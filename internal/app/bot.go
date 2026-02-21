@@ -27,7 +27,7 @@ func RunBot(ctx context.Context, modelName string) error {
 
 	modelAdapter := moonshot.NewClient()
 	toolRunner := tools.NewShell()
-	broker := bus.New(bus.DefaultBufferSize)
+	messageBus := bus.New(bus.DefaultBufferSize)
 
 	var (
 		mu     sync.Mutex
@@ -48,7 +48,7 @@ func RunBot(ctx context.Context, modelName string) error {
 	}
 
 	channel, err := telegram.NewChannel(token, func(msg telegram.IncomingMessage) {
-		err := broker.PublishInbound(ctx, bus.InboundMessage{
+		err := messageBus.PublishInbound(ctx, bus.InboundMessage{
 			Channel: bus.ChannelTelegram,
 			ChatID:  msg.ChatID,
 			UserID:  msg.UserID,
@@ -67,10 +67,10 @@ func RunBot(ctx context.Context, modelName string) error {
 
 	errCh := make(chan error, 2)
 	go func() {
-		errCh <- runAgentWorker(ctx, broker, getAgent)
+		errCh <- runAgentWorker(ctx, messageBus, getAgent)
 	}()
 	go func() {
-		errCh <- runTelegramSender(ctx, broker, channel)
+		errCh <- runOutboundWorker(ctx, messageBus, bus.ChannelTelegram, channel.SendText)
 	}()
 
 	select {
@@ -84,12 +84,12 @@ func RunBot(ctx context.Context, modelName string) error {
 	}
 }
 
-func runAgentWorker(ctx context.Context, broker *bus.Broker, getAgent func(sessionKey string) agent.Agent) error {
+func runAgentWorker(ctx context.Context, messageBus *bus.Bus, getAgent func(sessionKey string) agent.Agent) error {
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-		case in := <-broker.Inbound():
+		case in := <-messageBus.Inbound():
 			text := strings.TrimSpace(in.Text)
 			if text == "" {
 				continue
@@ -103,14 +103,14 @@ func runAgentWorker(ctx context.Context, broker *bus.Broker, getAgent func(sessi
 			a := getAgent(sessionKey)
 			if text == "/reset" {
 				if err := a.Reset(ctx); err != nil {
-					_ = broker.PublishOutbound(ctx, bus.OutboundMessage{
+					_ = messageBus.PublishOutbound(ctx, bus.OutboundMessage{
 						Channel: in.Channel,
 						ChatID:  in.ChatID,
 						Text:    "reset error: " + err.Error(),
 					})
 					continue
 				}
-				_ = broker.PublishOutbound(ctx, bus.OutboundMessage{
+				_ = messageBus.PublishOutbound(ctx, bus.OutboundMessage{
 					Channel: in.Channel,
 					ChatID:  in.ChatID,
 					Text:    "history reset",
@@ -122,7 +122,7 @@ func runAgentWorker(ctx context.Context, broker *bus.Broker, getAgent func(sessi
 			if err != nil {
 				answer = "reply error: " + err.Error()
 			}
-			if err := broker.PublishOutbound(ctx, bus.OutboundMessage{
+			if err := messageBus.PublishOutbound(ctx, bus.OutboundMessage{
 				Channel: in.Channel,
 				ChatID:  in.ChatID,
 				Text:    answer,
@@ -133,18 +133,23 @@ func runAgentWorker(ctx context.Context, broker *bus.Broker, getAgent func(sessi
 	}
 }
 
-func runTelegramSender(ctx context.Context, broker *bus.Broker, channel *telegram.Channel) error {
+func runOutboundWorker(
+	ctx context.Context,
+	messageBus *bus.Bus,
+	channelName string,
+	send func(context.Context, string, string) error,
+) error {
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-		case out := <-broker.Outbound():
-			if out.Channel != bus.ChannelTelegram {
+		case out := <-messageBus.Outbound():
+			if out.Channel != channelName {
 				continue
 			}
 
-			if err := channel.SendText(ctx, out.ChatID, out.Text); err != nil {
-				fmt.Fprintf(os.Stderr, "telegram send error: %v\n", err)
+			if err := send(ctx, out.ChatID, out.Text); err != nil {
+				fmt.Fprintf(os.Stderr, "outbound send error (%s): %v\n", channelName, err)
 			}
 		}
 	}

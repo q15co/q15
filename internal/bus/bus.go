@@ -23,31 +23,31 @@ type OutboundMessage struct {
 	Text    string
 }
 
-type Broker struct {
+type Bus struct {
 	inbound  chan InboundMessage
 	outbound chan OutboundMessage
 }
 
-func New(bufferSize int) *Broker {
+func New(bufferSize int) *Bus {
 	if bufferSize <= 0 {
 		bufferSize = DefaultBufferSize
 	}
 
-	return &Broker{
+	return &Bus{
 		inbound:  make(chan InboundMessage, bufferSize),
 		outbound: make(chan OutboundMessage, bufferSize),
 	}
 }
 
-func (b *Broker) Inbound() <-chan InboundMessage {
+func (b *Bus) Inbound() <-chan InboundMessage {
 	return b.inbound
 }
 
-func (b *Broker) Outbound() <-chan OutboundMessage {
+func (b *Bus) Outbound() <-chan OutboundMessage {
 	return b.outbound
 }
 
-func (b *Broker) PublishInbound(ctx context.Context, msg InboundMessage) error {
+func (b *Bus) PublishInbound(ctx context.Context, msg InboundMessage) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -56,7 +56,7 @@ func (b *Broker) PublishInbound(ctx context.Context, msg InboundMessage) error {
 	}
 }
 
-func (b *Broker) PublishOutbound(ctx context.Context, msg OutboundMessage) error {
+func (b *Bus) PublishOutbound(ctx context.Context, msg OutboundMessage) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
