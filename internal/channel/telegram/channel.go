@@ -4,13 +4,20 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
 )
 
-type MessageHandler func(text string)
+type IncomingMessage struct {
+	ChatID string
+	UserID string
+	Text   string
+}
+
+type MessageHandler func(msg IncomingMessage)
 
 type Channel struct {
 	bot       *telego.Bot
@@ -22,7 +29,7 @@ func NewChannel(token string, onMessage MessageHandler) (*Channel, error) {
 		return nil, errors.New("telegram bot token is required")
 	}
 	if onMessage == nil {
-		onMessage = func(string) {}
+		onMessage = func(IncomingMessage) {}
 	}
 
 	bot, err := telego.NewBot(token)
@@ -63,6 +70,45 @@ func (c *Channel) Start(ctx context.Context) error {
 }
 
 func (c *Channel) handleMessage(_ context.Context, message *telego.Message) error {
-	c.onMessage(message.Text)
+	text := strings.TrimSpace(message.Text)
+	if text == "" {
+		return nil
+	}
+
+	msg := IncomingMessage{
+		ChatID: strconv.FormatInt(message.Chat.ID, 10),
+		Text:   text,
+	}
+	if message.From != nil {
+		msg.UserID = strconv.FormatInt(message.From.ID, 10)
+	}
+
+	c.onMessage(msg)
+	return nil
+}
+
+func (c *Channel) SendText(ctx context.Context, chatID, text string) error {
+	chatID = strings.TrimSpace(chatID)
+	text = strings.TrimSpace(text)
+
+	if chatID == "" {
+		return errors.New("chat id is required")
+	}
+	if text == "" {
+		return errors.New("text is required")
+	}
+
+	id, err := strconv.ParseInt(chatID, 10, 64)
+	if err != nil {
+		return fmt.Errorf("invalid chat id %q: %w", chatID, err)
+	}
+
+	_, err = c.bot.SendMessage(ctx, &telego.SendMessageParams{
+		ChatID: telego.ChatID{ID: id},
+		Text:   text,
+	})
+	if err != nil {
+		return fmt.Errorf("send telegram message: %w", err)
+	}
 	return nil
 }

@@ -2,18 +2,32 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"os"
+	"strings"
 
 	"q15.co/sandbox/internal/app"
 )
 
 func main() {
-	// if err := app.RunBot(context.Background()); err != nil {
-	// 	log.Fatal(err)
-	// }
+	mode := flag.String("mode", "cli", "run mode: cli or bot")
+	model := flag.String("model", "kimi-k2.5", "model name")
+	flag.Parse()
 
-	if err := app.RunCLI(context.Background(), "kimi-k2.5"); err != nil {
+	ctx := context.Background()
+
+	var err error
+	switch strings.ToLower(strings.TrimSpace(*mode)) {
+	case "bot":
+		err = app.RunBot(ctx, *model)
+	case "cli":
+		err = app.RunCLI(ctx, *model)
+	default:
+		err = fmt.Errorf("invalid mode %q (expected cli or bot)", *mode)
+	}
+
+	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

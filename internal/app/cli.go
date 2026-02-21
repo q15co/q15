@@ -15,7 +15,7 @@ import (
 func RunCLI(ctx context.Context, model string) error {
 	modelAdapter := moonshot.NewClient()
 	toolRunner := tools.NewShell()
-	var svc agent.Agent = agent.NewLoop(modelAdapter, toolRunner, model, agent.DefaultSystemPrompt)
+	var a agent.Agent = agent.NewLoop(modelAdapter, toolRunner, model, agent.DefaultSystemPrompt)
 
 	scanner := bufio.NewScanner(os.Stdin)
 	fmt.Println("Type your question and press enter.")
@@ -38,7 +38,7 @@ func RunCLI(ctx context.Context, model string) error {
 			return nil
 		}
 		if question == "/reset" {
-			if err := svc.Reset(ctx); err != nil {
+			if err := a.Reset(ctx); err != nil {
 				fmt.Fprintf(os.Stderr, "reset error: %v\n", err)
 				continue
 			}
@@ -46,7 +46,7 @@ func RunCLI(ctx context.Context, model string) error {
 			continue
 		}
 
-		answer, err := svc.Reply(ctx, question)
+		answer, err := a.Reply(ctx, question)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "reply error: %v\n", err)
 			continue
