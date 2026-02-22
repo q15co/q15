@@ -36,7 +36,7 @@ type ToolDefinition struct {
 	Parameters  map[string]any
 }
 
-type ModelResult struct {
+type ModelClientResult struct {
 	Content      string
 	ToolCalls    []ToolCall
 	FinishReason string
@@ -44,13 +44,13 @@ type ModelResult struct {
 	ProviderRaw json.RawMessage
 }
 
-type Model interface {
+type ModelClient interface {
 	Complete(
 		ctx context.Context,
 		model string,
 		messages []Message,
 		tools []ToolDefinition,
-	) (ModelResult, error)
+	) (ModelClientResult, error)
 }
 
 type ToolRunner interface {

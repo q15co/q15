@@ -8,60 +8,62 @@ import (
 )
 
 const (
-	DefaultSystemPrompt = "You are a helpful assistant. Use the available tools effectively and adapt to the sandbox environment described in the system prompt."
+	DefaultSystemPrompt = "You are q15, a helpful shell-capable assistant running for the user in a sandboxed environment. Use the available tools effectively and adapt to the sandbox environment described in the system prompt. Do not claim to be Claude, Anthropic, or any specific vendor/model unless that identity is explicitly provided in this conversation."
 	defaultMaxTurns     = 12
 )
 
 type Loop struct {
-	mu         sync.Mutex
-	model      Model
-	tools      ToolRunner
-	models     []string
-	systemText string
-	maxTurns   int
-	messages   []Message
+	mu          sync.Mutex
+	modelClient ModelClient
+	tools       ToolRunner
+	modelRefs   []string
+	systemText  string
+	maxTurns    int
+	messages    []Message
 }
 
 var _ Agent = (*Loop)(nil)
 
-func NewLoop(model Model, tools ToolRunner, models []string, systemText string) *Loop {
+func NewLoop(
+	modelClient ModelClient,
+	tools ToolRunner,
+	modelRefs []string,
+	systemText string,
+) *Loop {
 	systemText = strings.TrimSpace(systemText)
 	if systemText == "" {
 		systemText = DefaultSystemPrompt
 	}
-	models = normalizeModels(models)
+	modelRefs = normalizeModelRefs(modelRefs)
 	return &Loop{
-		model:      model,
-		tools:      tools,
-		models:     models,
-		systemText: systemText,
-		maxTurns:   defaultMaxTurns,
+		modelClient: modelClient,
+		tools:       tools,
+		modelRefs:   modelRefs,
+		systemText:  systemText,
+		maxTurns:    defaultMaxTurns,
 		messages: []Message{
 			{Role: SystemRole, Content: systemText},
 		},
 	}
 }
 
-func normalizeModels(models []string) []string {
-	if len(models) == 0 {
-		return []string{"kimi-k2.5"}
+func normalizeModelRefs(modelRefs []string) []string {
+	if len(modelRefs) == 0 {
+		return nil
 	}
 
-	out := make([]string, 0, len(models))
-	seen := make(map[string]struct{}, len(models))
-	for _, model := range models {
-		model = strings.TrimSpace(model)
-		if model == "" {
+	out := make([]string, 0, len(modelRefs))
+	seen := make(map[string]struct{}, len(modelRefs))
+	for _, modelRef := range modelRefs {
+		modelRef = strings.TrimSpace(modelRef)
+		if modelRef == "" {
 			continue
 		}
-		if _, ok := seen[model]; ok {
+		if _, ok := seen[modelRef]; ok {
 			continue
 		}
-		seen[model] = struct{}{}
-		out = append(out, model)
-	}
-	if len(out) == 0 {
-		return []string{"kimi-k2.5"}
+		seen[modelRef] = struct{}{}
+		out = append(out, modelRef)
 	}
 	return out
 }
@@ -151,11 +153,11 @@ func (l *Loop) complete(
 	ctx context.Context,
 	messages []Message,
 	tools []ToolDefinition,
-) (ModelResult, error) {
+) (ModelClientResult, error) {
 	var lastErr error
 
-	for _, model := range l.models {
-		result, err := l.model.Complete(ctx, model, messages, tools)
+	for _, modelRef := range l.modelRefs {
+		result, err := l.modelClient.Complete(ctx, modelRef, messages, tools)
 		if err == nil {
 			return result, nil
 		}
@@ -163,7 +165,7 @@ func (l *Loop) complete(
 	}
 
 	if lastErr == nil {
-		return ModelResult{}, fmt.Errorf("no models configured")
+		return ModelClientResult{}, fmt.Errorf("no models configured")
 	}
-	return ModelResult{}, fmt.Errorf("all models failed (%v): %w", l.models, lastErr)
+	return ModelClientResult{}, fmt.Errorf("all models failed (%v): %w", l.modelRefs, lastErr)
 }

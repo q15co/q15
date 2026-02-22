@@ -12,7 +12,7 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/bus"
 	"github.com/q15co/q15/systems/agent/internal/channel/telegram"
 	"github.com/q15co/q15/systems/agent/internal/config"
-	"github.com/q15co/q15/systems/agent/internal/provider/moonshot"
+	"github.com/q15co/q15/systems/agent/internal/provider/openaicompatible"
 	"github.com/q15co/q15/systems/agent/internal/sandbox"
 	"github.com/q15co/q15/systems/agent/internal/tools"
 )
@@ -22,17 +22,13 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 	if token == "" {
 		return errors.New("telegram token is required")
 	}
-	apiKey := strings.TrimSpace(rt.ProviderAPIKey)
-	if apiKey == "" {
-		return errors.New("provider api key is required")
-	}
 
 	models := normalizeModelList(rt.Models)
 	if len(models) == 0 {
 		return errors.New("at least one model is required")
 	}
 
-	modelAdapter, err := newModelAdapter(rt)
+	modelAdapter, err := newModelAdapter(rt.Models)
 	if err != nil {
 		return err
 	}
@@ -242,16 +238,82 @@ func packageManagerInstallHint(pm string) string {
 	}
 }
 
-func newModelAdapter(rt config.AgentRuntime) (agent.Model, error) {
-	switch strings.ToLower(strings.TrimSpace(rt.ProviderType)) {
-	case "openai-compatible":
-		return moonshot.NewClient(rt.ProviderBaseURL, rt.ProviderAPIKey), nil
-	default:
-		return nil, fmt.Errorf("unsupported provider type %q", rt.ProviderType)
-	}
+type routedModelAdapter struct {
+	endpoints map[string]routedModelEndpoint
 }
 
-func normalizeModelList(models []string) []string {
+type routedModelEndpoint struct {
+	client agent.ModelClient
+	model  string
+}
+
+var _ agent.ModelClient = (*routedModelAdapter)(nil)
+
+func (r *routedModelAdapter) Complete(
+	ctx context.Context,
+	model string,
+	messages []agent.Message,
+	tools []agent.ToolDefinition,
+) (agent.ModelClientResult, error) {
+	model = strings.TrimSpace(model)
+	endpoint, ok := r.endpoints[model]
+	if !ok {
+		return agent.ModelClientResult{}, fmt.Errorf("unknown configured fallback model %q", model)
+	}
+	return endpoint.client.Complete(ctx, endpoint.model, messages, tools)
+}
+
+func newModelAdapter(models []config.AgentModelRuntime) (agent.ModelClient, error) {
+	if len(models) == 0 {
+		return nil, errors.New("at least one model is required")
+	}
+
+	endpoints := make(map[string]routedModelEndpoint, len(models))
+	modelClients := make(map[string]agent.ModelClient)
+
+	for i, modelCfg := range models {
+		ref := strings.TrimSpace(modelCfg.Ref)
+		if ref == "" {
+			return nil, fmt.Errorf("models[%d].ref is required", i)
+		}
+		modelName := strings.TrimSpace(modelCfg.ModelName)
+		if modelName == "" {
+			return nil, fmt.Errorf("models[%d] (%q): model name is required", i, ref)
+		}
+
+		providerName := strings.TrimSpace(modelCfg.ProviderName)
+		if providerName == "" {
+			providerName = ref
+		}
+
+		client, ok := modelClients[providerName]
+		if !ok {
+			var err error
+			switch strings.ToLower(strings.TrimSpace(modelCfg.ProviderType)) {
+			case "openai-compatible":
+				client, err = openaicompatible.NewClient(
+					modelCfg.ProviderBaseURL,
+					modelCfg.ProviderAPIKey,
+				)
+			default:
+				err = fmt.Errorf("unsupported provider type %q", modelCfg.ProviderType)
+			}
+			if err != nil {
+				return nil, fmt.Errorf("configure provider for model %q: %w", ref, err)
+			}
+			modelClients[providerName] = client
+		}
+
+		endpoints[ref] = routedModelEndpoint{
+			client: client,
+			model:  modelName,
+		}
+	}
+
+	return &routedModelAdapter{endpoints: endpoints}, nil
+}
+
+func normalizeModelList(models []config.AgentModelRuntime) []string {
 	if len(models) == 0 {
 		return nil
 	}
@@ -259,15 +321,15 @@ func normalizeModelList(models []string) []string {
 	out := make([]string, 0, len(models))
 	seen := make(map[string]struct{}, len(models))
 	for _, model := range models {
-		model = strings.TrimSpace(model)
-		if model == "" {
+		ref := strings.TrimSpace(model.Ref)
+		if ref == "" {
 			continue
 		}
-		if _, ok := seen[model]; ok {
+		if _, ok := seen[ref]; ok {
 			continue
 		}
-		seen[model] = struct{}{}
-		out = append(out, model)
+		seen[ref] = struct{}{}
+		out = append(out, ref)
 	}
 	return out
 }

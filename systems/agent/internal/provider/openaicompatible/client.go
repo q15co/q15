@@ -1,4 +1,4 @@
-package moonshot
+package openaicompatible
 
 import (
 	"context"
@@ -16,14 +16,16 @@ type Client struct {
 	client openai.Client
 }
 
-var _ agent.Model = (*Client)(nil)
+var _ agent.ModelClient = (*Client)(nil)
 
-const defaultBaseURL = "https://api.moonshot.ai/v1"
-
-func NewClient(baseURL string, apiKey string) *Client {
+func NewClient(baseURL string, apiKey string) (*Client, error) {
 	baseURL = strings.TrimSpace(baseURL)
 	if baseURL == "" {
-		baseURL = defaultBaseURL
+		return nil, fmt.Errorf("provider base url is required")
+	}
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		return nil, fmt.Errorf("provider api key is required")
 	}
 
 	client := openai.NewClient(
@@ -31,7 +33,7 @@ func NewClient(baseURL string, apiKey string) *Client {
 		option.WithAPIKey(apiKey),
 	)
 
-	return &Client{client: client}
+	return &Client{client: client}, nil
 }
 
 func (c *Client) Complete(
@@ -39,14 +41,14 @@ func (c *Client) Complete(
 	model string,
 	messages []agent.Message,
 	tools []agent.ToolDefinition,
-) (agent.ModelResult, error) {
+) (agent.ModelClientResult, error) {
 	if strings.TrimSpace(model) == "" {
-		return agent.ModelResult{}, fmt.Errorf("model name is required")
+		return agent.ModelClientResult{}, fmt.Errorf("model name is required")
 	}
 
 	reqMessages, err := mapMessages(messages)
 	if err != nil {
-		return agent.ModelResult{}, err
+		return agent.ModelClientResult{}, err
 	}
 	reqTools := mapTools(tools)
 
@@ -56,16 +58,16 @@ func (c *Client) Complete(
 		Tools:    reqTools,
 	})
 	if err != nil {
-		return agent.ModelResult{}, fmt.Errorf("chat completion: %w", err)
+		return agent.ModelClientResult{}, fmt.Errorf("chat completion: %w", err)
 	}
 	if len(chatCompletion.Choices) == 0 {
-		return agent.ModelResult{}, fmt.Errorf("chat completion returned no choices")
+		return agent.ModelClientResult{}, fmt.Errorf("chat completion returned no choices")
 	}
 
 	choice := chatCompletion.Choices[0]
 	toolCalls, err := mapToolCalls(choice.Message.ToolCalls)
 	if err != nil {
-		return agent.ModelResult{}, err
+		return agent.ModelClientResult{}, err
 	}
 
 	content := strings.TrimSpace(choice.Message.Content)
@@ -73,7 +75,7 @@ func (c *Client) Complete(
 		content = strings.TrimSpace(choice.Message.Refusal)
 	}
 
-	return agent.ModelResult{
+	return agent.ModelClientResult{
 		Content:      content,
 		ToolCalls:    toolCalls,
 		FinishReason: choice.FinishReason,

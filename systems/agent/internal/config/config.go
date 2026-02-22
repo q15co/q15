@@ -23,8 +23,7 @@ type Provider struct {
 
 type Agent struct {
 	Name     string   `mapstructure:"name"`
-	Model    string   `mapstructure:"model"`
-	Models   []string `mapstructure:"models"` // legacy, ignored for q15.toml shape
+	Models   []string `mapstructure:"models"` // ordered fallback list of provider/model refs
 	Sandbox  Sandbox  `mapstructure:"sandbox"`
 	Telegram Telegram `mapstructure:"telegram"`
 }
@@ -45,12 +44,18 @@ type Telegram struct {
 
 // AgentRuntime is the resolved runtime config for one agent after env vars and
 // provider/model references have been processed.
+type AgentModelRuntime struct {
+	Ref             string
+	ProviderName    string
+	ProviderType    string
+	ProviderBaseURL string
+	ProviderAPIKey  string
+	ModelName       string
+}
+
 type AgentRuntime struct {
 	Name                   string
-	ProviderType           string
-	ProviderBaseURL        string
-	ProviderAPIKey         string
-	Models                 []string
+	Models                 []AgentModelRuntime
 	SandboxContainerName   string
 	SandboxFromImage       string
 	WorkspaceHostDir       string
@@ -140,37 +145,56 @@ func (c Config) ResolveAgentRuntimes() ([]AgentRuntime, error) {
 
 	runtimes := make([]AgentRuntime, 0, len(c.Agents))
 	for i, agentCfg := range c.Agents {
-		providerName, modelName, err := parseModelRef(agentCfg.Model)
+		modelRefs, err := agentCfg.modelRefs()
 		if err != nil {
-			return nil, fmt.Errorf("agents[%d].model: %w", i, err)
+			return nil, fmt.Errorf("agents[%d].models: %w", i, err)
 		}
 
-		provider, ok := c.FindProvider(providerName)
-		if !ok {
-			return nil, fmt.Errorf(
-				"agents[%d].model provider %q is not defined in providers",
-				i,
-				providerName,
-			)
-		}
+		resolvedModels := make([]AgentModelRuntime, 0, len(modelRefs))
+		for j, modelRef := range modelRefs {
+			providerName, modelName, err := parseModelRef(modelRef)
+			if err != nil {
+				return nil, fmt.Errorf("agents[%d].models[%d]: %w", i, j, err)
+			}
 
-		providerType := normalizeProviderType(provider.Type)
-		if providerType == "" {
-			return nil, fmt.Errorf(
-				"agents[%d].model provider %q has unsupported type %q",
-				i,
-				provider.Name,
-				provider.Type,
-			)
-		}
+			fieldPath := fmt.Sprintf("agents[%d].models[%d]", i, j)
 
-		apiKey := strings.TrimSpace(os.Getenv(strings.TrimSpace(provider.KeyEnv)))
-		if apiKey == "" {
-			return nil, fmt.Errorf(
-				"provider %q requires env var %q",
-				provider.Name,
-				provider.KeyEnv,
-			)
+			provider, ok := c.FindProvider(providerName)
+			if !ok {
+				return nil, fmt.Errorf(
+					"%s provider %q is not defined in providers",
+					fieldPath,
+					providerName,
+				)
+			}
+
+			providerType := normalizeProviderType(provider.Type)
+			if providerType == "" {
+				return nil, fmt.Errorf(
+					"%s provider %q has unsupported type %q",
+					fieldPath,
+					provider.Name,
+					provider.Type,
+				)
+			}
+
+			apiKey := strings.TrimSpace(os.Getenv(strings.TrimSpace(provider.KeyEnv)))
+			if apiKey == "" {
+				return nil, fmt.Errorf(
+					"provider %q requires env var %q",
+					provider.Name,
+					provider.KeyEnv,
+				)
+			}
+
+			resolvedModels = append(resolvedModels, AgentModelRuntime{
+				Ref:             modelRef,
+				ProviderName:    provider.Name,
+				ProviderType:    providerType,
+				ProviderBaseURL: strings.TrimSpace(provider.BaseURL),
+				ProviderAPIKey:  apiKey,
+				ModelName:       modelName,
+			})
 		}
 
 		token, err := agentCfg.TelegramToken()
@@ -192,10 +216,7 @@ func (c Config) ResolveAgentRuntimes() ([]AgentRuntime, error) {
 
 		runtimes = append(runtimes, AgentRuntime{
 			Name:                   strings.TrimSpace(agentCfg.Name),
-			ProviderType:           providerType,
-			ProviderBaseURL:        strings.TrimSpace(provider.BaseURL),
-			ProviderAPIKey:         apiKey,
-			Models:                 []string{modelName},
+			Models:                 resolvedModels,
 			SandboxContainerName:   strings.TrimSpace(agentCfg.Sandbox.ContainerName),
 			SandboxFromImage:       strings.TrimSpace(agentCfg.Sandbox.FromImage),
 			WorkspaceHostDir:       strings.TrimSpace(agentCfg.Sandbox.WorkspaceHostDir),
@@ -231,6 +252,13 @@ func (c Config) validate() error {
 		if strings.TrimSpace(provider.Type) == "" {
 			return fmt.Errorf("provider[%d].type is required", i)
 		}
+		if normalizeProviderType(provider.Type) == "openai-compatible" &&
+			strings.TrimSpace(provider.BaseURL) == "" {
+			return fmt.Errorf(
+				"provider[%d].base_url is required for openai-compatible providers",
+				i,
+			)
+		}
 		if strings.TrimSpace(provider.KeyEnv) == "" {
 			return fmt.Errorf("provider[%d].key_env is required", i)
 		}
@@ -247,16 +275,14 @@ func (c Config) validate() error {
 		}
 		agents[name] = struct{}{}
 
-		if len(agent.Models) > 0 {
-			return fmt.Errorf(
-				"agent[%d].models is not supported in q15.toml; use agent[%d].model = \"provider/model\"",
-				i,
-				i,
-			)
+		modelRefs, err := agent.modelRefs()
+		if err != nil {
+			return fmt.Errorf("agent[%d].models: %w", i, err)
 		}
-
-		if _, _, err := parseModelRef(agent.Model); err != nil {
-			return fmt.Errorf("agent[%d].model: %w", i, err)
+		for j, modelRef := range modelRefs {
+			if _, _, err := parseModelRef(modelRef); err != nil {
+				return fmt.Errorf("agent[%d].models[%d]: %w", i, j, err)
+			}
 		}
 		if strings.TrimSpace(agent.Sandbox.ContainerName) == "" {
 			return fmt.Errorf("agent[%d].sandbox.container_name is required", i)
@@ -285,6 +311,22 @@ func (c Config) validate() error {
 	return nil
 }
 
+func (a Agent) modelRefs() ([]string, error) {
+	if len(a.Models) == 0 {
+		return nil, errors.New("must contain at least one model")
+	}
+
+	refs := make([]string, 0, len(a.Models))
+	for i, modelRef := range a.Models {
+		modelRef = strings.TrimSpace(modelRef)
+		if modelRef == "" {
+			return nil, fmt.Errorf("[%d] must not be empty", i)
+		}
+		refs = append(refs, modelRef)
+	}
+	return refs, nil
+}
+
 func parseModelRef(modelRef string) (providerName string, modelName string, err error) {
 	modelRef = strings.TrimSpace(modelRef)
 	if modelRef == "" {
@@ -306,7 +348,7 @@ func parseModelRef(modelRef string) (providerName string, modelName string, err 
 
 func normalizeProviderType(providerType string) string {
 	switch strings.ToLower(strings.TrimSpace(providerType)) {
-	case "moonshot", "openai-compatible":
+	case "moonshot", "openai-compatible", "openai_compatible":
 		return "openai-compatible"
 	default:
 		return ""
