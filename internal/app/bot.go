@@ -13,6 +13,7 @@ import (
 	"q15.co/sandbox/internal/channel/telegram"
 	"q15.co/sandbox/internal/config"
 	"q15.co/sandbox/internal/provider/moonshot"
+	"q15.co/sandbox/internal/sandbox"
 	"q15.co/sandbox/internal/tools"
 )
 
@@ -35,7 +36,25 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 	if err != nil {
 		return err
 	}
-	toolRunner := tools.NewShell()
+
+	agentSandbox := sandbox.New(sandbox.Settings{
+		ContainerName:    rt.SandboxContainerName,
+		FromImage:        rt.SandboxFromImage,
+		WorkspaceHostDir: rt.WorkspaceHostDir,
+		WorkspaceDir:     rt.WorkspaceDir,
+	})
+	if sandbox.VerboseEnabled() {
+		fmt.Printf("[app] preparing sandbox for agent=%q container=%q workspace_host_dir=%q workspace_dir=%q from_image=%q\n",
+			rt.Name, rt.SandboxContainerName, rt.WorkspaceHostDir, rt.WorkspaceDir, rt.SandboxFromImage)
+	}
+	if err := agentSandbox.Prepare(ctx); err != nil {
+		return fmt.Errorf("prepare sandbox for agent %q: %w", rt.Name, err)
+	}
+	if sandbox.VerboseEnabled() {
+		fmt.Printf("[app] sandbox ready for agent=%q container=%q\n", rt.Name, rt.SandboxContainerName)
+	}
+
+	toolRunner := tools.NewShell(agentSandbox)
 	messageBus := bus.New(bus.DefaultBufferSize)
 
 	var (

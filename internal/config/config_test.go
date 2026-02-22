@@ -18,13 +18,19 @@ type = "openai-compatible"
 base_url = "https://api.moonshot.ai/v1"
 key_env = "MOONSHOT_API_KEY"
 
-[[agent]]
-name = "Jared"
-model = "moonshot/kimi-k2.5"
+	[[agent]]
+	name = "Jared"
+	model = "moonshot/kimi-k2.5"
 
-[agent.telegram]
-token_env = "JARED_TELEGRAM_TOKEN"
-allowed_user_ids = [123456789]
+	[agent.sandbox]
+	container_name = "q15-jared"
+	from_image = "docker.io/library/debian:bookworm-slim"
+	workspace_host_dir = "/tmp/q15-workspaces/jared"
+	workspace_dir = "/workspace"
+
+	[agent.telegram]
+	token_env = "JARED_TELEGRAM_TOKEN"
+	allowed_user_ids = [123456789]
 `), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -53,6 +59,18 @@ allowed_user_ids = [123456789]
 	if len(rt.Models) != 1 || rt.Models[0] != "kimi-k2.5" {
 		t.Fatalf("unexpected models: %#v", rt.Models)
 	}
+	if rt.SandboxContainerName != "q15-jared" {
+		t.Fatalf("unexpected sandbox container name: %q", rt.SandboxContainerName)
+	}
+	if rt.SandboxFromImage != "docker.io/library/debian:bookworm-slim" {
+		t.Fatalf("unexpected sandbox base image: %q", rt.SandboxFromImage)
+	}
+	if rt.WorkspaceHostDir != "/tmp/q15-workspaces/jared" {
+		t.Fatalf("unexpected workspace host dir: %q", rt.WorkspaceHostDir)
+	}
+	if rt.WorkspaceDir != "/workspace" {
+		t.Fatalf("unexpected workspace dir: %q", rt.WorkspaceDir)
+	}
 	if rt.TelegramToken != "tg-123" {
 		t.Fatalf("unexpected telegram token: %q", rt.TelegramToken)
 	}
@@ -74,6 +92,12 @@ func TestValidateRejectsLegacyAgentModelsList(t *testing.T) {
 			{
 				Name:   "legacy",
 				Models: []string{"moonshot/kimi-k2.5"},
+				Sandbox: Sandbox{
+					ContainerName:    "q15-legacy",
+					FromImage:        "docker.io/library/debian:bookworm-slim",
+					WorkspaceHostDir: "/tmp/q15-workspaces/legacy",
+					WorkspaceDir:     "/workspace",
+				},
 			},
 		},
 	}
@@ -96,6 +120,12 @@ func TestValidateRequiresTelegramAllowedUserIDs(t *testing.T) {
 			{
 				Name:  "no-allowlist",
 				Model: "moonshot/kimi-k2.5",
+				Sandbox: Sandbox{
+					ContainerName:    "q15-no-allowlist",
+					FromImage:        "docker.io/library/debian:bookworm-slim",
+					WorkspaceHostDir: "/tmp/q15-workspaces/no-allowlist",
+					WorkspaceDir:     "/workspace",
+				},
 				Telegram: Telegram{
 					TokenEnv: "TEST_TELEGRAM_TOKEN",
 				},

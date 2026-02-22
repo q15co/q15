@@ -25,7 +25,15 @@ type Agent struct {
 	Name     string   `mapstructure:"name"`
 	Model    string   `mapstructure:"model"`
 	Models   []string `mapstructure:"models"` // legacy, ignored for q15.toml shape
+	Sandbox  Sandbox  `mapstructure:"sandbox"`
 	Telegram Telegram `mapstructure:"telegram"`
+}
+
+type Sandbox struct {
+	ContainerName    string `mapstructure:"container_name"`
+	FromImage        string `mapstructure:"from_image"`
+	WorkspaceHostDir string `mapstructure:"workspace_host_dir"`
+	WorkspaceDir     string `mapstructure:"workspace_dir"`
 }
 
 type Telegram struct {
@@ -42,6 +50,10 @@ type AgentRuntime struct {
 	ProviderBaseURL        string
 	ProviderAPIKey         string
 	Models                 []string
+	SandboxContainerName   string
+	SandboxFromImage       string
+	WorkspaceHostDir       string
+	WorkspaceDir           string
 	TelegramToken          string
 	TelegramAllowedUserIDs []int64
 }
@@ -159,6 +171,10 @@ func (c Config) ResolveAgentRuntimes() ([]AgentRuntime, error) {
 			ProviderBaseURL:        strings.TrimSpace(provider.BaseURL),
 			ProviderAPIKey:         apiKey,
 			Models:                 []string{modelName},
+			SandboxContainerName:   strings.TrimSpace(agentCfg.Sandbox.ContainerName),
+			SandboxFromImage:       strings.TrimSpace(agentCfg.Sandbox.FromImage),
+			WorkspaceHostDir:       strings.TrimSpace(agentCfg.Sandbox.WorkspaceHostDir),
+			WorkspaceDir:           strings.TrimSpace(agentCfg.Sandbox.WorkspaceDir),
 			TelegramToken:          token,
 			TelegramAllowedUserIDs: allowedUserIDs,
 		})
@@ -211,6 +227,18 @@ func (c Config) validate() error {
 
 		if _, _, err := parseModelRef(agent.Model); err != nil {
 			return fmt.Errorf("agent[%d].model: %w", i, err)
+		}
+		if strings.TrimSpace(agent.Sandbox.ContainerName) == "" {
+			return fmt.Errorf("agent[%d].sandbox.container_name is required", i)
+		}
+		if strings.TrimSpace(agent.Sandbox.FromImage) == "" {
+			return fmt.Errorf("agent[%d].sandbox.from_image is required", i)
+		}
+		if strings.TrimSpace(agent.Sandbox.WorkspaceHostDir) == "" {
+			return fmt.Errorf("agent[%d].sandbox.workspace_host_dir is required", i)
+		}
+		if strings.TrimSpace(agent.Sandbox.WorkspaceDir) == "" {
+			return fmt.Errorf("agent[%d].sandbox.workspace_dir is required", i)
 		}
 		if strings.TrimSpace(agent.Telegram.Token) == "" && strings.TrimSpace(agent.Telegram.TokenEnv) == "" {
 			return fmt.Errorf("agent[%d].telegram requires token or token_env", i)
