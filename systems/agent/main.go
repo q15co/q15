@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"q15.co/sandbox/cmd"
+	"github.com/q15co/q15/systems/agent/cmd"
 )
 
 func main() {

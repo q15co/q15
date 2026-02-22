@@ -6,8 +6,8 @@ import (
 	"os"
 	"strings"
 
-	"q15.co/sandbox/internal/agent"
-	"q15.co/sandbox/internal/bus"
+	"github.com/q15co/q15/systems/agent/internal/agent"
+	"github.com/q15co/q15/systems/agent/internal/bus"
 )
 
 func runAgentWorker(

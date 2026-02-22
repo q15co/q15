@@ -9,8 +9,8 @@ import (
 	"io"
 	"os"
 
-	"q15.co/sandbox/internal/sandbox"
-	"q15.co/sandbox/internal/sandboxbuildah"
+	sandboxcontract "github.com/q15co/q15/libs/sandbox-contract"
+	"github.com/q15co/q15/systems/sandbox-helper/internal/sandboxbuildah"
 )
 
 const helperRequestEnv = "Q15_SANDBOX_HELPER_REQUEST_B64"
@@ -20,11 +20,11 @@ func main() {
 		return
 	}
 	if err := sandboxbuildah.EnsureProcessEnvironment(); err != nil {
-		writeResponse(sandbox.HelperResponse{Error: err.Error()})
+		writeResponse(sandboxcontract.HelperResponse{Error: err.Error()})
 		os.Exit(1)
 	}
 	if err := run(); err != nil {
-		writeResponse(sandbox.HelperResponse{Error: err.Error()})
+		writeResponse(sandboxcontract.HelperResponse{Error: err.Error()})
 		os.Exit(1)
 	}
 }
@@ -53,29 +53,33 @@ func run() error {
 		if err := sandboxbuildah.Prepare(context.Background(), cfg); err != nil {
 			return err
 		}
-		writeResponse(sandbox.HelperResponse{})
+		writeResponse(sandboxcontract.HelperResponse{})
 		return nil
 	case "exec":
 		out, err := sandboxbuildah.Exec(context.Background(), cfg, req.Command)
 		if err != nil {
 			return err
 		}
-		writeResponse(sandbox.HelperResponse{Output: out})
+		writeResponse(sandboxcontract.HelperResponse{Output: out})
 		return nil
 	default:
 		return fmt.Errorf("unsupported action %q", action)
 	}
 }
 
-func loadRequest() (sandbox.HelperRequest, error) {
+func loadRequest() (sandboxcontract.HelperRequest, error) {
 	if encoded := os.Getenv(helperRequestEnv); encoded != "" {
 		raw, err := base64.StdEncoding.DecodeString(encoded)
 		if err != nil {
-			return sandbox.HelperRequest{}, fmt.Errorf("decode %s: %w", helperRequestEnv, err)
+			return sandboxcontract.HelperRequest{}, fmt.Errorf(
+				"decode %s: %w",
+				helperRequestEnv,
+				err,
+			)
 		}
-		var req sandbox.HelperRequest
+		var req sandboxcontract.HelperRequest
 		if err := json.Unmarshal(raw, &req); err != nil {
-			return sandbox.HelperRequest{}, fmt.Errorf(
+			return sandboxcontract.HelperRequest{}, fmt.Errorf(
 				"decode helper request from %s: %w",
 				helperRequestEnv,
 				err,
@@ -84,24 +88,26 @@ func loadRequest() (sandbox.HelperRequest, error) {
 		return req, nil
 	}
 
-	var req sandbox.HelperRequest
+	var req sandboxcontract.HelperRequest
 	if err := json.NewDecoder(os.Stdin).Decode(&req); err != nil {
 		if err == io.EOF {
-			return sandbox.HelperRequest{}, fmt.Errorf("missing helper request JSON on stdin")
+			return sandboxcontract.HelperRequest{}, fmt.Errorf(
+				"missing helper request JSON on stdin",
+			)
 		}
-		return sandbox.HelperRequest{}, fmt.Errorf("decode helper request: %w", err)
+		return sandboxcontract.HelperRequest{}, fmt.Errorf("decode helper request: %w", err)
 	}
 	raw, err := json.Marshal(req)
 	if err != nil {
-		return sandbox.HelperRequest{}, fmt.Errorf("re-encode helper request: %w", err)
+		return sandboxcontract.HelperRequest{}, fmt.Errorf("re-encode helper request: %w", err)
 	}
 	if err := os.Setenv(helperRequestEnv, base64.StdEncoding.EncodeToString(raw)); err != nil {
-		return sandbox.HelperRequest{}, fmt.Errorf("set %s: %w", helperRequestEnv, err)
+		return sandboxcontract.HelperRequest{}, fmt.Errorf("set %s: %w", helperRequestEnv, err)
 	}
 	return req, nil
 }
 
-func writeResponse(resp sandbox.HelperResponse) {
+func writeResponse(resp sandboxcontract.HelperResponse) {
 	enc := json.NewEncoder(os.Stdout)
 	_ = enc.Encode(resp)
 }

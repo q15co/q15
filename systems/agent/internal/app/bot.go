@@ -8,13 +8,13 @@ import (
 	"strings"
 	"sync"
 
-	"q15.co/sandbox/internal/agent"
-	"q15.co/sandbox/internal/bus"
-	"q15.co/sandbox/internal/channel/telegram"
-	"q15.co/sandbox/internal/config"
-	"q15.co/sandbox/internal/provider/moonshot"
-	"q15.co/sandbox/internal/sandbox"
-	"q15.co/sandbox/internal/tools"
+	"github.com/q15co/q15/systems/agent/internal/agent"
+	"github.com/q15co/q15/systems/agent/internal/bus"
+	"github.com/q15co/q15/systems/agent/internal/channel/telegram"
+	"github.com/q15co/q15/systems/agent/internal/config"
+	"github.com/q15co/q15/systems/agent/internal/provider/moonshot"
+	"github.com/q15co/q15/systems/agent/internal/sandbox"
+	"github.com/q15co/q15/systems/agent/internal/tools"
 )
 
 func runBot(ctx context.Context, rt config.AgentRuntime) error {

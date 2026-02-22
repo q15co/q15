@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"q15.co/sandbox/internal/agent"
+	"github.com/q15co/q15/systems/agent/internal/agent"
 )
 
 type CommandExecutor interface {

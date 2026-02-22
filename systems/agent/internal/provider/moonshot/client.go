@@ -9,7 +9,7 @@ import (
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/packages/param"
-	"q15.co/sandbox/internal/agent"
+	"github.com/q15co/q15/systems/agent/internal/agent"
 )
 
 type Client struct {

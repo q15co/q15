@@ -1,6 +1,9 @@
 GO ?= go
 BIN_DIR ?= bin
 CONFIG ?= q15.toml
+AGENT_MOD_DIR ?= systems/agent
+HELPER_MOD_DIR ?= systems/sandbox-helper
+CONTRACT_MOD_DIR ?= libs/sandbox-contract
 
 HELPER_TAGS := containers_image_openpgp exclude_graphdriver_btrfs
 RUN_ENV := BUILDAH_ISOLATION=chroot GOMAXPROCS=1 GODEBUG=updatemaxprocs=0
@@ -15,14 +18,16 @@ build: build-main build-helper
 
 build-main:
 	@mkdir -p $(BIN_DIR)
-	$(GO) build -o $(BIN_DIR)/q15 .
+	cd $(AGENT_MOD_DIR) && $(GO) build -o ../../$(BIN_DIR)/q15 .
 
 build-helper:
 	@mkdir -p $(BIN_DIR)
-	CGO_ENABLED=0 $(GO) build -tags='$(HELPER_TAGS)' -o $(BIN_DIR)/q15-sandbox-helper ./cmd/q15-sandbox-helper
+	cd $(HELPER_MOD_DIR) && CGO_ENABLED=0 $(GO) build -tags='$(HELPER_TAGS)' -o ../../$(BIN_DIR)/q15-sandbox-helper .
 
 test:
-	CGO_ENABLED=0 $(GO) test -tags='$(HELPER_TAGS)' ./...
+	cd $(CONTRACT_MOD_DIR) && $(GO) test ./...
+	cd $(AGENT_MOD_DIR) && CGO_ENABLED=0 $(GO) test -tags='$(HELPER_TAGS)' ./...
+	cd $(HELPER_MOD_DIR) && CGO_ENABLED=0 $(GO) test -tags='$(HELPER_TAGS)' ./...
 
 run: build
 	@if [ ! -f "$(CONFIG)" ]; then echo "missing config: $(CONFIG)"; exit 1; fi
@@ -41,10 +46,10 @@ clean:
 
 help:
 	@echo "Available targets:"
-	@echo "  build         Build main app and sandbox helper into ./bin"
-	@echo "  build-main    Build ./bin/q15"
+	@echo "  build         Build agent app and sandbox helper into ./bin"
+	@echo "  build-main    Build ./bin/q15 from $(AGENT_MOD_DIR)"
 	@echo "  build-helper  Build ./bin/q15-sandbox-helper (helper-safe tags)"
-	@echo "  test          Run Go tests with helper-safe tags (CGO_ENABLED=0)"
+	@echo "  test          Run Go tests for contract + agent + helper modules"
 	@echo "  run           Build and start q15 with dev runtime defaults"
 	@echo "  run-verbose   Same as run, with Q15_SANDBOX_VERBOSE=1"
 	@echo "  fmt           Run gofmt over all Go files"

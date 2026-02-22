@@ -13,6 +13,8 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+
+	sandboxcontract "github.com/q15co/q15/libs/sandbox-contract"
 )
 
 type Settings struct {
@@ -148,8 +150,8 @@ func (s *Sandbox) runHelperLocked(
 		return "", err
 	}
 
-	reqBytes, err := json.Marshal(HelperRequest{
-		Settings: s.cfg,
+	reqBytes, err := json.Marshal(sandboxcontract.HelperRequest{
+		Settings: toContractSettings(s.cfg),
 		Command:  command,
 	})
 	if err != nil {
@@ -177,7 +179,7 @@ func (s *Sandbox) runHelperLocked(
 	)
 	runErr := cmd.Run()
 
-	var resp HelperResponse
+	var resp sandboxcontract.HelperResponse
 	parseErr := json.Unmarshal(stdout.Bytes(), &resp)
 	if parseErr != nil && stdout.Len() > 0 {
 		verbosef("helper: response parse failed action=%q: %v", action, parseErr)
@@ -203,6 +205,16 @@ func (s *Sandbox) runHelperLocked(
 		return "", errors.New(resp.Error)
 	}
 	return resp.Output, nil
+}
+
+func toContractSettings(cfg Settings) sandboxcontract.Settings {
+	return sandboxcontract.Settings{
+		ContainerName:    cfg.ContainerName,
+		FromImage:        cfg.FromImage,
+		WorkspaceHostDir: cfg.WorkspaceHostDir,
+		WorkspaceDir:     cfg.WorkspaceDir,
+		Network:          cfg.Network,
+	}
 }
 
 func helperCommand(ctx context.Context, helperBin, action string, _ Settings) *exec.Cmd {
@@ -295,7 +307,7 @@ func resolveHelperBinary() (string, error) {
 	}
 
 	return "", errors.New(
-		"sandbox helper binary not found (build ./cmd/q15-sandbox-helper and set Q15_SANDBOX_HELPER_BIN if needed)",
+		"sandbox helper binary not found (build ./systems/sandbox-helper and set Q15_SANDBOX_HELPER_BIN if needed)",
 	)
 }
 

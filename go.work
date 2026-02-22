@@ -1,3 +1,7 @@
 go 1.25.5
 
-use .
+use (
+	./libs/sandbox-contract
+	./systems/agent
+	./systems/sandbox-helper
+)

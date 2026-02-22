@@ -3,9 +3,9 @@ package cmd
 import (
 	"strings"
 
+	"github.com/q15co/q15/systems/agent/internal/app"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
-	"q15.co/sandbox/internal/app"
 )
 
 var startCmd = &cobra.Command{
