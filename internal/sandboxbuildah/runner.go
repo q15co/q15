@@ -68,6 +68,14 @@ func Prepare(ctx context.Context, cfg Settings) error {
 		verbosef("Prepare: mkdir failed: %v", err)
 		return fmt.Errorf("create workspace host dir %q: %w", cfg.WorkspaceHostDir, err)
 	}
+	storageHostDir, _ := defaultStorageHostDir()
+	if storageHostDir != "" {
+		verbosef("Prepare: ensuring storage host dir exists: %q", storageHostDir)
+		if err := os.MkdirAll(storageHostDir, 0o755); err != nil {
+			verbosef("Prepare: storage mkdir failed: %v", err)
+			return fmt.Errorf("create storage host dir %q: %w", storageHostDir, err)
+		}
+	}
 	if err := ctx.Err(); err != nil {
 		verbosef("Prepare: context error after workspace setup: %v", err)
 		return err
@@ -135,8 +143,28 @@ func openStore() (storage.Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	verbosef("openStore: default options graph_root=%q run_root=%q driver=%q", options.GraphRoot, options.RunRoot, options.GraphDriverName)
+	if graphRoot, ok := defaultStorageHostDir(); ok {
+		options.GraphRoot = graphRoot
+	}
+	options.GraphDriverName = "vfs"
+	verbosef("openStore: options graph_root=%q run_root=%q driver=%q graph_driver_options=%q", options.GraphRoot, options.RunRoot, options.GraphDriverName, options.GraphDriverOptions)
 	return storage.GetStore(options)
+}
+
+func defaultStorageHostDir() (string, bool) {
+	home := strings.TrimSpace(os.Getenv("HOME"))
+	if home == "" {
+		var err error
+		home, err = os.UserHomeDir()
+		if err != nil {
+			verbosef("defaultStorageHostDir: unable to resolve user home: %v", err)
+			return "", false
+		}
+	}
+	if home == "" {
+		return "", false
+	}
+	return filepath.Join(home, ".local", "share", "q15", "buildah-storage"), true
 }
 
 func openOrCreateBuilder(ctx context.Context, store storage.Store, cfg Settings) (*buildah.Builder, error) {

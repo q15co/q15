@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 )
@@ -137,7 +138,7 @@ func (s *Sandbox) runHelperLocked(ctx context.Context, action string, command st
 		return "", fmt.Errorf("marshal helper request: %w", err)
 	}
 
-	cmd := helperCommand(ctx, helperBin, action)
+	cmd := helperCommand(ctx, helperBin, action, s.cfg)
 	cmd.Stdin = bytes.NewReader(reqBytes)
 
 	var stdout bytes.Buffer
@@ -180,9 +181,11 @@ func (s *Sandbox) runHelperLocked(ctx context.Context, action string, command st
 	return resp.Output, nil
 }
 
-func helperCommand(ctx context.Context, helperBin, action string) *exec.Cmd {
+func helperCommand(ctx context.Context, helperBin, action string, _ Settings) *exec.Cmd {
 	if usePodmanUnshare() {
-		return exec.CommandContext(ctx, "podman", "unshare", helperBin, action)
+		cmd := exec.CommandContext(ctx, "podman", "unshare", helperBin, action)
+		cmd.Env = filterEnv(os.Environ(), "STORAGE_DRIVER")
+		return cmd
 	}
 	return exec.CommandContext(ctx, helperBin, action)
 }
@@ -191,9 +194,44 @@ func usePodmanUnshare() bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("Q15_SANDBOX_USE_PODMAN_UNSHARE"))) {
 	case "1", "true", "yes", "on":
 		return true
-	default:
+	case "0", "false", "no", "off":
 		return false
 	}
+	if runtime.GOOS != "linux" || os.Geteuid() == 0 {
+		return false
+	}
+	if _, err := exec.LookPath("podman"); err != nil {
+		verbosef("usePodmanUnshare: default disabled because podman is not in PATH: %v", err)
+		return false
+	}
+	return true
+}
+
+func filterEnv(env []string, blockedKeys ...string) []string {
+	if len(blockedKeys) == 0 || len(env) == 0 {
+		return env
+	}
+	blocked := make(map[string]struct{}, len(blockedKeys))
+	for _, k := range blockedKeys {
+		k = strings.TrimSpace(k)
+		if k == "" {
+			continue
+		}
+		blocked[k] = struct{}{}
+	}
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		key, _, ok := strings.Cut(kv, "=")
+		if !ok {
+			out = append(out, kv)
+			continue
+		}
+		if _, deny := blocked[key]; deny {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
 }
 
 func (s *Sandbox) helperBinaryLocked() (string, error) {
