@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	DefaultSystemPrompt = "You are a helpful assistant with excellent skills in using nixos and the fish shell"
+	DefaultSystemPrompt = "You are a helpful assistant. Use the available tools effectively and adapt to the sandbox environment described in the system prompt."
 	defaultMaxTurns     = 12
 )
 
