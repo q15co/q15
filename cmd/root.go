@@ -35,7 +35,7 @@ func Execute() error {
 }
 
 func initEnv() {
-	viper.SetEnvPrefix("SANDBOX")
+	viper.SetEnvPrefix("Q15")
 	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_", ".", "_"))
 	viper.AutomaticEnv()
 }

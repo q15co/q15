@@ -29,19 +29,21 @@ type Agent struct {
 }
 
 type Telegram struct {
-	Token    string `mapstructure:"token"`
-	TokenEnv string `mapstructure:"token_env"`
+	Token          string  `mapstructure:"token"`
+	TokenEnv       string  `mapstructure:"token_env"`
+	AllowedUserIDs []int64 `mapstructure:"allowed_user_ids"`
 }
 
 // AgentRuntime is the resolved runtime config for one agent after env vars and
 // provider/model references have been processed.
 type AgentRuntime struct {
-	Name            string
-	ProviderType    string
-	ProviderBaseURL string
-	ProviderAPIKey  string
-	Models          []string
-	TelegramToken   string
+	Name                   string
+	ProviderType           string
+	ProviderBaseURL        string
+	ProviderAPIKey         string
+	Models                 []string
+	TelegramToken          string
+	TelegramAllowedUserIDs []int64
 }
 
 func Load(path string) (Config, error) {
@@ -146,14 +148,19 @@ func (c Config) ResolveAgentRuntimes() ([]AgentRuntime, error) {
 		if err != nil {
 			return nil, fmt.Errorf("resolve telegram token for agent %q: %w", agentCfg.Name, err)
 		}
+		allowedUserIDs, err := normalizeAllowedUserIDs(agentCfg.Telegram.AllowedUserIDs)
+		if err != nil {
+			return nil, fmt.Errorf("resolve telegram allowed users for agent %q: %w", agentCfg.Name, err)
+		}
 
 		runtimes = append(runtimes, AgentRuntime{
-			Name:            strings.TrimSpace(agentCfg.Name),
-			ProviderType:    providerType,
-			ProviderBaseURL: strings.TrimSpace(provider.BaseURL),
-			ProviderAPIKey:  apiKey,
-			Models:          []string{modelName},
-			TelegramToken:   token,
+			Name:                   strings.TrimSpace(agentCfg.Name),
+			ProviderType:           providerType,
+			ProviderBaseURL:        strings.TrimSpace(provider.BaseURL),
+			ProviderAPIKey:         apiKey,
+			Models:                 []string{modelName},
+			TelegramToken:          token,
+			TelegramAllowedUserIDs: allowedUserIDs,
 		})
 	}
 
@@ -205,6 +212,12 @@ func (c Config) validate() error {
 		if _, _, err := parseModelRef(agent.Model); err != nil {
 			return fmt.Errorf("agent[%d].model: %w", i, err)
 		}
+		if strings.TrimSpace(agent.Telegram.Token) == "" && strings.TrimSpace(agent.Telegram.TokenEnv) == "" {
+			return fmt.Errorf("agent[%d].telegram requires token or token_env", i)
+		}
+		if _, err := normalizeAllowedUserIDs(agent.Telegram.AllowedUserIDs); err != nil {
+			return fmt.Errorf("agent[%d].telegram.allowed_user_ids: %w", i, err)
+		}
 	}
 
 	return nil
@@ -236,4 +249,25 @@ func normalizeProviderType(providerType string) string {
 	default:
 		return ""
 	}
+}
+
+func normalizeAllowedUserIDs(ids []int64) ([]int64, error) {
+	if len(ids) == 0 {
+		return nil, errors.New("must contain at least one user id")
+	}
+
+	out := make([]int64, 0, len(ids))
+	seen := make(map[int64]struct{}, len(ids))
+	for i, id := range ids {
+		if id <= 0 {
+			return nil, fmt.Errorf("[%d] must be greater than 0", i)
+		}
+		if _, ok := seen[id]; ok {
+			return nil, fmt.Errorf("[%d] duplicates user id %d", i, id)
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+
+	return out, nil
 }

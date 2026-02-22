@@ -24,6 +24,7 @@ model = "moonshot/kimi-k2.5"
 
 [agent.telegram]
 token_env = "JARED_TELEGRAM_TOKEN"
+allowed_user_ids = [123456789]
 `), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -55,6 +56,9 @@ token_env = "JARED_TELEGRAM_TOKEN"
 	if rt.TelegramToken != "tg-123" {
 		t.Fatalf("unexpected telegram token: %q", rt.TelegramToken)
 	}
+	if len(rt.TelegramAllowedUserIDs) != 1 || rt.TelegramAllowedUserIDs[0] != 123456789 {
+		t.Fatalf("unexpected allowed telegram user ids: %#v", rt.TelegramAllowedUserIDs)
+	}
 }
 
 func TestValidateRejectsLegacyAgentModelsList(t *testing.T) {
@@ -76,5 +80,30 @@ func TestValidateRejectsLegacyAgentModelsList(t *testing.T) {
 
 	if err := cfg.Validate(); err == nil {
 		t.Fatalf("expected validation error for legacy agent.models")
+	}
+}
+
+func TestValidateRequiresTelegramAllowedUserIDs(t *testing.T) {
+	cfg := Config{
+		Providers: []Provider{
+			{
+				Name:   "moonshot",
+				Type:   "openai-compatible",
+				KeyEnv: "MOONSHOT_API_KEY",
+			},
+		},
+		Agents: []Agent{
+			{
+				Name:  "no-allowlist",
+				Model: "moonshot/kimi-k2.5",
+				Telegram: Telegram{
+					TokenEnv: "TEST_TELEGRAM_TOKEN",
+				},
+			},
+		},
+	}
+
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected validation error when telegram.allowed_user_ids is missing")
 	}
 }

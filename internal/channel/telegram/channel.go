@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 
@@ -19,12 +20,15 @@ type IncomingMessage struct {
 
 type MessageHandler func(msg IncomingMessage)
 
+type Option func(*Channel) error
+
 type Channel struct {
-	bot       *telego.Bot
-	onMessage MessageHandler
+	bot            *telego.Bot
+	onMessage      MessageHandler
+	allowedUserIDs map[int64]struct{}
 }
 
-func NewChannel(token string, onMessage MessageHandler) (*Channel, error) {
+func NewChannel(token string, onMessage MessageHandler, opts ...Option) (*Channel, error) {
 	if strings.TrimSpace(token) == "" {
 		return nil, errors.New("telegram bot token is required")
 	}
@@ -37,10 +41,21 @@ func NewChannel(token string, onMessage MessageHandler) (*Channel, error) {
 		return nil, fmt.Errorf("create telegram bot: %w", err)
 	}
 
-	return &Channel{
+	ch := &Channel{
 		bot:       bot,
 		onMessage: onMessage,
-	}, nil
+	}
+
+	for _, opt := range opts {
+		if opt == nil {
+			continue
+		}
+		if err := opt(ch); err != nil {
+			return nil, err
+		}
+	}
+
+	return ch, nil
 }
 
 func (c *Channel) Start(ctx context.Context) error {
@@ -73,6 +88,17 @@ func (c *Channel) handleMessage(_ context.Context, message *telego.Message) erro
 	text := strings.TrimSpace(message.Text)
 	if text == "" {
 		return nil
+	}
+
+	if len(c.allowedUserIDs) > 0 {
+		if message.From == nil {
+			fmt.Fprintln(os.Stdout, "ignore telegram message without sender while allowlist is enabled")
+			return nil
+		}
+		if _, ok := c.allowedUserIDs[message.From.ID]; !ok {
+			fmt.Fprintf(os.Stdout, "ignore unauthorized telegram user %d\n", message.From.ID)
+			return nil
+		}
 	}
 
 	msg := IncomingMessage{
@@ -111,4 +137,23 @@ func (c *Channel) SendText(ctx context.Context, chatID, text string) error {
 		return fmt.Errorf("send telegram message: %w", err)
 	}
 	return nil
+}
+
+func WithAllowedUserIDs(ids []int64) Option {
+	return func(c *Channel) error {
+		if len(ids) == 0 {
+			return errors.New("telegram allowed user ids cannot be empty")
+		}
+
+		allowed := make(map[int64]struct{}, len(ids))
+		for i, id := range ids {
+			if id <= 0 {
+				return fmt.Errorf("telegram allowed user ids[%d] must be greater than 0", i)
+			}
+			allowed[id] = struct{}{}
+		}
+
+		c.allowedUserIDs = allowed
+		return nil
+	}
 }

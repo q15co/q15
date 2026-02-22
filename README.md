@@ -82,7 +82,7 @@ go run . start --config q15.toml
 | MOONSHOT_API_KEY | Provider dependent | API key for model provider in config |
 | TELEGRAM_BOT_TOKEN | Agent dependent | Telegram token when referenced by `telegram.token_env` |
 
-Runtime options can also be set with `SANDBOX_`-prefixed env vars (for example `SANDBOX_CONFIG`).
+Runtime options can also be set with `Q15_`-prefixed env vars (for example `Q15_CONFIG`).
 Config precedence is: flags > env vars > config file > defaults.
 
 ### Config File
@@ -102,10 +102,12 @@ model = "moonshot/kimi-k2.5"
 
 [agent.telegram]
 token_env = "JARED_TELEGRAM_TOKEN"
+allowed_user_ids = [123456789]
 \`\`\`
 
 The `agent.model` field uses `provider/model` format.
 You can set either `telegram.token` or `telegram.token_env` per agent.
+`telegram.allowed_user_ids` is required and only those Telegram users may talk to that agent.
 
 ### Supported Shells
 

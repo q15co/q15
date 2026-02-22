@@ -66,7 +66,7 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 		if err != nil && !errors.Is(err, context.Canceled) {
 			fmt.Fprintf(os.Stderr, "publish inbound error: %v\n", err)
 		}
-	})
+	}, telegram.WithAllowedUserIDs(rt.TelegramAllowedUserIDs))
 	if err != nil {
 		return err
 	}
