@@ -61,7 +61,14 @@ func New(cfg Settings) *Sandbox {
 	cfg.WorkspaceHostDir = filepath.Clean(strings.TrimSpace(cfg.WorkspaceHostDir))
 	cfg.WorkspaceDir = filepath.Clean(strings.TrimSpace(cfg.WorkspaceDir))
 	cfg.Network = normalizeNetworkModeOrDefault(cfg.Network)
-	verbosef("New: container=%q from_image=%q workspace_host_dir=%q workspace_dir=%q network=%q", cfg.ContainerName, cfg.FromImage, cfg.WorkspaceHostDir, cfg.WorkspaceDir, cfg.Network)
+	verbosef(
+		"New: container=%q from_image=%q workspace_host_dir=%q workspace_dir=%q network=%q",
+		cfg.ContainerName,
+		cfg.FromImage,
+		cfg.WorkspaceHostDir,
+		cfg.WorkspaceDir,
+		cfg.Network,
+	)
 	return &Sandbox{cfg: cfg}
 }
 
@@ -120,11 +127,22 @@ func (s *Sandbox) Exec(ctx context.Context, command string) (string, error) {
 		return "", err
 	}
 
-	verbosef("Exec: running command in container=%q workdir=%q mount=%q->%q command=%q", s.cfg.ContainerName, s.cfg.WorkspaceDir, s.cfg.WorkspaceHostDir, s.cfg.WorkspaceDir, command)
+	verbosef(
+		"Exec: running command in container=%q workdir=%q mount=%q->%q command=%q",
+		s.cfg.ContainerName,
+		s.cfg.WorkspaceDir,
+		s.cfg.WorkspaceHostDir,
+		s.cfg.WorkspaceDir,
+		command,
+	)
 	return s.runHelperLocked(ctx, "exec", command)
 }
 
-func (s *Sandbox) runHelperLocked(ctx context.Context, action string, command string) (string, error) {
+func (s *Sandbox) runHelperLocked(
+	ctx context.Context,
+	action string,
+	command string,
+) (string, error) {
 	helperBin, err := s.helperBinaryLocked()
 	if err != nil {
 		return "", err
@@ -150,7 +168,13 @@ func (s *Sandbox) runHelperLocked(ctx context.Context, action string, command st
 		cmd.Stderr = &stderr
 	}
 
-	verbosef("helper: exec=%q args=%q action=%q container=%q", cmd.Path, cmd.Args, action, s.cfg.ContainerName)
+	verbosef(
+		"helper: exec=%q args=%q action=%q container=%q",
+		cmd.Path,
+		cmd.Args,
+		action,
+		s.cfg.ContainerName,
+	)
 	runErr := cmd.Run()
 
 	var resp HelperResponse
@@ -270,7 +294,9 @@ func resolveHelperBinary() (string, error) {
 		return p, nil
 	}
 
-	return "", errors.New("sandbox helper binary not found (build ./cmd/q15-sandbox-helper and set Q15_SANDBOX_HELPER_BIN if needed)")
+	return "", errors.New(
+		"sandbox helper binary not found (build ./cmd/q15-sandbox-helper and set Q15_SANDBOX_HELPER_BIN if needed)",
+	)
 }
 
 func normalizeNetworkModeOrDefault(mode string) string {

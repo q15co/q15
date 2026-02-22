@@ -1,1 +1,9 @@
 q15.toml
+bin/
+q15
+q15-sandbox-helper
+.devenv/
+.devenv*
+.direnv/
+.devcontainer.json
+.pre-commit-config.yaml

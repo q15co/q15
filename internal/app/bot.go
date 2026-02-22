@@ -45,14 +45,25 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 		Network:          rt.SandboxNetwork,
 	})
 	if sandbox.VerboseEnabled() {
-		fmt.Printf("[app] preparing sandbox for agent=%q container=%q workspace_host_dir=%q workspace_dir=%q from_image=%q network=%q\n",
-			rt.Name, rt.SandboxContainerName, rt.WorkspaceHostDir, rt.WorkspaceDir, rt.SandboxFromImage, rt.SandboxNetwork)
+		fmt.Printf(
+			"[app] preparing sandbox for agent=%q container=%q workspace_host_dir=%q workspace_dir=%q from_image=%q network=%q\n",
+			rt.Name,
+			rt.SandboxContainerName,
+			rt.WorkspaceHostDir,
+			rt.WorkspaceDir,
+			rt.SandboxFromImage,
+			rt.SandboxNetwork,
+		)
 	}
 	if err := agentSandbox.Prepare(ctx); err != nil {
 		return fmt.Errorf("prepare sandbox for agent %q: %w", rt.Name, err)
 	}
 	if sandbox.VerboseEnabled() {
-		fmt.Printf("[app] sandbox ready for agent=%q container=%q\n", rt.Name, rt.SandboxContainerName)
+		fmt.Printf(
+			"[app] sandbox ready for agent=%q container=%q\n",
+			rt.Name,
+			rt.SandboxContainerName,
+		)
 	}
 
 	systemPrompt := agent.DefaultSystemPrompt
@@ -146,30 +157,63 @@ func composeSystemPrompt(base string, info sandbox.SandboxInfo) string {
 		lines = append(lines, fmt.Sprintf("- Base image: %s", info.FromImage))
 	}
 	if info.ContainerName != "" {
-		lines = append(lines, fmt.Sprintf("- Sandbox container: %s (persistent Buildah builder)", info.ContainerName))
+		lines = append(
+			lines,
+			fmt.Sprintf("- Sandbox container: %s (persistent Buildah builder)", info.ContainerName),
+		)
 	}
 	if info.WorkspaceDir != "" {
-		lines = append(lines, fmt.Sprintf("- Workspace: %s (bind-mounted persistent host directory)", info.WorkspaceDir))
+		lines = append(
+			lines,
+			fmt.Sprintf(
+				"- Workspace: %s (bind-mounted persistent host directory)",
+				info.WorkspaceDir,
+			),
+		)
 	}
 	if info.Network != "" {
 		lines = append(lines, fmt.Sprintf("- Network: %s", info.Network))
 		if info.Network == "disabled" {
-			lines = append(lines, "- Note: internet access from inside this sandbox is disabled; package installs/downloads will fail unless artifacts are already present locally.")
+			lines = append(
+				lines,
+				"- Note: internet access from inside this sandbox is disabled; package installs/downloads will fail unless artifacts are already present locally.",
+			)
 		}
 	}
 	if info.PackageManager != "" {
 		lines = append(lines, fmt.Sprintf("- Package manager: %s", info.PackageManager))
-		lines = append(lines, fmt.Sprintf("- Prefer using `%s` for installing tools in this sandbox.", packageManagerInstallHint(info.PackageManager)))
+		lines = append(
+			lines,
+			fmt.Sprintf(
+				"- Prefer using `%s` for installing tools in this sandbox.",
+				packageManagerInstallHint(info.PackageManager),
+			),
+		)
 		if info.PackageManager == "apt-get" {
-			lines = append(lines, "- In this rootless sandbox, Debian/Ubuntu package downloads may fail when apt tries to drop privileges to `_apt`.")
-			lines = append(lines, "- If that happens, use: `apt-get -o APT::Sandbox::User=root update && DEBIAN_FRONTEND=noninteractive apt-get -o APT::Sandbox::User=root install -y <package>`")
+			lines = append(
+				lines,
+				"- In this rootless sandbox, Debian/Ubuntu package downloads may fail when apt tries to drop privileges to `_apt`.",
+			)
+			lines = append(
+				lines,
+				"- If that happens, use: `apt-get -o APT::Sandbox::User=root update && DEBIAN_FRONTEND=noninteractive apt-get -o APT::Sandbox::User=root install -y <package>`",
+			)
 		}
 	}
 	if len(info.ShellsAvailable) > 0 {
-		lines = append(lines, fmt.Sprintf("- Available shells: %s", strings.Join(info.ShellsAvailable, ", ")))
+		lines = append(
+			lines,
+			fmt.Sprintf("- Available shells: %s", strings.Join(info.ShellsAvailable, ", ")),
+		)
 	}
 	if len(info.ToolsAvailable) > 0 {
-		lines = append(lines, fmt.Sprintf("- Preinstalled tools detected: %s", strings.Join(info.ToolsAvailable, ", ")))
+		lines = append(
+			lines,
+			fmt.Sprintf(
+				"- Preinstalled tools detected: %s",
+				strings.Join(info.ToolsAvailable, ", "),
+			),
+		)
 	}
 
 	return base + "\n\n" + strings.Join(lines, "\n")

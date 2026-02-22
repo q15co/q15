@@ -12,6 +12,7 @@ import (
 
 	"github.com/containers/buildah"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
+	nettypes "go.podman.io/common/libnetwork/types"
 	"go.podman.io/storage"
 )
 
@@ -86,13 +87,24 @@ func Prepare(ctx context.Context, cfg Settings) error {
 		verbosef("Prepare: openStore failed: %v", err)
 		return fmt.Errorf("open container storage: %w", err)
 	}
-	verbosef("Prepare: storage opened (graph_root=%q run_root=%q driver=%q)", store.GraphRoot(), store.RunRoot(), store.GraphDriverName())
+	verbosef(
+		"Prepare: storage opened (graph_root=%q run_root=%q driver=%q)",
+		store.GraphRoot(),
+		store.RunRoot(),
+		store.GraphDriverName(),
+	)
 	builder, err := openOrCreateBuilder(ctx, store, cfg)
 	if err != nil {
 		verbosef("Prepare: openOrCreateBuilder failed: %v", err)
 		return fmt.Errorf("ensure build container %q: %w", cfg.ContainerName, err)
 	}
-	verbosef("Prepare: ready (container=%q container_id=%q from_image=%q network=%q)", cfg.ContainerName, builder.ContainerID, builder.FromImage, cfg.Network)
+	verbosef(
+		"Prepare: ready (container=%q container_id=%q from_image=%q network=%q)",
+		cfg.ContainerName,
+		builder.ContainerID,
+		builder.FromImage,
+		cfg.Network,
+	)
 	return nil
 }
 
@@ -125,7 +137,14 @@ func Exec(ctx context.Context, cfg Settings, command string) (string, error) {
 		return "", fmt.Errorf("ensure build container %q: %w", cfg.ContainerName, err)
 	}
 
-	verbosef("Exec: running command in container=%q workdir=%q mount=%q->%q command=%q", cfg.ContainerName, cfg.WorkspaceDir, cfg.WorkspaceHostDir, cfg.WorkspaceDir, command)
+	verbosef(
+		"Exec: running command in container=%q workdir=%q mount=%q->%q command=%q",
+		cfg.ContainerName,
+		cfg.WorkspaceDir,
+		cfg.WorkspaceHostDir,
+		cfg.WorkspaceDir,
+		command,
+	)
 	return runInBuilder(builder, cfg, command), nil
 }
 
@@ -147,7 +166,13 @@ func openStore() (storage.Store, error) {
 		options.GraphRoot = graphRoot
 	}
 	options.GraphDriverName = "vfs"
-	verbosef("openStore: options graph_root=%q run_root=%q driver=%q graph_driver_options=%q", options.GraphRoot, options.RunRoot, options.GraphDriverName, options.GraphDriverOptions)
+	verbosef(
+		"openStore: options graph_root=%q run_root=%q driver=%q graph_driver_options=%q",
+		options.GraphRoot,
+		options.RunRoot,
+		options.GraphDriverName,
+		options.GraphDriverOptions,
+	)
 	return storage.GetStore(options)
 }
 
@@ -167,28 +192,40 @@ func defaultStorageHostDir() (string, bool) {
 	return filepath.Join(home, ".local", "share", "q15", "buildah-storage"), true
 }
 
-func openOrCreateBuilder(ctx context.Context, store storage.Store, cfg Settings) (*buildah.Builder, error) {
+func openOrCreateBuilder(
+	ctx context.Context,
+	store storage.Store,
+	cfg Settings,
+) (*buildah.Builder, error) {
 	networkEnabled := cfg.Network == "enabled"
-	var disabledNet *disabledNetwork
+	var disabledNet nettypes.ContainerNetwork
 	if !networkEnabled {
-		n := disabledNetwork{}
-		disabledNet = &n
+		disabledNet = newDisabledNetwork()
 	}
 
 	verbosef("openOrCreateBuilder: trying existing builder %q", cfg.ContainerName)
 	builder, err := buildah.OpenBuilder(store, cfg.ContainerName)
 	if err == nil {
 		if disabledNet != nil {
-			builder.NetworkInterface = *disabledNet
+			builder.NetworkInterface = disabledNet
 		}
-		verbosef("openOrCreateBuilder: opened existing builder %q (id=%q image=%q)", cfg.ContainerName, builder.ContainerID, builder.FromImage)
+		verbosef(
+			"openOrCreateBuilder: opened existing builder %q (id=%q image=%q)",
+			cfg.ContainerName,
+			builder.ContainerID,
+			builder.FromImage,
+		)
 		return builder, nil
 	}
 	if !errors.Is(err, storage.ErrContainerUnknown) {
 		verbosef("openOrCreateBuilder: open existing failed with non-notfound error: %v", err)
 		return nil, err
 	}
-	verbosef("openOrCreateBuilder: builder %q not found, creating from image %q", cfg.ContainerName, cfg.FromImage)
+	verbosef(
+		"openOrCreateBuilder: builder %q not found, creating from image %q",
+		cfg.ContainerName,
+		cfg.FromImage,
+	)
 
 	builderOpts := buildah.BuilderOptions{
 		Container:    cfg.ContainerName,
@@ -199,7 +236,7 @@ func openOrCreateBuilder(ctx context.Context, store storage.Store, cfg Settings)
 	if networkEnabled {
 		builderOpts.ConfigureNetwork = buildah.NetworkEnabled
 	} else {
-		builderOpts.NetworkInterface = *disabledNet
+		builderOpts.NetworkInterface = disabledNet
 		builderOpts.ConfigureNetwork = buildah.NetworkDisabled
 	}
 	builder, err = buildah.NewBuilder(ctx, store, builderOpts)
@@ -208,9 +245,14 @@ func openOrCreateBuilder(ctx context.Context, store storage.Store, cfg Settings)
 		return nil, err
 	}
 	if disabledNet != nil {
-		builder.NetworkInterface = *disabledNet
+		builder.NetworkInterface = disabledNet
 	}
-	verbosef("openOrCreateBuilder: created builder %q (id=%q image=%q)", cfg.ContainerName, builder.ContainerID, builder.FromImage)
+	verbosef(
+		"openOrCreateBuilder: created builder %q (id=%q image=%q)",
+		cfg.ContainerName,
+		builder.ContainerID,
+		builder.FromImage,
+	)
 	return builder, nil
 }
 

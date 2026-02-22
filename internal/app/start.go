@@ -4,8 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"q15.co/sandbox/internal/config"
 	"strings"
+
+	"q15.co/sandbox/internal/config"
 )
 
 func Start(ctx context.Context, configPath string) error {

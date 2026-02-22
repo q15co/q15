@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: CI
+    runs-on: [self-hosted]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Verify devenv available
+        run: |
+          if ! command -v devenv >/dev/null 2>&1; then
+            echo "::error::devenv not found on self-hosted runner"
+            exit 1
+          fi
+          echo "✓ devenv found at $(which devenv)"
+
+      - name: Run devenv test (hooks/lint/static checks)
+        run: devenv test
+
+      - name: Build binaries
+        run: devenv shell -- make build
+
+      - name: Run tests
+        run: devenv shell -- make test

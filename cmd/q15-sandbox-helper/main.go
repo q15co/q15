@@ -1,3 +1,4 @@
+// Package main implements the Buildah helper subprocess used by q15 sandboxes.
 package main
 
 import (
@@ -74,7 +75,11 @@ func loadRequest() (sandbox.HelperRequest, error) {
 		}
 		var req sandbox.HelperRequest
 		if err := json.Unmarshal(raw, &req); err != nil {
-			return sandbox.HelperRequest{}, fmt.Errorf("decode helper request from %s: %w", helperRequestEnv, err)
+			return sandbox.HelperRequest{}, fmt.Errorf(
+				"decode helper request from %s: %w",
+				helperRequestEnv,
+				err,
+			)
 		}
 		return req, nil
 	}

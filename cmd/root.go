@@ -1,3 +1,4 @@
+// Package cmd defines the q15 CLI commands.
 package cmd
 
 import (
@@ -30,6 +31,7 @@ func init() {
 	rootCmd.AddCommand(startCmd)
 }
 
+// Execute runs the root command.
 func Execute() error {
 	return rootCmd.ExecuteContext(context.Background())
 }

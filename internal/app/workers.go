@@ -10,7 +10,11 @@ import (
 	"q15.co/sandbox/internal/bus"
 )
 
-func runAgentWorker(ctx context.Context, messageBus *bus.Bus, getAgent func(sessionKey string) agent.Agent) error {
+func runAgentWorker(
+	ctx context.Context,
+	messageBus *bus.Bus,
+	getAgent func(sessionKey string) agent.Agent,
+) error {
 	for {
 		select {
 		case <-ctx.Done():

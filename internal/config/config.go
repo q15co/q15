@@ -120,7 +120,9 @@ func (a Agent) TelegramToken() (string, error) {
 
 	envName := strings.TrimSpace(a.Telegram.TokenEnv)
 	if envName == "" {
-		return "", errors.New("telegram token is required (set telegram.token or telegram.token_env)")
+		return "", errors.New(
+			"telegram token is required (set telegram.token or telegram.token_env)",
+		)
 	}
 
 	envValue := strings.TrimSpace(os.Getenv(envName))
@@ -145,17 +147,30 @@ func (c Config) ResolveAgentRuntimes() ([]AgentRuntime, error) {
 
 		provider, ok := c.FindProvider(providerName)
 		if !ok {
-			return nil, fmt.Errorf("agents[%d].model provider %q is not defined in providers", i, providerName)
+			return nil, fmt.Errorf(
+				"agents[%d].model provider %q is not defined in providers",
+				i,
+				providerName,
+			)
 		}
 
 		providerType := normalizeProviderType(provider.Type)
 		if providerType == "" {
-			return nil, fmt.Errorf("agents[%d].model provider %q has unsupported type %q", i, provider.Name, provider.Type)
+			return nil, fmt.Errorf(
+				"agents[%d].model provider %q has unsupported type %q",
+				i,
+				provider.Name,
+				provider.Type,
+			)
 		}
 
 		apiKey := strings.TrimSpace(os.Getenv(strings.TrimSpace(provider.KeyEnv)))
 		if apiKey == "" {
-			return nil, fmt.Errorf("provider %q requires env var %q", provider.Name, provider.KeyEnv)
+			return nil, fmt.Errorf(
+				"provider %q requires env var %q",
+				provider.Name,
+				provider.KeyEnv,
+			)
 		}
 
 		token, err := agentCfg.TelegramToken()
@@ -164,7 +179,11 @@ func (c Config) ResolveAgentRuntimes() ([]AgentRuntime, error) {
 		}
 		allowedUserIDs, err := normalizeAllowedUserIDs(agentCfg.Telegram.AllowedUserIDs)
 		if err != nil {
-			return nil, fmt.Errorf("resolve telegram allowed users for agent %q: %w", agentCfg.Name, err)
+			return nil, fmt.Errorf(
+				"resolve telegram allowed users for agent %q: %w",
+				agentCfg.Name,
+				err,
+			)
 		}
 		sandboxNetwork, err := normalizeSandboxNetwork(agentCfg.Sandbox.Network)
 		if err != nil {
@@ -229,7 +248,11 @@ func (c Config) validate() error {
 		agents[name] = struct{}{}
 
 		if len(agent.Models) > 0 {
-			return fmt.Errorf("agent[%d].models is not supported in q15.toml; use agent[%d].model = \"provider/model\"", i, i)
+			return fmt.Errorf(
+				"agent[%d].models is not supported in q15.toml; use agent[%d].model = \"provider/model\"",
+				i,
+				i,
+			)
 		}
 
 		if _, _, err := parseModelRef(agent.Model); err != nil {
@@ -250,7 +273,8 @@ func (c Config) validate() error {
 		if _, err := normalizeSandboxNetwork(agent.Sandbox.Network); err != nil {
 			return fmt.Errorf("agent[%d].sandbox.network: %w", i, err)
 		}
-		if strings.TrimSpace(agent.Telegram.Token) == "" && strings.TrimSpace(agent.Telegram.TokenEnv) == "" {
+		if strings.TrimSpace(agent.Telegram.Token) == "" &&
+			strings.TrimSpace(agent.Telegram.TokenEnv) == "" {
 			return fmt.Errorf("agent[%d].telegram requires token or token_env", i)
 		}
 		if _, err := normalizeAllowedUserIDs(agent.Telegram.AllowedUserIDs); err != nil {

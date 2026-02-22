@@ -1,3 +1,4 @@
+// Package main starts the q15 sandbox application.
 package main
 
 import (

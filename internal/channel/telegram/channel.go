@@ -92,7 +92,10 @@ func (c *Channel) handleMessage(_ context.Context, message *telego.Message) erro
 
 	if len(c.allowedUserIDs) > 0 {
 		if message.From == nil {
-			fmt.Fprintln(os.Stdout, "ignore telegram message without sender while allowlist is enabled")
+			fmt.Fprintln(
+				os.Stdout,
+				"ignore telegram message without sender while allowlist is enabled",
+			)
 			return nil
 		}
 		if _, ok := c.allowedUserIDs[message.From.ID]; !ok {

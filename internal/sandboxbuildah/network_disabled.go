@@ -17,7 +17,10 @@ func newDisabledNetwork() nettypes.ContainerNetwork {
 	return disabledNetwork{}
 }
 
-func (disabledNetwork) NetworkCreate(nettypes.Network, *nettypes.NetworkCreateOptions) (nettypes.Network, error) {
+func (disabledNetwork) NetworkCreate(
+	nettypes.Network,
+	*nettypes.NetworkCreateOptions,
+) (nettypes.Network, error) {
 	return nettypes.Network{}, errSandboxNetworkDisabled
 }
 
@@ -37,7 +40,10 @@ func (disabledNetwork) NetworkInspect(string) (nettypes.Network, error) {
 	return nettypes.Network{}, errSandboxNetworkDisabled
 }
 
-func (disabledNetwork) Setup(string, nettypes.SetupOptions) (map[string]nettypes.StatusBlock, error) {
+func (disabledNetwork) Setup(
+	string,
+	nettypes.SetupOptions,
+) (map[string]nettypes.StatusBlock, error) {
 	return map[string]nettypes.StatusBlock{}, nil
 }
 

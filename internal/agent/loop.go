@@ -147,7 +147,11 @@ func (l *Loop) runTool(ctx context.Context, call ToolCall) (string, error) {
 	return l.tools.Run(ctx, call)
 }
 
-func (l *Loop) complete(ctx context.Context, messages []Message, tools []ToolDefinition) (ModelResult, error) {
+func (l *Loop) complete(
+	ctx context.Context,
+	messages []Message,
+	tools []ToolDefinition,
+) (ModelResult, error) {
 	var lastErr error
 
 	for _, model := range l.models {

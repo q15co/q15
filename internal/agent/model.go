@@ -45,7 +45,12 @@ type ModelResult struct {
 }
 
 type Model interface {
-	Complete(ctx context.Context, model string, messages []Message, tools []ToolDefinition) (ModelResult, error)
+	Complete(
+		ctx context.Context,
+		model string,
+		messages []Message,
+		tools []ToolDefinition,
+	) (ModelResult, error)
 }
 
 type ToolRunner interface {

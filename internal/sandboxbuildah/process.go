@@ -39,8 +39,14 @@ func EnsureProcessEnvironment() error {
 func ensureBuildahProcessEnvironment() error {
 	verbosef("ensureBuildahProcessEnvironment: begin")
 	buildahEnvOnce.Do(func() {
-		verbosef("ensureBuildahProcessEnvironment: first-time setup (euid=%d rootless=%v rootless_uid=%d userns_env=%q XDG_RUNTIME_DIR=%q)",
-			os.Geteuid(), unshare.IsRootless(), unshare.GetRootlessUID(), os.Getenv(unshare.UsernsEnvName), os.Getenv("XDG_RUNTIME_DIR"))
+		verbosef(
+			"ensureBuildahProcessEnvironment: first-time setup (euid=%d rootless=%v rootless_uid=%d userns_env=%q XDG_RUNTIME_DIR=%q)",
+			os.Geteuid(),
+			unshare.IsRootless(),
+			unshare.GetRootlessUID(),
+			os.Getenv(unshare.UsernsEnvName),
+			os.Getenv("XDG_RUNTIME_DIR"),
+		)
 		if err := setXDGRuntimeDir(); err != nil {
 			buildahEnvErr = err
 			verbosef("ensureBuildahProcessEnvironment: setXDGRuntimeDir failed: %v", err)
@@ -49,19 +55,33 @@ func ensureBuildahProcessEnvironment() error {
 		if skipUnshareEnabled() {
 			if err := markRootlessUsernsConfigured(); err != nil {
 				buildahEnvErr = err
-				verbosef("ensureBuildahProcessEnvironment: markRootlessUsernsConfigured failed: %v", err)
+				verbosef(
+					"ensureBuildahProcessEnvironment: markRootlessUsernsConfigured failed: %v",
+					err,
+				)
 				return
 			}
-			verbosef("ensureBuildahProcessEnvironment: skipping unshare due to Q15_SANDBOX_SKIP_UNSHARE=%q", os.Getenv("Q15_SANDBOX_SKIP_UNSHARE"))
+			verbosef(
+				"ensureBuildahProcessEnvironment: skipping unshare due to Q15_SANDBOX_SKIP_UNSHARE=%q",
+				os.Getenv("Q15_SANDBOX_SKIP_UNSHARE"),
+			)
 			return
 		}
 		if os.Getenv(unshare.UsernsEnvName) != "" {
-			verbosef("ensureBuildahProcessEnvironment: skipping unshare because %s is already set to %q", unshare.UsernsEnvName, os.Getenv(unshare.UsernsEnvName))
+			verbosef(
+				"ensureBuildahProcessEnvironment: skipping unshare because %s is already set to %q",
+				unshare.UsernsEnvName,
+				os.Getenv(unshare.UsernsEnvName),
+			)
 			return
 		}
-		verbosef("ensureBuildahProcessEnvironment: calling unshare.MaybeReexecUsingUserNamespace(false)")
+		verbosef(
+			"ensureBuildahProcessEnvironment: calling unshare.MaybeReexecUsingUserNamespace(false)",
+		)
 		unshare.MaybeReexecUsingUserNamespace(false)
-		verbosef("ensureBuildahProcessEnvironment: returned from unshare.MaybeReexecUsingUserNamespace(false)")
+		verbosef(
+			"ensureBuildahProcessEnvironment: returned from unshare.MaybeReexecUsingUserNamespace(false)",
+		)
 	})
 	if buildahEnvErr != nil {
 		verbosef("ensureBuildahProcessEnvironment: error: %v", buildahEnvErr)
@@ -73,7 +93,11 @@ func ensureBuildahProcessEnvironment() error {
 
 func setXDGRuntimeDir() error {
 	if !unshare.IsRootless() || os.Getenv("XDG_RUNTIME_DIR") != "" {
-		verbosef("setXDGRuntimeDir: no change (rootless=%v, XDG_RUNTIME_DIR=%q)", unshare.IsRootless(), os.Getenv("XDG_RUNTIME_DIR"))
+		verbosef(
+			"setXDGRuntimeDir: no change (rootless=%v, XDG_RUNTIME_DIR=%q)",
+			unshare.IsRootless(),
+			os.Getenv("XDG_RUNTIME_DIR"),
+		)
 		return nil
 	}
 
@@ -96,13 +120,20 @@ func markRootlessUsernsConfigured() error {
 
 	current := os.Getenv(unshare.UsernsEnvName)
 	if current == "done" {
-		verbosef("markRootlessUsernsConfigured: %s already set to %q", unshare.UsernsEnvName, current)
+		verbosef(
+			"markRootlessUsernsConfigured: %s already set to %q",
+			unshare.UsernsEnvName,
+			current,
+		)
 		return nil
 	}
 	if err := os.Setenv(unshare.UsernsEnvName, "done"); err != nil {
 		return fmt.Errorf("set %s=done: %w", unshare.UsernsEnvName, err)
 	}
-	verbosef("markRootlessUsernsConfigured: set %s=done (skip-unshare compatibility mode, not a real userns reexec)", unshare.UsernsEnvName)
+	verbosef(
+		"markRootlessUsernsConfigured: set %s=done (skip-unshare compatibility mode, not a real userns reexec)",
+		unshare.UsernsEnvName,
+	)
 	return nil
 }
 

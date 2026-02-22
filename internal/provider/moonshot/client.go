@@ -92,7 +92,10 @@ func mapMessages(messages []agent.Message) ([]openai.ChatCompletionMessageParamU
 			out = append(out, openai.UserMessage(msg.Content))
 		case agent.AssistantRole:
 			if len(msg.ProviderRaw) > 0 {
-				out = append(out, param.Override[openai.ChatCompletionMessageParamUnion](msg.ProviderRaw))
+				out = append(
+					out,
+					param.Override[openai.ChatCompletionMessageParamUnion](msg.ProviderRaw),
+				)
 				continue
 			}
 
@@ -124,7 +127,9 @@ func mapMessages(messages []agent.Message) ([]openai.ChatCompletionMessageParamU
 	return out, nil
 }
 
-func mapAssistantToolCalls(calls []agent.ToolCall) []openai.ChatCompletionMessageToolCallUnionParam {
+func mapAssistantToolCalls(
+	calls []agent.ToolCall,
+) []openai.ChatCompletionMessageToolCallUnionParam {
 	if len(calls) == 0 {
 		return nil
 	}
