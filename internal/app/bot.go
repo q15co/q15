@@ -11,21 +11,30 @@ import (
 	"q15.co/sandbox/internal/agent"
 	"q15.co/sandbox/internal/bus"
 	"q15.co/sandbox/internal/channel/telegram"
+	"q15.co/sandbox/internal/config"
 	"q15.co/sandbox/internal/provider/moonshot"
 	"q15.co/sandbox/internal/tools"
 )
 
-func RunBot(ctx context.Context, modelName string) error {
-	token := strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN"))
+func runBot(ctx context.Context, rt config.AgentRuntime) error {
+	token := strings.TrimSpace(rt.TelegramToken)
 	if token == "" {
-		return errors.New("TELEGRAM_BOT_TOKEN is not set")
+		return errors.New("telegram token is required")
 	}
-	modelName = strings.TrimSpace(modelName)
-	if modelName == "" {
-		return errors.New("model name is required")
+	apiKey := strings.TrimSpace(rt.ProviderAPIKey)
+	if apiKey == "" {
+		return errors.New("provider api key is required")
 	}
 
-	modelAdapter := moonshot.NewClient()
+	models := normalizeModelList(rt.Models)
+	if len(models) == 0 {
+		return errors.New("at least one model is required")
+	}
+
+	modelAdapter, err := newModelAdapter(rt)
+	if err != nil {
+		return err
+	}
 	toolRunner := tools.NewShell()
 	messageBus := bus.New(bus.DefaultBufferSize)
 
@@ -42,7 +51,7 @@ func RunBot(ctx context.Context, modelName string) error {
 			return a
 		}
 
-		a := agent.NewLoop(modelAdapter, toolRunner, modelName, agent.DefaultSystemPrompt)
+		a := agent.NewLoop(modelAdapter, toolRunner, models, agent.DefaultSystemPrompt)
 		agents[sessionKey] = a
 		return a
 	}
@@ -84,73 +93,32 @@ func RunBot(ctx context.Context, modelName string) error {
 	}
 }
 
-func runAgentWorker(ctx context.Context, messageBus *bus.Bus, getAgent func(sessionKey string) agent.Agent) error {
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case in := <-messageBus.Inbound():
-			text := strings.TrimSpace(in.Text)
-			if text == "" {
-				continue
-			}
-
-			sessionKey, err := bus.SessionKey(in.Channel, in.ChatID)
-			if err != nil {
-				continue
-			}
-
-			a := getAgent(sessionKey)
-			if text == "/reset" {
-				if err := a.Reset(ctx); err != nil {
-					_ = messageBus.PublishOutbound(ctx, bus.OutboundMessage{
-						Channel: in.Channel,
-						ChatID:  in.ChatID,
-						Text:    "reset error: " + err.Error(),
-					})
-					continue
-				}
-				_ = messageBus.PublishOutbound(ctx, bus.OutboundMessage{
-					Channel: in.Channel,
-					ChatID:  in.ChatID,
-					Text:    "history reset",
-				})
-				continue
-			}
-
-			answer, err := a.Reply(ctx, text)
-			if err != nil {
-				answer = "reply error: " + err.Error()
-			}
-			if err := messageBus.PublishOutbound(ctx, bus.OutboundMessage{
-				Channel: in.Channel,
-				ChatID:  in.ChatID,
-				Text:    answer,
-			}); err != nil {
-				return err
-			}
-		}
+func newModelAdapter(rt config.AgentRuntime) (agent.Model, error) {
+	switch strings.ToLower(strings.TrimSpace(rt.ProviderType)) {
+	case "openai-compatible":
+		return moonshot.NewClient(rt.ProviderBaseURL, rt.ProviderAPIKey), nil
+	default:
+		return nil, fmt.Errorf("unsupported provider type %q", rt.ProviderType)
 	}
 }
 
-func runOutboundWorker(
-	ctx context.Context,
-	messageBus *bus.Bus,
-	channelName string,
-	send func(context.Context, string, string) error,
-) error {
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case out := <-messageBus.Outbound():
-			if out.Channel != channelName {
-				continue
-			}
-
-			if err := send(ctx, out.ChatID, out.Text); err != nil {
-				fmt.Fprintf(os.Stderr, "outbound send error (%s): %v\n", channelName, err)
-			}
-		}
+func normalizeModelList(models []string) []string {
+	if len(models) == 0 {
+		return nil
 	}
+
+	out := make([]string, 0, len(models))
+	seen := make(map[string]struct{}, len(models))
+	for _, model := range models {
+		model = strings.TrimSpace(model)
+		if model == "" {
+			continue
+		}
+		if _, ok := seen[model]; ok {
+			continue
+		}
+		seen[model] = struct{}{}
+		out = append(out, model)
+	}
+	return out
 }

@@ -1,15 +1,14 @@
-# Shell AI Assistant
+# Shell AI Agent Bot
 
-An interactive AI-powered shell assistant CLI written in Go. This tool provides an intelligent conversational interface that can execute shell commands on your behalf, with a focus on NixOS and fish shell expertise.
+An AI-powered Telegram agent bot written in Go. The bot runs an agent loop that can execute shell commands and reply back through Telegram.
 
 ## Features
 
 - 🤖 **AI-Powered Conversations**: Uses Moonshot AI's Kimi K2.5 model for intelligent responses
 - 🐚 **Shell Command Execution**: Can execute shell commands in fish, bash, or sh via function calling
-- 💬 **Interactive CLI**: Simple REPL-style interface for continuous conversation
 - 🧵 **Conversation Memory**: Maintains context across turns in memory
-- 🔄 **Reset Support**: Clear conversation history with `/reset`
-- ✉️ **Telegram Adapter**: Optional Telegram channel driver
+- 🔄 **Reset Support**: Clear chat history with `/reset`
+- ✉️ **Telegram Adapter**: Telegram channel driver with inbound/outbound message routing
 - ⏱️ **Command Timeouts**: 30-second timeout for safety on shell commands
 - 🏗️ **Clean Architecture**: Uses ports and adapters pattern for maintainability
 
@@ -18,21 +17,23 @@ An interactive AI-powered shell assistant CLI written in Go. This tool provides 
 This project follows **Hexagonal Architecture** (Ports and Adapters pattern):
 
 \`\`\`
-cmd/main.go (Entry Point)
+main.go (Entry Point)
        |
        v
-internal/app/cli.go (CLI Driver)
+cmd/root.go + cmd/start.go (CLI Commands)
        |
-       | depends on
        v
-internal/agent/agent.go (Agent Interface)
+internal/app/start.go (Startup + Config Runtime)
        |
-       | implements
        v
-internal/provider/moonshot/client.go (Provider Adapter)
-       - Moonshot AI integration
-       - Tool/function calling
-       - Shell execution
+internal/app/bot.go + workers.go (Bot Runtime + Workers)
+       |
+       v
+internal/agent/loop.go (Agent Loop)
+       |
+       v
+internal/provider/moonshot/client.go (Model Adapter)
+internal/tools/shell.go (Tool Adapter)
 \`\`\`
 
 ## Prerequisites
@@ -60,50 +61,16 @@ export MOONSHOT_API_KEY=your-api-key-here
 
 ## Usage
 
-Run the application:
+Show CLI help:
 
 \`\`\`bash
-go run cmd/main.go
+go run .
 \`\`\`
 
-Or build and run:
+Start all agents from `q15.toml`:
 
 \`\`\`bash
-go build -o shell-ai cmd/main.go
-./shell-ai
-\`\`\`
-
-### Interactive Commands
-
-Once running, you'll see the prompt:
-
-\`\`\`
-Type your question and press enter.
-Use '/reset' to clear chat history.
-Type 'exit' to quit.
-#>
-\`\`\`
-
-- Type any question or command request
-- The AI can execute shell commands on your behalf (you'll see CMD> and OUT> prefixes)
-- Use /reset to clear conversation history
-- Type exit or quit to exit
-
-### Example Session
-
-\`\`\`
-#> list all files in the current directory
-CMD> ls -la
-total 12
-drwxr-xr-x 3 user users   60 Feb 20 23:49 .
-...
-OUT> (output shown above)
-AI> Here are the files in your current directory...
-
-#> /reset
-history reset
-
-#> exit
+go run . start --config q15.toml
 \`\`\`
 
 ## Configuration
@@ -112,8 +79,33 @@ history reset
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| MOONSHOT_API_KEY | Yes | Your Moonshot AI API key |
-| TELEGRAM_BOT_TOKEN | Bot mode only | Telegram bot token |
+| MOONSHOT_API_KEY | Provider dependent | API key for model provider in config |
+| TELEGRAM_BOT_TOKEN | Agent dependent | Telegram token when referenced by `telegram.token_env` |
+
+Runtime options can also be set with `SANDBOX_`-prefixed env vars (for example `SANDBOX_CONFIG`).
+Config precedence is: flags > env vars > config file > defaults.
+
+### Config File
+
+Use `q15.toml` to define providers and agents:
+
+\`\`\`toml
+[[provider]]
+name = "moonshot"
+type = "openai-compatible"
+base_url = "https://api.moonshot.ai/v1"
+key_env = "MOONSHOT_API_KEY"
+
+[[agent]]
+name = "Jared"
+model = "moonshot/kimi-k2.5"
+
+[agent.telegram]
+token_env = "JARED_TELEGRAM_TOKEN"
+\`\`\`
+
+The `agent.model` field uses `provider/model` format.
+You can set either `telegram.token` or `telegram.token_env` per agent.
 
 ### Supported Shells
 
@@ -125,19 +117,21 @@ The application looks for shells in this order:
 ## Dependencies
 
 - github.com/openai/openai-go/v3 - OpenAI-compatible Go client
-- github.com/tidwall/gjson - JSON parsing utilities
-- github.com/tidwall/sjson - JSON modification utilities
+- github.com/mymmrac/telego - Telegram bot adapter
+- github.com/spf13/viper - Config/flags/env merging
 
 ## Project Structure
 
 \`\`\`
 .
 ├── cmd/
-│   └── main.go              # Application entry point
+│   ├── root.go              # Root CLI command
+│   └── start.go             # Starts all configured agents
 ├── internal/
-│   ├── app/                 # App runners (CLI/Bot)
-│   │   ├── cli.go
-│   │   └── bot.go
+│   ├── app/                 # App runtime
+│   │   ├── start.go
+│   │   ├── bot.go
+│   │   └── workers.go
 │   ├── agent/               # Agent contracts
 │   │   └── agent.go
 │   ├── conversation/        # Conversation domain events
@@ -152,6 +146,7 @@ The application looks for shells in this order:
 │       └── event.go
 ├── go.mod                   # Go module definition
 ├── go.sum                   # Dependency checksums
+├── main.go                  # Process entry point
 └── README.md                # This file
 \`\`\`
 

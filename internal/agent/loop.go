@@ -16,7 +16,7 @@ type Loop struct {
 	mu         sync.Mutex
 	model      Model
 	tools      ToolRunner
-	modelName  string
+	models     []string
 	systemText string
 	maxTurns   int
 	messages   []Message
@@ -24,21 +24,46 @@ type Loop struct {
 
 var _ Agent = (*Loop)(nil)
 
-func NewLoop(model Model, tools ToolRunner, modelName, systemText string) *Loop {
+func NewLoop(model Model, tools ToolRunner, models []string, systemText string) *Loop {
 	systemText = strings.TrimSpace(systemText)
 	if systemText == "" {
 		systemText = DefaultSystemPrompt
 	}
+	models = normalizeModels(models)
 	return &Loop{
 		model:      model,
 		tools:      tools,
-		modelName:  modelName,
+		models:     models,
 		systemText: systemText,
 		maxTurns:   defaultMaxTurns,
 		messages: []Message{
 			{Role: SystemRole, Content: systemText},
 		},
 	}
+}
+
+func normalizeModels(models []string) []string {
+	if len(models) == 0 {
+		return []string{"kimi-k2.5"}
+	}
+
+	out := make([]string, 0, len(models))
+	seen := make(map[string]struct{}, len(models))
+	for _, model := range models {
+		model = strings.TrimSpace(model)
+		if model == "" {
+			continue
+		}
+		if _, ok := seen[model]; ok {
+			continue
+		}
+		seen[model] = struct{}{}
+		out = append(out, model)
+	}
+	if len(out) == 0 {
+		return []string{"kimi-k2.5"}
+	}
+	return out
 }
 
 func (l *Loop) Reply(ctx context.Context, userInput string) (string, error) {
@@ -62,7 +87,7 @@ func (l *Loop) Reply(ctx context.Context, userInput string) (string, error) {
 	}
 
 	for turn := 0; turn < l.maxTurns; turn++ {
-		result, err := l.model.Complete(ctx, l.modelName, l.messages, toolDefs)
+		result, err := l.complete(ctx, l.messages, toolDefs)
 		if err != nil {
 			l.messages = l.messages[:turnStart]
 			return "", fmt.Errorf("model complete: %w", err)
@@ -120,4 +145,21 @@ func (l *Loop) runTool(ctx context.Context, call ToolCall) (string, error) {
 		return "", fmt.Errorf("tool call is missing id")
 	}
 	return l.tools.Run(ctx, call)
+}
+
+func (l *Loop) complete(ctx context.Context, messages []Message, tools []ToolDefinition) (ModelResult, error) {
+	var lastErr error
+
+	for _, model := range l.models {
+		result, err := l.model.Complete(ctx, model, messages, tools)
+		if err == nil {
+			return result, nil
+		}
+		lastErr = err
+	}
+
+	if lastErr == nil {
+		return ModelResult{}, fmt.Errorf("no models configured")
+	}
+	return ModelResult{}, fmt.Errorf("all models failed (%v): %w", l.models, lastErr)
 }

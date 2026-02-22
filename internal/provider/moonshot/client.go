@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/openai/openai-go/v3"
@@ -19,11 +18,16 @@ type Client struct {
 
 var _ agent.Model = (*Client)(nil)
 
-func NewClient() *Client {
-	apiKey := os.Getenv("MOONSHOT_API_KEY")
+const defaultBaseURL = "https://api.moonshot.ai/v1"
+
+func NewClient(baseURL string, apiKey string) *Client {
+	baseURL = strings.TrimSpace(baseURL)
+	if baseURL == "" {
+		baseURL = defaultBaseURL
+	}
 
 	client := openai.NewClient(
-		option.WithBaseURL("https://api.moonshot.ai/v1"),
+		option.WithBaseURL(baseURL),
 		option.WithAPIKey(apiKey),
 	)
 
