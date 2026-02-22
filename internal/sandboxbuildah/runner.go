@@ -20,6 +20,7 @@ type Settings struct {
 	FromImage        string
 	WorkspaceHostDir string
 	WorkspaceDir     string
+	Network          string
 }
 
 func (s Settings) Validate() error {
@@ -40,6 +41,9 @@ func (s Settings) Validate() error {
 	}
 	if !filepath.IsAbs(strings.TrimSpace(s.WorkspaceDir)) {
 		return errors.New("workspace dir must be an absolute path")
+	}
+	if _, err := normalizeNetworkMode(s.Network); err != nil {
+		return fmt.Errorf("network: %w", err)
 	}
 	return nil
 }
@@ -80,7 +84,7 @@ func Prepare(ctx context.Context, cfg Settings) error {
 		verbosef("Prepare: openOrCreateBuilder failed: %v", err)
 		return fmt.Errorf("ensure build container %q: %w", cfg.ContainerName, err)
 	}
-	verbosef("Prepare: ready (container=%q container_id=%q from_image=%q)", cfg.ContainerName, builder.ContainerID, builder.FromImage)
+	verbosef("Prepare: ready (container=%q container_id=%q from_image=%q network=%q)", cfg.ContainerName, builder.ContainerID, builder.FromImage, cfg.Network)
 	return nil
 }
 
@@ -122,6 +126,7 @@ func normalizeSettings(cfg Settings) Settings {
 	cfg.FromImage = strings.TrimSpace(cfg.FromImage)
 	cfg.WorkspaceHostDir = filepath.Clean(strings.TrimSpace(cfg.WorkspaceHostDir))
 	cfg.WorkspaceDir = filepath.Clean(strings.TrimSpace(cfg.WorkspaceDir))
+	cfg.Network = normalizeNetworkModeOrDefault(cfg.Network)
 	return cfg
 }
 
@@ -135,12 +140,19 @@ func openStore() (storage.Store, error) {
 }
 
 func openOrCreateBuilder(ctx context.Context, store storage.Store, cfg Settings) (*buildah.Builder, error) {
-	network := newDisabledNetwork()
+	networkEnabled := cfg.Network == "enabled"
+	var disabledNet *disabledNetwork
+	if !networkEnabled {
+		n := disabledNetwork{}
+		disabledNet = &n
+	}
 
 	verbosef("openOrCreateBuilder: trying existing builder %q", cfg.ContainerName)
 	builder, err := buildah.OpenBuilder(store, cfg.ContainerName)
 	if err == nil {
-		builder.NetworkInterface = network
+		if disabledNet != nil {
+			builder.NetworkInterface = *disabledNet
+		}
 		verbosef("openOrCreateBuilder: opened existing builder %q (id=%q image=%q)", cfg.ContainerName, builder.ContainerID, builder.FromImage)
 		return builder, nil
 	}
@@ -150,19 +162,26 @@ func openOrCreateBuilder(ctx context.Context, store storage.Store, cfg Settings)
 	}
 	verbosef("openOrCreateBuilder: builder %q not found, creating from image %q", cfg.ContainerName, cfg.FromImage)
 
-	builder, err = buildah.NewBuilder(ctx, store, buildah.BuilderOptions{
-		Container:        cfg.ContainerName,
-		FromImage:        cfg.FromImage,
-		PullPolicy:       buildah.PullIfMissing,
-		ReportWriter:     io.Discard,
-		NetworkInterface: network,
-		ConfigureNetwork: buildah.NetworkDisabled,
-	})
+	builderOpts := buildah.BuilderOptions{
+		Container:    cfg.ContainerName,
+		FromImage:    cfg.FromImage,
+		PullPolicy:   buildah.PullIfMissing,
+		ReportWriter: io.Discard,
+	}
+	if networkEnabled {
+		builderOpts.ConfigureNetwork = buildah.NetworkEnabled
+	} else {
+		builderOpts.NetworkInterface = *disabledNet
+		builderOpts.ConfigureNetwork = buildah.NetworkDisabled
+	}
+	builder, err = buildah.NewBuilder(ctx, store, builderOpts)
 	if err != nil {
 		verbosef("openOrCreateBuilder: create failed: %v", err)
 		return nil, err
 	}
-	builder.NetworkInterface = network
+	if disabledNet != nil {
+		builder.NetworkInterface = *disabledNet
+	}
 	verbosef("openOrCreateBuilder: created builder %q (id=%q image=%q)", cfg.ContainerName, builder.ContainerID, builder.FromImage)
 	return builder, nil
 }
@@ -179,7 +198,7 @@ func runInBuilder(builder *buildah.Builder, cfg Settings, command string) string
 			Stderr:           &stderr,
 			Terminal:         buildah.WithoutTerminal,
 			WorkingDir:       cfg.WorkspaceDir,
-			ConfigureNetwork: buildah.NetworkDisabled,
+			ConfigureNetwork: runNetworkPolicy(cfg),
 			Mounts: []specs.Mount{
 				{
 					Type:        "bind",
@@ -197,6 +216,32 @@ func runInBuilder(builder *buildah.Builder, cfg Settings, command string) string
 	}
 
 	return formatCommandOutput(stdout.Bytes(), stderr.Bytes(), err)
+}
+
+func runNetworkPolicy(cfg Settings) buildah.NetworkConfigurationPolicy {
+	if cfg.Network == "enabled" {
+		return buildah.NetworkEnabled
+	}
+	return buildah.NetworkDisabled
+}
+
+func normalizeNetworkModeOrDefault(mode string) string {
+	normalized, err := normalizeNetworkMode(mode)
+	if err != nil {
+		return strings.ToLower(strings.TrimSpace(mode))
+	}
+	return normalized
+}
+
+func normalizeNetworkMode(mode string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "", "disabled":
+		return "disabled", nil
+	case "enabled":
+		return "enabled", nil
+	default:
+		return "", errors.New(`must be "enabled" or "disabled"`)
+	}
 }
 
 func formatCommandOutput(stdout []byte, stderr []byte, err error) string {

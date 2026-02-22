@@ -34,6 +34,7 @@ type Sandbox struct {
 	FromImage        string `mapstructure:"from_image"`
 	WorkspaceHostDir string `mapstructure:"workspace_host_dir"`
 	WorkspaceDir     string `mapstructure:"workspace_dir"`
+	Network          string `mapstructure:"network"`
 }
 
 type Telegram struct {
@@ -54,6 +55,7 @@ type AgentRuntime struct {
 	SandboxFromImage       string
 	WorkspaceHostDir       string
 	WorkspaceDir           string
+	SandboxNetwork         string
 	TelegramToken          string
 	TelegramAllowedUserIDs []int64
 }
@@ -164,6 +166,10 @@ func (c Config) ResolveAgentRuntimes() ([]AgentRuntime, error) {
 		if err != nil {
 			return nil, fmt.Errorf("resolve telegram allowed users for agent %q: %w", agentCfg.Name, err)
 		}
+		sandboxNetwork, err := normalizeSandboxNetwork(agentCfg.Sandbox.Network)
+		if err != nil {
+			return nil, fmt.Errorf("resolve sandbox network for agent %q: %w", agentCfg.Name, err)
+		}
 
 		runtimes = append(runtimes, AgentRuntime{
 			Name:                   strings.TrimSpace(agentCfg.Name),
@@ -175,6 +181,7 @@ func (c Config) ResolveAgentRuntimes() ([]AgentRuntime, error) {
 			SandboxFromImage:       strings.TrimSpace(agentCfg.Sandbox.FromImage),
 			WorkspaceHostDir:       strings.TrimSpace(agentCfg.Sandbox.WorkspaceHostDir),
 			WorkspaceDir:           strings.TrimSpace(agentCfg.Sandbox.WorkspaceDir),
+			SandboxNetwork:         sandboxNetwork,
 			TelegramToken:          token,
 			TelegramAllowedUserIDs: allowedUserIDs,
 		})
@@ -240,6 +247,9 @@ func (c Config) validate() error {
 		if strings.TrimSpace(agent.Sandbox.WorkspaceDir) == "" {
 			return fmt.Errorf("agent[%d].sandbox.workspace_dir is required", i)
 		}
+		if _, err := normalizeSandboxNetwork(agent.Sandbox.Network); err != nil {
+			return fmt.Errorf("agent[%d].sandbox.network: %w", i, err)
+		}
 		if strings.TrimSpace(agent.Telegram.Token) == "" && strings.TrimSpace(agent.Telegram.TokenEnv) == "" {
 			return fmt.Errorf("agent[%d].telegram requires token or token_env", i)
 		}
@@ -298,4 +308,15 @@ func normalizeAllowedUserIDs(ids []int64) ([]int64, error) {
 	}
 
 	return out, nil
+}
+
+func normalizeSandboxNetwork(network string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(network)) {
+	case "", "disabled":
+		return "disabled", nil
+	case "enabled":
+		return "enabled", nil
+	default:
+		return "", errors.New(`must be "enabled" or "disabled"`)
+	}
 }

@@ -42,10 +42,11 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 		FromImage:        rt.SandboxFromImage,
 		WorkspaceHostDir: rt.WorkspaceHostDir,
 		WorkspaceDir:     rt.WorkspaceDir,
+		Network:          rt.SandboxNetwork,
 	})
 	if sandbox.VerboseEnabled() {
-		fmt.Printf("[app] preparing sandbox for agent=%q container=%q workspace_host_dir=%q workspace_dir=%q from_image=%q\n",
-			rt.Name, rt.SandboxContainerName, rt.WorkspaceHostDir, rt.WorkspaceDir, rt.SandboxFromImage)
+		fmt.Printf("[app] preparing sandbox for agent=%q container=%q workspace_host_dir=%q workspace_dir=%q from_image=%q network=%q\n",
+			rt.Name, rt.SandboxContainerName, rt.WorkspaceHostDir, rt.WorkspaceDir, rt.SandboxFromImage, rt.SandboxNetwork)
 	}
 	if err := agentSandbox.Prepare(ctx); err != nil {
 		return fmt.Errorf("prepare sandbox for agent %q: %w", rt.Name, err)

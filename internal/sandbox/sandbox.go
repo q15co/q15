@@ -19,6 +19,7 @@ type Settings struct {
 	FromImage        string
 	WorkspaceHostDir string
 	WorkspaceDir     string
+	Network          string
 }
 
 func (s Settings) Validate() error {
@@ -40,6 +41,9 @@ func (s Settings) Validate() error {
 	if !filepath.IsAbs(strings.TrimSpace(s.WorkspaceDir)) {
 		return errors.New("workspace dir must be an absolute path")
 	}
+	if _, err := normalizeNetworkMode(s.Network); err != nil {
+		return fmt.Errorf("network: %w", err)
+	}
 	return nil
 }
 
@@ -55,7 +59,8 @@ func New(cfg Settings) *Sandbox {
 	cfg.FromImage = strings.TrimSpace(cfg.FromImage)
 	cfg.WorkspaceHostDir = filepath.Clean(strings.TrimSpace(cfg.WorkspaceHostDir))
 	cfg.WorkspaceDir = filepath.Clean(strings.TrimSpace(cfg.WorkspaceDir))
-	verbosef("New: container=%q from_image=%q workspace_host_dir=%q workspace_dir=%q", cfg.ContainerName, cfg.FromImage, cfg.WorkspaceHostDir, cfg.WorkspaceDir)
+	cfg.Network = normalizeNetworkModeOrDefault(cfg.Network)
+	verbosef("New: container=%q from_image=%q workspace_host_dir=%q workspace_dir=%q network=%q", cfg.ContainerName, cfg.FromImage, cfg.WorkspaceHostDir, cfg.WorkspaceDir, cfg.Network)
 	return &Sandbox{cfg: cfg}
 }
 
@@ -228,4 +233,23 @@ func resolveHelperBinary() (string, error) {
 	}
 
 	return "", errors.New("sandbox helper binary not found (build ./cmd/q15-sandbox-helper and set Q15_SANDBOX_HELPER_BIN if needed)")
+}
+
+func normalizeNetworkModeOrDefault(mode string) string {
+	normalized, err := normalizeNetworkMode(mode)
+	if err != nil {
+		return strings.ToLower(strings.TrimSpace(mode))
+	}
+	return normalized
+}
+
+func normalizeNetworkMode(mode string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "", "disabled":
+		return "disabled", nil
+	case "enabled":
+		return "enabled", nil
+	default:
+		return "", errors.New(`must be "enabled" or "disabled"`)
+	}
 }

@@ -44,6 +44,7 @@ func run() error {
 		FromImage:        req.Settings.FromImage,
 		WorkspaceHostDir: req.Settings.WorkspaceHostDir,
 		WorkspaceDir:     req.Settings.WorkspaceDir,
+		Network:          req.Settings.Network,
 	}
 
 	switch action {
