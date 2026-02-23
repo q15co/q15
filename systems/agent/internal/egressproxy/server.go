@@ -17,7 +17,9 @@ import (
 const defaultListenAddr = "0.0.0.0:0"
 
 type Config struct {
-	ListenAddr string
+	ListenAddr   string
+	SecretValues map[string]string
+	Rules        []Rule
 }
 
 type Server struct {
@@ -28,6 +30,10 @@ type Server struct {
 	ca       *generatedCA
 	stopOnce sync.Once
 	stopErr  error
+
+	compiledRules []compiledRule
+	secretValues  map[string]string
+	mitmAction    *goproxy.ConnectAction
 }
 
 func Start(ctx context.Context, cfg Config) (*Server, error) {
@@ -39,6 +45,11 @@ func Start(ctx context.Context, cfg Config) (*Server, error) {
 	ca, err := createExportedCA()
 	if err != nil {
 		return nil, fmt.Errorf("create exported CA: %w", err)
+	}
+	compiledRules, err := compileRules(cfg.Rules, cfg.SecretValues)
+	if err != nil {
+		_ = ca.cleanup()
+		return nil, fmt.Errorf("compile proxy rules: %w", err)
 	}
 
 	listener, err := net.Listen("tcp", listenAddr)
@@ -58,11 +69,20 @@ func Start(ctx context.Context, cfg Config) (*Server, error) {
 	}
 
 	s := &Server{
-		listener: listener,
-		server:   httpServer,
-		errCh:    make(chan error, 1),
-		ca:       ca,
+		listener:      listener,
+		server:        httpServer,
+		errCh:         make(chan error, 1),
+		ca:            ca,
+		compiledRules: compiledRules,
+		secretValues:  cloneStringMap(cfg.SecretValues),
+		mitmAction: &goproxy.ConnectAction{
+			Action:    goproxy.ConnectMitm,
+			TLSConfig: goproxy.TLSConfigFromCA(&ca.TLSCert),
+		},
 	}
+	proxy.OnRequest().HandleConnectFunc(s.handleConnect)
+	proxy.OnRequest().DoFunc(s.handleRequest)
+	proxy.OnResponse().DoFunc(s.handleResponse)
 
 	go func() {
 		<-ctx.Done()
@@ -160,4 +180,79 @@ func (s *Server) ProxyURLForContainerHost(containerHost string) (string, error) 
 		return "", fmt.Errorf("parse listener address %q: %w", addr, err)
 	}
 	return "http://" + net.JoinHostPort(containerHost, port), nil
+}
+
+func (s *Server) handleConnect(host string, _ *goproxy.ProxyCtx) (*goproxy.ConnectAction, string) {
+	if s.shouldMITMHost(host) {
+		return s.mitmAction, host
+	}
+	return goproxy.OkConnect, host
+}
+
+func (s *Server) shouldMITMHost(host string) bool {
+	for _, rule := range s.compiledRules {
+		if rule.matchesConnectHost(host) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) handleRequest(
+	req *http.Request,
+	_ *goproxy.ProxyCtx,
+) (*http.Request, *http.Response) {
+	if req == nil {
+		return nil, nil
+	}
+	if req.Method == http.MethodConnect {
+		return req, nil
+	}
+
+	for _, rule := range s.compiledRules {
+		if !rule.matchesRequest(req) {
+			continue
+		}
+		for headerName, tmpl := range rule.setHeader {
+			value, err := renderSecretTemplate(tmpl, s.secretValues)
+			if err != nil {
+				return req, goproxy.NewResponse(
+					req,
+					goproxy.ContentTypeText,
+					http.StatusBadGateway,
+					fmt.Sprintf("proxy rule %q header render failed", displayRuleName(rule)),
+				)
+			}
+			req.Header.Set(headerName, value)
+		}
+	}
+	return req, nil
+}
+
+func (s *Server) handleResponse(resp *http.Response, _ *goproxy.ProxyCtx) *http.Response {
+	if resp == nil {
+		return nil
+	}
+	for _, key := range []string{"Authorization", "Proxy-Authorization", "X-Api-Key"} {
+		resp.Header.Del(key)
+	}
+	return resp
+}
+
+func cloneStringMap(m map[string]string) map[string]string {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
+}
+
+func displayRuleName(r compiledRule) string {
+	if strings.TrimSpace(r.name) != "" {
+		return r.name
+	}
+	return "<unnamed>"
 }

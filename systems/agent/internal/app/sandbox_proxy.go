@@ -23,9 +23,19 @@ func startSandboxProxy(
 	if rtProxy == nil {
 		return nil, nil
 	}
+	for i, rule := range rtProxy.Rules {
+		if len(rule.ReplacePlaceholder) > 0 {
+			return nil, fmt.Errorf(
+				"proxy rule[%d] replace_placeholder is not implemented yet in embedded proxy",
+				i,
+			)
+		}
+	}
 
 	server, err := egressproxy.Start(ctx, egressproxy.Config{
-		ListenAddr: rtProxy.ListenAddr,
+		ListenAddr:   rtProxy.ListenAddr,
+		SecretValues: rtProxy.SecretValues,
+		Rules:        toEgressProxyRules(rtProxy.Rules),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("start embedded egress proxy: %w", err)
@@ -66,4 +76,31 @@ func startSandboxProxy(
 			CACertContainerPath:  caCertContainerPath,
 		},
 	}, nil
+}
+
+func toEgressProxyRules(rules []config.SandboxProxyRule) []egressproxy.Rule {
+	if len(rules) == 0 {
+		return nil
+	}
+	out := make([]egressproxy.Rule, 0, len(rules))
+	for _, rule := range rules {
+		out = append(out, egressproxy.Rule{
+			Name:              rule.Name,
+			MatchHosts:        append([]string(nil), rule.MatchHosts...),
+			MatchPathPrefixes: append([]string(nil), rule.MatchPathPrefixes...),
+			SetHeader:         cloneStringMap(rule.SetHeader),
+		})
+	}
+	return out
+}
+
+func cloneStringMap(m map[string]string) map[string]string {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
 }

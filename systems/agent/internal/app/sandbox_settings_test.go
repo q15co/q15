@@ -91,3 +91,27 @@ func TestStartSandboxProxy_BuildsSandboxProxySettings(t *testing.T) {
 		t.Fatalf("expected CA cert host path to exist, stat error = %v", err)
 	}
 }
+
+func TestStartSandboxProxy_RejectsReplacePlaceholderRules(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	_, err := startSandboxProxy(ctx, &config.SandboxProxyRuntime{
+		Enabled:             true,
+		ListenAddr:          "127.0.0.1:0",
+		ContainerProxyHost:  "10.0.2.2",
+		CACertContainerPath: "/run/q15-proxy/ca.crt",
+		SecretValues:        map[string]string{"gh_token": "abc"},
+		Rules: []config.SandboxProxyRule{
+			{
+				MatchHosts: []string{"api.github.com"},
+				ReplacePlaceholder: []config.SandboxProxyPlaceholderReplacement{
+					{Placeholder: "__X__", Secret: "gh_token", In: []string{"header"}},
+				},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatalf("expected error for replace_placeholder rules")
+	}
+}
