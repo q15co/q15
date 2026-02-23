@@ -23,7 +23,12 @@ type Settings struct {
 	WorkspaceHostDir string
 	WorkspaceDir     string
 	Network          string
+	Proxy            *ProxySettings
 }
+
+// ProxySettings reuses the sandbox helper IPC contract shape directly.
+// Keeping this as an alias removes one translation layer in the agent sandbox adapter.
+type ProxySettings = sandboxcontract.ProxySettings
 
 func (s Settings) Validate() error {
 	if strings.TrimSpace(s.ContainerName) == "" {
@@ -47,6 +52,9 @@ func (s Settings) Validate() error {
 	if _, err := normalizeNetworkMode(s.Network); err != nil {
 		return fmt.Errorf("network: %w", err)
 	}
+	if err := validateProxySettings(s); err != nil {
+		return fmt.Errorf("proxy: %w", err)
+	}
 	return nil
 }
 
@@ -63,6 +71,7 @@ func New(cfg Settings) *Sandbox {
 	cfg.WorkspaceHostDir = filepath.Clean(strings.TrimSpace(cfg.WorkspaceHostDir))
 	cfg.WorkspaceDir = filepath.Clean(strings.TrimSpace(cfg.WorkspaceDir))
 	cfg.Network = normalizeNetworkModeOrDefault(cfg.Network)
+	cfg.Proxy = normalizeProxySettings(cfg.Proxy)
 	verbosef(
 		"New: container=%q from_image=%q workspace_host_dir=%q workspace_dir=%q network=%q",
 		cfg.ContainerName,
@@ -214,13 +223,14 @@ func toContractSettings(cfg Settings) sandboxcontract.Settings {
 		WorkspaceHostDir: cfg.WorkspaceHostDir,
 		WorkspaceDir:     cfg.WorkspaceDir,
 		Network:          cfg.Network,
+		Proxy:            cfg.Proxy,
 	}
 }
 
 func helperCommand(ctx context.Context, helperBin, action string, _ Settings) *exec.Cmd {
 	if usePodmanUnshare() {
 		cmd := exec.CommandContext(ctx, "podman", "unshare", helperBin, action)
-		cmd.Env = filterEnv(os.Environ(), "STORAGE_DRIVER")
+		cmd.Env = preferNixWrappersInEnv(filterEnv(os.Environ(), "STORAGE_DRIVER"))
 		return cmd
 	}
 	return exec.CommandContext(ctx, helperBin, action)
@@ -266,6 +276,52 @@ func filterEnv(env []string, blockedKeys ...string) []string {
 			continue
 		}
 		out = append(out, kv)
+	}
+	return out
+}
+
+func preferNixWrappersInEnv(env []string) []string {
+	const wrappersDir = "/run/wrappers/bin"
+
+	if _, err := os.Stat(wrappersDir); err != nil {
+		return env
+	}
+
+	out := make([]string, 0, len(env)+1)
+	foundPATH := false
+	for _, kv := range env {
+		key, value, ok := strings.Cut(kv, "=")
+		if !ok {
+			out = append(out, kv)
+			continue
+		}
+		if key != "PATH" {
+			out = append(out, kv)
+			continue
+		}
+
+		foundPATH = true
+		parts := strings.Split(value, string(os.PathListSeparator))
+		alreadyPresent := false
+		for _, part := range parts {
+			if part == wrappersDir {
+				alreadyPresent = true
+				break
+			}
+		}
+
+		if alreadyPresent {
+			out = append(out, kv)
+			continue
+		}
+		if value == "" {
+			out = append(out, "PATH="+wrappersDir)
+			continue
+		}
+		out = append(out, "PATH="+wrappersDir+string(os.PathListSeparator)+value)
+	}
+	if !foundPATH {
+		out = append(out, "PATH="+wrappersDir)
 	}
 	return out
 }
@@ -328,4 +384,56 @@ func normalizeNetworkMode(mode string) (string, error) {
 	default:
 		return "", errors.New(`must be "enabled" or "disabled"`)
 	}
+}
+
+func normalizeProxySettings(proxy *ProxySettings) *ProxySettings {
+	if proxy == nil {
+		return nil
+	}
+	normalized := *proxy
+	normalized.HTTPProxyURL = strings.TrimSpace(proxy.HTTPProxyURL)
+	normalized.HTTPSProxyURL = strings.TrimSpace(proxy.HTTPSProxyURL)
+	normalized.AllProxyURL = strings.TrimSpace(proxy.AllProxyURL)
+	normalized.NoProxy = strings.TrimSpace(proxy.NoProxy)
+	if path := strings.TrimSpace(proxy.CACertHostPath); path != "" {
+		normalized.CACertHostPath = filepath.Clean(path)
+	} else {
+		normalized.CACertHostPath = ""
+	}
+	if path := strings.TrimSpace(proxy.CACertContainerPath); path != "" {
+		normalized.CACertContainerPath = filepath.Clean(path)
+	} else {
+		normalized.CACertContainerPath = ""
+	}
+	return &normalized
+}
+
+func validateProxySettings(cfg Settings) error {
+	if cfg.Proxy == nil || !cfg.Proxy.Enabled {
+		return nil
+	}
+	normalizedNetwork, err := normalizeNetworkMode(cfg.Network)
+	if err != nil {
+		return err
+	}
+	if normalizedNetwork != "enabled" {
+		return errors.New(`enabled proxy requires network "enabled"`)
+	}
+
+	p := cfg.Proxy
+	if strings.TrimSpace(p.HTTPProxyURL) == "" &&
+		strings.TrimSpace(p.HTTPSProxyURL) == "" &&
+		strings.TrimSpace(p.AllProxyURL) == "" {
+		return errors.New("at least one proxy URL is required when enabled")
+	}
+	if path := strings.TrimSpace(p.CACertHostPath); path != "" && !filepath.IsAbs(path) {
+		return errors.New("ca cert host path must be an absolute path")
+	}
+	if path := strings.TrimSpace(p.CACertContainerPath); path != "" && !filepath.IsAbs(path) {
+		return errors.New("ca cert container path must be an absolute path")
+	}
+	if (strings.TrimSpace(p.CACertHostPath) == "") != (strings.TrimSpace(p.CACertContainerPath) == "") {
+		return errors.New("ca cert host/container paths must be set together")
+	}
+	return nil
 }

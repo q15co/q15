@@ -52,6 +52,11 @@ func ensureBuildahProcessEnvironment() error {
 			verbosef("ensureBuildahProcessEnvironment: setXDGRuntimeDir failed: %v", err)
 			return
 		}
+		if err := preferNixWrappersInPath(); err != nil {
+			buildahEnvErr = err
+			verbosef("ensureBuildahProcessEnvironment: preferNixWrappersInPath failed: %v", err)
+			return
+		}
 		if skipUnshareEnabled() {
 			if err := markRootlessUsernsConfigured(); err != nil {
 				buildahEnvErr = err
@@ -89,6 +94,36 @@ func ensureBuildahProcessEnvironment() error {
 		verbosef("ensureBuildahProcessEnvironment: ready")
 	}
 	return buildahEnvErr
+}
+
+func preferNixWrappersInPath() error {
+	const wrappersDir = "/run/wrappers/bin"
+
+	if _, err := os.Stat(wrappersDir); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("stat %s: %w", wrappersDir, err)
+	}
+
+	pathEnv := os.Getenv("PATH")
+	parts := strings.Split(pathEnv, string(os.PathListSeparator))
+	for _, part := range parts {
+		if part == wrappersDir {
+			verbosef("preferNixWrappersInPath: PATH already contains %s", wrappersDir)
+			return nil
+		}
+	}
+
+	newPath := wrappersDir
+	if pathEnv != "" {
+		newPath = wrappersDir + string(os.PathListSeparator) + pathEnv
+	}
+	if err := os.Setenv("PATH", newPath); err != nil {
+		return fmt.Errorf("set PATH: %w", err)
+	}
+	verbosef("preferNixWrappersInPath: prepended %s to PATH", wrappersDir)
+	return nil
 }
 
 func setXDGRuntimeDir() error {

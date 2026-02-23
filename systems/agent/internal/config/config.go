@@ -3,7 +3,9 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/textproto"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/spf13/viper"
@@ -29,11 +31,32 @@ type Agent struct {
 }
 
 type Sandbox struct {
-	ContainerName    string `mapstructure:"container_name"`
-	FromImage        string `mapstructure:"from_image"`
-	WorkspaceHostDir string `mapstructure:"workspace_host_dir"`
-	WorkspaceDir     string `mapstructure:"workspace_dir"`
-	Network          string `mapstructure:"network"`
+	ContainerName    string        `mapstructure:"container_name"`
+	FromImage        string        `mapstructure:"from_image"`
+	WorkspaceHostDir string        `mapstructure:"workspace_host_dir"`
+	WorkspaceDir     string        `mapstructure:"workspace_dir"`
+	Network          string        `mapstructure:"network"`
+	Proxy            *SandboxProxy `mapstructure:"proxy"`
+}
+
+type SandboxProxy struct {
+	ContainerProxyHost string             `mapstructure:"container_proxy_host"` // optional override
+	Secrets            []string           `mapstructure:"secrets"`              // alias list, env name derived (e.g. gh_token -> GH_TOKEN)
+	Rules              []SandboxProxyRule `mapstructure:"rule"`
+}
+
+type SandboxProxyRule struct {
+	Name               string                               `mapstructure:"name"`
+	MatchHosts         []string                             `mapstructure:"match_hosts"`
+	MatchPathPrefixes  []string                             `mapstructure:"match_path_prefixes"`
+	SetHeader          map[string]string                    `mapstructure:"set_header"`
+	ReplacePlaceholder []SandboxProxyPlaceholderReplacement `mapstructure:"replace_placeholder"`
+}
+
+type SandboxProxyPlaceholderReplacement struct {
+	Placeholder string   `mapstructure:"placeholder"`
+	Secret      string   `mapstructure:"secret"`
+	In          []string `mapstructure:"in"` // allowed v1: header, query, path
 }
 
 type Telegram struct {
@@ -53,6 +76,27 @@ type AgentModelRuntime struct {
 	ModelName       string
 }
 
+type SandboxProxyRuntime struct {
+	Enabled              bool
+	ListenAddr           string
+	ContainerProxyHost   string
+	CACertContainerPath  string
+	NoProxy              []string
+	SetLowercaseProxyEnv bool
+	SecretValues         map[string]string // alias -> resolved secret value
+	Rules                []SandboxProxyRule
+}
+
+const (
+	defaultSandboxProxyListenAddr          = "0.0.0.0:0"
+	defaultSandboxProxyCACertContainerPath = "/run/q15-proxy/ca.crt"
+)
+
+var (
+	proxySecretAliasRE         = regexp.MustCompile(`^[a-z0-9_-]+$`)
+	defaultSandboxProxyNoProxy = []string{"localhost", "127.0.0.1", "::1"}
+)
+
 type AgentRuntime struct {
 	Name                   string
 	Models                 []AgentModelRuntime
@@ -61,6 +105,7 @@ type AgentRuntime struct {
 	WorkspaceHostDir       string
 	WorkspaceDir           string
 	SandboxNetwork         string
+	SandboxProxy           *SandboxProxyRuntime
 	TelegramToken          string
 	TelegramAllowedUserIDs []int64
 }
@@ -213,6 +258,10 @@ func (c Config) ResolveAgentRuntimes() ([]AgentRuntime, error) {
 		if err != nil {
 			return nil, fmt.Errorf("resolve sandbox network for agent %q: %w", agentCfg.Name, err)
 		}
+		sandboxProxy, err := resolveSandboxProxyRuntime(agentCfg.Sandbox.Proxy, sandboxNetwork)
+		if err != nil {
+			return nil, fmt.Errorf("resolve sandbox proxy for agent %q: %w", agentCfg.Name, err)
+		}
 
 		runtimes = append(runtimes, AgentRuntime{
 			Name:                   strings.TrimSpace(agentCfg.Name),
@@ -222,6 +271,7 @@ func (c Config) ResolveAgentRuntimes() ([]AgentRuntime, error) {
 			WorkspaceHostDir:       strings.TrimSpace(agentCfg.Sandbox.WorkspaceHostDir),
 			WorkspaceDir:           strings.TrimSpace(agentCfg.Sandbox.WorkspaceDir),
 			SandboxNetwork:         sandboxNetwork,
+			SandboxProxy:           sandboxProxy,
 			TelegramToken:          token,
 			TelegramAllowedUserIDs: allowedUserIDs,
 		})
@@ -298,6 +348,9 @@ func (c Config) validate() error {
 		}
 		if _, err := normalizeSandboxNetwork(agent.Sandbox.Network); err != nil {
 			return fmt.Errorf("agent[%d].sandbox.network: %w", i, err)
+		}
+		if err := validateSandboxProxy(agent.Sandbox.Proxy, agent.Sandbox.Network); err != nil {
+			return fmt.Errorf("agent[%d].sandbox.proxy: %w", i, err)
 		}
 		if strings.TrimSpace(agent.Telegram.Token) == "" &&
 			strings.TrimSpace(agent.Telegram.TokenEnv) == "" {
@@ -385,4 +438,249 @@ func normalizeSandboxNetwork(network string) (string, error) {
 	default:
 		return "", errors.New(`must be "enabled" or "disabled"`)
 	}
+}
+
+func validateSandboxProxy(proxy *SandboxProxy, sandboxNetwork string) error {
+	if proxy == nil {
+		return nil
+	}
+
+	normalizedNetwork, err := normalizeSandboxNetwork(sandboxNetwork)
+	if err != nil {
+		return err
+	}
+	if normalizedNetwork != "enabled" {
+		return errors.New(`enabled proxy requires sandbox.network = "enabled"`)
+	}
+
+	secretAliases, err := normalizeProxySecretAliases(proxy.Secrets)
+	if err != nil {
+		return fmt.Errorf("secrets: %w", err)
+	}
+	if len(secretAliases) == 0 {
+		return errors.New("secrets must contain at least one alias")
+	}
+	secretEnvByAlias := make(map[string]string, len(secretAliases))
+	for _, alias := range secretAliases {
+		secretEnvByAlias[alias] = proxySecretEnvName(alias)
+	}
+
+	for i, rule := range proxy.Rules {
+		if len(rule.MatchHosts) == 0 {
+			return fmt.Errorf("rule[%d].match_hosts must contain at least one host", i)
+		}
+		for j, host := range rule.MatchHosts {
+			if strings.TrimSpace(host) == "" {
+				return fmt.Errorf("rule[%d].match_hosts[%d] must not be empty", i, j)
+			}
+		}
+		for j, pfx := range rule.MatchPathPrefixes {
+			pfx = strings.TrimSpace(pfx)
+			if pfx == "" {
+				return fmt.Errorf("rule[%d].match_path_prefixes[%d] must not be empty", i, j)
+			}
+			if !strings.HasPrefix(pfx, "/") {
+				return fmt.Errorf("rule[%d].match_path_prefixes[%d] must start with /", i, j)
+			}
+		}
+		for headerName := range rule.SetHeader {
+			if strings.TrimSpace(headerName) == "" {
+				return fmt.Errorf("rule[%d].set_header contains an empty header name", i)
+			}
+		}
+		for j, repl := range rule.ReplacePlaceholder {
+			if strings.TrimSpace(repl.Placeholder) == "" {
+				return fmt.Errorf("rule[%d].replace_placeholder[%d].placeholder is required", i, j)
+			}
+			secretAlias, err := normalizeProxySecretAlias(repl.Secret)
+			if err != nil {
+				return fmt.Errorf("rule[%d].replace_placeholder[%d].secret: %w", i, j, err)
+			}
+			if _, ok := secretEnvByAlias[secretAlias]; !ok {
+				return fmt.Errorf(
+					"rule[%d].replace_placeholder[%d].secret %q is not defined in proxy.secrets",
+					i,
+					j,
+					secretAlias,
+				)
+			}
+			if len(repl.In) == 0 {
+				return fmt.Errorf("rule[%d].replace_placeholder[%d].in must not be empty", i, j)
+			}
+			for k, where := range repl.In {
+				where = strings.ToLower(strings.TrimSpace(where))
+				switch where {
+				case "header", "query", "path":
+					// supported in v1
+				case "body":
+					return fmt.Errorf(
+						"rule[%d].replace_placeholder[%d].in[%d]=body is not supported in v1",
+						i,
+						j,
+						k,
+					)
+				default:
+					return fmt.Errorf(
+						"rule[%d].replace_placeholder[%d].in[%d] must be header, query, or path",
+						i,
+						j,
+						k,
+					)
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+func resolveSandboxProxyRuntime(
+	proxy *SandboxProxy,
+	sandboxNetwork string,
+) (*SandboxProxyRuntime, error) {
+	if proxy == nil {
+		return nil, nil
+	}
+	if err := validateSandboxProxy(proxy, sandboxNetwork); err != nil {
+		return nil, err
+	}
+
+	secretAliases, err := normalizeProxySecretAliases(proxy.Secrets)
+	if err != nil {
+		return nil, fmt.Errorf("secrets: %w", err)
+	}
+	secretValues := make(map[string]string, len(secretAliases))
+	for _, alias := range secretAliases {
+		envName := proxySecretEnvName(alias)
+		value := strings.TrimSpace(os.Getenv(envName))
+		if value == "" {
+			return nil, fmt.Errorf(
+				`proxy secret %q requires env var %q`,
+				alias,
+				envName,
+			)
+		}
+		secretValues[alias] = value
+	}
+
+	return &SandboxProxyRuntime{
+		Enabled:              true,
+		ListenAddr:           defaultSandboxProxyListenAddr,
+		ContainerProxyHost:   normalizeSandboxProxyContainerHost(proxy.ContainerProxyHost),
+		CACertContainerPath:  defaultSandboxProxyCACertContainerPath,
+		NoProxy:              append([]string(nil), defaultSandboxProxyNoProxy...),
+		SetLowercaseProxyEnv: true,
+		SecretValues:         secretValues,
+		Rules:                normalizeSandboxProxyRules(proxy.Rules),
+	}, nil
+}
+
+func normalizeSandboxProxyRules(rules []SandboxProxyRule) []SandboxProxyRule {
+	if len(rules) == 0 {
+		return nil
+	}
+
+	out := make([]SandboxProxyRule, 0, len(rules))
+	for _, rule := range rules {
+		normalizedRule := SandboxProxyRule{
+			Name:              strings.TrimSpace(rule.Name),
+			MatchHosts:        normalizeStringList(rule.MatchHosts, true),
+			MatchPathPrefixes: normalizeStringList(rule.MatchPathPrefixes, false),
+		}
+		if len(rule.SetHeader) > 0 {
+			normalizedRule.SetHeader = make(map[string]string, len(rule.SetHeader))
+			for k, v := range rule.SetHeader {
+				headerName := textproto.CanonicalMIMEHeaderKey(strings.TrimSpace(k))
+				normalizedRule.SetHeader[headerName] = strings.TrimSpace(v)
+			}
+		}
+		if len(rule.ReplacePlaceholder) > 0 {
+			normalizedRule.ReplacePlaceholder = make(
+				[]SandboxProxyPlaceholderReplacement,
+				0,
+				len(rule.ReplacePlaceholder),
+			)
+			for _, repl := range rule.ReplacePlaceholder {
+				normalizedRule.ReplacePlaceholder = append(
+					normalizedRule.ReplacePlaceholder,
+					SandboxProxyPlaceholderReplacement{
+						Placeholder: strings.TrimSpace(repl.Placeholder),
+						Secret:      strings.ToLower(strings.TrimSpace(repl.Secret)),
+						In:          normalizeStringList(repl.In, true),
+					},
+				)
+			}
+		}
+		out = append(out, normalizedRule)
+	}
+	return out
+}
+
+func normalizeStringList(values []string, lower bool) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, v := range values {
+		v = strings.TrimSpace(v)
+		if lower {
+			v = strings.ToLower(v)
+		}
+		if v == "" {
+			continue
+		}
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	return out
+}
+
+func normalizeProxySecretAliases(aliases []string) ([]string, error) {
+	if len(aliases) == 0 {
+		return nil, nil
+	}
+	out := make([]string, 0, len(aliases))
+	seen := make(map[string]struct{}, len(aliases))
+	for i, alias := range aliases {
+		normalized, err := normalizeProxySecretAlias(alias)
+		if err != nil {
+			return nil, fmt.Errorf("[%d]: %w", i, err)
+		}
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		out = append(out, normalized)
+	}
+	return out, nil
+}
+
+func normalizeProxySecretAlias(alias string) (string, error) {
+	alias = strings.ToLower(strings.TrimSpace(alias))
+	if alias == "" {
+		return "", errors.New("alias must not be empty")
+	}
+	if !proxySecretAliasRE.MatchString(alias) {
+		return "", errors.New("alias must contain only a-z, 0-9, _, or -")
+	}
+	return alias, nil
+}
+
+func proxySecretEnvName(alias string) string {
+	alias = strings.ReplaceAll(alias, "-", "_")
+	return strings.ToUpper(alias)
+}
+
+func normalizeSandboxProxyContainerHost(raw string) string {
+	if host := strings.TrimSpace(raw); host != "" {
+		return host
+	}
+	if host := strings.TrimSpace(os.Getenv("Q15_SANDBOX_PROXY_CONTAINER_HOST")); host != "" {
+		return host
+	}
+	return "host.containers.internal"
 }

@@ -46,6 +46,7 @@ func run() error {
 		WorkspaceHostDir: req.Settings.WorkspaceHostDir,
 		WorkspaceDir:     req.Settings.WorkspaceDir,
 		Network:          req.Settings.Network,
+		Proxy:            toBuildahProxySettings(req.Settings.Proxy),
 	}
 
 	switch action {
@@ -64,6 +65,22 @@ func run() error {
 		return nil
 	default:
 		return fmt.Errorf("unsupported action %q", action)
+	}
+}
+
+func toBuildahProxySettings(proxy *sandboxcontract.ProxySettings) *sandboxbuildah.ProxySettings {
+	if proxy == nil {
+		return nil
+	}
+	return &sandboxbuildah.ProxySettings{
+		Enabled:              proxy.Enabled,
+		HTTPProxyURL:         proxy.HTTPProxyURL,
+		HTTPSProxyURL:        proxy.HTTPSProxyURL,
+		AllProxyURL:          proxy.AllProxyURL,
+		NoProxy:              proxy.NoProxy,
+		CACertHostPath:       proxy.CACertHostPath,
+		CACertContainerPath:  proxy.CACertContainerPath,
+		SetLowercaseProxyEnv: proxy.SetLowercaseProxyEnv,
 	}
 }
 

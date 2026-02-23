@@ -33,13 +33,18 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 		return err
 	}
 
-	agentSandbox := sandbox.New(sandbox.Settings{
-		ContainerName:    rt.SandboxContainerName,
-		FromImage:        rt.SandboxFromImage,
-		WorkspaceHostDir: rt.WorkspaceHostDir,
-		WorkspaceDir:     rt.WorkspaceDir,
-		Network:          rt.SandboxNetwork,
-	})
+	proxyHandle, err := startSandboxProxy(ctx, rt.SandboxProxy)
+	if err != nil {
+		return fmt.Errorf("start sandbox proxy for agent %q: %w", rt.Name, err)
+	}
+	var sandboxProxySettings *sandbox.ProxySettings
+	if proxyHandle != nil {
+		sandboxProxySettings = proxyHandle.sandboxSettings
+	}
+
+	sandboxSettings := buildSandboxSettings(rt, sandboxProxySettings)
+
+	agentSandbox := sandbox.New(sandboxSettings)
 	if sandbox.VerboseEnabled() {
 		fmt.Printf(
 			"[app] preparing sandbox for agent=%q container=%q workspace_host_dir=%q workspace_dir=%q from_image=%q network=%q\n",

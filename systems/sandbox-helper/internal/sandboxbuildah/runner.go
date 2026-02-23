@@ -22,6 +22,18 @@ type Settings struct {
 	WorkspaceHostDir string
 	WorkspaceDir     string
 	Network          string
+	Proxy            *ProxySettings
+}
+
+type ProxySettings struct {
+	Enabled              bool
+	HTTPProxyURL         string
+	HTTPSProxyURL        string
+	AllProxyURL          string
+	NoProxy              string
+	CACertHostPath       string
+	CACertContainerPath  string
+	SetLowercaseProxyEnv bool
 }
 
 func (s Settings) Validate() error {
@@ -45,6 +57,9 @@ func (s Settings) Validate() error {
 	}
 	if _, err := normalizeNetworkMode(s.Network); err != nil {
 		return fmt.Errorf("network: %w", err)
+	}
+	if err := validateProxySettings(s); err != nil {
+		return fmt.Errorf("proxy: %w", err)
 	}
 	return nil
 }
@@ -154,6 +169,7 @@ func normalizeSettings(cfg Settings) Settings {
 	cfg.WorkspaceHostDir = filepath.Clean(strings.TrimSpace(cfg.WorkspaceHostDir))
 	cfg.WorkspaceDir = filepath.Clean(strings.TrimSpace(cfg.WorkspaceDir))
 	cfg.Network = normalizeNetworkModeOrDefault(cfg.Network)
+	cfg.Proxy = normalizeProxySettings(cfg.Proxy)
 	return cfg
 }
 
@@ -259,6 +275,15 @@ func openOrCreateBuilder(
 func runInBuilder(builder *buildah.Builder, cfg Settings, command string) string {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
+	mounts := []specs.Mount{
+		{
+			Type:        "bind",
+			Source:      cfg.WorkspaceHostDir,
+			Destination: cfg.WorkspaceDir,
+			Options:     []string{"rbind", "rw"},
+		},
+	}
+	mounts = append(mounts, proxyExtraMounts(cfg)...)
 
 	err := builder.Run(
 		[]string{"/bin/sh", "-c", command},
@@ -269,14 +294,8 @@ func runInBuilder(builder *buildah.Builder, cfg Settings, command string) string
 			Terminal:         buildah.WithoutTerminal,
 			WorkingDir:       cfg.WorkspaceDir,
 			ConfigureNetwork: runNetworkPolicy(cfg),
-			Mounts: []specs.Mount{
-				{
-					Type:        "bind",
-					Source:      cfg.WorkspaceHostDir,
-					Destination: cfg.WorkspaceDir,
-					Options:     []string{"rbind", "rw"},
-				},
-			},
+			Env:              proxyRunEnv(cfg),
+			Mounts:           mounts,
 		},
 	)
 	if err != nil {
@@ -311,6 +330,116 @@ func normalizeNetworkMode(mode string) (string, error) {
 		return "enabled", nil
 	default:
 		return "", errors.New(`must be "enabled" or "disabled"`)
+	}
+}
+
+func normalizeProxySettings(proxy *ProxySettings) *ProxySettings {
+	if proxy == nil {
+		return nil
+	}
+	normalized := *proxy
+	normalized.HTTPProxyURL = strings.TrimSpace(proxy.HTTPProxyURL)
+	normalized.HTTPSProxyURL = strings.TrimSpace(proxy.HTTPSProxyURL)
+	normalized.AllProxyURL = strings.TrimSpace(proxy.AllProxyURL)
+	normalized.NoProxy = strings.TrimSpace(proxy.NoProxy)
+	if path := strings.TrimSpace(proxy.CACertHostPath); path != "" {
+		normalized.CACertHostPath = filepath.Clean(path)
+	} else {
+		normalized.CACertHostPath = ""
+	}
+	if path := strings.TrimSpace(proxy.CACertContainerPath); path != "" {
+		normalized.CACertContainerPath = filepath.Clean(path)
+	} else {
+		normalized.CACertContainerPath = ""
+	}
+	return &normalized
+}
+
+func validateProxySettings(cfg Settings) error {
+	if cfg.Proxy == nil || !cfg.Proxy.Enabled {
+		return nil
+	}
+	normalizedNetwork, err := normalizeNetworkMode(cfg.Network)
+	if err != nil {
+		return err
+	}
+	if normalizedNetwork != "enabled" {
+		return errors.New(`enabled proxy requires network "enabled"`)
+	}
+
+	p := cfg.Proxy
+	if strings.TrimSpace(p.HTTPProxyURL) == "" &&
+		strings.TrimSpace(p.HTTPSProxyURL) == "" &&
+		strings.TrimSpace(p.AllProxyURL) == "" {
+		return errors.New("at least one proxy URL is required when enabled")
+	}
+	if path := strings.TrimSpace(p.CACertHostPath); path != "" && !filepath.IsAbs(path) {
+		return errors.New("ca cert host path must be an absolute path")
+	}
+	if path := strings.TrimSpace(p.CACertContainerPath); path != "" && !filepath.IsAbs(path) {
+		return errors.New("ca cert container path must be an absolute path")
+	}
+	if (strings.TrimSpace(p.CACertHostPath) == "") != (strings.TrimSpace(p.CACertContainerPath) == "") {
+		return errors.New("ca cert host/container paths must be set together")
+	}
+	return nil
+}
+
+func proxyRunEnv(cfg Settings) []string {
+	if cfg.Proxy == nil || !cfg.Proxy.Enabled {
+		return nil
+	}
+	p := cfg.Proxy
+	var env []string
+	appendKV := func(key, value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		env = append(env, key+"="+value)
+	}
+
+	appendKV("HTTP_PROXY", p.HTTPProxyURL)
+	appendKV("HTTPS_PROXY", p.HTTPSProxyURL)
+	appendKV("ALL_PROXY", p.AllProxyURL)
+	appendKV("NO_PROXY", p.NoProxy)
+	if p.SetLowercaseProxyEnv {
+		appendKV("http_proxy", p.HTTPProxyURL)
+		appendKV("https_proxy", p.HTTPSProxyURL)
+		appendKV("all_proxy", p.AllProxyURL)
+		appendKV("no_proxy", p.NoProxy)
+	}
+
+	if strings.TrimSpace(p.CACertContainerPath) != "" {
+		for _, key := range []string{
+			"SSL_CERT_FILE",
+			"NODE_EXTRA_CA_CERTS",
+			"REQUESTS_CA_BUNDLE",
+			"CURL_CA_BUNDLE",
+			"GIT_SSL_CAINFO",
+		} {
+			appendKV(key, p.CACertContainerPath)
+		}
+	}
+
+	return env
+}
+
+func proxyExtraMounts(cfg Settings) []specs.Mount {
+	if cfg.Proxy == nil || !cfg.Proxy.Enabled {
+		return nil
+	}
+	p := cfg.Proxy
+	if strings.TrimSpace(p.CACertHostPath) == "" || strings.TrimSpace(p.CACertContainerPath) == "" {
+		return nil
+	}
+	return []specs.Mount{
+		{
+			Type:        "bind",
+			Source:      p.CACertHostPath,
+			Destination: p.CACertContainerPath,
+			Options:     []string{"rbind", "ro"},
+		},
 	}
 }
 
