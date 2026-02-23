@@ -38,6 +38,14 @@ func startSandboxProxy(
 		cancel()
 		return nil, fmt.Errorf("build container proxy URL: %w", err)
 	}
+	caCertHostPath := strings.TrimSpace(server.CACertHostPath())
+	caCertContainerPath := strings.TrimSpace(rtProxy.CACertContainerPath)
+	if caCertHostPath != "" && caCertContainerPath == "" {
+		shutdownCtx, cancel := context.WithCancel(context.Background())
+		_ = server.Stop(shutdownCtx)
+		cancel()
+		return nil, fmt.Errorf("proxy CA cert container path is required when CA export is present")
+	}
 
 	go func() {
 		if err, ok := <-server.Errors(); ok && err != nil {
@@ -54,10 +62,8 @@ func startSandboxProxy(
 			AllProxyURL:          proxyURL,
 			NoProxy:              strings.Join(rtProxy.NoProxy, ","),
 			SetLowercaseProxyEnv: rtProxy.SetLowercaseProxyEnv,
-			// MITM/CA trust wiring lands in the next slice. Leaving both CA paths
-			// empty keeps sandbox/helper validation happy in passthrough mode.
-			CACertHostPath:      "",
-			CACertContainerPath: "",
+			CACertHostPath:       caCertHostPath,
+			CACertContainerPath:  caCertContainerPath,
 		},
 	}, nil
 }

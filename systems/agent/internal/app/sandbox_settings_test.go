@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"os"
 	"testing"
 
 	"github.com/q15co/q15/systems/agent/internal/config"
@@ -58,6 +59,7 @@ func TestStartSandboxProxy_BuildsSandboxProxySettings(t *testing.T) {
 		Enabled:              true,
 		ListenAddr:           "127.0.0.1:0",
 		ContainerProxyHost:   "10.0.2.2",
+		CACertContainerPath:  "/run/q15-proxy/ca.crt",
 		NoProxy:              []string{"localhost", "127.0.0.1"},
 		SetLowercaseProxyEnv: true,
 	})
@@ -76,8 +78,16 @@ func TestStartSandboxProxy_BuildsSandboxProxySettings(t *testing.T) {
 	if handle.sandboxSettings.NoProxy != "localhost,127.0.0.1" {
 		t.Fatalf("unexpected NO_PROXY: %q", handle.sandboxSettings.NoProxy)
 	}
-	if handle.sandboxSettings.CACertHostPath != "" ||
-		handle.sandboxSettings.CACertContainerPath != "" {
-		t.Fatalf("expected no CA paths in passthrough slice, got %#v", handle.sandboxSettings)
+	if handle.sandboxSettings.CACertHostPath == "" {
+		t.Fatalf("expected CA cert host path to be populated")
+	}
+	if handle.sandboxSettings.CACertContainerPath != "/run/q15-proxy/ca.crt" {
+		t.Fatalf(
+			"unexpected CA cert container path: %q",
+			handle.sandboxSettings.CACertContainerPath,
+		)
+	}
+	if _, err := os.Stat(handle.sandboxSettings.CACertHostPath); err != nil {
+		t.Fatalf("expected CA cert host path to exist, stat error = %v", err)
 	}
 }
