@@ -15,7 +15,7 @@ const (
 type Loop struct {
 	mu          sync.Mutex
 	modelClient ModelClient
-	tools       ToolRunner
+	tools       ToolRegistry
 	modelRefs   []string
 	systemText  string
 	maxTurns    int
@@ -26,7 +26,7 @@ var _ Agent = (*Loop)(nil)
 
 func NewLoop(
 	modelClient ModelClient,
-	tools ToolRunner,
+	tools ToolRegistry,
 	modelRefs []string,
 	systemText string,
 ) *Loop {
@@ -141,7 +141,7 @@ func (l *Loop) Reset(ctx context.Context) error {
 
 func (l *Loop) runTool(ctx context.Context, call ToolCall) (string, error) {
 	if l.tools == nil {
-		return "", fmt.Errorf("no tool runner configured for call %q", call.Name)
+		return "", fmt.Errorf("no tool registry configured for call %q", call.Name)
 	}
 	if strings.TrimSpace(call.ID) == "" {
 		return "", fmt.Errorf("tool call is missing id")

@@ -53,7 +53,12 @@ type ModelClient interface {
 	) (ModelClientResult, error)
 }
 
-type ToolRunner interface {
+type Tool interface {
+	Definition() ToolDefinition
+	Run(ctx context.Context, arguments string) (string, error)
+}
+
+type ToolRegistry interface {
 	Definitions() []ToolDefinition
 	Run(ctx context.Context, call ToolCall) (string, error)
 }

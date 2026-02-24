@@ -80,6 +80,10 @@ allowed_user_ids = [123456789]
 - Use `/reset` in Telegram to clear an agent's conversation history for that chat.
 - `telegram.allowed_user_ids` is required.
 - Set `telegram.token` or `telegram.token_env`.
+- Optional Brave web search tool: set `Q15_BRAVE_API_KEY` to enable the `web_search` tool for the
+  model.
+- `web_search` runs in the host agent process (not inside the sandbox shell), so it is independent
+  of `agent.sandbox.network`.
 - On NixOS dev shells, do not add `shadow` to the shell packages: the Nix-store
   `newuidmap`/`newgidmap` binaries are not usable for rootless user-namespace setup.
 

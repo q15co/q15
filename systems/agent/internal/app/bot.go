@@ -83,7 +83,25 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 		systemPrompt = composeSystemPrompt(systemPrompt, info)
 	}
 
-	toolRunner := tools.NewShell(agentSandbox)
+	toolList := []agent.Tool{tools.NewShell(agentSandbox)}
+	braveAPIKey := strings.TrimSpace(os.Getenv("Q15_BRAVE_API_KEY"))
+	if braveAPIKey != "" {
+		webSearchTool, err := tools.NewBraveWebSearch(braveAPIKey)
+		if err != nil {
+			return fmt.Errorf("configure brave web search tool for agent %q: %w", rt.Name, err)
+		}
+		toolList = append(toolList, webSearchTool)
+		if sandbox.VerboseEnabled() {
+			fmt.Printf("[app] enabled tool web_search (Brave) for agent=%q\n", rt.Name)
+		}
+	} else if sandbox.VerboseEnabled() {
+		fmt.Printf("[app] web_search disabled for agent=%q (Q15_BRAVE_API_KEY not set)\n", rt.Name)
+	}
+
+	toolRegistry, err := agent.NewToolRegistry(toolList...)
+	if err != nil {
+		return fmt.Errorf("build tool registry for agent %q: %w", rt.Name, err)
+	}
 	messageBus := bus.New(bus.DefaultBufferSize)
 
 	var (
@@ -99,7 +117,7 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 			return a
 		}
 
-		a := agent.NewLoop(modelAdapter, toolRunner, models, systemPrompt)
+		a := agent.NewLoop(modelAdapter, toolRegistry, models, systemPrompt)
 		agents[sessionKey] = a
 		return a
 	}
