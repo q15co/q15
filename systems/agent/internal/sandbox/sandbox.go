@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 
@@ -167,7 +166,7 @@ func (s *Sandbox) runHelperLocked(
 		return "", fmt.Errorf("marshal helper request: %w", err)
 	}
 
-	cmd := helperCommand(ctx, helperBin, action, s.cfg)
+	cmd := helperCommand(ctx, helperBin, action)
 	cmd.Stdin = bytes.NewReader(reqBytes)
 
 	var stdout bytes.Buffer
@@ -227,103 +226,8 @@ func toContractSettings(cfg Settings) sandboxcontract.Settings {
 	}
 }
 
-func helperCommand(ctx context.Context, helperBin, action string, _ Settings) *exec.Cmd {
-	if usePodmanUnshare() {
-		cmd := exec.CommandContext(ctx, "podman", "unshare", helperBin, action)
-		cmd.Env = preferNixWrappersInEnv(filterEnv(os.Environ(), "STORAGE_DRIVER"))
-		return cmd
-	}
+func helperCommand(ctx context.Context, helperBin, action string) *exec.Cmd {
 	return exec.CommandContext(ctx, helperBin, action)
-}
-
-func usePodmanUnshare() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("Q15_SANDBOX_USE_PODMAN_UNSHARE"))) {
-	case "1", "true", "yes", "on":
-		return true
-	case "0", "false", "no", "off":
-		return false
-	}
-	if runtime.GOOS != "linux" || os.Geteuid() == 0 {
-		return false
-	}
-	if _, err := exec.LookPath("podman"); err != nil {
-		verbosef("usePodmanUnshare: default disabled because podman is not in PATH: %v", err)
-		return false
-	}
-	return true
-}
-
-func filterEnv(env []string, blockedKeys ...string) []string {
-	if len(blockedKeys) == 0 || len(env) == 0 {
-		return env
-	}
-	blocked := make(map[string]struct{}, len(blockedKeys))
-	for _, k := range blockedKeys {
-		k = strings.TrimSpace(k)
-		if k == "" {
-			continue
-		}
-		blocked[k] = struct{}{}
-	}
-	out := make([]string, 0, len(env))
-	for _, kv := range env {
-		key, _, ok := strings.Cut(kv, "=")
-		if !ok {
-			out = append(out, kv)
-			continue
-		}
-		if _, deny := blocked[key]; deny {
-			continue
-		}
-		out = append(out, kv)
-	}
-	return out
-}
-
-func preferNixWrappersInEnv(env []string) []string {
-	const wrappersDir = "/run/wrappers/bin"
-
-	if _, err := os.Stat(wrappersDir); err != nil {
-		return env
-	}
-
-	out := make([]string, 0, len(env)+1)
-	foundPATH := false
-	for _, kv := range env {
-		key, value, ok := strings.Cut(kv, "=")
-		if !ok {
-			out = append(out, kv)
-			continue
-		}
-		if key != "PATH" {
-			out = append(out, kv)
-			continue
-		}
-
-		foundPATH = true
-		parts := strings.Split(value, string(os.PathListSeparator))
-		alreadyPresent := false
-		for _, part := range parts {
-			if part == wrappersDir {
-				alreadyPresent = true
-				break
-			}
-		}
-
-		if alreadyPresent {
-			out = append(out, kv)
-			continue
-		}
-		if value == "" {
-			out = append(out, "PATH="+wrappersDir)
-			continue
-		}
-		out = append(out, "PATH="+wrappersDir+string(os.PathListSeparator)+value)
-	}
-	if !foundPATH {
-		out = append(out, "PATH="+wrappersDir)
-	}
-	return out
 }
 
 func (s *Sandbox) helperBinaryLocked() (string, error) {

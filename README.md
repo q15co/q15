@@ -4,10 +4,17 @@ Telegram-based shell agent with sandboxed command execution and OpenAI-compatibl
 
 ## Requirements
 
+- Linux (sandbox runtime is rootless Buildah)
 - Go (for local builds/runs)
 - Buildah (sandbox runtime)
 - A Telegram bot token
 - API key(s) for your configured model provider(s)
+- A working C toolchain for building `q15-sandbox-helper` locally (`make run` builds it with cgo)
+
+On NixOS, rootless sandbox startup requires the host wrapper helpers:
+
+- `/run/wrappers/bin/newuidmap`
+- `/run/wrappers/bin/newgidmap`
 
 ## Run
 
@@ -16,6 +23,9 @@ Use the repo `q15.toml` (or create your own) and start the agent runtime:
 ```bash
 make run
 ```
+
+`q15` runs as a normal unprivileged user process. The `q15-sandbox-helper` process enters the
+rootless user namespace for Buildah.
 
 Or run the agent module directly:
 
@@ -70,3 +80,11 @@ allowed_user_ids = [123456789]
 - Use `/reset` in Telegram to clear an agent's conversation history for that chat.
 - `telegram.allowed_user_ids` is required.
 - Set `telegram.token` or `telegram.token_env`.
+- On NixOS dev shells, do not add `shadow` to the shell packages: the Nix-store
+  `newuidmap`/`newgidmap` binaries are not usable for rootless user-namespace setup.
+
+## Troubleshooting
+
+If sandbox prepare fails with an error mentioning a Nix store `shadow` path such as
+`/nix/store/...-shadow-.../bin/newuidmap`, the helper resolved the wrong uidmap binary. Use the host
+wrappers in `/run/wrappers/bin` and remove `shadow` from the devshell.

@@ -31,7 +31,8 @@ in {
       netavark
       aardvark-dns
       fuse-overlayfs
-      shadow
+      # Intentionally exclude `shadow`: Nix-store newuidmap/newgidmap break rootless
+      # Buildah/Podman on NixOS; use host wrappers in /run/wrappers/bin instead.
       slirp4netns
       crun
 

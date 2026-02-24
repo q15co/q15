@@ -1,8 +1,12 @@
 package sandboxbuildah
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 
@@ -14,6 +18,10 @@ import (
 var (
 	buildahEnvOnce sync.Once
 	buildahEnvErr  error
+
+	nixWrappersBinDir = "/run/wrappers/bin"
+	lookPathFunc      = exec.LookPath
+	statFunc          = os.Stat
 )
 
 // InitProcess must be called at the start of the helper main(). If it returns
@@ -57,26 +65,25 @@ func ensureBuildahProcessEnvironment() error {
 			verbosef("ensureBuildahProcessEnvironment: preferNixWrappersInPath failed: %v", err)
 			return
 		}
-		if skipUnshareEnabled() {
-			if err := markRootlessUsernsConfigured(); err != nil {
-				buildahEnvErr = err
-				verbosef(
-					"ensureBuildahProcessEnvironment: markRootlessUsernsConfigured failed: %v",
-					err,
-				)
-				return
-			}
-			verbosef(
-				"ensureBuildahProcessEnvironment: skipping unshare due to Q15_SANDBOX_SKIP_UNSHARE=%q",
-				os.Getenv("Q15_SANDBOX_SKIP_UNSHARE"),
-			)
-			return
-		}
 		if os.Getenv(unshare.UsernsEnvName) != "" {
 			verbosef(
 				"ensureBuildahProcessEnvironment: skipping unshare because %s is already set to %q",
 				unshare.UsernsEnvName,
 				os.Getenv(unshare.UsernsEnvName),
+			)
+			return
+		}
+		if err := ensureNixOSUIDMapWrappers(); err != nil {
+			buildahEnvErr = err
+			verbosef("ensureBuildahProcessEnvironment: ensureNixOSUIDMapWrappers failed: %v", err)
+			return
+		}
+		if !hasCgoUnshareConstructor {
+			buildahEnvErr = errors.New(
+				"q15-sandbox-helper was built with CGO disabled; rootless Buildah userns reexec requires CGO (rebuild helper with CGO_ENABLED=1)",
+			)
+			verbosef(
+				"ensureBuildahProcessEnvironment: helper missing CGO unshare constructor hook",
 			)
 			return
 		}
@@ -97,32 +104,30 @@ func ensureBuildahProcessEnvironment() error {
 }
 
 func preferNixWrappersInPath() error {
-	const wrappersDir = "/run/wrappers/bin"
-
-	if _, err := os.Stat(wrappersDir); err != nil {
+	if _, err := statFunc(nixWrappersBinDir); err != nil {
 		if os.IsNotExist(err) {
 			return nil
 		}
-		return fmt.Errorf("stat %s: %w", wrappersDir, err)
+		return fmt.Errorf("stat %s: %w", nixWrappersBinDir, err)
 	}
 
 	pathEnv := os.Getenv("PATH")
 	parts := strings.Split(pathEnv, string(os.PathListSeparator))
 	for _, part := range parts {
-		if part == wrappersDir {
-			verbosef("preferNixWrappersInPath: PATH already contains %s", wrappersDir)
+		if part == nixWrappersBinDir {
+			verbosef("preferNixWrappersInPath: PATH already contains %s", nixWrappersBinDir)
 			return nil
 		}
 	}
 
-	newPath := wrappersDir
+	newPath := nixWrappersBinDir
 	if pathEnv != "" {
-		newPath = wrappersDir + string(os.PathListSeparator) + pathEnv
+		newPath = nixWrappersBinDir + string(os.PathListSeparator) + pathEnv
 	}
 	if err := os.Setenv("PATH", newPath); err != nil {
 		return fmt.Errorf("set PATH: %w", err)
 	}
-	verbosef("preferNixWrappersInPath: prepended %s to PATH", wrappersDir)
+	verbosef("preferNixWrappersInPath: prepended %s to PATH", nixWrappersBinDir)
 	return nil
 }
 
@@ -147,36 +152,92 @@ func setXDGRuntimeDir() error {
 	return nil
 }
 
-func markRootlessUsernsConfigured() error {
+func ensureNixOSUIDMapWrappers() error {
+	if runtime.GOOS != "linux" {
+		return fmt.Errorf("rootless Buildah sandbox runtime is Linux-only (got %s)", runtime.GOOS)
+	}
 	if !unshare.IsRootless() {
-		verbosef("markRootlessUsernsConfigured: skipping (not rootless)")
+		verbosef("ensureNixOSUIDMapWrappers: skipping (not rootless)")
 		return nil
 	}
 
-	current := os.Getenv(unshare.UsernsEnvName)
-	if current == "done" {
-		verbosef(
-			"markRootlessUsernsConfigured: %s already set to %q",
-			unshare.UsernsEnvName,
-			current,
+	verbosef("ensureNixOSUIDMapWrappers: PATH=%q", os.Getenv("PATH"))
+	uidmapPath, err := lookPathFunc("newuidmap")
+	if err != nil {
+		return fmt.Errorf(
+			"resolve newuidmap in PATH (expected %q): %w",
+			filepath.Join(nixWrappersBinDir, "newuidmap"),
+			err,
 		)
-		return nil
 	}
-	if err := os.Setenv(unshare.UsernsEnvName, "done"); err != nil {
-		return fmt.Errorf("set %s=done: %w", unshare.UsernsEnvName, err)
+	gidmapPath, err := lookPathFunc("newgidmap")
+	if err != nil {
+		return fmt.Errorf(
+			"resolve newgidmap in PATH (expected %q): %w",
+			filepath.Join(nixWrappersBinDir, "newgidmap"),
+			err,
+		)
 	}
 	verbosef(
-		"markRootlessUsernsConfigured: set %s=done (skip-unshare compatibility mode, not a real userns reexec)",
-		unshare.UsernsEnvName,
+		"ensureNixOSUIDMapWrappers: resolved newuidmap=%q newgidmap=%q",
+		uidmapPath,
+		gidmapPath,
 	)
+
+	expectedUIDMap := filepath.Join(nixWrappersBinDir, "newuidmap")
+	expectedGIDMap := filepath.Join(nixWrappersBinDir, "newgidmap")
+	if uidmapPath != expectedUIDMap || gidmapPath != expectedGIDMap {
+		msg := fmt.Sprintf(
+			"rootless uidmap helpers must resolve to NixOS wrappers (expected newuidmap=%q newgidmap=%q; got newuidmap=%q newgidmap=%q)",
+			expectedUIDMap,
+			expectedGIDMap,
+			uidmapPath,
+			gidmapPath,
+		)
+		if looksLikeNixStoreShadowUIDMapBinary(uidmapPath) ||
+			looksLikeNixStoreShadowUIDMapBinary(gidmapPath) {
+			msg += "; resolved Nix store shadow uidmap helper(s), which are not usable for rootless user namespaces"
+		}
+		msg += "; remove `shadow` from the devshell and rely on /run/wrappers/bin"
+		return errors.New(msg)
+	}
+
+	if err := requireAnySetIDBit(expectedUIDMap); err != nil {
+		return err
+	}
+	if err := requireAnySetIDBit(expectedGIDMap); err != nil {
+		return err
+	}
 	return nil
 }
 
-func skipUnshareEnabled() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("Q15_SANDBOX_SKIP_UNSHARE"))) {
-	case "1", "true", "yes", "on":
-		return true
-	default:
+func requireAnySetIDBit(path string) error {
+	info, err := statFunc(path)
+	if err != nil {
+		return fmt.Errorf("stat %s: %w", path, err)
+	}
+	mode := info.Mode()
+	if mode&os.ModeSetuid == 0 && mode&os.ModeSetgid == 0 {
+		return fmt.Errorf(
+			"%s must have setuid/setgid bit set for rootless user namespaces (mode=%#o); remove `shadow` from the devshell and rely on /run/wrappers/bin",
+			path,
+			uint32(mode),
+		)
+	}
+	return nil
+}
+
+func looksLikeNixStoreShadowUIDMapBinary(path string) bool {
+	path = strings.TrimSpace(path)
+	if path == "" {
 		return false
 	}
+	if !strings.HasPrefix(path, "/nix/store/") {
+		return false
+	}
+	base := filepath.Base(path)
+	if base != "newuidmap" && base != "newgidmap" {
+		return false
+	}
+	return strings.Contains(path, "-shadow-")
 }

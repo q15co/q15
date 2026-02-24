@@ -22,7 +22,7 @@ build-main:
 
 build-helper:
 	@mkdir -p $(BIN_DIR)
-	cd $(HELPER_MOD_DIR) && CGO_ENABLED=0 $(GO) build -tags='$(HELPER_TAGS)' -o ../../$(BIN_DIR)/q15-sandbox-helper .
+	cd $(HELPER_MOD_DIR) && CGO_ENABLED=1 $(GO) build -tags='$(HELPER_TAGS)' -o ../../$(BIN_DIR)/q15-sandbox-helper .
 
 test:
 	cd $(CONTRACT_MOD_DIR) && $(GO) test ./...
