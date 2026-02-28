@@ -60,6 +60,7 @@ base_url = "https://api.z.ai/api/coding/paas/v4"
 key_env = "ZAI_API_KEY"
 
 [[agent]]
+# Authoritative agent identity used for prompt identity and core-memory rendering.
 name = "Jared"
 models = ["moonshot/kimi-k2.5", "zai/glm-5"]
 memory_recent_turns = 6
@@ -80,6 +81,12 @@ allowed_user_ids = [123456789]
 
 - `memory_recent_turns` controls how many persisted turns are replayed into the model context on
   each reply. `0` uses default `6`.
+- `agent.name` is the authoritative runtime identity for the assistant.
+  - The default system prompt is rendered from `agent.name`.
+  - Seeded core memory templates use `{{agent_name}}` and are rendered at load time.
+  - Keep identity lines in core memory templated with `{{agent_name}}` rather than hardcoding a
+    name.
+  - No legacy identity migration is performed for pre-template core files.
 - Agent memory is persisted per configured agent runtime in:
   - host: `<agent.sandbox.workspace_host_dir>/.q15-memory`
   - sandbox: `/memory` The memory directory is git-backed and auto-committed after successful turns.

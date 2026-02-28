@@ -198,6 +198,7 @@ func (s *Store) ensureREADME() error {
 This directory contains persistent agent memory.
 
 	- Core memory (always injected into the system prompt) is stored in core/*.md (for example AGENT.md, USER.md, SOUL.md).
+	- Agent identity comes from config agent.name; use {{agent_name}} in core files instead of hardcoded names.
 	- Conversation turns are stored as canonical JSON files under history/turns/.
 	- Notes are organized under notes/inbox, notes/zettel, and notes/maps.
 	- Git history tracks all memory changes.
