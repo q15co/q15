@@ -16,6 +16,8 @@ func TestBuildSandboxSettings_WithoutProxy(t *testing.T) {
 		SandboxFromImage:     "docker.io/library/debian:bookworm-slim",
 		WorkspaceHostDir:     "/tmp/q15/agent-a",
 		WorkspaceDir:         "/workspace",
+		MemoryHostDir:        "/tmp/q15/agent-a/.q15-memory",
+		MemoryDir:            "/memory",
 		SandboxNetwork:       "enabled",
 	}
 
@@ -26,6 +28,12 @@ func TestBuildSandboxSettings_WithoutProxy(t *testing.T) {
 	if got.Proxy != nil {
 		t.Fatalf("expected nil proxy settings, got %#v", got.Proxy)
 	}
+	if got.MemoryHostDir != rt.MemoryHostDir {
+		t.Fatalf("unexpected memory host dir: %q", got.MemoryHostDir)
+	}
+	if got.MemoryDir != rt.MemoryDir {
+		t.Fatalf("unexpected memory dir: %q", got.MemoryDir)
+	}
 }
 
 func TestBuildSandboxSettings_WithProxySettings(t *testing.T) {
@@ -35,6 +43,8 @@ func TestBuildSandboxSettings_WithProxySettings(t *testing.T) {
 		SandboxFromImage:     "docker.io/library/debian:bookworm-slim",
 		WorkspaceHostDir:     "/tmp/q15/agent-a",
 		WorkspaceDir:         "/workspace",
+		MemoryHostDir:        "/tmp/q15/agent-a/.q15-memory",
+		MemoryDir:            "/memory",
 		SandboxNetwork:       "enabled",
 	}
 	proxy := &sandbox.ProxySettings{

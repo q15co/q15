@@ -8,6 +8,8 @@ type Settings struct {
 	FromImage        string         `json:"from_image"`
 	WorkspaceHostDir string         `json:"workspace_host_dir"`
 	WorkspaceDir     string         `json:"workspace_dir"`
+	MemoryHostDir    string         `json:"memory_host_dir"`
+	MemoryDir        string         `json:"memory_dir"`
 	Network          string         `json:"network"`
 	Proxy            *ProxySettings `json:"proxy,omitempty"`
 }

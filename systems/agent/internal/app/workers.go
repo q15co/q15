@@ -13,7 +13,7 @@ import (
 func runAgentWorker(
 	ctx context.Context,
 	messageBus *bus.Bus,
-	getAgent func(sessionKey string) agent.Agent,
+	a agent.Agent,
 ) error {
 	for {
 		select {
@@ -22,29 +22,6 @@ func runAgentWorker(
 		case in := <-messageBus.Inbound():
 			text := strings.TrimSpace(in.Text)
 			if text == "" {
-				continue
-			}
-
-			sessionKey, err := bus.SessionKey(in.Channel, in.ChatID)
-			if err != nil {
-				continue
-			}
-
-			a := getAgent(sessionKey)
-			if text == "/reset" {
-				if err := a.Reset(ctx); err != nil {
-					_ = messageBus.PublishOutbound(ctx, bus.OutboundMessage{
-						Channel: in.Channel,
-						ChatID:  in.ChatID,
-						Text:    "reset error: " + err.Error(),
-					})
-					continue
-				}
-				_ = messageBus.PublishOutbound(ctx, bus.OutboundMessage{
-					Channel: in.Channel,
-					ChatID:  in.ChatID,
-					Text:    "history reset",
-				})
 				continue
 			}
 

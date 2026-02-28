@@ -14,6 +14,8 @@ func buildSandboxSettings(
 		FromImage:        rt.SandboxFromImage,
 		WorkspaceHostDir: rt.WorkspaceHostDir,
 		WorkspaceDir:     rt.WorkspaceDir,
+		MemoryHostDir:    rt.MemoryHostDir,
+		MemoryDir:        rt.MemoryDir,
 		Network:          rt.SandboxNetwork,
 	}
 	settings.Proxy = proxySettings

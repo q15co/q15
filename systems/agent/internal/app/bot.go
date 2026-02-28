@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"sync"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/bus"
 	"github.com/q15co/q15/systems/agent/internal/channel/telegram"
 	"github.com/q15co/q15/systems/agent/internal/config"
+	"github.com/q15co/q15/systems/agent/internal/memory"
 	"github.com/q15co/q15/systems/agent/internal/provider/openaicompatible"
 	"github.com/q15co/q15/systems/agent/internal/sandbox"
 	"github.com/q15co/q15/systems/agent/internal/tools"
@@ -78,9 +78,9 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 			WorkspaceHostDir: rt.WorkspaceHostDir,
 			WorkspaceDir:     rt.WorkspaceDir,
 			Network:          rt.SandboxNetwork,
-		})
+		}, rt.MemoryDir)
 	} else {
-		systemPrompt = composeSystemPrompt(systemPrompt, info)
+		systemPrompt = composeSystemPrompt(systemPrompt, info, rt.MemoryDir)
 	}
 
 	toolList := []agent.Tool{tools.NewShell(agentSandbox)}
@@ -102,25 +102,21 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 	if err != nil {
 		return fmt.Errorf("build tool registry for agent %q: %w", rt.Name, err)
 	}
-	messageBus := bus.New(bus.DefaultBufferSize)
 
-	var (
-		mu     sync.Mutex
-		agents = make(map[string]agent.Agent)
-	)
-
-	getAgent := func(sessionKey string) agent.Agent {
-		mu.Lock()
-		defer mu.Unlock()
-
-		if a, ok := agents[sessionKey]; ok {
-			return a
-		}
-
-		a := agent.NewLoop(modelAdapter, toolRegistry, models, systemPrompt)
-		agents[sessionKey] = a
-		return a
+	agentMemoryStore := memory.NewStore(rt.MemoryHostDir, nil)
+	if err := agentMemoryStore.Init(ctx); err != nil {
+		return fmt.Errorf("initialize memory store for agent %q: %w", rt.Name, err)
 	}
+
+	botAgent := agent.NewLoop(
+		modelAdapter,
+		toolRegistry,
+		models,
+		systemPrompt,
+		agentMemoryStore,
+		rt.MemoryRecentTurns,
+	)
+	messageBus := bus.New(bus.DefaultBufferSize)
 
 	channel, err := telegram.NewChannel(token, func(msg telegram.IncomingMessage) {
 		err := messageBus.PublishInbound(ctx, bus.InboundMessage{
@@ -142,7 +138,7 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 
 	errCh := make(chan error, 2)
 	go func() {
-		errCh <- runAgentWorker(ctx, messageBus, getAgent)
+		errCh <- runAgentWorker(ctx, messageBus, botAgent)
 	}()
 	go func() {
 		errCh <- runOutboundWorker(ctx, messageBus, bus.ChannelTelegram, channel.SendText)
@@ -159,7 +155,7 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 	}
 }
 
-func composeSystemPrompt(base string, info sandbox.SandboxInfo) string {
+func composeSystemPrompt(base string, info sandbox.SandboxInfo, memoryDir string) string {
 	base = strings.TrimSpace(base)
 	if base == "" {
 		base = agent.DefaultSystemPrompt
@@ -187,6 +183,16 @@ func composeSystemPrompt(base string, info sandbox.SandboxInfo) string {
 			fmt.Sprintf(
 				"- Workspace: %s (bind-mounted persistent host directory)",
 				info.WorkspaceDir,
+			),
+		)
+	}
+	memoryDir = strings.TrimSpace(memoryDir)
+	if memoryDir != "" {
+		lines = append(
+			lines,
+			fmt.Sprintf(
+				"- Persistent memory repo: %s (use shell/tool calls to inspect and organize long-term memory files)",
+				memoryDir,
 			),
 		)
 	}

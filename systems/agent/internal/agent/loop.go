@@ -10,16 +10,18 @@ import (
 const (
 	DefaultSystemPrompt = "You are q15, a helpful shell-capable assistant running for the user in a sandboxed environment. Use the available tools effectively and adapt to the sandbox environment described in the system prompt. Do not claim to be Claude, Anthropic, or any specific vendor/model unless that identity is explicitly provided in this conversation."
 	defaultMaxTurns     = 12
+	defaultRecentTurns  = 6
 )
 
 type Loop struct {
 	mu          sync.Mutex
 	modelClient ModelClient
 	tools       ToolRegistry
+	store       ConversationStore
 	modelRefs   []string
 	systemText  string
 	maxTurns    int
-	messages    []Message
+	recentTurns int
 }
 
 var _ Agent = (*Loop)(nil)
@@ -29,21 +31,25 @@ func NewLoop(
 	tools ToolRegistry,
 	modelRefs []string,
 	systemText string,
+	store ConversationStore,
+	recentTurns int,
 ) *Loop {
 	systemText = strings.TrimSpace(systemText)
 	if systemText == "" {
 		systemText = DefaultSystemPrompt
 	}
+	if recentTurns == 0 {
+		recentTurns = defaultRecentTurns
+	}
 	modelRefs = normalizeModelRefs(modelRefs)
 	return &Loop{
 		modelClient: modelClient,
 		tools:       tools,
+		store:       store,
 		modelRefs:   modelRefs,
 		systemText:  systemText,
 		maxTurns:    defaultMaxTurns,
-		messages: []Message{
-			{Role: SystemRole, Content: systemText},
-		},
+		recentTurns: recentTurns,
 	}
 }
 
@@ -77,8 +83,21 @@ func (l *Loop) Reply(ctx context.Context, userInput string) (string, error) {
 		return "", fmt.Errorf("empty user input")
 	}
 
-	turnStart := len(l.messages)
-	l.messages = append(l.messages, Message{
+	var recentMessages []Message
+	if l.store != nil {
+		var err error
+		recentMessages, err = l.store.LoadRecentMessages(ctx, l.recentTurns)
+		if err != nil {
+			return "", fmt.Errorf("load recent messages: %w", err)
+		}
+	}
+
+	messages := make([]Message, 0, 2+len(recentMessages))
+	messages = append(messages, Message{Role: SystemRole, Content: l.systemText})
+	messages = append(messages, copyMessages(recentMessages)...)
+
+	turnStart := len(messages)
+	messages = append(messages, Message{
 		Role:    UserRole,
 		Content: userInput,
 	})
@@ -89,9 +108,8 @@ func (l *Loop) Reply(ctx context.Context, userInput string) (string, error) {
 	}
 
 	for turn := 0; turn < l.maxTurns; turn++ {
-		result, err := l.complete(ctx, l.messages, toolDefs)
+		result, err := l.complete(ctx, messages, toolDefs)
 		if err != nil {
-			l.messages = l.messages[:turnStart]
 			return "", fmt.Errorf("model complete: %w", err)
 		}
 
@@ -101,12 +119,17 @@ func (l *Loop) Reply(ctx context.Context, userInput string) (string, error) {
 			ToolCalls:   result.ToolCalls,
 			ProviderRaw: result.ProviderRaw,
 		}
-		l.messages = append(l.messages, assistantMsg)
+		messages = append(messages, assistantMsg)
 
 		if len(result.ToolCalls) == 0 {
 			answer := strings.TrimSpace(result.Content)
 			if answer == "" {
 				answer = "(assistant returned no text)"
+			}
+			if l.store != nil {
+				if err := l.store.AppendTurn(ctx, copyMessages(messages[turnStart:])); err != nil {
+					return "", fmt.Errorf("persist turn: %w", err)
+				}
 			}
 			return answer, nil
 		}
@@ -116,7 +139,7 @@ func (l *Loop) Reply(ctx context.Context, userInput string) (string, error) {
 			if err != nil {
 				output = "tool error: " + err.Error()
 			}
-			l.messages = append(l.messages, Message{
+			messages = append(messages, Message{
 				Role:       ToolRole,
 				Content:    output,
 				ToolCallID: call.ID,
@@ -124,19 +147,7 @@ func (l *Loop) Reply(ctx context.Context, userInput string) (string, error) {
 		}
 	}
 
-	l.messages = l.messages[:turnStart]
 	return "", fmt.Errorf("max tool-call turns reached (%d)", l.maxTurns)
-}
-
-func (l *Loop) Reset(ctx context.Context) error {
-	_ = ctx
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	l.messages = []Message{
-		{Role: SystemRole, Content: l.systemText},
-	}
-	return nil
 }
 
 func (l *Loop) runTool(ctx context.Context, call ToolCall) (string, error) {
@@ -168,4 +179,22 @@ func (l *Loop) complete(
 		return ModelClientResult{}, fmt.Errorf("no models configured")
 	}
 	return ModelClientResult{}, fmt.Errorf("all models failed (%v): %w", l.modelRefs, lastErr)
+}
+
+func copyMessages(in []Message) []Message {
+	if len(in) == 0 {
+		return nil
+	}
+
+	out := make([]Message, len(in))
+	for i, msg := range in {
+		out[i] = msg
+		if len(msg.ToolCalls) > 0 {
+			out[i].ToolCalls = append([]ToolCall(nil), msg.ToolCalls...)
+		}
+		if len(msg.ProviderRaw) > 0 {
+			out[i].ProviderRaw = append([]byte(nil), msg.ProviderRaw...)
+		}
+	}
+	return out
 }

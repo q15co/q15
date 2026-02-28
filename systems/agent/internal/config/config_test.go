@@ -77,11 +77,62 @@ key_env = "MOONSHOT_API_KEY"
 	if rt.WorkspaceDir != "/workspace" {
 		t.Fatalf("unexpected workspace dir: %q", rt.WorkspaceDir)
 	}
+	if rt.MemoryHostDir != "/tmp/q15-workspaces/jared/.q15-memory" {
+		t.Fatalf("unexpected memory host dir: %q", rt.MemoryHostDir)
+	}
+	if rt.MemoryDir != "/memory" {
+		t.Fatalf("unexpected memory dir: %q", rt.MemoryDir)
+	}
+	if rt.MemoryRecentTurns != 6 {
+		t.Fatalf("unexpected default memory recent turns: %d", rt.MemoryRecentTurns)
+	}
 	if rt.TelegramToken != "tg-123" {
 		t.Fatalf("unexpected telegram token: %q", rt.TelegramToken)
 	}
 	if len(rt.TelegramAllowedUserIDs) != 1 || rt.TelegramAllowedUserIDs[0] != 123456789 {
 		t.Fatalf("unexpected allowed telegram user ids: %#v", rt.TelegramAllowedUserIDs)
+	}
+}
+
+func TestLoadAgentRuntimes_TOML_MemoryRecentTurnsPassThrough(t *testing.T) {
+	t.Setenv("MOONSHOT_API_KEY", "api-123")
+	t.Setenv("JARED_TELEGRAM_TOKEN", "tg-123")
+
+	path := filepath.Join(t.TempDir(), "q15.toml")
+	if err := os.WriteFile(path, []byte(`
+[[provider]]
+name = "moonshot"
+type = "openai-compatible"
+base_url = "https://api.moonshot.ai/v1"
+key_env = "MOONSHOT_API_KEY"
+
+[[agent]]
+name = "Jared"
+models = ["moonshot/kimi-k2.5"]
+memory_recent_turns = 42
+
+[agent.sandbox]
+container_name = "q15-jared"
+from_image = "docker.io/library/debian:bookworm-slim"
+workspace_host_dir = "/tmp/q15-workspaces/jared"
+workspace_dir = "/workspace"
+
+[agent.telegram]
+token_env = "JARED_TELEGRAM_TOKEN"
+allowed_user_ids = [123456789]
+`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	runtimes, err := LoadAgentRuntimes(path)
+	if err != nil {
+		t.Fatalf("load runtimes: %v", err)
+	}
+	if len(runtimes) != 1 {
+		t.Fatalf("expected 1 runtime, got %d", len(runtimes))
+	}
+	if got := runtimes[0].MemoryRecentTurns; got != 42 {
+		t.Fatalf("unexpected memory recent turns: %d", got)
 	}
 }
 

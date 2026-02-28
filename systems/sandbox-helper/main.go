@@ -45,6 +45,8 @@ func run() error {
 		FromImage:        req.Settings.FromImage,
 		WorkspaceHostDir: req.Settings.WorkspaceHostDir,
 		WorkspaceDir:     req.Settings.WorkspaceDir,
+		MemoryHostDir:    req.Settings.MemoryHostDir,
+		MemoryDir:        req.Settings.MemoryDir,
 		Network:          req.Settings.Network,
 		Proxy:            toBuildahProxySettings(req.Settings.Proxy),
 	}

@@ -21,6 +21,8 @@ type Settings struct {
 	FromImage        string
 	WorkspaceHostDir string
 	WorkspaceDir     string
+	MemoryHostDir    string
+	MemoryDir        string
 	Network          string
 	Proxy            *ProxySettings
 }
@@ -42,11 +44,23 @@ func (s Settings) Validate() error {
 	if strings.TrimSpace(s.WorkspaceDir) == "" {
 		return errors.New("workspace dir is required")
 	}
+	if strings.TrimSpace(s.MemoryHostDir) == "" {
+		return errors.New("memory host dir is required")
+	}
+	if strings.TrimSpace(s.MemoryDir) == "" {
+		return errors.New("memory dir is required")
+	}
 	if !filepath.IsAbs(strings.TrimSpace(s.WorkspaceHostDir)) {
 		return errors.New("workspace host dir must be an absolute path")
 	}
 	if !filepath.IsAbs(strings.TrimSpace(s.WorkspaceDir)) {
 		return errors.New("workspace dir must be an absolute path")
+	}
+	if !filepath.IsAbs(strings.TrimSpace(s.MemoryHostDir)) {
+		return errors.New("memory host dir must be an absolute path")
+	}
+	if !filepath.IsAbs(strings.TrimSpace(s.MemoryDir)) {
+		return errors.New("memory dir must be an absolute path")
 	}
 	if _, err := normalizeNetworkMode(s.Network); err != nil {
 		return fmt.Errorf("network: %w", err)
@@ -69,6 +83,8 @@ func New(cfg Settings) *Sandbox {
 	cfg.FromImage = strings.TrimSpace(cfg.FromImage)
 	cfg.WorkspaceHostDir = filepath.Clean(strings.TrimSpace(cfg.WorkspaceHostDir))
 	cfg.WorkspaceDir = filepath.Clean(strings.TrimSpace(cfg.WorkspaceDir))
+	cfg.MemoryHostDir = filepath.Clean(strings.TrimSpace(cfg.MemoryHostDir))
+	cfg.MemoryDir = filepath.Clean(strings.TrimSpace(cfg.MemoryDir))
 	cfg.Network = normalizeNetworkModeOrDefault(cfg.Network)
 	cfg.Proxy = normalizeProxySettings(cfg.Proxy)
 	verbosef(
@@ -104,6 +120,11 @@ func (s *Sandbox) Prepare(ctx context.Context) error {
 	if err := os.MkdirAll(s.cfg.WorkspaceHostDir, 0o755); err != nil {
 		verbosef("Prepare: mkdir failed: %v", err)
 		return fmt.Errorf("create workspace host dir %q: %w", s.cfg.WorkspaceHostDir, err)
+	}
+	verbosef("Prepare: ensuring memory host dir exists: %q", s.cfg.MemoryHostDir)
+	if err := os.MkdirAll(s.cfg.MemoryHostDir, 0o755); err != nil {
+		verbosef("Prepare: memory mkdir failed: %v", err)
+		return fmt.Errorf("create memory host dir %q: %w", s.cfg.MemoryHostDir, err)
 	}
 	if err := ctx.Err(); err != nil {
 		verbosef("Prepare: context error after workspace setup: %v", err)
@@ -221,6 +242,8 @@ func toContractSettings(cfg Settings) sandboxcontract.Settings {
 		FromImage:        cfg.FromImage,
 		WorkspaceHostDir: cfg.WorkspaceHostDir,
 		WorkspaceDir:     cfg.WorkspaceDir,
+		MemoryHostDir:    cfg.MemoryHostDir,
+		MemoryDir:        cfg.MemoryDir,
 		Network:          cfg.Network,
 		Proxy:            cfg.Proxy,
 	}

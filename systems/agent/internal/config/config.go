@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/textproto"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -24,10 +25,11 @@ type Provider struct {
 }
 
 type Agent struct {
-	Name     string   `mapstructure:"name"`
-	Models   []string `mapstructure:"models"` // ordered fallback list of provider/model refs
-	Sandbox  Sandbox  `mapstructure:"sandbox"`
-	Telegram Telegram `mapstructure:"telegram"`
+	Name              string   `mapstructure:"name"`
+	Models            []string `mapstructure:"models"` // ordered fallback list of provider/model refs
+	MemoryRecentTurns int      `mapstructure:"memory_recent_turns"`
+	Sandbox           Sandbox  `mapstructure:"sandbox"`
+	Telegram          Telegram `mapstructure:"telegram"`
 }
 
 type Sandbox struct {
@@ -90,6 +92,8 @@ type SandboxProxyRuntime struct {
 const (
 	defaultSandboxProxyListenAddr          = "0.0.0.0:0"
 	defaultSandboxProxyCACertContainerPath = "/run/q15-proxy/ca.crt"
+	defaultMemoryDir                       = "/memory"
+	defaultMemoryRecentTurns               = 6
 )
 
 var (
@@ -104,6 +108,9 @@ type AgentRuntime struct {
 	SandboxFromImage       string
 	WorkspaceHostDir       string
 	WorkspaceDir           string
+	MemoryHostDir          string
+	MemoryDir              string
+	MemoryRecentTurns      int
 	SandboxNetwork         string
 	SandboxProxy           *SandboxProxyRuntime
 	TelegramToken          string
@@ -262,14 +269,22 @@ func (c Config) ResolveAgentRuntimes() ([]AgentRuntime, error) {
 		if err != nil {
 			return nil, fmt.Errorf("resolve sandbox proxy for agent %q: %w", agentCfg.Name, err)
 		}
+		memoryRecentTurns := agentCfg.MemoryRecentTurns
+		if memoryRecentTurns == 0 {
+			memoryRecentTurns = defaultMemoryRecentTurns
+		}
+		workspaceHostDir := strings.TrimSpace(agentCfg.Sandbox.WorkspaceHostDir)
 
 		runtimes = append(runtimes, AgentRuntime{
 			Name:                   strings.TrimSpace(agentCfg.Name),
 			Models:                 resolvedModels,
 			SandboxContainerName:   strings.TrimSpace(agentCfg.Sandbox.ContainerName),
 			SandboxFromImage:       strings.TrimSpace(agentCfg.Sandbox.FromImage),
-			WorkspaceHostDir:       strings.TrimSpace(agentCfg.Sandbox.WorkspaceHostDir),
+			WorkspaceHostDir:       workspaceHostDir,
 			WorkspaceDir:           strings.TrimSpace(agentCfg.Sandbox.WorkspaceDir),
+			MemoryHostDir:          filepath.Join(workspaceHostDir, ".q15-memory"),
+			MemoryDir:              defaultMemoryDir,
+			MemoryRecentTurns:      memoryRecentTurns,
 			SandboxNetwork:         sandboxNetwork,
 			SandboxProxy:           sandboxProxy,
 			TelegramToken:          token,

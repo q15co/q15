@@ -11,6 +11,8 @@ func TestSettingsValidateRejectsEnabledProxyWithNetworkDisabled(t *testing.T) {
 		FromImage:        "docker.io/library/debian:bookworm-slim",
 		WorkspaceHostDir: "/tmp/q15-test",
 		WorkspaceDir:     "/workspace",
+		MemoryHostDir:    "/tmp/q15-test/.q15-memory",
+		MemoryDir:        "/memory",
 		Network:          "disabled",
 		Proxy: &ProxySettings{
 			Enabled:      true,

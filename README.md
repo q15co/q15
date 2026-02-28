@@ -62,6 +62,7 @@ key_env = "ZAI_API_KEY"
 [[agent]]
 name = "Jared"
 models = ["moonshot/kimi-k2.5", "zai/glm-5"]
+memory_recent_turns = 6
 
 [agent.sandbox]
 container_name = "q15-jared"
@@ -77,7 +78,11 @@ allowed_user_ids = [123456789]
 
 ## Notes
 
-- Use `/reset` in Telegram to clear an agent's conversation history for that chat.
+- `memory_recent_turns` controls how many persisted turns are replayed into the model context on
+  each reply. `0` uses default `6`.
+- Agent memory is persisted per configured agent runtime in:
+  - host: `<agent.sandbox.workspace_host_dir>/.q15-memory`
+  - sandbox: `/memory` The memory directory is git-backed and auto-committed after successful turns.
 - `telegram.allowed_user_ids` is required.
 - Set `telegram.token` or `telegram.token_env`.
 - Optional Brave web search tool: set `Q15_BRAVE_API_KEY` to enable the `web_search` tool for the
