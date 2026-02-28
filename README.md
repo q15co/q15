@@ -83,6 +83,12 @@ allowed_user_ids = [123456789]
 - Agent memory is persisted per configured agent runtime in:
   - host: `<agent.sandbox.workspace_host_dir>/.q15-memory`
   - sandbox: `/memory` The memory directory is git-backed and auto-committed after successful turns.
+- Core memory is stored in:
+  - `/memory/core/*.md` (seeded templates like `AGENT.md`, `USER.md`, `SOUL.md`) These files are
+    injected into the system prompt on each reply.
+- External memory stays out-of-context by default:
+  - `/memory/history/turns/...` (canonical transcript turns)
+  - `/memory/notes/...` (agent-managed notes)
 - `telegram.allowed_user_ids` is required.
 - Set `telegram.token` or `telegram.token_env`.
 - Optional Brave web search tool: set `Q15_BRAVE_API_KEY` to enable the `web_search` tool for the

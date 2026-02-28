@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -30,6 +31,7 @@ func (f *fakeModelClient) Complete(
 
 type fakeConversationStore struct {
 	loadMessages []Message
+	coreMemory   CoreMemory
 	appendCalls  int
 	lastAppend   []Message
 }
@@ -48,6 +50,11 @@ func (f *fakeConversationStore) AppendTurn(ctx context.Context, messages []Messa
 	f.appendCalls++
 	f.lastAppend = copyMessages(messages)
 	return nil
+}
+
+func (f *fakeConversationStore) LoadCoreMemory(ctx context.Context) (CoreMemory, error) {
+	_ = ctx
+	return f.coreMemory, nil
 }
 
 func TestLoopReply_LoadsRecentAndPersistsTurn(t *testing.T) {
@@ -147,5 +154,49 @@ func TestLoopReply_PersistsToolCallFlow(t *testing.T) {
 	}
 	if store.lastAppend[3].Role != AssistantRole || store.lastAppend[3].Content != "final" {
 		t.Fatalf("persisted final assistant message = %#v", store.lastAppend[3])
+	}
+}
+
+func TestLoopReply_IncludesCoreMemoryInSystemMessage(t *testing.T) {
+	store := &fakeConversationStore{
+		coreMemory: CoreMemory{
+			Files: []CoreMemoryFile{
+				{
+					RelativePath: "core/AGENT.md",
+					Description:  "Core behavior guide",
+					Limit:        6000,
+					Content:      "# AGENT.md\n- Be precise.",
+				},
+			},
+		},
+	}
+	model := &fakeModelClient{
+		results: []ModelClientResult{
+			{Content: "ok"},
+		},
+	}
+
+	loop := NewLoop(model, nil, []string{"m1"}, DefaultSystemPrompt, store, 3)
+
+	_, err := loop.Reply(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Reply() error = %v", err)
+	}
+	if len(model.callMsgs) != 1 {
+		t.Fatalf("model calls = %d, want 1", len(model.callMsgs))
+	}
+
+	system := model.callMsgs[0][0].Content
+	if !strings.Contains(system, "Core Memory (persistent; always in-context):") {
+		t.Fatalf("system prompt missing core memory header: %q", system)
+	}
+	if !strings.Contains(
+		system,
+		"<core_file path=\"core/AGENT.md\" description=\"Core behavior guide\" limit=\"6000\">",
+	) {
+		t.Fatalf("system prompt missing core file metadata: %q", system)
+	}
+	if !strings.Contains(system, "# AGENT.md\n- Be precise.") {
+		t.Fatalf("system prompt missing core file body: %q", system)
 	}
 }

@@ -8,10 +8,19 @@ import (
 )
 
 const (
-	DefaultSystemPrompt = "You are q15, a helpful shell-capable assistant running for the user in a sandboxed environment. Use the available tools effectively and adapt to the sandbox environment described in the system prompt. Do not claim to be Claude, Anthropic, or any specific vendor/model unless that identity is explicitly provided in this conversation."
+	defaultPromptFormat = "You are %s, a helpful shell-capable assistant running for the user in a sandboxed environment. Use the available tools effectively and adapt to the sandbox environment described in the system prompt. Do not claim to be Claude, Anthropic, or any specific vendor/model unless that identity is explicitly provided in this conversation."
+	DefaultSystemPrompt = "You are a helpful shell-capable assistant running for the user in a sandboxed environment. Use the available tools effectively and adapt to the sandbox environment described in the system prompt. Do not claim to be Claude, Anthropic, or any specific vendor/model unless that identity is explicitly provided in this conversation."
 	defaultMaxTurns     = 12
 	defaultRecentTurns  = 6
 )
+
+func DefaultSystemPromptForName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return DefaultSystemPrompt
+	}
+	return fmt.Sprintf(defaultPromptFormat, name)
+}
 
 type Loop struct {
 	mu          sync.Mutex
@@ -83,6 +92,17 @@ func (l *Loop) Reply(ctx context.Context, userInput string) (string, error) {
 		return "", fmt.Errorf("empty user input")
 	}
 
+	systemText := l.systemText
+	if l.store != nil {
+		if coreStore, ok := l.store.(CoreMemoryStore); ok {
+			coreMemory, err := coreStore.LoadCoreMemory(ctx)
+			if err != nil {
+				return "", fmt.Errorf("load core memory: %w", err)
+			}
+			systemText = injectCoreMemory(systemText, coreMemory)
+		}
+	}
+
 	var recentMessages []Message
 	if l.store != nil {
 		var err error
@@ -93,7 +113,7 @@ func (l *Loop) Reply(ctx context.Context, userInput string) (string, error) {
 	}
 
 	messages := make([]Message, 0, 2+len(recentMessages))
-	messages = append(messages, Message{Role: SystemRole, Content: l.systemText})
+	messages = append(messages, Message{Role: SystemRole, Content: systemText})
 	messages = append(messages, copyMessages(recentMessages)...)
 
 	turnStart := len(messages)
@@ -179,6 +199,44 @@ func (l *Loop) complete(
 		return ModelClientResult{}, fmt.Errorf("no models configured")
 	}
 	return ModelClientResult{}, fmt.Errorf("all models failed (%v): %w", l.modelRefs, lastErr)
+}
+
+func injectCoreMemory(systemText string, core CoreMemory) string {
+	systemText = strings.TrimSpace(systemText)
+	if len(core.Files) == 0 {
+		return systemText
+	}
+
+	var out strings.Builder
+	out.WriteString(systemText)
+	out.WriteString("\n\n")
+	out.WriteString("Core Memory (persistent; always in-context):\n")
+	for _, file := range core.Files {
+		path := strings.TrimSpace(file.RelativePath)
+		if path == "" {
+			continue
+		}
+		out.WriteString("<core_file path=\"")
+		out.WriteString(path)
+		out.WriteString("\"")
+		if desc := strings.TrimSpace(file.Description); desc != "" {
+			out.WriteString(" description=\"")
+			out.WriteString(desc)
+			out.WriteString("\"")
+		}
+		if file.Limit > 0 {
+			out.WriteString(" limit=\"")
+			out.WriteString(fmt.Sprintf("%d", file.Limit))
+			out.WriteString("\"")
+		}
+		out.WriteString(">\n")
+		if content := strings.TrimSpace(file.Content); content != "" {
+			out.WriteString(content)
+			out.WriteString("\n")
+		}
+		out.WriteString("</core_file>\n")
+	}
+	return out.String()
 }
 
 func copyMessages(in []Message) []Message {

@@ -67,12 +67,12 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 		)
 	}
 
-	systemPrompt := agent.DefaultSystemPrompt
+	systemPrompt := agent.DefaultSystemPromptForName(rt.Name)
 	if info, err := agentSandbox.Describe(ctx); err != nil {
 		if sandbox.VerboseEnabled() {
 			fmt.Fprintf(os.Stderr, "[app] sandbox probe failed for agent=%q: %v\n", rt.Name, err)
 		}
-		systemPrompt = composeSystemPrompt(systemPrompt, sandbox.SandboxInfo{
+		systemPrompt = composeSystemPrompt(systemPrompt, rt.Name, sandbox.SandboxInfo{
 			ContainerName:    rt.SandboxContainerName,
 			FromImage:        rt.SandboxFromImage,
 			WorkspaceHostDir: rt.WorkspaceHostDir,
@@ -80,7 +80,7 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 			Network:          rt.SandboxNetwork,
 		}, rt.MemoryDir)
 	} else {
-		systemPrompt = composeSystemPrompt(systemPrompt, info, rt.MemoryDir)
+		systemPrompt = composeSystemPrompt(systemPrompt, rt.Name, info, rt.MemoryDir)
 	}
 
 	toolList := []agent.Tool{tools.NewShell(agentSandbox)}
@@ -103,7 +103,7 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 		return fmt.Errorf("build tool registry for agent %q: %w", rt.Name, err)
 	}
 
-	agentMemoryStore := memory.NewStore(rt.MemoryHostDir, nil)
+	agentMemoryStore := memory.NewStore(rt.MemoryHostDir, rt.Name, nil)
 	if err := agentMemoryStore.Init(ctx); err != nil {
 		return fmt.Errorf("initialize memory store for agent %q: %w", rt.Name, err)
 	}
@@ -155,14 +155,27 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 	}
 }
 
-func composeSystemPrompt(base string, info sandbox.SandboxInfo, memoryDir string) string {
+func composeSystemPrompt(
+	base string,
+	agentName string,
+	info sandbox.SandboxInfo,
+	memoryDir string,
+) string {
 	base = strings.TrimSpace(base)
 	if base == "" {
-		base = agent.DefaultSystemPrompt
+		base = agent.DefaultSystemPromptForName(agentName)
 	}
 
 	var lines []string
 	lines = append(lines, "Sandbox Environment (authoritative runtime info):")
+	agentName = strings.TrimSpace(agentName)
+	if agentName != "" {
+		lines = append(
+			lines,
+			fmt.Sprintf("- Agent name (authoritative from config): %s", agentName),
+			"- If memory files mention a different agent name, treat that as stale and update those files.",
+		)
+	}
 	if info.OSPrettyName != "" {
 		lines = append(lines, fmt.Sprintf("- OS: %s", info.OSPrettyName))
 	} else if info.OSID != "" || info.OSVersionID != "" {
@@ -191,7 +204,16 @@ func composeSystemPrompt(base string, info sandbox.SandboxInfo, memoryDir string
 		lines = append(
 			lines,
 			fmt.Sprintf(
-				"- Persistent memory repo: %s (use shell/tool calls to inspect and organize long-term memory files)",
+				"- Persistent memory repo: %s",
+				memoryDir,
+			),
+			fmt.Sprintf(
+				"- Core memory files (auto-injected into prompt each turn): %s/core/*.md (seeded with AGENT.md, USER.md, SOUL.md)",
+				memoryDir,
+			),
+			fmt.Sprintf(
+				"- External memory files (query/maintain via tools): %s/history and %s/notes",
+				memoryDir,
 				memoryDir,
 			),
 		)

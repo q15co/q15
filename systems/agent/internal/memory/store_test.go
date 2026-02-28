@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
@@ -33,13 +34,16 @@ func (f *fakeCommitter) CommitAll(ctx context.Context, repoDir, message string) 
 func TestStoreInitCreatesScaffold(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "memory")
 	committer := &fakeCommitter{}
-	store := NewStore(root, committer)
+	store := NewStore(root, "Jared", committer)
 
 	if err := store.Init(context.Background()); err != nil {
 		t.Fatalf("Init() error = %v", err)
 	}
 
 	requiredPaths := []string{
+		filepath.Join(root, "core", "AGENT.md"),
+		filepath.Join(root, "core", "USER.md"),
+		filepath.Join(root, "core", "SOUL.md"),
 		filepath.Join(root, "history", "turns"),
 		filepath.Join(root, "notes", "inbox"),
 		filepath.Join(root, "notes", "zettel"),
@@ -61,9 +65,41 @@ func TestStoreInitCreatesScaffold(t *testing.T) {
 	}
 }
 
+func TestStoreLoadCoreMemory(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "memory")
+	store := NewStore(root, "Jared", &fakeCommitter{})
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	core, err := store.LoadCoreMemory(context.Background())
+	if err != nil {
+		t.Fatalf("LoadCoreMemory() error = %v", err)
+	}
+	if len(core.Files) < 3 {
+		t.Fatalf("core files len = %d, want at least 3 seeded files", len(core.Files))
+	}
+	foundAgent := false
+	for _, file := range core.Files {
+		if file.RelativePath == "core/AGENT.md" {
+			foundAgent = true
+			if file.Description == "" || file.Limit == 0 || file.Content == "" {
+				t.Fatalf("AGENT.md core file missing parsed frontmatter/body: %#v", file)
+			}
+			if !strings.Contains(file.Content, "You are Jared, a pragmatic software assistant.") {
+				t.Fatalf("AGENT.md did not render configured agent name: %q", file.Content)
+			}
+			break
+		}
+	}
+	if !foundAgent {
+		t.Fatalf("expected core/AGENT.md in loaded core files: %#v", core.Files)
+	}
+}
+
 func TestStoreAppendAndLoadRecentMessages(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "memory")
-	store := NewStore(root, &fakeCommitter{})
+	store := NewStore(root, "Jared", &fakeCommitter{})
 
 	if err := store.Init(context.Background()); err != nil {
 		t.Fatalf("Init() error = %v", err)
@@ -92,4 +128,59 @@ func TestStoreAppendAndLoadRecentMessages(t *testing.T) {
 	if got[0].Content != "two" || got[1].Content != "second" {
 		t.Fatalf("LoadRecentMessages contents = %#v, want latest turn only", got)
 	}
+}
+
+func TestParseMarkdownFrontmatter(t *testing.T) {
+	t.Run("metadata and body", func(t *testing.T) {
+		raw := `---
+description: "Core behavior: keep output concise"
+limit: 4096
+---
+
+# Title
+
+Body paragraph.
+`
+		description, limit, body := parseMarkdownFrontmatter(raw)
+		if description != "Core behavior: keep output concise" {
+			t.Fatalf("description = %q, want %q", description, "Core behavior: keep output concise")
+		}
+		if limit != 4096 {
+			t.Fatalf("limit = %d, want %d", limit, 4096)
+		}
+		if body != "# Title\n\nBody paragraph." {
+			t.Fatalf("body = %q", body)
+		}
+	})
+
+	t.Run("no frontmatter", func(t *testing.T) {
+		raw := "# Header\n\nText"
+		description, limit, body := parseMarkdownFrontmatter(raw)
+		if description != "" {
+			t.Fatalf("description = %q, want empty", description)
+		}
+		if limit != 0 {
+			t.Fatalf("limit = %d, want 0", limit)
+		}
+		if body != "# Header\n\nText" {
+			t.Fatalf("body = %q, want original markdown", body)
+		}
+	})
+
+	t.Run("invalid yaml", func(t *testing.T) {
+		raw := `---
+description: [unterminated
+---
+hello`
+		description, limit, body := parseMarkdownFrontmatter(raw)
+		if description != "" {
+			t.Fatalf("description = %q, want empty", description)
+		}
+		if limit != 0 {
+			t.Fatalf("limit = %d, want 0", limit)
+		}
+		if body != "hello" {
+			t.Fatalf("body = %q, want %q", body, "hello")
+		}
+	})
 }

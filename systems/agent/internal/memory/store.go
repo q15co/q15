@@ -8,32 +8,45 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
+	"github.com/yuin/goldmark"
+	meta "github.com/yuin/goldmark-meta"
+	"github.com/yuin/goldmark/parser"
+	"github.com/yuin/goldmark/text"
 )
 
 const (
 	headStateRelativePath = "state/head.json"
 	readmeRelativePath    = "README.md"
+	coreDirPath           = "core"
+)
+
+var coreFrontmatterParser = goldmark.New(
+	goldmark.WithExtensions(meta.Meta),
 )
 
 type Store struct {
 	mu        sync.Mutex
 	rootDir   string
+	agentName string
 	committer Committer
 }
 
 var _ agent.ConversationStore = (*Store)(nil)
+var _ agent.CoreMemoryStore = (*Store)(nil)
 
-func NewStore(rootDir string, committer Committer) *Store {
+func NewStore(rootDir string, agentName string, committer Committer) *Store {
 	if committer == nil {
 		committer = NewGitCommitter()
 	}
 	return &Store{
 		rootDir:   filepath.Clean(strings.TrimSpace(rootDir)),
+		agentName: normalizeAgentName(agentName),
 		committer: committer,
 	}
 }
@@ -50,6 +63,7 @@ func (s *Store) Init(ctx context.Context) error {
 	}
 
 	dirs := []string{
+		filepath.Join(s.rootDir, "core"),
 		filepath.Join(s.rootDir, "history", "turns"),
 		filepath.Join(s.rootDir, "notes", "inbox"),
 		filepath.Join(s.rootDir, "notes", "zettel"),
@@ -63,6 +77,9 @@ func (s *Store) Init(ctx context.Context) error {
 	}
 
 	if err := s.ensureREADME(); err != nil {
+		return err
+	}
+	if err := s.ensureCoreMemory(); err != nil {
 		return err
 	}
 	if err := s.ensureHeadState(); err != nil {
@@ -110,6 +127,21 @@ func (s *Store) LoadRecentMessages(ctx context.Context, turns int) ([]agent.Mess
 		out = append(out, copyMessages(turn.Messages)...)
 	}
 	return out, nil
+}
+
+func (s *Store) LoadCoreMemory(ctx context.Context) (agent.CoreMemory, error) {
+	_ = ctx
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	files, err := s.loadCoreFiles()
+	if err != nil {
+		return agent.CoreMemory{}, err
+	}
+	return agent.CoreMemory{
+		Files: files,
+	}, nil
 }
 
 func (s *Store) AppendTurn(ctx context.Context, messages []agent.Message) error {
@@ -165,13 +197,100 @@ func (s *Store) ensureREADME() error {
 
 This directory contains persistent agent memory.
 
-- Conversation turns are stored as canonical JSON files under history/turns/.
-- Notes are organized under notes/inbox, notes/zettel, and notes/maps.
-- Git history tracks all memory changes.
+	- Core memory (always injected into the system prompt) is stored in core/*.md (for example AGENT.md, USER.md, SOUL.md).
+	- Conversation turns are stored as canonical JSON files under history/turns/.
+	- Notes are organized under notes/inbox, notes/zettel, and notes/maps.
+	- Git history tracks all memory changes.
 `)
 	if err := writeTextFileAtomic(path, content+"\n"); err != nil {
 		return fmt.Errorf("write memory README: %w", err)
 	}
+	return nil
+}
+
+func (s *Store) ensureCoreMemory() error {
+	files := map[string]string{
+		filepath.Join(coreDirPath, "AGENT.md"): strings.TrimSpace(`
+---
+description: Core runtime behavior guidance for the assistant; keep concise and actionable.
+limit: 6000
+---
+
+# AGENT.md
+
+## Role
+
+- You are {{agent_name}}, a pragmatic software assistant.
+- Prioritize correctness, clarity, and concrete outcomes.
+
+## Collaboration
+
+- Be direct and concise by default.
+- Explain tradeoffs when decisions matter.
+- Surface uncertainty explicitly and verify when needed.
+
+## Safety
+
+- Avoid destructive actions without clear intent.
+- Respect privacy and do not expose secrets.
+`),
+		filepath.Join(coreDirPath, "USER.md"): strings.TrimSpace(`
+---
+description: Durable user profile and interaction preferences.
+limit: 6000
+---
+
+# USER.md
+
+## Identity
+
+- Preferred name: unknown
+- Timezone: unknown
+
+## Communication Preferences
+
+- Tone: unknown
+- Verbosity: unknown
+- Formatting preferences: unknown
+
+## Long-Term Notes
+
+- (Add durable user preferences and constraints here.)
+`),
+		filepath.Join(coreDirPath, "SOUL.md"): strings.TrimSpace(`
+---
+description: Evolving assistant personality, voice, and behavioral principles.
+limit: 6000
+---
+
+# SOUL.md
+
+## Voice
+
+- Practical, calm, and technically rigorous.
+- Confident without overclaiming.
+
+## Principles
+
+- Prefer useful action over performative language.
+- Keep context organized so future sessions stay coherent.
+- Update this file as behavior evolves.
+`),
+	}
+
+	for relativePath, content := range files {
+		path := filepath.Join(s.rootDir, relativePath)
+		if _, err := os.Stat(path); err == nil {
+			continue
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("stat core memory file %q: %w", path, err)
+		}
+
+		if err := writeTextFileAtomic(path, content+"\n"); err != nil {
+			return fmt.Errorf("initialize core memory file %q: %w", path, err)
+		}
+	}
+
 	return nil
 }
 
@@ -191,6 +310,150 @@ func (s *Store) ensureHeadState() error {
 		return fmt.Errorf("initialize memory head state: %w", err)
 	}
 	return nil
+}
+
+func (s *Store) loadCoreFiles() ([]agent.CoreMemoryFile, error) {
+	base := filepath.Join(s.rootDir, coreDirPath)
+
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read core directory: %w", err)
+	}
+
+	paths := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		if strings.EqualFold(filepath.Ext(entry.Name()), ".md") {
+			paths = append(paths, filepath.Join(base, entry.Name()))
+		}
+	}
+
+	sort.Strings(paths)
+	out := make([]agent.CoreMemoryFile, 0, len(paths))
+	for _, path := range paths {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("read core file %q: %w", path, err)
+		}
+		description, limit, body := parseMarkdownFrontmatter(string(raw))
+		relative, err := filepath.Rel(s.rootDir, path)
+		if err != nil {
+			return nil, fmt.Errorf("resolve relative core path %q: %w", path, err)
+		}
+		out = append(out, agent.CoreMemoryFile{
+			RelativePath: filepath.ToSlash(relative),
+			Description:  s.renderCoreTemplate(description),
+			Limit:        limit,
+			Content:      s.renderCoreTemplate(body),
+		})
+	}
+
+	return out, nil
+}
+
+func parseMarkdownFrontmatter(raw string) (description string, limit int, body string) {
+	normalized := strings.ReplaceAll(raw, "\r\n", "\n")
+	normalized = strings.ReplaceAll(normalized, "\r", "\n")
+	normalized = strings.TrimSpace(normalized)
+	if normalized == "" {
+		return "", 0, ""
+	}
+
+	body = stripYAMLFrontmatter(normalized)
+
+	ctx := parser.NewContext()
+	coreFrontmatterParser.Parser().Parse(
+		text.NewReader([]byte(normalized)),
+		parser.WithContext(ctx),
+	)
+
+	values, err := meta.TryGet(ctx)
+	if err != nil || values == nil {
+		return "", 0, body
+	}
+
+	if value, ok := values["description"].(string); ok {
+		description = strings.TrimSpace(value)
+	}
+	if description == "" {
+		if value, ok := values["Description"].(string); ok {
+			description = strings.TrimSpace(value)
+		}
+	}
+
+	switch value := values["limit"].(type) {
+	case int:
+		limit = value
+	case int64:
+		limit = int(value)
+	case float64:
+		limit = int(value)
+	case string:
+		n, convErr := strconv.Atoi(strings.TrimSpace(value))
+		if convErr == nil {
+			limit = n
+		}
+	}
+	if limit == 0 {
+		switch value := values["Limit"].(type) {
+		case int:
+			limit = value
+		case int64:
+			limit = int(value)
+		case float64:
+			limit = int(value)
+		case string:
+			n, convErr := strconv.Atoi(strings.TrimSpace(value))
+			if convErr == nil {
+				limit = n
+			}
+		}
+	}
+
+	return description, limit, body
+}
+
+func (s *Store) renderCoreTemplate(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	return strings.ReplaceAll(raw, "{{agent_name}}", s.agentName)
+}
+
+func normalizeAgentName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "q15"
+	}
+	return name
+}
+
+func stripYAMLFrontmatter(normalized string) string {
+	rest, ok := strings.CutPrefix(normalized, "---\n")
+	if !ok {
+		return normalized
+	}
+
+	for {
+		line, next, hasNewline := strings.Cut(rest, "\n")
+		if isYAMLSeparator(line) {
+			return strings.TrimSpace(next)
+		}
+		if !hasNewline {
+			return normalized
+		}
+		rest = next
+	}
+}
+
+func isYAMLSeparator(line string) bool {
+	line = strings.TrimSpace(line)
+	return line != "" && strings.Trim(line, "-") == ""
 }
 
 func (s *Store) listTurnPaths() ([]string, error) {
