@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -27,7 +28,7 @@ func runAgentWorker(
 
 			answer, err := a.Reply(ctx, text)
 			if err != nil {
-				answer = "reply error: " + err.Error()
+				answer = formatReplyError(err)
 			}
 			if err := messageBus.PublishOutbound(ctx, bus.OutboundMessage{
 				Channel: in.Channel,
@@ -38,6 +39,19 @@ func runAgentWorker(
 			}
 		}
 	}
+}
+
+func formatReplyError(err error) string {
+	var stopErr *agent.StopError
+	if errors.As(err, &stopErr) {
+		switch stopErr.Reason {
+		case agent.StopReasonToolTurnLimit:
+			return "I stopped this run after reaching an internal tool-call safety limit. Progress was saved."
+		case agent.StopReasonToolLoopDetected:
+			return "I stopped this run because tool calls appeared stuck in a loop. Progress was saved."
+		}
+	}
+	return "reply error: " + err.Error()
 }
 
 func runOutboundWorker(

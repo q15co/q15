@@ -10,7 +10,7 @@ import (
 const (
 	defaultPromptFormat = "You are %s, a helpful shell-capable assistant running for the user in a sandboxed environment. Use the available tools effectively and adapt to the sandbox environment described in the system prompt. Do not claim to be Claude, Anthropic, or any specific vendor/model unless that identity is explicitly provided in this conversation."
 	DefaultSystemPrompt = "You are a helpful shell-capable assistant running for the user in a sandboxed environment. Use the available tools effectively and adapt to the sandbox environment described in the system prompt. Do not claim to be Claude, Anthropic, or any specific vendor/model unless that identity is explicitly provided in this conversation."
-	defaultMaxTurns     = 12
+	defaultMaxTurns     = 96
 	defaultRecentTurns  = 6
 )
 
@@ -126,6 +126,7 @@ func (l *Loop) Reply(ctx context.Context, userInput string) (string, error) {
 	if l.tools != nil {
 		toolDefs = l.tools.Definitions()
 	}
+	loopDetector := newToolLoopDetector()
 
 	for turn := 0; turn < l.maxTurns; turn++ {
 		result, err := l.complete(ctx, messages, toolDefs)
@@ -146,10 +147,8 @@ func (l *Loop) Reply(ctx context.Context, userInput string) (string, error) {
 			if answer == "" {
 				answer = "(assistant returned no text)"
 			}
-			if l.store != nil {
-				if err := l.store.AppendTurn(ctx, copyMessages(messages[turnStart:])); err != nil {
-					return "", fmt.Errorf("persist turn: %w", err)
-				}
+			if err := l.persistTurn(ctx, messages, turnStart); err != nil {
+				return "", fmt.Errorf("persist turn: %w", err)
 			}
 			return answer, nil
 		}
@@ -164,10 +163,50 @@ func (l *Loop) Reply(ctx context.Context, userInput string) (string, error) {
 				Content:    output,
 				ToolCallID: call.ID,
 			})
+
+			if assessment := loopDetector.Record(call, output); assessment.Critical {
+				stopSummary := formatStopSummary(
+					StopReasonToolLoopDetected,
+					l.maxTurns,
+					assessment.RepeatCount,
+					assessment.NoProgressCount,
+				)
+				messages = append(messages, Message{
+					Role:    AssistantRole,
+					Content: stopSummary,
+				})
+				if err := l.persistTurn(ctx, messages, turnStart); err != nil {
+					return "", fmt.Errorf("persist interrupted turn: %w", err)
+				}
+				return "", &StopError{
+					Reason: StopReasonToolLoopDetected,
+					Detail: fmt.Sprintf(
+						"tool loop detected (repeat=%d, no_progress=%d)",
+						assessment.RepeatCount,
+						assessment.NoProgressCount,
+					),
+				}
+			}
 		}
 	}
 
-	return "", fmt.Errorf("max tool-call turns reached (%d)", l.maxTurns)
+	stopSummary := formatStopSummary(
+		StopReasonToolTurnLimit,
+		l.maxTurns,
+		loopDetector.MaxRepeatCount(),
+		loopDetector.MaxNoProgressCount(),
+	)
+	messages = append(messages, Message{
+		Role:    AssistantRole,
+		Content: stopSummary,
+	})
+	if err := l.persistTurn(ctx, messages, turnStart); err != nil {
+		return "", fmt.Errorf("persist interrupted turn: %w", err)
+	}
+	return "", &StopError{
+		Reason: StopReasonToolTurnLimit,
+		Detail: fmt.Sprintf("max tool-call turns reached (%d)", l.maxTurns),
+	}
 }
 
 func (l *Loop) runTool(ctx context.Context, call ToolCall) (string, error) {
@@ -201,58 +240,9 @@ func (l *Loop) complete(
 	return ModelClientResult{}, fmt.Errorf("all models failed (%v): %w", l.modelRefs, lastErr)
 }
 
-func injectCoreMemory(systemText string, core CoreMemory) string {
-	systemText = strings.TrimSpace(systemText)
-	if len(core.Files) == 0 {
-		return systemText
-	}
-
-	var out strings.Builder
-	out.WriteString(systemText)
-	out.WriteString("\n\n")
-	out.WriteString("Core Memory (persistent; always in-context):\n")
-	for _, file := range core.Files {
-		path := strings.TrimSpace(file.RelativePath)
-		if path == "" {
-			continue
-		}
-		out.WriteString("<core_file path=\"")
-		out.WriteString(path)
-		out.WriteString("\"")
-		if desc := strings.TrimSpace(file.Description); desc != "" {
-			out.WriteString(" description=\"")
-			out.WriteString(desc)
-			out.WriteString("\"")
-		}
-		if file.Limit > 0 {
-			out.WriteString(" limit=\"")
-			out.WriteString(fmt.Sprintf("%d", file.Limit))
-			out.WriteString("\"")
-		}
-		out.WriteString(">\n")
-		if content := strings.TrimSpace(file.Content); content != "" {
-			out.WriteString(content)
-			out.WriteString("\n")
-		}
-		out.WriteString("</core_file>\n")
-	}
-	return out.String()
-}
-
-func copyMessages(in []Message) []Message {
-	if len(in) == 0 {
+func (l *Loop) persistTurn(ctx context.Context, messages []Message, turnStart int) error {
+	if l.store == nil {
 		return nil
 	}
-
-	out := make([]Message, len(in))
-	for i, msg := range in {
-		out[i] = msg
-		if len(msg.ToolCalls) > 0 {
-			out[i].ToolCalls = append([]ToolCall(nil), msg.ToolCalls...)
-		}
-		if len(msg.ProviderRaw) > 0 {
-			out[i].ProviderRaw = append([]byte(nil), msg.ProviderRaw...)
-		}
-	}
-	return out
+	return l.store.AppendTurn(ctx, copyMessages(messages[turnStart:]))
 }

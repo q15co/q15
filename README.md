@@ -81,6 +81,11 @@ allowed_user_ids = [123456789]
 
 - `memory_recent_turns` controls how many persisted turns are replayed into the model context on
   each reply. `0` uses default `6`.
+- Tool-call loop safety limits are internal runtime guards (hard-coded in the agent binary) and are
+  not user-configurable in `q15.toml`.
+  - These guards are separate from `memory_recent_turns`.
+  - If a run is interrupted by loop safety, the partial turn is still persisted so follow-up replies
+    can continue with context.
 - `agent.name` is the authoritative runtime identity for the assistant.
   - The default system prompt is rendered from `agent.name`.
   - Seeded core memory templates use `{{agent_name}}` and are rendered at load time.

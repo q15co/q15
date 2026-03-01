@@ -130,6 +130,46 @@ func TestStoreAppendAndLoadRecentMessages(t *testing.T) {
 	}
 }
 
+func TestStoreInterruptedTurnPersistsAndReplays(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "memory")
+	store := NewStore(root, "Jared", &fakeCommitter{})
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	interrupted := []agent.Message{
+		{Role: agent.UserRole, Content: "do a long task"},
+		{
+			Role: agent.AssistantRole,
+			ToolCalls: []agent.ToolCall{
+				{ID: "call-1", Name: "echo", Arguments: `{"value":"x"}`},
+			},
+		},
+		{Role: agent.ToolRole, ToolCallID: "call-1", Content: "tool-output"},
+		{
+			Role:    agent.AssistantRole,
+			Content: "Run stopped by internal safety guard: reached maximum tool-call turns (96). Progress up to this point has been saved.",
+		},
+	}
+	if err := store.AppendTurn(context.Background(), interrupted); err != nil {
+		t.Fatalf("AppendTurn() error = %v", err)
+	}
+
+	got, err := store.LoadRecentMessages(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("LoadRecentMessages() error = %v", err)
+	}
+	if len(got) != len(interrupted) {
+		t.Fatalf("LoadRecentMessages len = %d, want %d", len(got), len(interrupted))
+	}
+	if got[len(got)-1].Role != agent.AssistantRole {
+		t.Fatalf("last replayed role = %q, want assistant", got[len(got)-1].Role)
+	}
+	if !strings.Contains(got[len(got)-1].Content, "internal safety guard") {
+		t.Fatalf("last replayed message = %q", got[len(got)-1].Content)
+	}
+}
+
 func TestParseMarkdownFrontmatter(t *testing.T) {
 	t.Run("metadata and body", func(t *testing.T) {
 		raw := `---

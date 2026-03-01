@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -198,5 +200,166 @@ func TestLoopReply_IncludesCoreMemoryInSystemMessage(t *testing.T) {
 	}
 	if !strings.Contains(system, "# AGENT.md\n- Be precise.") {
 		t.Fatalf("system prompt missing core file body: %q", system)
+	}
+}
+
+func TestNewLoop_DefaultMaxTurns(t *testing.T) {
+	loop := NewLoop(
+		&fakeModelClient{},
+		nil,
+		[]string{"m1"},
+		DefaultSystemPrompt,
+		&fakeConversationStore{},
+		6,
+	)
+	if loop.maxTurns != 96 {
+		t.Fatalf("loop.maxTurns = %d, want 96", loop.maxTurns)
+	}
+}
+
+func TestLoopReply_AllowsMoreThanTwelveToolCallTurns(t *testing.T) {
+	store := &fakeConversationStore{}
+
+	const toolTurns = 14
+	results := make([]ModelClientResult, 0, toolTurns+1)
+	for i := 0; i < toolTurns; i++ {
+		results = append(results, ModelClientResult{
+			ToolCalls: []ToolCall{
+				{
+					ID:        fmt.Sprintf("call-%d", i),
+					Name:      "echo",
+					Arguments: `{"value":"x"}`,
+				},
+			},
+		})
+	}
+	results = append(results, ModelClientResult{Content: "done"})
+
+	model := &fakeModelClient{results: results}
+	registry, err := NewToolRegistry(&testTool{
+		def: ToolDefinition{Name: "echo"},
+		run: func(context.Context, string) (string, error) {
+			return "tool-output", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewToolRegistry() error = %v", err)
+	}
+
+	loop := NewLoop(model, registry, []string{"m1"}, DefaultSystemPrompt, store, 3)
+	out, err := loop.Reply(context.Background(), "question")
+	if err != nil {
+		t.Fatalf("Reply() error = %v", err)
+	}
+	if out != "done" {
+		t.Fatalf("Reply() = %q, want done", out)
+	}
+	if len(model.callMsgs) != toolTurns+1 {
+		t.Fatalf("model calls = %d, want %d", len(model.callMsgs), toolTurns+1)
+	}
+}
+
+func TestLoopReply_StopsAtHardLimitAndPersistsInterruptedTurn(t *testing.T) {
+	store := &fakeConversationStore{}
+
+	results := make([]ModelClientResult, 0, defaultMaxTurns)
+	for i := 0; i < defaultMaxTurns; i++ {
+		results = append(results, ModelClientResult{
+			ToolCalls: []ToolCall{
+				{
+					ID:        fmt.Sprintf("call-%d", i),
+					Name:      "echo",
+					Arguments: fmt.Sprintf(`{"step":%d}`, i),
+				},
+			},
+		})
+	}
+
+	model := &fakeModelClient{results: results}
+	registry, err := NewToolRegistry(&testTool{
+		def: ToolDefinition{Name: "echo"},
+		run: func(context.Context, string) (string, error) {
+			return "tool-output", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewToolRegistry() error = %v", err)
+	}
+
+	loop := NewLoop(model, registry, []string{"m1"}, DefaultSystemPrompt, store, 3)
+	out, err := loop.Reply(context.Background(), "question")
+	if out != "" {
+		t.Fatalf("Reply() output = %q, want empty", out)
+	}
+	var stopErr *StopError
+	if !errors.As(err, &stopErr) {
+		t.Fatalf("Reply() error = %v, want StopError", err)
+	}
+	if stopErr.Reason != StopReasonToolTurnLimit {
+		t.Fatalf("stop reason = %q, want %q", stopErr.Reason, StopReasonToolTurnLimit)
+	}
+	if store.appendCalls != 1 {
+		t.Fatalf("AppendTurn calls = %d, want 1", store.appendCalls)
+	}
+	if len(store.lastAppend) == 0 {
+		t.Fatalf("persisted turn is empty")
+	}
+	last := store.lastAppend[len(store.lastAppend)-1]
+	if last.Role != AssistantRole {
+		t.Fatalf("last persisted role = %q, want assistant", last.Role)
+	}
+	if !strings.Contains(last.Content, "reached maximum tool-call turns (96)") {
+		t.Fatalf("last persisted message = %q", last.Content)
+	}
+}
+
+func TestLoopReply_StopsOnNoProgressToolLoop(t *testing.T) {
+	store := &fakeConversationStore{}
+
+	results := make([]ModelClientResult, 0, defaultToolLoopCriticalThreshold+5)
+	for i := 0; i < defaultToolLoopCriticalThreshold+5; i++ {
+		results = append(results, ModelClientResult{
+			ToolCalls: []ToolCall{
+				{
+					ID:        fmt.Sprintf("call-%d", i),
+					Name:      "echo",
+					Arguments: `{"value":"stuck"}`,
+				},
+			},
+		})
+	}
+
+	model := &fakeModelClient{results: results}
+	registry, err := NewToolRegistry(&testTool{
+		def: ToolDefinition{Name: "echo"},
+		run: func(context.Context, string) (string, error) {
+			return "same-output", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewToolRegistry() error = %v", err)
+	}
+
+	loop := NewLoop(model, registry, []string{"m1"}, DefaultSystemPrompt, store, 3)
+	out, err := loop.Reply(context.Background(), "question")
+	if out != "" {
+		t.Fatalf("Reply() output = %q, want empty", out)
+	}
+	var stopErr *StopError
+	if !errors.As(err, &stopErr) {
+		t.Fatalf("Reply() error = %v, want StopError", err)
+	}
+	if stopErr.Reason != StopReasonToolLoopDetected {
+		t.Fatalf("stop reason = %q, want %q", stopErr.Reason, StopReasonToolLoopDetected)
+	}
+	if len(model.callMsgs) >= defaultMaxTurns {
+		t.Fatalf("expected early stop before hard limit, model calls = %d", len(model.callMsgs))
+	}
+	if store.appendCalls != 1 {
+		t.Fatalf("AppendTurn calls = %d, want 1", store.appendCalls)
+	}
+	last := store.lastAppend[len(store.lastAppend)-1]
+	if !strings.Contains(last.Content, "detected repeated tool-call loop") {
+		t.Fatalf("last persisted message = %q", last.Content)
 	}
 }
