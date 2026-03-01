@@ -1,6 +1,7 @@
 # q15
 
-Telegram-based shell agent with sandboxed command execution and OpenAI-compatible model providers.
+Telegram-based shell agent with sandboxed command execution and OpenAI-compatible or OpenAI
+Codex-subscription model providers.
 
 ## Requirements
 
@@ -59,10 +60,14 @@ type = "openai-compatible"
 base_url = "https://api.z.ai/api/coding/paas/v4"
 key_env = "ZAI_API_KEY"
 
+[[provider]]
+name = "openai-sub"
+type = "openai-codex"
+
 [[agent]]
 # Authoritative agent identity used for prompt identity and core-memory rendering.
 name = "Jared"
-models = ["moonshot/kimi-k2.5", "zai/glm-5"]
+models = ["openai-sub/gpt-5-codex", "moonshot/kimi-k2.5", "zai/glm-5"]
 memory_recent_turns = 6
 
 [agent.sandbox]
@@ -75,6 +80,20 @@ network = "enabled"
 [agent.telegram]
 token_env = "JARED_TELEGRAM_TOKEN"
 allowed_user_ids = [123456789]
+```
+
+### OpenAI Codex Subscription Login
+
+For `provider.type = "openai-codex"`, q15 reads OAuth credentials from:
+
+- `~/.q15/auth.json` (provider key: `openai`)
+
+Login and inspect credentials:
+
+```bash
+q15 auth login --provider openai
+q15 auth status
+q15 auth logout --provider openai
 ```
 
 ## Notes
@@ -103,6 +122,8 @@ allowed_user_ids = [123456789]
   - `/memory/notes/...` (agent-managed notes)
 - `telegram.allowed_user_ids` is required.
 - Set `telegram.token` or `telegram.token_env`.
+- `openai-codex` providers do not use `provider.base_url` or `provider.key_env`.
+- `openai-compatible` providers still require both `provider.base_url` and `provider.key_env`.
 - Optional Brave web search tool: set `Q15_BRAVE_API_KEY` to enable the `web_search` tool for the
   model.
 - `web_search` runs in the host agent process (not inside the sandbox shell), so it is independent
@@ -115,3 +136,9 @@ allowed_user_ids = [123456789]
 If sandbox prepare fails with an error mentioning a Nix store `shadow` path such as
 `/nix/store/...-shadow-.../bin/newuidmap`, the helper resolved the wrong uidmap binary. Use the host
 wrappers in `/run/wrappers/bin` and remove `shadow` from the devshell.
+
+If an `openai-codex` model call fails with a credential error, run:
+
+```bash
+q15 auth login --provider openai
+```

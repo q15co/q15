@@ -93,7 +93,7 @@ func mapMessages(messages []agent.Message) ([]openai.ChatCompletionMessageParamU
 		case agent.UserRole:
 			out = append(out, openai.UserMessage(msg.Content))
 		case agent.AssistantRole:
-			if len(msg.ProviderRaw) > 0 {
+			if len(msg.ProviderRaw) > 0 && isAssistantProviderRaw(msg.ProviderRaw) {
 				out = append(
 					out,
 					param.Override[openai.ChatCompletionMessageParamUnion](msg.ProviderRaw),
@@ -205,4 +205,18 @@ func mapToolCalls(toolCalls []openai.ChatCompletionMessageToolCallUnion) ([]agen
 	}
 
 	return out, nil
+}
+
+func isAssistantProviderRaw(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return false
+	}
+
+	var probe struct {
+		Role string `json:"role"`
+	}
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(probe.Role), "assistant")
 }

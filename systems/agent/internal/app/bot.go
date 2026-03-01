@@ -12,6 +12,7 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/channel/telegram"
 	"github.com/q15co/q15/systems/agent/internal/config"
 	"github.com/q15co/q15/systems/agent/internal/memory"
+	"github.com/q15co/q15/systems/agent/internal/provider/openaicodex"
 	"github.com/q15co/q15/systems/agent/internal/provider/openaicompatible"
 	"github.com/q15co/q15/systems/agent/internal/sandbox"
 	"github.com/q15co/q15/systems/agent/internal/tools"
@@ -346,6 +347,8 @@ func newModelAdapter(models []config.AgentModelRuntime) (agent.ModelClient, erro
 					modelCfg.ProviderBaseURL,
 					modelCfg.ProviderAPIKey,
 				)
+			case "openai-codex":
+				client, err = openaicodex.NewClient()
 			default:
 				err = fmt.Errorf("unsupported provider type %q", modelCfg.ProviderType)
 			}

@@ -230,12 +230,26 @@ func (c Config) ResolveAgentRuntimes() ([]AgentRuntime, error) {
 				)
 			}
 
-			apiKey := strings.TrimSpace(os.Getenv(strings.TrimSpace(provider.KeyEnv)))
-			if apiKey == "" {
+			var apiKey string
+			switch providerType {
+			case "openai-compatible":
+				apiKey = strings.TrimSpace(os.Getenv(strings.TrimSpace(provider.KeyEnv)))
+				if apiKey == "" {
+					return nil, fmt.Errorf(
+						"provider %q requires env var %q",
+						provider.Name,
+						provider.KeyEnv,
+					)
+				}
+			case "openai-codex":
+				// Credentials come from q15 auth store for OpenAI subscription login.
+				apiKey = ""
+			default:
 				return nil, fmt.Errorf(
-					"provider %q requires env var %q",
+					"%s provider %q has unsupported type %q",
+					fieldPath,
 					provider.Name,
-					provider.KeyEnv,
+					provider.Type,
 				)
 			}
 
@@ -317,14 +331,16 @@ func (c Config) validate() error {
 		if strings.TrimSpace(provider.Type) == "" {
 			return fmt.Errorf("provider[%d].type is required", i)
 		}
-		if normalizeProviderType(provider.Type) == "openai-compatible" &&
+		normalizedType := normalizeProviderType(provider.Type)
+		if normalizedType == "openai-compatible" &&
 			strings.TrimSpace(provider.BaseURL) == "" {
 			return fmt.Errorf(
 				"provider[%d].base_url is required for openai-compatible providers",
 				i,
 			)
 		}
-		if strings.TrimSpace(provider.KeyEnv) == "" {
+		if normalizedType == "openai-compatible" &&
+			strings.TrimSpace(provider.KeyEnv) == "" {
 			return fmt.Errorf("provider[%d].key_env is required", i)
 		}
 	}
@@ -418,6 +434,8 @@ func normalizeProviderType(providerType string) string {
 	switch strings.ToLower(strings.TrimSpace(providerType)) {
 	case "moonshot", "openai-compatible", "openai_compatible":
 		return "openai-compatible"
+	case "openai-codex", "openai_codex":
+		return "openai-codex"
 	default:
 		return ""
 	}

@@ -619,3 +619,130 @@ func TestResolveAgentRuntimesUsesDefaultProxyContainerHostOverrideEnv(t *testing
 		t.Fatalf("unexpected proxy container host override: %q", got)
 	}
 }
+
+func TestValidateAllowsOpenAICodexProviderWithoutBaseURLOrKeyEnv(t *testing.T) {
+	cfg := Config{
+		Providers: []Provider{
+			{
+				Name: "openai-sub",
+				Type: "openai-codex",
+			},
+		},
+		Agents: []Agent{
+			{
+				Name:   "codex-agent",
+				Models: []string{"openai-sub/gpt-5-codex"},
+				Sandbox: Sandbox{
+					ContainerName:    "q15-codex-agent",
+					FromImage:        "docker.io/library/debian:bookworm-slim",
+					WorkspaceHostDir: "/tmp/q15-workspaces/codex",
+					WorkspaceDir:     "/workspace",
+				},
+				Telegram: Telegram{
+					TokenEnv:       "TEST_TELEGRAM_TOKEN",
+					AllowedUserIDs: []int64{123456789},
+				},
+			},
+		},
+	}
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected validation success for openai-codex provider, got %v", err)
+	}
+}
+
+func TestResolveAgentRuntimesSupportsOpenAICodexAndOpenAICompatibleFallbacks(t *testing.T) {
+	t.Setenv("MOONSHOT_API_KEY", "api-moonshot")
+	t.Setenv("TEST_TELEGRAM_TOKEN", "tg-123")
+
+	cfg := Config{
+		Providers: []Provider{
+			{
+				Name: "openai-sub",
+				Type: "openai-codex",
+			},
+			{
+				Name:    "moonshot",
+				Type:    "openai-compatible",
+				BaseURL: "https://api.moonshot.ai/v1",
+				KeyEnv:  "MOONSHOT_API_KEY",
+			},
+		},
+		Agents: []Agent{
+			{
+				Name:   "mixed-fallbacks",
+				Models: []string{"openai-sub/gpt-5-codex", "moonshot/kimi-k2.5"},
+				Sandbox: Sandbox{
+					ContainerName:    "q15-mixed-fallbacks",
+					FromImage:        "docker.io/library/debian:bookworm-slim",
+					WorkspaceHostDir: "/tmp/q15-workspaces/mixed-fallbacks",
+					WorkspaceDir:     "/workspace",
+				},
+				Telegram: Telegram{
+					TokenEnv:       "TEST_TELEGRAM_TOKEN",
+					AllowedUserIDs: []int64{123456789},
+				},
+			},
+		},
+	}
+
+	runtimes, err := cfg.ResolveAgentRuntimes()
+	if err != nil {
+		t.Fatalf("resolve runtimes: %v", err)
+	}
+	if len(runtimes) != 1 {
+		t.Fatalf("expected 1 runtime, got %d", len(runtimes))
+	}
+	if len(runtimes[0].Models) != 2 {
+		t.Fatalf("expected 2 resolved model fallbacks, got %#v", runtimes[0].Models)
+	}
+
+	first := runtimes[0].Models[0]
+	if first.ProviderType != "openai-codex" {
+		t.Fatalf("first provider type = %q, want %q", first.ProviderType, "openai-codex")
+	}
+	if first.ProviderAPIKey != "" {
+		t.Fatalf("first provider api key = %q, want empty", first.ProviderAPIKey)
+	}
+
+	second := runtimes[0].Models[1]
+	if second.ProviderType != "openai-compatible" {
+		t.Fatalf("second provider type = %q, want %q", second.ProviderType, "openai-compatible")
+	}
+	if second.ProviderAPIKey != "api-moonshot" {
+		t.Fatalf("second provider api key = %q, want %q", second.ProviderAPIKey, "api-moonshot")
+	}
+}
+
+func TestNormalizeProviderTypeSupportsOpenAICodexAliases(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "hyphenated",
+			input: "openai-codex",
+			want:  "openai-codex",
+		},
+		{
+			name:  "underscored",
+			input: "openai_codex",
+			want:  "openai-codex",
+		},
+		{
+			name:  "whitespace and casing",
+			input: "  OpenAI-Codex ",
+			want:  "openai-codex",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			if got := normalizeProviderType(tc.input); got != tc.want {
+				t.Fatalf("normalizeProviderType(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}

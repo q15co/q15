@@ -28,7 +28,7 @@ func init() {
 
 	cobra.CheckErr(viper.BindPFlag("config", rootCmd.PersistentFlags().Lookup("config")))
 
-	rootCmd.AddCommand(startCmd)
+	rootCmd.AddCommand(startCmd, newAuthCommand())
 }
 
 // Execute runs the root command.
