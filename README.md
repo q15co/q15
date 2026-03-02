@@ -19,10 +19,17 @@ On NixOS, rootless sandbox startup requires the host wrapper helpers:
 
 ## Run
 
-Use the repo `q15.toml` (or create your own) and start the agent runtime:
+Place your config at `~/.config/q15/config.toml` (or override `CONFIG=...`) and start the agent
+runtime:
 
 ```bash
 make run
+```
+
+To run with the repo-local config file instead:
+
+```bash
+make run CONFIG=config.toml
 ```
 
 `q15` runs as a normal unprivileged user process. The `q15-sandbox-helper` process enters the
@@ -31,12 +38,19 @@ rootless user namespace for Buildah.
 Or run the agent module directly:
 
 ```bash
-go run ./systems/agent start --config q15.toml
+go run ./systems/agent start
 ```
+
+Default config path is `~/.config/q15/config.toml` and can be overridden with `--config` or
+`Q15_CONFIG`.
+
+Use `--config-dir` or `Q15_CONFIG_DIR` to change the default base directory used by both config and
+auth paths.
 
 ## Config
 
-`q15.toml` defines providers and agents.
+`config.toml` defines providers and agents. By default q15 reads it from
+`~/.config/q15/config.toml`.
 
 `agent.models` is an ordered fallback list of `provider/model` references.
 
@@ -86,7 +100,13 @@ allowed_user_ids = [123456789]
 
 For `provider.type = "openai-codex"`, q15 reads OAuth credentials from:
 
-- `~/.q15/auth.json` (provider key: `openai`)
+- `~/.config/q15/auth.json` (provider key: `openai`)
+
+Path overrides:
+
+- `Q15_CONFIG_DIR` sets the base directory used by both defaults (`config.toml` and `auth.json`).
+- `Q15_AUTH_PATH` sets an explicit auth file path.
+- CLI equivalents: `--config-dir` and `--auth-path`.
 
 Login and inspect credentials:
 
@@ -101,7 +121,7 @@ q15 auth logout --provider openai
 - `memory_recent_turns` controls how many persisted turns are replayed into the model context on
   each reply. `0` uses default `6`.
 - Tool-call loop safety limits are internal runtime guards (hard-coded in the agent binary) and are
-  not user-configurable in `q15.toml`.
+  not user-configurable in `config.toml`.
   - These guards are separate from `memory_recent_turns`.
   - If a run is interrupted by loop safety, the partial turn is still persisted so follow-up replies
     can continue with context.

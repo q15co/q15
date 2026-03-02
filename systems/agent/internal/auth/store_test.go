@@ -156,3 +156,41 @@ func TestCredentialExpiryHelpers(t *testing.T) {
 		t.Fatalf("credential expiring in <5m should need refresh")
 	}
 }
+
+func TestDefaultAuthStorePathUsesDefaultLocation(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	got, err := defaultAuthStorePath()
+	if err != nil {
+		t.Fatalf("defaultAuthStorePath error = %v", err)
+	}
+	if want := filepath.Join(home, ".config", "q15", "auth.json"); got != want {
+		t.Fatalf("defaultAuthStorePath = %q, want %q", got, want)
+	}
+}
+
+func TestSetStorePath(t *testing.T) {
+	override := filepath.Join(t.TempDir(), "custom-auth.json")
+
+	prev := authStorePath
+	t.Cleanup(func() { authStorePath = prev })
+
+	if err := SetStorePath(override); err != nil {
+		t.Fatalf("SetStorePath error = %v", err)
+	}
+
+	got, err := authStorePath()
+	if err != nil {
+		t.Fatalf("authStorePath error = %v", err)
+	}
+	if got != override {
+		t.Fatalf("authStorePath = %q, want %q", got, override)
+	}
+}
+
+func TestSetStorePathRejectsEmpty(t *testing.T) {
+	if err := SetStorePath("   "); err == nil {
+		t.Fatalf("expected SetStorePath to reject empty path")
+	}
+}

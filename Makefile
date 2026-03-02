@@ -1,6 +1,6 @@
 GO ?= go
 BIN_DIR ?= bin
-CONFIG ?= q15.toml
+CONFIG ?= $(HOME)/.config/q15/config.toml
 AGENT_MOD_DIR ?= systems/agent
 HELPER_MOD_DIR ?= systems/sandbox-helper
 CONTRACT_MOD_DIR ?= libs/sandbox-contract

@@ -10,7 +10,7 @@ func TestLoadAgentRuntimes_TOML(t *testing.T) {
 	t.Setenv("MOONSHOT_API_KEY", "api-123")
 	t.Setenv("JARED_TELEGRAM_TOKEN", "tg-123")
 
-	path := filepath.Join(t.TempDir(), "q15.toml")
+	path := filepath.Join(t.TempDir(), "config.toml")
 	if err := os.WriteFile(path, []byte(`
 [[provider]]
 name = "moonshot"
@@ -98,7 +98,7 @@ func TestLoadAgentRuntimes_TOML_MemoryRecentTurnsPassThrough(t *testing.T) {
 	t.Setenv("MOONSHOT_API_KEY", "api-123")
 	t.Setenv("JARED_TELEGRAM_TOKEN", "tg-123")
 
-	path := filepath.Join(t.TempDir(), "q15.toml")
+	path := filepath.Join(t.TempDir(), "config.toml")
 	if err := os.WriteFile(path, []byte(`
 [[provider]]
 name = "moonshot"
@@ -294,7 +294,7 @@ func TestLoadAgentRuntimes_TOML_WithSandboxProxy(t *testing.T) {
 	t.Setenv("JARED_TELEGRAM_TOKEN", "tg-123")
 	t.Setenv("GH_TOKEN", "ghp_test_123")
 
-	path := filepath.Join(t.TempDir(), "q15.toml")
+	path := filepath.Join(t.TempDir(), "config.toml")
 	if err := os.WriteFile(path, []byte(`
 [[provider]]
 name = "moonshot"

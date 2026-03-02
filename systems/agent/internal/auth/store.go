@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	q15paths "github.com/q15co/q15/systems/agent/internal/paths"
 )
 
 type Credential struct {
@@ -38,12 +40,17 @@ func (c *Credential) NeedsRefresh() bool {
 	return time.Now().Add(5 * time.Minute).After(c.ExpiresAt)
 }
 
-func defaultAuthStorePath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("resolve user home: %w", err)
+func SetStorePath(path string) error {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return fmt.Errorf("auth store path is required")
 	}
-	return filepath.Join(home, ".q15", "auth.json"), nil
+	authStorePath = func() (string, error) { return path, nil }
+	return nil
+}
+
+func defaultAuthStorePath() (string, error) {
+	return q15paths.DefaultAuthPath()
 }
 
 func LoadStore() (*Store, error) {
