@@ -132,12 +132,20 @@ func (c *Channel) SendText(ctx context.Context, chatID, text string) error {
 		return fmt.Errorf("invalid chat id %q: %w", chatID, err)
 	}
 
+	formatted := markdownToTelegramHTML(text)
 	_, err = c.bot.SendMessage(ctx, &telego.SendMessageParams{
-		ChatID: telego.ChatID{ID: id},
-		Text:   text,
+		ChatID:    telego.ChatID{ID: id},
+		Text:      formatted,
+		ParseMode: telego.ModeHTML,
 	})
 	if err != nil {
-		return fmt.Errorf("send telegram message: %w", err)
+		_, plainErr := c.bot.SendMessage(ctx, &telego.SendMessageParams{
+			ChatID: telego.ChatID{ID: id},
+			Text:   text,
+		})
+		if plainErr != nil {
+			return fmt.Errorf("send telegram message: %w", plainErr)
+		}
 	}
 	return nil
 }
