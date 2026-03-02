@@ -86,15 +86,47 @@ memory_recent_turns = 6
 
 [agent.sandbox]
 container_name = "q15-jared"
-from_image = "docker.io/library/debian:bookworm-slim"
 workspace_host_dir = "/home/you/q15-workspaces/jared"
 workspace_dir = "/workspace"
-network = "enabled"
 
 [agent.telegram]
 token_env = "JARED_TELEGRAM_TOKEN"
 allowed_user_ids = [123456789]
 ```
+
+### Sandbox Runtime (Nix-Only)
+
+Sandbox runtime is hardcoded to a rootless-Buildah-friendly nix-only mode:
+
+- Base image is fixed: `docker.io/library/debian:bookworm-slim`
+- Sandbox networking is always enabled
+- Nix is auto-bootstrapped during `Prepare` if not already installed
+
+### exec_shell Usage
+
+`exec_shell` is nix-first and requires packages per call.
+
+Required arguments:
+
+- `command` (string)
+- `packages` (array of nix installables, minimum 1)
+
+Example tool payload:
+
+```json
+{
+  "command": "git --version && jq --version",
+  "packages": ["nixpkgs#git", "nixpkgs#jq"]
+}
+```
+
+Runtime execution shape:
+
+```bash
+nix --extra-experimental-features "nix-command flakes" shell <packages...> --command /bin/bash -c '<command>'
+```
+
+First run may require network access to bootstrap nix and fetch packages.
 
 ### OpenAI Codex Subscription Login
 
@@ -125,6 +157,7 @@ q15 auth logout --provider openai
   - These guards are separate from `memory_recent_turns`.
   - If a run is interrupted by loop safety, the partial turn is still persisted so follow-up replies
     can continue with context.
+- Sandbox runtime is nix-only with fixed Debian base image and always-on networking.
 - `agent.name` is the authoritative runtime identity for the assistant.
   - The default system prompt is rendered from `agent.name`.
   - Seeded core memory templates use `{{agent_name}}` and are rendered at load time.
@@ -146,8 +179,7 @@ q15 auth logout --provider openai
 - `openai-compatible` providers still require both `provider.base_url` and `provider.key_env`.
 - Optional Brave web search tool: set `Q15_BRAVE_API_KEY` to enable the `web_search` tool for the
   model.
-- `web_search` runs in the host agent process (not inside the sandbox shell), so it is independent
-  of `agent.sandbox.network`.
+- `web_search` runs in the host agent process (not inside the sandbox shell).
 - On NixOS dev shells, do not add `shadow` to the shell packages: the Nix-store
   `newuidmap`/`newgidmap` binaries are not usable for rootless user-namespace setup.
 

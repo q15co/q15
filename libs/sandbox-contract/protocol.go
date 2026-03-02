@@ -5,12 +5,10 @@ package sandboxcontract
 // Settings describes a persistent sandbox container and its mounted workspace.
 type Settings struct {
 	ContainerName    string         `json:"container_name"`
-	FromImage        string         `json:"from_image"`
 	WorkspaceHostDir string         `json:"workspace_host_dir"`
 	WorkspaceDir     string         `json:"workspace_dir"`
 	MemoryHostDir    string         `json:"memory_host_dir"`
 	MemoryDir        string         `json:"memory_dir"`
-	Network          string         `json:"network"`
 	Proxy            *ProxySettings `json:"proxy,omitempty"`
 }
 

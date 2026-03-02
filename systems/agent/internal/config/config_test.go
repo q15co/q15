@@ -24,7 +24,6 @@ key_env = "MOONSHOT_API_KEY"
 
 	[agent.sandbox]
 	container_name = "q15-jared"
-	from_image = "docker.io/library/debian:bookworm-slim"
 	workspace_host_dir = "/tmp/q15-workspaces/jared"
 	workspace_dir = "/workspace"
 
@@ -68,9 +67,6 @@ key_env = "MOONSHOT_API_KEY"
 	if rt.SandboxContainerName != "q15-jared" {
 		t.Fatalf("unexpected sandbox container name: %q", rt.SandboxContainerName)
 	}
-	if rt.SandboxFromImage != "docker.io/library/debian:bookworm-slim" {
-		t.Fatalf("unexpected sandbox base image: %q", rt.SandboxFromImage)
-	}
 	if rt.WorkspaceHostDir != "/tmp/q15-workspaces/jared" {
 		t.Fatalf("unexpected workspace host dir: %q", rt.WorkspaceHostDir)
 	}
@@ -113,7 +109,6 @@ memory_recent_turns = 42
 
 [agent.sandbox]
 container_name = "q15-jared"
-from_image = "docker.io/library/debian:bookworm-slim"
 workspace_host_dir = "/tmp/q15-workspaces/jared"
 workspace_dir = "/workspace"
 
@@ -151,7 +146,6 @@ func TestValidateRequiresAgentModels(t *testing.T) {
 				Name: "legacy",
 				Sandbox: Sandbox{
 					ContainerName:    "q15-legacy",
-					FromImage:        "docker.io/library/debian:bookworm-slim",
 					WorkspaceHostDir: "/tmp/q15-workspaces/legacy",
 					WorkspaceDir:     "/workspace",
 				},
@@ -184,7 +178,6 @@ func TestValidateRequiresTelegramAllowedUserIDs(t *testing.T) {
 				Models: []string{"moonshot/kimi-k2.5"},
 				Sandbox: Sandbox{
 					ContainerName:    "q15-no-allowlist",
-					FromImage:        "docker.io/library/debian:bookworm-slim",
 					WorkspaceHostDir: "/tmp/q15-workspaces/no-allowlist",
 					WorkspaceDir:     "/workspace",
 				},
@@ -215,7 +208,6 @@ func TestValidateRequiresBaseURLForOpenAICompatibleProvider(t *testing.T) {
 				Models: []string{"zai/glm-4.5"},
 				Sandbox: Sandbox{
 					ContainerName:    "q15-zai",
-					FromImage:        "docker.io/library/debian:bookworm-slim",
 					WorkspaceHostDir: "/tmp/q15-workspaces/zai",
 					WorkspaceDir:     "/workspace",
 				},
@@ -258,7 +250,6 @@ func TestResolveAgentRuntimesSupportsMixedProviderFallbacks(t *testing.T) {
 				Models: []string{"moonshot/kimi-k2.5", "zai/glm-5"},
 				Sandbox: Sandbox{
 					ContainerName:    "q15-mixed-fallbacks",
-					FromImage:        "docker.io/library/debian:bookworm-slim",
 					WorkspaceHostDir: "/tmp/q15-workspaces/mixed-fallbacks",
 					WorkspaceDir:     "/workspace",
 				},
@@ -308,10 +299,8 @@ models = ["moonshot/kimi-k2.5"]
 
 [agent.sandbox]
 container_name = "q15-jared"
-from_image = "docker.io/library/debian:bookworm-slim"
 workspace_host_dir = "/tmp/q15-workspaces/jared"
 workspace_dir = "/workspace"
-network = "enabled"
 
 [agent.sandbox.proxy]
 secrets = ["gh_token"]
@@ -386,46 +375,6 @@ allowed_user_ids = [123456789]
 	}
 }
 
-func TestValidateRejectsSandboxProxyEnabledWithNetworkDisabled(t *testing.T) {
-	cfg := Config{
-		Providers: []Provider{
-			{
-				Name:    "moonshot",
-				Type:    "openai-compatible",
-				BaseURL: "https://api.moonshot.ai/v1",
-				KeyEnv:  "MOONSHOT_API_KEY",
-			},
-		},
-		Agents: []Agent{
-			{
-				Name:   "proxy-agent",
-				Models: []string{"moonshot/kimi-k2.5"},
-				Sandbox: Sandbox{
-					ContainerName:    "q15-proxy-agent",
-					FromImage:        "docker.io/library/debian:bookworm-slim",
-					WorkspaceHostDir: "/tmp/q15-workspaces/proxy-agent",
-					WorkspaceDir:     "/workspace",
-					Network:          "disabled",
-					Proxy: &SandboxProxy{
-						Secrets: []string{"gh_token"},
-						Rules: []SandboxProxyRule{
-							{Name: "github-api", MatchHosts: []string{"api.github.com"}},
-						},
-					},
-				},
-				Telegram: Telegram{
-					TokenEnv:       "TEST_TELEGRAM_TOKEN",
-					AllowedUserIDs: []int64{123456789},
-				},
-			},
-		},
-	}
-
-	if err := cfg.Validate(); err == nil {
-		t.Fatalf("expected validation error when sandbox proxy is enabled with network disabled")
-	}
-}
-
 func TestValidateRejectsSandboxProxyBodyPlaceholderReplacement(t *testing.T) {
 	cfg := Config{
 		Providers: []Provider{
@@ -442,10 +391,8 @@ func TestValidateRejectsSandboxProxyBodyPlaceholderReplacement(t *testing.T) {
 				Models: []string{"moonshot/kimi-k2.5"},
 				Sandbox: Sandbox{
 					ContainerName:    "q15-proxy-agent",
-					FromImage:        "docker.io/library/debian:bookworm-slim",
 					WorkspaceHostDir: "/tmp/q15-workspaces/proxy-agent",
 					WorkspaceDir:     "/workspace",
-					Network:          "enabled",
 					Proxy: &SandboxProxy{
 						Secrets: []string{"gh_token"},
 						Rules: []SandboxProxyRule{
@@ -495,10 +442,8 @@ func TestResolveAgentRuntimesRequiresSandboxProxySecretEnv(t *testing.T) {
 				Models: []string{"moonshot/kimi-k2.5"},
 				Sandbox: Sandbox{
 					ContainerName:    "q15-proxy-agent",
-					FromImage:        "docker.io/library/debian:bookworm-slim",
 					WorkspaceHostDir: "/tmp/q15-workspaces/proxy-agent",
 					WorkspaceDir:     "/workspace",
-					Network:          "enabled",
 					Proxy: &SandboxProxy{
 						Secrets: []string{"gh_token"},
 						Rules: []SandboxProxyRule{
@@ -542,10 +487,8 @@ func TestResolveAgentRuntimesDerivesProxySecretEnvNameFromAlias(t *testing.T) {
 				Models: []string{"moonshot/kimi-k2.5"},
 				Sandbox: Sandbox{
 					ContainerName:    "q15-proxy-agent",
-					FromImage:        "docker.io/library/debian:bookworm-slim",
 					WorkspaceHostDir: "/tmp/q15-workspaces/proxy-agent",
 					WorkspaceDir:     "/workspace",
-					Network:          "enabled",
 					Proxy: &SandboxProxy{
 						ContainerProxyHost: "10.0.2.2",
 						Secrets:            []string{"gh_token"},
@@ -592,10 +535,8 @@ func TestResolveAgentRuntimesUsesDefaultProxyContainerHostOverrideEnv(t *testing
 				Models: []string{"moonshot/kimi-k2.5"},
 				Sandbox: Sandbox{
 					ContainerName:    "q15-proxy-agent",
-					FromImage:        "docker.io/library/debian:bookworm-slim",
 					WorkspaceHostDir: "/tmp/q15-workspaces/proxy-agent",
 					WorkspaceDir:     "/workspace",
-					Network:          "enabled",
 					Proxy: &SandboxProxy{
 						Secrets: []string{"gh_token"},
 						Rules: []SandboxProxyRule{
@@ -634,7 +575,6 @@ func TestValidateAllowsOpenAICodexProviderWithoutBaseURLOrKeyEnv(t *testing.T) {
 				Models: []string{"openai-sub/gpt-5-codex"},
 				Sandbox: Sandbox{
 					ContainerName:    "q15-codex-agent",
-					FromImage:        "docker.io/library/debian:bookworm-slim",
 					WorkspaceHostDir: "/tmp/q15-workspaces/codex",
 					WorkspaceDir:     "/workspace",
 				},
@@ -674,7 +614,6 @@ func TestResolveAgentRuntimesSupportsOpenAICodexAndOpenAICompatibleFallbacks(t *
 				Models: []string{"openai-sub/gpt-5-codex", "moonshot/kimi-k2.5"},
 				Sandbox: Sandbox{
 					ContainerName:    "q15-mixed-fallbacks",
-					FromImage:        "docker.io/library/debian:bookworm-slim",
 					WorkspaceHostDir: "/tmp/q15-workspaces/mixed-fallbacks",
 					WorkspaceDir:     "/workspace",
 				},

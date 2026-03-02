@@ -80,7 +80,8 @@ func createExportedCA() (*generatedCA, error) {
 		return nil, fmt.Errorf("create temp dir for CA export: %w", err)
 	}
 	certHostPath := filepath.Join(tempDir, "ca.crt")
-	if err := os.WriteFile(certHostPath, certPEM, 0o600); err != nil {
+	// The CA certificate is public material and must be readable from the sandbox mount.
+	if err := os.WriteFile(certHostPath, certPEM, 0o644); err != nil {
 		_ = os.RemoveAll(tempDir)
 		return nil, fmt.Errorf("write CA certificate file %q: %w", certHostPath, err)
 	}

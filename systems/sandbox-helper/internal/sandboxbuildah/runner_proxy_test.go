@@ -2,28 +2,9 @@ package sandboxbuildah
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 )
-
-func TestSettingsValidateRejectsEnabledProxyWithNetworkDisabled(t *testing.T) {
-	cfg := Settings{
-		ContainerName:    "q15-test",
-		FromImage:        "docker.io/library/debian:bookworm-slim",
-		WorkspaceHostDir: "/tmp/q15-test",
-		WorkspaceDir:     "/workspace",
-		MemoryHostDir:    "/tmp/q15-test/.q15-memory",
-		MemoryDir:        "/memory",
-		Network:          "disabled",
-		Proxy: &ProxySettings{
-			Enabled:      true,
-			HTTPProxyURL: "http://10.0.2.2:8080",
-		},
-	}
-
-	if err := cfg.Validate(); err == nil {
-		t.Fatalf("expected validation error")
-	}
-}
 
 func TestProxyRunEnvIncludesProxyAndTrustVars(t *testing.T) {
 	cfg := Settings{
@@ -48,8 +29,19 @@ func TestProxyRunEnvIncludesProxyAndTrustVars(t *testing.T) {
 	assertContainsKV(t, env, "all_proxy", "http://10.0.2.2:8080")
 	assertContainsKV(t, env, "no_proxy", "localhost,127.0.0.1")
 	assertContainsKV(t, env, "SSL_CERT_FILE", "/run/q15-proxy/ca.crt")
+	assertContainsKV(t, env, "NIX_SSL_CERT_FILE", "/run/q15-proxy/ca.crt")
 	assertContainsKV(t, env, "CURL_CA_BUNDLE", "/run/q15-proxy/ca.crt")
 	assertContainsKV(t, env, "GIT_SSL_CAINFO", "/run/q15-proxy/ca.crt")
+}
+
+func TestRunEnvPrependsNixPaths(t *testing.T) {
+	env := runEnv(Settings{})
+	assertContainsKV(
+		t,
+		env,
+		"PATH",
+		"/root/.nix-profile/bin:/nix/var/nix/profiles/default/bin:/nix/var/nix/profiles/per-user/root/profile/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+	)
 }
 
 func TestProxyExtraMountsAddsReadOnlyCAMount(t *testing.T) {
@@ -85,6 +77,42 @@ func TestProxyExtraMountsAddsReadOnlyCAMount(t *testing.T) {
 	}
 	if !foundRO {
 		t.Fatalf("expected read-only CA mount, options=%#v", m.Options)
+	}
+}
+
+func TestWrapCommandWithProxyCABundle_NoProxyReturnsOriginal(t *testing.T) {
+	command := "echo hi"
+	got := wrapCommandWithProxyCABundle(Settings{}, command)
+	if got != command {
+		t.Fatalf("wrapped command = %q, want %q", got, command)
+	}
+}
+
+func TestWrapCommandWithProxyCABundle_AppendsBundlePrefix(t *testing.T) {
+	command := "nix --version"
+	cfg := Settings{
+		Proxy: &ProxySettings{
+			Enabled:             true,
+			CACertContainerPath: "/run/q15-proxy/ca.crt",
+		},
+	}
+
+	got := wrapCommandWithProxyCABundle(cfg, command)
+	assertContainsSnippet(t, got, "proxy CA cert is not readable")
+	assertContainsSnippet(
+		t,
+		got,
+		"cat /etc/ssl/certs/ca-certificates.crt '/run/q15-proxy/ca.crt' > \"$q15_ca_bundle\"",
+	)
+	assertContainsSnippet(t, got, "export NIX_SSL_CERT_FILE=\"$q15_ca_bundle\"")
+	assertContainsSnippet(t, got, "export CURL_CA_BUNDLE=\"$q15_ca_bundle\"")
+	assertContainsSnippet(t, got, command)
+}
+
+func assertContainsSnippet(t *testing.T, haystack, needle string) {
+	t.Helper()
+	if !strings.Contains(haystack, needle) {
+		t.Fatalf("expected %q in %q", needle, haystack)
 	}
 }
 

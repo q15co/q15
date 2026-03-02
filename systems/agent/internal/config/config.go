@@ -34,10 +34,8 @@ type Agent struct {
 
 type Sandbox struct {
 	ContainerName    string        `mapstructure:"container_name"`
-	FromImage        string        `mapstructure:"from_image"`
 	WorkspaceHostDir string        `mapstructure:"workspace_host_dir"`
 	WorkspaceDir     string        `mapstructure:"workspace_dir"`
-	Network          string        `mapstructure:"network"`
 	Proxy            *SandboxProxy `mapstructure:"proxy"`
 }
 
@@ -105,13 +103,11 @@ type AgentRuntime struct {
 	Name                   string
 	Models                 []AgentModelRuntime
 	SandboxContainerName   string
-	SandboxFromImage       string
 	WorkspaceHostDir       string
 	WorkspaceDir           string
 	MemoryHostDir          string
 	MemoryDir              string
 	MemoryRecentTurns      int
-	SandboxNetwork         string
 	SandboxProxy           *SandboxProxyRuntime
 	TelegramToken          string
 	TelegramAllowedUserIDs []int64
@@ -140,11 +136,16 @@ func Load(path string) (Config, error) {
 }
 
 func LoadAgentRuntimes(path string) ([]AgentRuntime, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil, errors.New("config path is required")
+	}
+
 	cfg, err := Load(path)
 	if err != nil {
 		return nil, err
 	}
-	return cfg.ResolveAgentRuntimes()
+	return cfg.resolveAgentRuntimes("")
 }
 
 func (c Config) FindAgent(name string) (Agent, bool) {
@@ -191,6 +192,10 @@ func (a Agent) TelegramToken() (string, error) {
 }
 
 func (c Config) ResolveAgentRuntimes() ([]AgentRuntime, error) {
+	return c.resolveAgentRuntimes("")
+}
+
+func (c Config) resolveAgentRuntimes(_ string) ([]AgentRuntime, error) {
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
@@ -275,11 +280,7 @@ func (c Config) ResolveAgentRuntimes() ([]AgentRuntime, error) {
 				err,
 			)
 		}
-		sandboxNetwork, err := normalizeSandboxNetwork(agentCfg.Sandbox.Network)
-		if err != nil {
-			return nil, fmt.Errorf("resolve sandbox network for agent %q: %w", agentCfg.Name, err)
-		}
-		sandboxProxy, err := resolveSandboxProxyRuntime(agentCfg.Sandbox.Proxy, sandboxNetwork)
+		sandboxProxy, err := resolveSandboxProxyRuntime(agentCfg.Sandbox.Proxy)
 		if err != nil {
 			return nil, fmt.Errorf("resolve sandbox proxy for agent %q: %w", agentCfg.Name, err)
 		}
@@ -293,13 +294,11 @@ func (c Config) ResolveAgentRuntimes() ([]AgentRuntime, error) {
 			Name:                   strings.TrimSpace(agentCfg.Name),
 			Models:                 resolvedModels,
 			SandboxContainerName:   strings.TrimSpace(agentCfg.Sandbox.ContainerName),
-			SandboxFromImage:       strings.TrimSpace(agentCfg.Sandbox.FromImage),
 			WorkspaceHostDir:       workspaceHostDir,
 			WorkspaceDir:           strings.TrimSpace(agentCfg.Sandbox.WorkspaceDir),
 			MemoryHostDir:          filepath.Join(workspaceHostDir, ".q15-memory"),
 			MemoryDir:              defaultMemoryDir,
 			MemoryRecentTurns:      memoryRecentTurns,
-			SandboxNetwork:         sandboxNetwork,
 			SandboxProxy:           sandboxProxy,
 			TelegramToken:          token,
 			TelegramAllowedUserIDs: allowedUserIDs,
@@ -368,19 +367,13 @@ func (c Config) validate() error {
 		if strings.TrimSpace(agent.Sandbox.ContainerName) == "" {
 			return fmt.Errorf("agent[%d].sandbox.container_name is required", i)
 		}
-		if strings.TrimSpace(agent.Sandbox.FromImage) == "" {
-			return fmt.Errorf("agent[%d].sandbox.from_image is required", i)
-		}
 		if strings.TrimSpace(agent.Sandbox.WorkspaceHostDir) == "" {
 			return fmt.Errorf("agent[%d].sandbox.workspace_host_dir is required", i)
 		}
 		if strings.TrimSpace(agent.Sandbox.WorkspaceDir) == "" {
 			return fmt.Errorf("agent[%d].sandbox.workspace_dir is required", i)
 		}
-		if _, err := normalizeSandboxNetwork(agent.Sandbox.Network); err != nil {
-			return fmt.Errorf("agent[%d].sandbox.network: %w", i, err)
-		}
-		if err := validateSandboxProxy(agent.Sandbox.Proxy, agent.Sandbox.Network); err != nil {
+		if err := validateSandboxProxy(agent.Sandbox.Proxy); err != nil {
 			return fmt.Errorf("agent[%d].sandbox.proxy: %w", i, err)
 		}
 		if strings.TrimSpace(agent.Telegram.Token) == "" &&
@@ -462,28 +455,9 @@ func normalizeAllowedUserIDs(ids []int64) ([]int64, error) {
 	return out, nil
 }
 
-func normalizeSandboxNetwork(network string) (string, error) {
-	switch strings.ToLower(strings.TrimSpace(network)) {
-	case "", "disabled":
-		return "disabled", nil
-	case "enabled":
-		return "enabled", nil
-	default:
-		return "", errors.New(`must be "enabled" or "disabled"`)
-	}
-}
-
-func validateSandboxProxy(proxy *SandboxProxy, sandboxNetwork string) error {
+func validateSandboxProxy(proxy *SandboxProxy) error {
 	if proxy == nil {
 		return nil
-	}
-
-	normalizedNetwork, err := normalizeSandboxNetwork(sandboxNetwork)
-	if err != nil {
-		return err
-	}
-	if normalizedNetwork != "enabled" {
-		return errors.New(`enabled proxy requires sandbox.network = "enabled"`)
 	}
 
 	secretAliases, err := normalizeProxySecretAliases(proxy.Secrets)
@@ -569,12 +543,11 @@ func validateSandboxProxy(proxy *SandboxProxy, sandboxNetwork string) error {
 
 func resolveSandboxProxyRuntime(
 	proxy *SandboxProxy,
-	sandboxNetwork string,
 ) (*SandboxProxyRuntime, error) {
 	if proxy == nil {
 		return nil, nil
 	}
-	if err := validateSandboxProxy(proxy, sandboxNetwork); err != nil {
+	if err := validateSandboxProxy(proxy); err != nil {
 		return nil, err
 	}
 

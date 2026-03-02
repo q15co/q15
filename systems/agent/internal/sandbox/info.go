@@ -8,18 +8,19 @@ import (
 
 type SandboxInfo struct {
 	ContainerName    string
-	FromImage        string
 	WorkspaceHostDir string
 	WorkspaceDir     string
-	Network          string
+	Runtime          string
+	BaseImage        string
 
 	OSID         string
 	OSVersionID  string
 	OSPrettyName string
 
-	PackageManager  string
-	ShellsAvailable []string
-	ToolsAvailable  []string
+	NixPath     string
+	NixVersion  string
+	BashPath    string
+	BashVersion string
 }
 
 func (s *Sandbox) Describe(ctx context.Context) (SandboxInfo, error) {
@@ -30,10 +31,10 @@ func (s *Sandbox) Describe(ctx context.Context) (SandboxInfo, error) {
 
 	info := SandboxInfo{
 		ContainerName:    cfg.ContainerName,
-		FromImage:        cfg.FromImage,
 		WorkspaceHostDir: cfg.WorkspaceHostDir,
 		WorkspaceDir:     cfg.WorkspaceDir,
-		Network:          cfg.Network,
+		Runtime:          "nix-only",
+		BaseImage:        "docker.io/library/debian:bookworm-slim",
 	}
 	if !prepared {
 		return info, fmt.Errorf("sandbox is not prepared")
@@ -44,6 +45,14 @@ func (s *Sandbox) Describe(ctx context.Context) (SandboxInfo, error) {
 		return info, err
 	}
 
+	applySandboxProbeOutput(&info, out)
+	return info, nil
+}
+
+func applySandboxProbeOutput(info *SandboxInfo, out string) {
+	if info == nil {
+		return
+	}
 	for _, rawLine := range strings.Split(out, "\n") {
 		line := strings.TrimSpace(rawLine)
 		if line == "" {
@@ -62,16 +71,16 @@ func (s *Sandbox) Describe(ctx context.Context) (SandboxInfo, error) {
 			info.OSVersionID = val
 		case "os_pretty_name":
 			info.OSPrettyName = val
-		case "package_manager":
-			info.PackageManager = val
-		case "shell":
-			info.ShellsAvailable = appendUnique(info.ShellsAvailable, val)
-		case "tool":
-			info.ToolsAvailable = appendUnique(info.ToolsAvailable, val)
+		case "nix_path":
+			info.NixPath = val
+		case "nix_version":
+			info.NixVersion = val
+		case "bash_path":
+			info.BashPath = val
+		case "bash_version":
+			info.BashVersion = val
 		}
 	}
-
-	return info, nil
 }
 
 func sandboxProbeCommand() string {
@@ -83,40 +92,20 @@ if [ -r /etc/os-release ]; then
   printf 'os_pretty_name=%s\n' "${PRETTY_NAME:-}"
 fi
 
-pm=""
-for c in apt-get apk pacman dnf microdnf yum zypper nix; do
-  if command -v "$c" >/dev/null 2>&1; then
-    pm="$c"
-    break
-  fi
-done
-printf 'package_manager=%s\n' "$pm"
+if command -v nix >/dev/null 2>&1; then
+  nix_path="$(command -v nix || true)"
+  printf 'nix_path=%s\n' "$nix_path"
+  nix_version="$(nix --version 2>/dev/null | head -n 1 || true)"
+  printf 'nix_version=%s\n' "$nix_version"
+fi
 
-for c in /bin/sh /bin/bash /bin/dash /bin/ash /usr/bin/fish; do
-  if [ -x "$c" ]; then
-    printf 'shell=%s\n' "$c"
-  fi
-done
-
-for c in git curl wget python3 python node npm jq make gcc go tar unzip; do
-  if command -v "$c" >/dev/null 2>&1; then
-    printf 'tool=%s\n' "$c"
-  fi
-done
+if command -v bash >/dev/null 2>&1; then
+  bash_path="$(command -v bash || true)"
+  printf 'bash_path=%s\n' "$bash_path"
+  bash_version="$(bash --version 2>/dev/null | head -n 1 || true)"
+  printf 'bash_version=%s\n' "$bash_version"
+fi
 
 exit 0
 `
-}
-
-func appendUnique(items []string, item string) []string {
-	item = strings.TrimSpace(item)
-	if item == "" {
-		return items
-	}
-	for _, existing := range items {
-		if existing == item {
-			return items
-		}
-	}
-	return append(items, item)
 }

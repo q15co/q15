@@ -12,18 +12,22 @@ import (
 
 	"github.com/containers/buildah"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
-	nettypes "go.podman.io/common/libnetwork/types"
 	"go.podman.io/storage"
+)
+
+const (
+	sandboxBaseImage         = "docker.io/library/debian:bookworm-slim"
+	sandboxRuntimeAnnotation = "io.q15.sandbox.runtime"
+	sandboxRuntimeValue      = "nix-only-v1"
+	sharedNixHostDirEnv      = "Q15_SANDBOX_NIX_STORE_HOST_DIR"
 )
 
 type Settings struct {
 	ContainerName    string
-	FromImage        string
 	WorkspaceHostDir string
 	WorkspaceDir     string
 	MemoryHostDir    string
 	MemoryDir        string
-	Network          string
 	Proxy            *ProxySettings
 }
 
@@ -41,9 +45,6 @@ type ProxySettings struct {
 func (s Settings) Validate() error {
 	if strings.TrimSpace(s.ContainerName) == "" {
 		return errors.New("container name is required")
-	}
-	if strings.TrimSpace(s.FromImage) == "" {
-		return errors.New("from image is required")
 	}
 	if strings.TrimSpace(s.WorkspaceHostDir) == "" {
 		return errors.New("workspace host dir is required")
@@ -69,9 +70,6 @@ func (s Settings) Validate() error {
 	if !filepath.IsAbs(strings.TrimSpace(s.MemoryDir)) {
 		return errors.New("memory dir must be an absolute path")
 	}
-	if _, err := normalizeNetworkMode(s.Network); err != nil {
-		return fmt.Errorf("network: %w", err)
-	}
 	if err := validateProxySettings(s); err != nil {
 		return fmt.Errorf("proxy: %w", err)
 	}
@@ -93,6 +91,7 @@ func Prepare(ctx context.Context, cfg Settings) error {
 		verbosef("Prepare: buildah process environment failed: %v", err)
 		return fmt.Errorf("prepare buildah process environment: %w", err)
 	}
+
 	verbosef("Prepare: ensuring workspace host dir exists: %q", cfg.WorkspaceHostDir)
 	if err := os.MkdirAll(cfg.WorkspaceHostDir, 0o755); err != nil {
 		verbosef("Prepare: mkdir failed: %v", err)
@@ -111,6 +110,12 @@ func Prepare(ctx context.Context, cfg Settings) error {
 			return fmt.Errorf("create storage host dir %q: %w", storageHostDir, err)
 		}
 	}
+	nixHostDir, err := ensureSharedNixHostDir()
+	if err != nil {
+		verbosef("Prepare: shared nix host dir setup failed: %v", err)
+		return fmt.Errorf("prepare shared nix host dir: %w", err)
+	}
+	verbosef("Prepare: shared nix store host dir=%q mounted_at=%q", nixHostDir, "/nix")
 	if err := ctx.Err(); err != nil {
 		verbosef("Prepare: context error after workspace setup: %v", err)
 		return err
@@ -127,17 +132,26 @@ func Prepare(ctx context.Context, cfg Settings) error {
 		store.RunRoot(),
 		store.GraphDriverName(),
 	)
+
 	builder, err := openOrCreateBuilder(ctx, store, cfg)
 	if err != nil {
 		verbosef("Prepare: openOrCreateBuilder failed: %v", err)
 		return fmt.Errorf("ensure build container %q: %w", cfg.ContainerName, err)
 	}
+	if err := ensureNixBootstrap(builder, cfg); err != nil {
+		verbosef("Prepare: ensureNixBootstrap failed: %v", err)
+		return fmt.Errorf(
+			"bootstrap nix in sandbox %q: %w (check sandbox network/proxy/CA settings)",
+			cfg.ContainerName,
+			err,
+		)
+	}
+
 	verbosef(
-		"Prepare: ready (container=%q container_id=%q from_image=%q network=%q)",
+		"Prepare: ready (container=%q container_id=%q base_image=%q)",
 		cfg.ContainerName,
 		builder.ContainerID,
-		builder.FromImage,
-		cfg.Network,
+		sandboxBaseImage,
 	)
 	return nil
 }
@@ -158,6 +172,10 @@ func Exec(ctx context.Context, cfg Settings, command string) (string, error) {
 	if err := ensureBuildahProcessEnvironment(); err != nil {
 		verbosef("Exec: buildah process environment failed: %v", err)
 		return "", fmt.Errorf("prepare buildah process environment: %w", err)
+	}
+	if _, err := ensureSharedNixHostDir(); err != nil {
+		verbosef("Exec: shared nix host dir setup failed: %v", err)
+		return "", fmt.Errorf("prepare shared nix host dir: %w", err)
 	}
 
 	store, err := openStore()
@@ -184,12 +202,10 @@ func Exec(ctx context.Context, cfg Settings, command string) (string, error) {
 
 func normalizeSettings(cfg Settings) Settings {
 	cfg.ContainerName = strings.TrimSpace(cfg.ContainerName)
-	cfg.FromImage = strings.TrimSpace(cfg.FromImage)
 	cfg.WorkspaceHostDir = filepath.Clean(strings.TrimSpace(cfg.WorkspaceHostDir))
 	cfg.WorkspaceDir = filepath.Clean(strings.TrimSpace(cfg.WorkspaceDir))
 	cfg.MemoryHostDir = filepath.Clean(strings.TrimSpace(cfg.MemoryHostDir))
 	cfg.MemoryDir = filepath.Clean(strings.TrimSpace(cfg.MemoryDir))
-	cfg.Network = normalizeNetworkModeOrDefault(cfg.Network)
 	cfg.Proxy = normalizeProxySettings(cfg.Proxy)
 	return cfg
 }
@@ -229,60 +245,112 @@ func defaultStorageHostDir() (string, bool) {
 	return filepath.Join(home, ".local", "share", "q15", "buildah-storage"), true
 }
 
+func defaultSharedNixHostDir() (string, bool) {
+	if path := strings.TrimSpace(os.Getenv(sharedNixHostDirEnv)); path != "" {
+		return path, true
+	}
+
+	home := strings.TrimSpace(os.Getenv("HOME"))
+	if home == "" {
+		var err error
+		home, err = os.UserHomeDir()
+		if err != nil {
+			verbosef("defaultSharedNixHostDir: unable to resolve user home: %v", err)
+			return "", false
+		}
+	}
+	if home == "" {
+		return "", false
+	}
+	return filepath.Join(home, ".local", "share", "q15", "nix-store"), true
+}
+
+func ensureSharedNixHostDir() (string, error) {
+	hostDir, ok := defaultSharedNixHostDir()
+	if !ok {
+		return "", errors.New("unable to resolve shared nix host dir")
+	}
+	hostDir = filepath.Clean(strings.TrimSpace(hostDir))
+	if hostDir == "" {
+		return "", errors.New("shared nix host dir is empty")
+	}
+	if !filepath.IsAbs(hostDir) {
+		return "", fmt.Errorf("%s must be an absolute path", sharedNixHostDirEnv)
+	}
+	if err := os.MkdirAll(hostDir, 0o755); err != nil {
+		return "", fmt.Errorf("mkdir %q: %w", hostDir, err)
+	}
+	return hostDir, nil
+}
+
+func sharedNixStoreMount() (specs.Mount, error) {
+	hostDir, err := ensureSharedNixHostDir()
+	if err != nil {
+		return specs.Mount{}, err
+	}
+	return specs.Mount{
+		Type:        "bind",
+		Source:      hostDir,
+		Destination: "/nix",
+		Options:     []string{"rbind", "rw"},
+	}, nil
+}
+
 func openOrCreateBuilder(
 	ctx context.Context,
 	store storage.Store,
 	cfg Settings,
 ) (*buildah.Builder, error) {
-	networkEnabled := cfg.Network == "enabled"
-	var disabledNet nettypes.ContainerNetwork
-	if !networkEnabled {
-		disabledNet = newDisabledNetwork()
-	}
-
 	verbosef("openOrCreateBuilder: trying existing builder %q", cfg.ContainerName)
 	builder, err := buildah.OpenBuilder(store, cfg.ContainerName)
 	if err == nil {
-		if disabledNet != nil {
-			builder.NetworkInterface = disabledNet
+		recreate, reason := shouldRecreateExistingBuilder(builder)
+		if recreate {
+			verbosef(
+				"openOrCreateBuilder: recreating existing builder %q: %s",
+				cfg.ContainerName,
+				reason,
+			)
+			if err := builder.Delete(); err != nil {
+				return nil, fmt.Errorf("delete stale builder %q: %w", cfg.ContainerName, err)
+			}
+		} else {
+			verbosef(
+				"openOrCreateBuilder: opened existing builder %q (id=%q image=%q)",
+				cfg.ContainerName,
+				builder.ContainerID,
+				builder.FromImage,
+			)
+			return builder, nil
 		}
-		verbosef(
-			"openOrCreateBuilder: opened existing builder %q (id=%q image=%q)",
-			cfg.ContainerName,
-			builder.ContainerID,
-			builder.FromImage,
-		)
-		return builder, nil
-	}
-	if !errors.Is(err, storage.ErrContainerUnknown) {
+	} else if !errors.Is(err, storage.ErrContainerUnknown) {
 		verbosef("openOrCreateBuilder: open existing failed with non-notfound error: %v", err)
 		return nil, err
 	}
-	verbosef(
-		"openOrCreateBuilder: builder %q not found, creating from image %q",
-		cfg.ContainerName,
-		cfg.FromImage,
-	)
 
-	builderOpts := buildah.BuilderOptions{
-		Container:    cfg.ContainerName,
-		FromImage:    cfg.FromImage,
-		PullPolicy:   buildah.PullIfMissing,
-		ReportWriter: io.Discard,
-	}
-	if networkEnabled {
-		builderOpts.ConfigureNetwork = buildah.NetworkEnabled
-	} else {
-		builderOpts.NetworkInterface = disabledNet
-		builderOpts.ConfigureNetwork = buildah.NetworkDisabled
-	}
-	builder, err = buildah.NewBuilder(ctx, store, builderOpts)
+	verbosef(
+		"openOrCreateBuilder: creating builder %q from image %q",
+		cfg.ContainerName,
+		sandboxBaseImage,
+	)
+	builder, err = buildah.NewBuilder(ctx, store, buildah.BuilderOptions{
+		Container:        cfg.ContainerName,
+		FromImage:        sandboxBaseImage,
+		PullPolicy:       buildah.PullIfMissing,
+		ReportWriter:     io.Discard,
+		ConfigureNetwork: buildah.NetworkEnabled,
+	})
 	if err != nil {
 		verbosef("openOrCreateBuilder: create failed: %v", err)
 		return nil, err
 	}
-	if disabledNet != nil {
-		builder.NetworkInterface = disabledNet
+	builder.SetAnnotation(sandboxRuntimeAnnotation, sandboxRuntimeValue)
+	if err := builder.Save(); err != nil {
+		return nil, fmt.Errorf(
+			"persist runtime annotation for builder %q: %w",
+			cfg.ContainerName,
+			err,
+		)
 	}
 	verbosef(
 		"openOrCreateBuilder: created builder %q (id=%q image=%q)",
@@ -293,7 +361,77 @@ func openOrCreateBuilder(
 	return builder, nil
 }
 
+func shouldRecreateExistingBuilder(builder *buildah.Builder) (bool, string) {
+	if builder == nil {
+		return true, "builder handle is nil"
+	}
+	annotation := strings.TrimSpace(builder.Annotations()[sandboxRuntimeAnnotation])
+	if annotation != sandboxRuntimeValue {
+		if annotation == "" {
+			return true, "missing sandbox runtime annotation"
+		}
+		return true, fmt.Sprintf(
+			"sandbox runtime annotation mismatch (got %q want %q)",
+			annotation,
+			sandboxRuntimeValue,
+		)
+	}
+	return false, ""
+}
+
+func ensureNixBootstrap(builder *buildah.Builder, cfg Settings) error {
+	stdout, stderr, err := runInBuilderRaw(builder, cfg, nixBootstrapCommand())
+	if err == nil {
+		return nil
+	}
+	return errors.New(formatCommandOutput(stdout, stderr, err))
+}
+
+func nixBootstrapCommand() string {
+	return strings.TrimSpace(`
+set -eu
+if command -v nix >/dev/null 2>&1 && nix --version >/dev/null 2>&1; then
+  exit 0
+fi
+
+apt-get -o APT::Sandbox::User=root update
+DEBIAN_FRONTEND=noninteractive apt-get -o APT::Sandbox::User=root install -y bash ca-certificates curl xz-utils
+if [ ! -d /nix ]; then
+  echo "/nix is not mounted in the sandbox; configure shared nix store bind mount via Q15_SANDBOX_NIX_STORE_HOST_DIR" >&2
+  exit 1
+fi
+if [ ! -w /nix ]; then
+  echo "/nix mount is not writable in the sandbox; set Q15_SANDBOX_NIX_STORE_HOST_DIR to a writable host directory" >&2
+  exit 1
+fi
+mkdir -p /nix/store /nix/var/nix /etc/nix
+NIX_CONFIG="$(cat <<'EOF'
+build-users-group =
+experimental-features = nix-command flakes
+sandbox = false
+EOF
+)"
+export NIX_CONFIG
+curl -fsSL https://nixos.org/nix/install | sh -s -- --no-daemon --yes --no-channel-add --no-modify-profile
+cat > /etc/nix/nix.conf <<'EOF'
+build-users-group =
+experimental-features = nix-command flakes
+sandbox = false
+accept-flake-config = true
+EOF
+`)
+}
+
 func runInBuilder(builder *buildah.Builder, cfg Settings, command string) string {
+	stdout, stderr, err := runInBuilderRaw(builder, cfg, command)
+	return formatCommandOutput(stdout, stderr, err)
+}
+
+func runInBuilderRaw(
+	builder *buildah.Builder,
+	cfg Settings,
+	command string,
+) ([]byte, []byte, error) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	mounts := []specs.Mount{
@@ -310,18 +448,23 @@ func runInBuilder(builder *buildah.Builder, cfg Settings, command string) string
 			Options:     []string{"rbind", "rw"},
 		},
 	}
+	sharedNixMount, err := sharedNixStoreMount()
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve shared nix store mount: %w", err)
+	}
+	mounts = append(mounts, sharedNixMount)
 	mounts = append(mounts, proxyExtraMounts(cfg)...)
 
-	err := builder.Run(
-		[]string{"/bin/sh", "-c", command},
+	err = builder.Run(
+		[]string{"/bin/sh", "-c", wrapCommandWithProxyCABundle(cfg, command)},
 		buildah.RunOptions{
 			Isolation:        buildah.IsolationOCIRootless,
 			Stdout:           &stdout,
 			Stderr:           &stderr,
 			Terminal:         buildah.WithoutTerminal,
 			WorkingDir:       cfg.WorkspaceDir,
-			ConfigureNetwork: runNetworkPolicy(cfg),
-			Env:              proxyRunEnv(cfg),
+			ConfigureNetwork: buildah.NetworkEnabled,
+			Env:              runEnv(cfg),
 			Mounts:           mounts,
 		},
 	)
@@ -331,33 +474,54 @@ func runInBuilder(builder *buildah.Builder, cfg Settings, command string) string
 		verbosef("runInBuilder: command completed in container=%q (stdout=%d bytes stderr=%d bytes)", cfg.ContainerName, stdout.Len(), stderr.Len())
 	}
 
-	return formatCommandOutput(stdout.Bytes(), stderr.Bytes(), err)
+	return stdout.Bytes(), stderr.Bytes(), err
 }
 
-func runNetworkPolicy(cfg Settings) buildah.NetworkConfigurationPolicy {
-	if cfg.Network == "enabled" {
-		return buildah.NetworkEnabled
+func wrapCommandWithProxyCABundle(cfg Settings, command string) string {
+	if cfg.Proxy == nil || !cfg.Proxy.Enabled {
+		return command
 	}
-	return buildah.NetworkDisabled
+	caPath := strings.TrimSpace(cfg.Proxy.CACertContainerPath)
+	if caPath == "" {
+		return command
+	}
+
+	quotedCAPath := shellSingleQuote(caPath)
+	prefix := strings.Join(
+		[]string{
+			"if [ ! -r " + quotedCAPath + " ]; then",
+			`  echo "proxy CA cert is not readable: ` + caPath + `" >&2`,
+			"  exit 78",
+			"fi",
+			`q15_ca_bundle="/tmp/q15-ca-bundle.crt"`,
+			"if [ -r /etc/ssl/certs/ca-certificates.crt ]; then",
+			"  cat /etc/ssl/certs/ca-certificates.crt " + quotedCAPath + ` > "$q15_ca_bundle"`,
+			"else",
+			"  cat " + quotedCAPath + ` > "$q15_ca_bundle"`,
+			"fi",
+			`export SSL_CERT_FILE="$q15_ca_bundle"`,
+			`export NIX_SSL_CERT_FILE="$q15_ca_bundle"`,
+			`export NODE_EXTRA_CA_CERTS="$q15_ca_bundle"`,
+			`export REQUESTS_CA_BUNDLE="$q15_ca_bundle"`,
+			`export CURL_CA_BUNDLE="$q15_ca_bundle"`,
+			`export GIT_SSL_CAINFO="$q15_ca_bundle"`,
+		},
+		"\n",
+	)
+
+	return prefix + "\n" + command
 }
 
-func normalizeNetworkModeOrDefault(mode string) string {
-	normalized, err := normalizeNetworkMode(mode)
-	if err != nil {
-		return strings.ToLower(strings.TrimSpace(mode))
-	}
-	return normalized
+func shellSingleQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'"
 }
 
-func normalizeNetworkMode(mode string) (string, error) {
-	switch strings.ToLower(strings.TrimSpace(mode)) {
-	case "", "disabled":
-		return "disabled", nil
-	case "enabled":
-		return "enabled", nil
-	default:
-		return "", errors.New(`must be "enabled" or "disabled"`)
+func runEnv(cfg Settings) []string {
+	env := []string{
+		"PATH=/root/.nix-profile/bin:/nix/var/nix/profiles/default/bin:/nix/var/nix/profiles/per-user/root/profile/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 	}
+	env = append(env, proxyRunEnv(cfg)...)
+	return env
 }
 
 func normalizeProxySettings(proxy *ProxySettings) *ProxySettings {
@@ -385,13 +549,6 @@ func normalizeProxySettings(proxy *ProxySettings) *ProxySettings {
 func validateProxySettings(cfg Settings) error {
 	if cfg.Proxy == nil || !cfg.Proxy.Enabled {
 		return nil
-	}
-	normalizedNetwork, err := normalizeNetworkMode(cfg.Network)
-	if err != nil {
-		return err
-	}
-	if normalizedNetwork != "enabled" {
-		return errors.New(`enabled proxy requires network "enabled"`)
 	}
 
 	p := cfg.Proxy
@@ -440,6 +597,7 @@ func proxyRunEnv(cfg Settings) []string {
 	if strings.TrimSpace(p.CACertContainerPath) != "" {
 		for _, key := range []string{
 			"SSL_CERT_FILE",
+			"NIX_SSL_CERT_FILE",
 			"NODE_EXTRA_CA_CERTS",
 			"REQUESTS_CA_BUNDLE",
 			"CURL_CA_BUNDLE",

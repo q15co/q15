@@ -13,12 +13,10 @@ func TestBuildSandboxSettings_WithoutProxy(t *testing.T) {
 	rt := config.AgentRuntime{
 		Name:                 "agent-a",
 		SandboxContainerName: "q15-agent-a",
-		SandboxFromImage:     "docker.io/library/debian:bookworm-slim",
 		WorkspaceHostDir:     "/tmp/q15/agent-a",
 		WorkspaceDir:         "/workspace",
 		MemoryHostDir:        "/tmp/q15/agent-a/.q15-memory",
 		MemoryDir:            "/memory",
-		SandboxNetwork:       "enabled",
 	}
 
 	got := buildSandboxSettings(rt, nil)
@@ -40,12 +38,10 @@ func TestBuildSandboxSettings_WithProxySettings(t *testing.T) {
 	rt := config.AgentRuntime{
 		Name:                 "agent-a",
 		SandboxContainerName: "q15-agent-a",
-		SandboxFromImage:     "docker.io/library/debian:bookworm-slim",
 		WorkspaceHostDir:     "/tmp/q15/agent-a",
 		WorkspaceDir:         "/workspace",
 		MemoryHostDir:        "/tmp/q15/agent-a/.q15-memory",
 		MemoryDir:            "/memory",
-		SandboxNetwork:       "enabled",
 	}
 	proxy := &sandbox.ProxySettings{
 		Enabled:      true,

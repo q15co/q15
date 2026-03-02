@@ -18,12 +18,10 @@ import (
 
 type Settings struct {
 	ContainerName    string
-	FromImage        string
 	WorkspaceHostDir string
 	WorkspaceDir     string
 	MemoryHostDir    string
 	MemoryDir        string
-	Network          string
 	Proxy            *ProxySettings
 }
 
@@ -34,9 +32,6 @@ type ProxySettings = sandboxcontract.ProxySettings
 func (s Settings) Validate() error {
 	if strings.TrimSpace(s.ContainerName) == "" {
 		return errors.New("container name is required")
-	}
-	if strings.TrimSpace(s.FromImage) == "" {
-		return errors.New("from image is required")
 	}
 	if strings.TrimSpace(s.WorkspaceHostDir) == "" {
 		return errors.New("workspace host dir is required")
@@ -62,9 +57,6 @@ func (s Settings) Validate() error {
 	if !filepath.IsAbs(strings.TrimSpace(s.MemoryDir)) {
 		return errors.New("memory dir must be an absolute path")
 	}
-	if _, err := normalizeNetworkMode(s.Network); err != nil {
-		return fmt.Errorf("network: %w", err)
-	}
 	if err := validateProxySettings(s); err != nil {
 		return fmt.Errorf("proxy: %w", err)
 	}
@@ -80,20 +72,17 @@ type Sandbox struct {
 
 func New(cfg Settings) *Sandbox {
 	cfg.ContainerName = strings.TrimSpace(cfg.ContainerName)
-	cfg.FromImage = strings.TrimSpace(cfg.FromImage)
 	cfg.WorkspaceHostDir = filepath.Clean(strings.TrimSpace(cfg.WorkspaceHostDir))
 	cfg.WorkspaceDir = filepath.Clean(strings.TrimSpace(cfg.WorkspaceDir))
 	cfg.MemoryHostDir = filepath.Clean(strings.TrimSpace(cfg.MemoryHostDir))
 	cfg.MemoryDir = filepath.Clean(strings.TrimSpace(cfg.MemoryDir))
-	cfg.Network = normalizeNetworkModeOrDefault(cfg.Network)
 	cfg.Proxy = normalizeProxySettings(cfg.Proxy)
 	verbosef(
-		"New: container=%q from_image=%q workspace_host_dir=%q workspace_dir=%q network=%q",
+		"New: container=%q sandbox_runtime=%q workspace_host_dir=%q workspace_dir=%q",
 		cfg.ContainerName,
-		cfg.FromImage,
+		"nix-only",
 		cfg.WorkspaceHostDir,
 		cfg.WorkspaceDir,
-		cfg.Network,
 	)
 	return &Sandbox{cfg: cfg}
 }
@@ -239,12 +228,10 @@ func (s *Sandbox) runHelperLocked(
 func toContractSettings(cfg Settings) sandboxcontract.Settings {
 	return sandboxcontract.Settings{
 		ContainerName:    cfg.ContainerName,
-		FromImage:        cfg.FromImage,
 		WorkspaceHostDir: cfg.WorkspaceHostDir,
 		WorkspaceDir:     cfg.WorkspaceDir,
 		MemoryHostDir:    cfg.MemoryHostDir,
 		MemoryDir:        cfg.MemoryDir,
-		Network:          cfg.Network,
 		Proxy:            cfg.Proxy,
 	}
 }
@@ -294,25 +281,6 @@ func resolveHelperBinary() (string, error) {
 	)
 }
 
-func normalizeNetworkModeOrDefault(mode string) string {
-	normalized, err := normalizeNetworkMode(mode)
-	if err != nil {
-		return strings.ToLower(strings.TrimSpace(mode))
-	}
-	return normalized
-}
-
-func normalizeNetworkMode(mode string) (string, error) {
-	switch strings.ToLower(strings.TrimSpace(mode)) {
-	case "", "disabled":
-		return "disabled", nil
-	case "enabled":
-		return "enabled", nil
-	default:
-		return "", errors.New(`must be "enabled" or "disabled"`)
-	}
-}
-
 func normalizeProxySettings(proxy *ProxySettings) *ProxySettings {
 	if proxy == nil {
 		return nil
@@ -339,14 +307,6 @@ func validateProxySettings(cfg Settings) error {
 	if cfg.Proxy == nil || !cfg.Proxy.Enabled {
 		return nil
 	}
-	normalizedNetwork, err := normalizeNetworkMode(cfg.Network)
-	if err != nil {
-		return err
-	}
-	if normalizedNetwork != "enabled" {
-		return errors.New(`enabled proxy requires network "enabled"`)
-	}
-
 	p := cfg.Proxy
 	if strings.TrimSpace(p.HTTPProxyURL) == "" &&
 		strings.TrimSpace(p.HTTPSProxyURL) == "" &&

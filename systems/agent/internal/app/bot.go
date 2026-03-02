@@ -48,13 +48,12 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 	agentSandbox := sandbox.New(sandboxSettings)
 	if sandbox.VerboseEnabled() {
 		fmt.Printf(
-			"[app] preparing sandbox for agent=%q container=%q workspace_host_dir=%q workspace_dir=%q from_image=%q network=%q\n",
+			"[app] preparing sandbox for agent=%q container=%q workspace_host_dir=%q workspace_dir=%q sandbox_runtime=%q\n",
 			rt.Name,
 			rt.SandboxContainerName,
 			rt.WorkspaceHostDir,
 			rt.WorkspaceDir,
-			rt.SandboxFromImage,
-			rt.SandboxNetwork,
+			"nix-only",
 		)
 	}
 	if err := agentSandbox.Prepare(ctx); err != nil {
@@ -75,15 +74,14 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 		}
 		systemPrompt = composeSystemPrompt(systemPrompt, rt.Name, sandbox.SandboxInfo{
 			ContainerName:    rt.SandboxContainerName,
-			FromImage:        rt.SandboxFromImage,
 			WorkspaceHostDir: rt.WorkspaceHostDir,
 			WorkspaceDir:     rt.WorkspaceDir,
-			Network:          rt.SandboxNetwork,
+			Runtime:          "nix-only",
+			BaseImage:        "docker.io/library/debian:bookworm-slim",
 		}, rt.MemoryDir)
 	} else {
 		systemPrompt = composeSystemPrompt(systemPrompt, rt.Name, info, rt.MemoryDir)
 	}
-
 	toolList := []agent.Tool{tools.NewShell(agentSandbox)}
 	braveAPIKey := strings.TrimSpace(os.Getenv("Q15_BRAVE_API_KEY"))
 	if braveAPIKey != "" {
@@ -182,8 +180,11 @@ func composeSystemPrompt(
 	} else if info.OSID != "" || info.OSVersionID != "" {
 		lines = append(lines, fmt.Sprintf("- OS: %s %s", strings.TrimSpace(info.OSID), strings.TrimSpace(info.OSVersionID)))
 	}
-	if info.FromImage != "" {
-		lines = append(lines, fmt.Sprintf("- Base image: %s", info.FromImage))
+	if info.Runtime != "" {
+		lines = append(lines, fmt.Sprintf("- Sandbox runtime: %s", info.Runtime))
+	}
+	if info.BaseImage != "" {
+		lines = append(lines, fmt.Sprintf("- Base image: %s", info.BaseImage))
 	}
 	if info.ContainerName != "" {
 		lines = append(
@@ -219,74 +220,39 @@ func composeSystemPrompt(
 			),
 		)
 	}
-	if info.Network != "" {
-		lines = append(lines, fmt.Sprintf("- Network: %s", info.Network))
-		if info.Network == "disabled" {
-			lines = append(
-				lines,
-				"- Note: internet access from inside this sandbox is disabled; package installs/downloads will fail unless artifacts are already present locally.",
-			)
-		}
+	lines = append(lines, "- Package management model: nix-only via exec_shell.")
+	lines = append(
+		lines,
+		"- Every exec_shell call must include a non-empty `packages` array of nix installables (for example `nixpkgs#git`).",
+	)
+	lines = append(
+		lines,
+		"- Use exec_shell to run `nix shell ... --command /bin/bash -c '<command>'`; the runtime assembles this automatically from `packages` + `command`.",
+	)
+	lines = append(
+		lines,
+		"- First run may bootstrap nix and fetch package indexes, so network access is required.",
+	)
+	if nixSummary := formatBinarySummary(info.NixPath, info.NixVersion); nixSummary != "" {
+		lines = append(lines, fmt.Sprintf("- Nix: %s", nixSummary))
 	}
-	if info.PackageManager != "" {
-		lines = append(lines, fmt.Sprintf("- Package manager: %s", info.PackageManager))
-		lines = append(
-			lines,
-			fmt.Sprintf(
-				"- Prefer using `%s` for installing tools in this sandbox.",
-				packageManagerInstallHint(info.PackageManager),
-			),
-		)
-		if info.PackageManager == "apt-get" {
-			lines = append(
-				lines,
-				"- In this rootless sandbox, Debian/Ubuntu package downloads may fail when apt tries to drop privileges to `_apt`.",
-			)
-			lines = append(
-				lines,
-				"- If that happens, use: `apt-get -o APT::Sandbox::User=root update && DEBIAN_FRONTEND=noninteractive apt-get -o APT::Sandbox::User=root install -y <package>`",
-			)
-		}
-	}
-	if len(info.ShellsAvailable) > 0 {
-		lines = append(
-			lines,
-			fmt.Sprintf("- Available shells: %s", strings.Join(info.ShellsAvailable, ", ")),
-		)
-	}
-	if len(info.ToolsAvailable) > 0 {
-		lines = append(
-			lines,
-			fmt.Sprintf(
-				"- Preinstalled tools detected: %s",
-				strings.Join(info.ToolsAvailable, ", "),
-			),
-		)
+	if bashSummary := formatBinarySummary(info.BashPath, info.BashVersion); bashSummary != "" {
+		lines = append(lines, fmt.Sprintf("- Bash: %s", bashSummary))
 	}
 
 	return base + "\n\n" + strings.Join(lines, "\n")
 }
 
-func packageManagerInstallHint(pm string) string {
-	switch strings.TrimSpace(pm) {
-	case "apt-get":
-		return "apt-get update && apt-get install -y <package>"
-	case "apk":
-		return "apk add <package>"
-	case "pacman":
-		return "pacman -S --noconfirm <package>"
-	case "dnf":
-		return "dnf install -y <package>"
-	case "microdnf":
-		return "microdnf install -y <package>"
-	case "yum":
-		return "yum install -y <package>"
-	case "zypper":
-		return "zypper --non-interactive install <package>"
-	case "nix":
-		return "nix profile install <package>"
+func formatBinarySummary(path, version string) string {
+	path = strings.TrimSpace(path)
+	version = strings.TrimSpace(version)
+	switch {
+	case path != "" && version != "":
+		return fmt.Sprintf("%s (%s)", path, version)
+	case path != "":
+		return path
 	default:
-		return pm + " <package>"
+		return version
 	}
 }
 
