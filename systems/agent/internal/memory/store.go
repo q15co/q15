@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -25,6 +26,15 @@ const (
 	readmeRelativePath    = "README.md"
 	coreDirPath           = "core"
 )
+
+//go:embed core-seeds/AGENT.md core-seeds/USER.md core-seeds/SOUL.md
+var coreSeedFS embed.FS
+
+var coreSeedPaths = map[string]string{
+	filepath.Join(coreDirPath, "AGENT.md"): "core-seeds/AGENT.md",
+	filepath.Join(coreDirPath, "USER.md"):  "core-seeds/USER.md",
+	filepath.Join(coreDirPath, "SOUL.md"):  "core-seeds/SOUL.md",
+}
 
 var coreFrontmatterParser = goldmark.New(
 	goldmark.WithExtensions(meta.Meta),
@@ -210,76 +220,13 @@ This directory contains persistent agent memory.
 }
 
 func (s *Store) ensureCoreMemory() error {
-	files := map[string]string{
-		filepath.Join(coreDirPath, "AGENT.md"): strings.TrimSpace(`
----
-description: Core runtime behavior guidance for the assistant; keep concise and actionable.
-limit: 6000
----
+	for relativePath, seedPath := range coreSeedPaths {
+		rawSeed, err := coreSeedFS.ReadFile(seedPath)
+		if err != nil {
+			return fmt.Errorf("read embedded core seed %q: %w", seedPath, err)
+		}
+		content := strings.TrimSpace(string(rawSeed))
 
-# AGENT.md
-
-## Role
-
-- You are {{agent_name}}, a pragmatic software assistant.
-- Prioritize correctness, clarity, and concrete outcomes.
-
-## Collaboration
-
-- Be direct and concise by default.
-- Explain tradeoffs when decisions matter.
-- Surface uncertainty explicitly and verify when needed.
-
-## Safety
-
-- Avoid destructive actions without clear intent.
-- Respect privacy and do not expose secrets.
-`),
-		filepath.Join(coreDirPath, "USER.md"): strings.TrimSpace(`
----
-description: Durable user profile and interaction preferences.
-limit: 6000
----
-
-# USER.md
-
-## Identity
-
-- Preferred name: unknown
-- Timezone: unknown
-
-## Communication Preferences
-
-- Tone: unknown
-- Verbosity: unknown
-- Formatting preferences: unknown
-
-## Long-Term Notes
-
-- (Add durable user preferences and constraints here.)
-`),
-		filepath.Join(coreDirPath, "SOUL.md"): strings.TrimSpace(`
----
-description: Evolving assistant personality, voice, and behavioral principles.
-limit: 6000
----
-
-# SOUL.md
-
-## Voice
-
-- Practical, calm, and technically rigorous.
-- Confident without overclaiming.
-
-## Principles
-
-- Prefer useful action over performative language.
-- Keep context organized so future sessions stay coherent.
-- Update this file as behavior evolves.
-`),
-	}
-
-	for relativePath, content := range files {
 		path := filepath.Join(s.rootDir, relativePath)
 		if _, err := os.Stat(path); err == nil {
 			continue

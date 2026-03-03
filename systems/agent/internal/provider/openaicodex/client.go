@@ -14,10 +14,9 @@ import (
 )
 
 const (
-	codexBaseURL             = "https://chatgpt.com/backend-api/codex"
-	codexOriginator          = "codex_cli_rs"
-	codexBetaHeader          = "responses=experimental"
-	defaultCodexInstructions = "You are Codex, a coding assistant."
+	codexBaseURL    = "https://chatgpt.com/backend-api/codex"
+	codexOriginator = "codex_cli_rs"
+	codexBetaHeader = "responses=experimental"
 )
 
 type tokenSource func(context.Context) (token string, accountID string, err error)
@@ -78,13 +77,21 @@ func (c *Client) Complete(
 	defer stream.Close()
 
 	var resp *responses.Response
+	streamEventErr := ""
+	snapshot := newStreamSnapshot()
 	for stream.Next() {
 		evt := stream.Current()
+		snapshot.Record(evt)
 		switch evt.Type {
-		case "response.completed", "response.failed", "response.incomplete":
-			if evt.Response.ID != "" {
+		case "response.done", "response.completed", "response.failed", "response.incomplete":
+			if isStreamResponsePresent(evt.Response) {
 				respCopy := evt.Response
 				resp = &respCopy
+			}
+		case "error":
+			streamEventErr = strings.TrimSpace(evt.Message)
+			if streamEventErr == "" {
+				streamEventErr = strings.TrimSpace(evt.Code)
 			}
 		}
 	}
@@ -92,10 +99,17 @@ func (c *Client) Complete(
 		return agent.ModelClientResult{}, fmt.Errorf("responses api: %w", err)
 	}
 	if resp == nil {
+		if streamEventErr != "" {
+			return agent.ModelClientResult{}, fmt.Errorf("responses api: %s", streamEventErr)
+		}
 		return agent.ModelClientResult{}, fmt.Errorf("responses api: stream ended without response")
+	}
+	if err := validateFinalResponse(resp); err != nil {
+		return agent.ModelClientResult{}, fmt.Errorf("responses api: %w", err)
 	}
 
 	result := parseResponse(resp)
+	result = mergeResultWithStreamSnapshot(result, snapshot)
 	result.ProviderRaw = json.RawMessage(resp.RawJSON())
 	return result, nil
 }
@@ -110,7 +124,7 @@ func buildRequestParams(
 		return responses.ResponseNewParams{}, err
 	}
 	if strings.TrimSpace(instructions) == "" {
-		instructions = defaultCodexInstructions
+		instructions = agent.DefaultSystemPrompt
 	}
 
 	params := responses.ResponseNewParams{
@@ -124,19 +138,23 @@ func buildRequestParams(
 	mappedTools := mapTools(tools)
 	if len(mappedTools) > 0 {
 		params.Tools = mappedTools
+		params.ToolChoice = responses.ResponseNewParamsToolChoiceUnion{
+			OfToolChoiceMode: openai.Opt(responses.ToolChoiceOptionsAuto),
+		}
+		params.ParallelToolCalls = openai.Opt(true)
 	}
 	return params, nil
 }
 
 func mapMessages(messages []agent.Message) (responses.ResponseInputParam, string, error) {
 	input := make(responses.ResponseInputParam, 0, len(messages))
-	instructions := ""
+	instructionsParts := make([]string, 0, 1)
 
 	for i, msg := range messages {
 		switch msg.Role {
 		case agent.SystemRole:
 			if trimmed := strings.TrimSpace(msg.Content); trimmed != "" {
-				instructions = trimmed
+				instructionsParts = append(instructionsParts, trimmed)
 			}
 		case agent.UserRole:
 			if strings.TrimSpace(msg.ToolCallID) != "" {
@@ -205,7 +223,7 @@ func mapMessages(messages []agent.Message) (responses.ResponseInputParam, string
 		}
 	}
 
-	return input, instructions, nil
+	return input, strings.Join(instructionsParts, "\n\n"), nil
 }
 
 func mapTools(tools []agent.ToolDefinition) []responses.ToolUnionParam {
@@ -292,7 +310,7 @@ func parseResponse(resp *responses.Response) agent.ModelClientResult {
 	if len(toolCalls) > 0 {
 		finishReason = "tool_calls"
 	}
-	if resp.Status == "incomplete" {
+	if resp.Status == responses.ResponseStatusIncomplete {
 		finishReason = "length"
 	}
 
@@ -301,4 +319,161 @@ func parseResponse(resp *responses.Response) agent.ModelClientResult {
 		ToolCalls:    toolCalls,
 		FinishReason: finishReason,
 	}
+}
+
+type streamSnapshot struct {
+	textBuilder         strings.Builder
+	refusalBuilder      strings.Builder
+	toolCalls           []agent.ToolCall
+	seenToolCallKeys    map[string]struct{}
+	textDeltaItemIDs    map[string]struct{}
+	refusalDeltaItemIDs map[string]struct{}
+}
+
+func newStreamSnapshot() *streamSnapshot {
+	return &streamSnapshot{
+		seenToolCallKeys:    make(map[string]struct{}),
+		textDeltaItemIDs:    make(map[string]struct{}),
+		refusalDeltaItemIDs: make(map[string]struct{}),
+	}
+}
+
+func (s *streamSnapshot) Record(evt responses.ResponseStreamEventUnion) {
+	if s == nil {
+		return
+	}
+
+	switch evt.Type {
+	case "response.output_text.delta":
+		if evt.ItemID != "" {
+			s.textDeltaItemIDs[evt.ItemID] = struct{}{}
+		}
+		s.textBuilder.WriteString(evt.Delta)
+	case "response.output_text.done":
+		if evt.ItemID != "" {
+			if _, hasDelta := s.textDeltaItemIDs[evt.ItemID]; hasDelta {
+				break
+			}
+		}
+		s.textBuilder.WriteString(evt.Text)
+	case "response.refusal.delta":
+		if evt.ItemID != "" {
+			s.refusalDeltaItemIDs[evt.ItemID] = struct{}{}
+		}
+		s.refusalBuilder.WriteString(evt.Delta)
+	case "response.refusal.done":
+		if evt.ItemID != "" {
+			if _, hasDelta := s.refusalDeltaItemIDs[evt.ItemID]; hasDelta {
+				break
+			}
+		}
+		s.refusalBuilder.WriteString(evt.Refusal)
+	case "response.output_item.done":
+		if evt.Item.Type != "function_call" {
+			break
+		}
+		name := strings.TrimSpace(evt.Item.Name)
+		if name == "" {
+			break
+		}
+		args := strings.TrimSpace(evt.Item.Arguments)
+		if args == "" {
+			args = "{}"
+		}
+		callID := strings.TrimSpace(evt.Item.CallID)
+		toolKey := strings.TrimSpace(evt.Item.ID)
+		if toolKey == "" {
+			toolKey = callID + "|" + name
+		}
+		if toolKey != "" {
+			if _, seen := s.seenToolCallKeys[toolKey]; seen {
+				break
+			}
+			s.seenToolCallKeys[toolKey] = struct{}{}
+		}
+		s.toolCalls = append(s.toolCalls, agent.ToolCall{
+			ID:        callID,
+			Name:      name,
+			Arguments: args,
+		})
+	}
+}
+
+func (s *streamSnapshot) Text() string {
+	if s == nil {
+		return ""
+	}
+	return strings.TrimSpace(s.textBuilder.String())
+}
+
+func (s *streamSnapshot) Refusal() string {
+	if s == nil {
+		return ""
+	}
+	return strings.TrimSpace(s.refusalBuilder.String())
+}
+
+func mergeResultWithStreamSnapshot(
+	result agent.ModelClientResult,
+	snapshot *streamSnapshot,
+) agent.ModelClientResult {
+	if snapshot == nil {
+		return result
+	}
+
+	if strings.TrimSpace(result.Content) == "" {
+		if text := snapshot.Text(); text != "" {
+			result.Content = text
+		} else if refusal := snapshot.Refusal(); refusal != "" {
+			result.Content = refusal
+		}
+	}
+	if len(result.ToolCalls) == 0 && len(snapshot.toolCalls) > 0 {
+		result.ToolCalls = append(result.ToolCalls, snapshot.toolCalls...)
+		if result.FinishReason == "" || result.FinishReason == "stop" {
+			result.FinishReason = "tool_calls"
+		}
+	}
+	return result
+}
+
+func isStreamResponsePresent(resp responses.Response) bool {
+	return resp.ID != "" ||
+		resp.Status != "" ||
+		len(resp.Output) > 0 ||
+		strings.TrimSpace(resp.Error.Message) != ""
+}
+
+func validateFinalResponse(resp *responses.Response) error {
+	if resp == nil {
+		return fmt.Errorf("missing response")
+	}
+
+	switch resp.Status {
+	case responses.ResponseStatusCompleted, responses.ResponseStatusIncomplete:
+		return nil
+	case responses.ResponseStatusFailed:
+		return fmt.Errorf("response failed: %s", responseFailureDetail(resp))
+	case responses.ResponseStatusCancelled:
+		return fmt.Errorf("response cancelled: %s", responseFailureDetail(resp))
+	case responses.ResponseStatusQueued, responses.ResponseStatusInProgress:
+		return fmt.Errorf("response not finalized (status=%s)", resp.Status)
+	case "":
+		return fmt.Errorf("response missing status")
+	default:
+		return fmt.Errorf("unsupported response status %q", resp.Status)
+	}
+}
+
+func responseFailureDetail(resp *responses.Response) string {
+	if resp == nil {
+		return "unknown error"
+	}
+	if msg := strings.TrimSpace(resp.Error.Message); msg != "" {
+		return msg
+	}
+	if code := strings.TrimSpace(string(resp.Error.Code)); code != "" {
+		return code
+	}
+	return "unknown error"
 }

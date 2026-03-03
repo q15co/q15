@@ -8,16 +8,20 @@ import (
 )
 
 const (
-	defaultPromptFormat = "You are %s, a helpful shell-capable assistant running for the user in a sandboxed environment. Use the available tools effectively and adapt to the sandbox environment described in the system prompt. Do not claim to be Claude, Anthropic, or any specific vendor/model unless that identity is explicitly provided in this conversation."
-	DefaultSystemPrompt = "You are a helpful shell-capable assistant running for the user in a sandboxed environment. Use the available tools effectively and adapt to the sandbox environment described in the system prompt. Do not claim to be Claude, Anthropic, or any specific vendor/model unless that identity is explicitly provided in this conversation."
-	defaultMaxTurns     = 96
-	defaultRecentTurns  = 6
+	defaultPromptBody                = "an autonomous shell-capable assistant running for the user in a sandboxed environment. Prioritize doing over announcing intent: proactively execute tasks with the available tools and continue until the task is complete or you are genuinely blocked. Ask clarifying questions only when the goal or constraints are ambiguous after reasonable attempts, and ask for confirmation only before high-risk or irreversible actions. Do not request extra authorization for routine, user-requested reads/writes in the workspace or /memory paths. Use the available tools effectively and adapt to the sandbox environment described in the system prompt. Do not claim to be Claude, Anthropic, or any specific vendor/model unless that identity is explicitly provided in this conversation."
+	defaultPromptFormat              = "You are %s, " + defaultPromptBody
+	DefaultSystemPrompt              = "You are " + defaultPromptBody
+	defaultMaxTurns                  = 96
+	defaultRecentTurns               = 6
+	toolExecutionSteeringPrompt      = "When tools are available and the user asks for an action, call the relevant tool(s) immediately instead of narrating intent. Avoid planning-only replies like \"I'll do that\" without tool calls. Do not ask for extra authorization for routine user-requested reads/writes in the workspace or /memory paths. Ask confirmation only for destructive or irreversible actions. If clarification is genuinely required, ask one concise question."
+	emptyResponseRetrySteeringPrompt = "Your previous response was empty. Return a non-empty result now: either call the required tool(s) immediately or provide a concise direct answer. Do not return an empty response."
+	maxEmptyAssistantRetries         = 3
 )
 
 func DefaultSystemPromptForName(name string) string {
 	name = strings.TrimSpace(name)
 	if name == "" {
-		return DefaultSystemPrompt
+		panic("agent name is required")
 	}
 	return fmt.Sprintf(defaultPromptFormat, name)
 }
@@ -127,23 +131,45 @@ func (l *Loop) Reply(ctx context.Context, userInput string) (string, error) {
 		toolDefs = l.tools.Definitions()
 	}
 	loopDetector := newToolLoopDetector()
+	emptyAssistantRetries := 0
 
 	for turn := 0; turn < l.maxTurns; turn++ {
-		result, err := l.complete(ctx, messages, toolDefs)
+		requestMessages := copyMessages(messages)
+		if len(toolDefs) > 0 || emptyAssistantRetries > 0 {
+			requestMessages = append(requestMessages, Message{
+				Role:    SystemRole,
+				Content: toolExecutionSteeringPrompt,
+			})
+		}
+		if emptyAssistantRetries > 0 {
+			requestMessages = append(requestMessages, Message{
+				Role:    SystemRole,
+				Content: emptyResponseRetrySteeringPrompt,
+			})
+		}
+		result, err := l.complete(ctx, requestMessages, toolDefs)
 		if err != nil {
 			return "", fmt.Errorf("model complete: %w", err)
 		}
 
+		assistantContent := strings.TrimSpace(result.Content)
+		if len(result.ToolCalls) == 0 && assistantContent == "" &&
+			emptyAssistantRetries < maxEmptyAssistantRetries {
+			emptyAssistantRetries++
+			continue
+		}
+		emptyAssistantRetries = 0
+
 		assistantMsg := Message{
 			Role:        AssistantRole,
-			Content:     strings.TrimSpace(result.Content),
+			Content:     assistantContent,
 			ToolCalls:   result.ToolCalls,
 			ProviderRaw: result.ProviderRaw,
 		}
 		messages = append(messages, assistantMsg)
 
 		if len(result.ToolCalls) == 0 {
-			answer := strings.TrimSpace(result.Content)
+			answer := assistantContent
 			if answer == "" {
 				answer = "(assistant returned no text)"
 			}

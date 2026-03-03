@@ -89,6 +89,18 @@ func TestStoreLoadCoreMemory(t *testing.T) {
 			if !strings.Contains(file.Content, "You are Jared, a pragmatic software assistant.") {
 				t.Fatalf("AGENT.md did not render configured agent name: %q", file.Content)
 			}
+			if !strings.Contains(file.Content, "Operate as an autonomous agent") {
+				t.Fatalf("AGENT.md missing autonomous guidance: %q", file.Content)
+			}
+			if !strings.Contains(file.Content, "do not narrate routine, low-risk tool calls") {
+				t.Fatalf("AGENT.md missing no-narration tool-call guidance: %q", file.Content)
+			}
+			if !strings.Contains(
+				file.Content,
+				"Do not ask extra authorization for routine user-requested reads/writes",
+			) {
+				t.Fatalf("AGENT.md missing routine-authorization guidance: %q", file.Content)
+			}
 			break
 		}
 	}

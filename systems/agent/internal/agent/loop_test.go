@@ -59,6 +59,39 @@ func (f *fakeConversationStore) LoadCoreMemory(ctx context.Context) (CoreMemory,
 	return f.coreMemory, nil
 }
 
+func TestDefaultSystemPromptIncludesAutonomousGuidance(t *testing.T) {
+	for _, want := range []string{
+		"autonomous shell-capable assistant",
+		"Prioritize doing over announcing intent",
+		"continue until the task is complete or you are genuinely blocked",
+		"Ask clarifying questions only when the goal or constraints are ambiguous",
+		"ask for confirmation only before high-risk or irreversible actions",
+	} {
+		if !strings.Contains(DefaultSystemPrompt, want) {
+			t.Fatalf("DefaultSystemPrompt missing %q:\n%s", want, DefaultSystemPrompt)
+		}
+	}
+}
+
+func TestDefaultSystemPromptForNameIncludesNameAndAutonomousGuidance(t *testing.T) {
+	prompt := DefaultSystemPromptForName("Jared")
+	if !strings.Contains(prompt, "You are Jared,") {
+		t.Fatalf("named prompt missing agent name:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "Prioritize doing over announcing intent") {
+		t.Fatalf("named prompt missing autonomous guidance:\n%s", prompt)
+	}
+}
+
+func TestDefaultSystemPromptForNamePanicsOnEmptyName(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatalf("DefaultSystemPromptForName should panic on empty agent name")
+		}
+	}()
+	_ = DefaultSystemPromptForName("   ")
+}
+
 func TestLoopReply_LoadsRecentAndPersistsTurn(t *testing.T) {
 	store := &fakeConversationStore{
 		loadMessages: []Message{
@@ -156,6 +189,139 @@ func TestLoopReply_PersistsToolCallFlow(t *testing.T) {
 	}
 	if store.lastAppend[3].Role != AssistantRole || store.lastAppend[3].Content != "final" {
 		t.Fatalf("persisted final assistant message = %#v", store.lastAppend[3])
+	}
+}
+
+func TestLoopReply_AppendsSteeringPromptWhenToolsEnabled(t *testing.T) {
+	store := &fakeConversationStore{}
+	model := &fakeModelClient{
+		results: []ModelClientResult{
+			{Content: "done"},
+		},
+	}
+
+	registry, err := NewToolRegistry(&testTool{
+		def: ToolDefinition{Name: "echo"},
+		run: func(context.Context, string) (string, error) {
+			return "tool-output", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewToolRegistry() error = %v", err)
+	}
+
+	loop := NewLoop(model, registry, []string{"m1"}, DefaultSystemPrompt, store, 3)
+	out, err := loop.Reply(context.Background(), "please check the workspace")
+	if err != nil {
+		t.Fatalf("Reply() error = %v", err)
+	}
+	if out != "done" {
+		t.Fatalf("Reply() = %q, want %q", out, "done")
+	}
+	if len(model.callMsgs) != 1 {
+		t.Fatalf("model calls = %d, want 1", len(model.callMsgs))
+	}
+	last := model.callMsgs[0][len(model.callMsgs[0])-1]
+	if last.Role != SystemRole || last.Content != toolExecutionSteeringPrompt {
+		t.Fatalf("last model message = %#v, want steering system message", last)
+	}
+	if len(store.lastAppend) != 2 {
+		t.Fatalf("persisted turn len = %d, want 2", len(store.lastAppend))
+	}
+	for i, msg := range store.lastAppend {
+		if msg.Role == SystemRole && strings.Contains(msg.Content, toolExecutionSteeringPrompt) {
+			t.Fatalf("persisted turn should not include steering prompt, found at index %d", i)
+		}
+	}
+}
+
+func TestLoopReply_DoesNotAppendSteeringPromptWithoutTools(t *testing.T) {
+	store := &fakeConversationStore{}
+	model := &fakeModelClient{
+		results: []ModelClientResult{
+			{Content: "plain"},
+		},
+	}
+
+	loop := NewLoop(model, nil, []string{"m1"}, DefaultSystemPrompt, store, 3)
+	out, err := loop.Reply(context.Background(), "what is 2 + 2?")
+	if err != nil {
+		t.Fatalf("Reply() error = %v", err)
+	}
+	if out != "plain" {
+		t.Fatalf("Reply() = %q, want %q", out, "plain")
+	}
+	if len(model.callMsgs) != 1 {
+		t.Fatalf("model calls = %d, want 1", len(model.callMsgs))
+	}
+	last := model.callMsgs[0][len(model.callMsgs[0])-1]
+	if last.Role != UserRole {
+		t.Fatalf("last model message role = %q, want %q", last.Role, UserRole)
+	}
+}
+
+func TestLoopReply_RetriesOnceOnEmptyAssistantResponse(t *testing.T) {
+	store := &fakeConversationStore{}
+	model := &fakeModelClient{
+		results: []ModelClientResult{
+			{Content: ""},
+			{Content: "after-retry"},
+		},
+	}
+
+	loop := NewLoop(model, nil, []string{"m1"}, DefaultSystemPrompt, store, 3)
+	out, err := loop.Reply(context.Background(), "answer me")
+	if err != nil {
+		t.Fatalf("Reply() error = %v", err)
+	}
+	if out != "after-retry" {
+		t.Fatalf("Reply() = %q, want %q", out, "after-retry")
+	}
+	if len(model.callMsgs) != 2 {
+		t.Fatalf("model calls = %d, want 2", len(model.callMsgs))
+	}
+	second := model.callMsgs[1]
+	if len(second) < 1 {
+		t.Fatalf("second call should include messages")
+	}
+	last := second[len(second)-1]
+	if last.Role != SystemRole || last.Content != emptyResponseRetrySteeringPrompt {
+		t.Fatalf("second call last message = %#v, want empty-response retry steering prompt", last)
+	}
+	if len(store.lastAppend) != 2 {
+		t.Fatalf("persisted turn len = %d, want 2", len(store.lastAppend))
+	}
+	if store.lastAppend[1].Content != "after-retry" {
+		t.Fatalf("persisted assistant message = %#v", store.lastAppend[1])
+	}
+}
+
+func TestLoopReply_ReturnsNoTextAfterEmptyRetryExhausted(t *testing.T) {
+	store := &fakeConversationStore{}
+	emptyResults := make([]ModelClientResult, 0, maxEmptyAssistantRetries+1)
+	for i := 0; i < maxEmptyAssistantRetries+1; i++ {
+		emptyResults = append(emptyResults, ModelClientResult{Content: ""})
+	}
+	model := &fakeModelClient{
+		results: emptyResults,
+	}
+
+	loop := NewLoop(model, nil, []string{"m1"}, DefaultSystemPrompt, store, 3)
+	out, err := loop.Reply(context.Background(), "still there?")
+	if err != nil {
+		t.Fatalf("Reply() error = %v", err)
+	}
+	if out != "(assistant returned no text)" {
+		t.Fatalf("Reply() = %q, want %q", out, "(assistant returned no text)")
+	}
+	if len(model.callMsgs) != maxEmptyAssistantRetries+1 {
+		t.Fatalf("model calls = %d, want %d", len(model.callMsgs), maxEmptyAssistantRetries+1)
+	}
+	if len(store.lastAppend) != 2 {
+		t.Fatalf("persisted turn len = %d, want 2", len(store.lastAppend))
+	}
+	if store.lastAppend[1].Role != AssistantRole || store.lastAppend[1].Content != "" {
+		t.Fatalf("persisted assistant message = %#v", store.lastAppend[1])
 	}
 }
 

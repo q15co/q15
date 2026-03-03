@@ -1,6 +1,8 @@
 package openaicodex
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/openai/openai-go/v3/responses"
@@ -68,6 +70,20 @@ func TestMapMessagesAndTools(t *testing.T) {
 	}
 }
 
+func TestMapMessagesConcatenatesSystemInstructions(t *testing.T) {
+	_, instructions, err := mapMessages([]agent.Message{
+		{Role: agent.SystemRole, Content: "base"},
+		{Role: agent.UserRole, Content: "hello"},
+		{Role: agent.SystemRole, Content: "steering"},
+	})
+	if err != nil {
+		t.Fatalf("mapMessages() error = %v", err)
+	}
+	if instructions != "base\n\nsteering" {
+		t.Fatalf("instructions = %q, want %q", instructions, "base\n\nsteering")
+	}
+}
+
 func TestParseResponseContentAndToolCalls(t *testing.T) {
 	resp := &responses.Response{
 		Status: "completed",
@@ -122,4 +138,258 @@ func TestParseResponseIncompleteMapsToLengthFinishReason(t *testing.T) {
 	if got.Content != "partial" {
 		t.Fatalf("content = %q, want %q", got.Content, "partial")
 	}
+}
+
+func TestBuildRequestParamsSetsToolChoiceAndParallelToolCalls(t *testing.T) {
+	params, err := buildRequestParams(
+		"gpt-5-codex",
+		[]agent.Message{
+			{Role: agent.SystemRole, Content: "sys"},
+			{Role: agent.UserRole, Content: "hello"},
+		},
+		[]agent.ToolDefinition{
+			{
+				Name: "shell",
+				Parameters: map[string]any{
+					"type": "object",
+				},
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("buildRequestParams() error = %v", err)
+	}
+
+	body := marshalParamsToMap(t, params)
+	if got := body["instructions"]; got != "sys" {
+		t.Fatalf("instructions = %#v, want %q", got, "sys")
+	}
+	if got := body["store"]; got != false {
+		t.Fatalf("store = %#v, want false", got)
+	}
+	if got := body["tool_choice"]; got != "auto" {
+		t.Fatalf("tool_choice = %#v, want %q", got, "auto")
+	}
+	if got := body["parallel_tool_calls"]; got != true {
+		t.Fatalf("parallel_tool_calls = %#v, want true", got)
+	}
+}
+
+func TestBuildRequestParamsUsesDefaultInstructionsWhenMissingSystemMessage(t *testing.T) {
+	params, err := buildRequestParams(
+		"gpt-5-codex",
+		[]agent.Message{
+			{Role: agent.UserRole, Content: "hello"},
+		},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("buildRequestParams() error = %v", err)
+	}
+
+	body := marshalParamsToMap(t, params)
+	if got := body["instructions"]; got != agent.DefaultSystemPrompt {
+		t.Fatalf("instructions = %#v, want %q", got, agent.DefaultSystemPrompt)
+	}
+	if _, ok := body["tool_choice"]; ok {
+		t.Fatalf(
+			"tool_choice should be omitted when no tools are provided: %#v",
+			body["tool_choice"],
+		)
+	}
+	if _, ok := body["parallel_tool_calls"]; ok {
+		t.Fatalf(
+			"parallel_tool_calls should be omitted when no tools are provided: %#v",
+			body["parallel_tool_calls"],
+		)
+	}
+}
+
+func TestValidateFinalResponse(t *testing.T) {
+	tests := []struct {
+		name      string
+		resp      *responses.Response
+		wantErr   bool
+		errSubstr string
+	}{
+		{
+			name: "completed",
+			resp: &responses.Response{
+				Status: responses.ResponseStatusCompleted,
+			},
+		},
+		{
+			name: "incomplete",
+			resp: &responses.Response{
+				Status: responses.ResponseStatusIncomplete,
+			},
+		},
+		{
+			name: "failed",
+			resp: &responses.Response{
+				Status: responses.ResponseStatusFailed,
+				Error: responses.ResponseError{
+					Message: "boom",
+				},
+			},
+			wantErr:   true,
+			errSubstr: "response failed: boom",
+		},
+		{
+			name: "cancelled",
+			resp: &responses.Response{
+				Status: responses.ResponseStatusCancelled,
+			},
+			wantErr:   true,
+			errSubstr: "response cancelled",
+		},
+		{
+			name: "queued",
+			resp: &responses.Response{
+				Status: responses.ResponseStatusQueued,
+			},
+			wantErr:   true,
+			errSubstr: "response not finalized",
+		},
+		{
+			name: "in_progress",
+			resp: &responses.Response{
+				Status: responses.ResponseStatusInProgress,
+			},
+			wantErr:   true,
+			errSubstr: "response not finalized",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateFinalResponse(tc.resp)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("validateFinalResponse() error = nil, want non-nil")
+				}
+				if tc.errSubstr != "" && !strings.Contains(err.Error(), tc.errSubstr) {
+					t.Fatalf("error = %q, want substring %q", err.Error(), tc.errSubstr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("validateFinalResponse() error = %v, want nil", err)
+			}
+		})
+	}
+}
+
+func TestStreamSnapshotRecordsTextRefusalAndToolCalls(t *testing.T) {
+	snapshot := newStreamSnapshot()
+	snapshot.Record(responses.ResponseStreamEventUnion{
+		Type:   "response.output_text.delta",
+		ItemID: "msg-1",
+		Delta:  "Hello ",
+	})
+	// Done text for the same item should be ignored when deltas were already seen.
+	snapshot.Record(responses.ResponseStreamEventUnion{
+		Type:   "response.output_text.done",
+		ItemID: "msg-1",
+		Text:   "Hello ",
+	})
+	// Done text for a different item should still be captured.
+	snapshot.Record(responses.ResponseStreamEventUnion{
+		Type:   "response.output_text.done",
+		ItemID: "msg-2",
+		Text:   "world",
+	})
+	snapshot.Record(responses.ResponseStreamEventUnion{
+		Type:    "response.refusal.done",
+		ItemID:  "ref-1",
+		Refusal: "cannot comply",
+	})
+	snapshot.Record(responses.ResponseStreamEventUnion{
+		Type: "response.output_item.done",
+		Item: responses.ResponseOutputItemUnion{
+			ID:        "fc-1",
+			Type:      "function_call",
+			CallID:    "call-1",
+			Name:      "exec_shell",
+			Arguments: `{"command":"pwd"}`,
+		},
+	})
+
+	if got := snapshot.Text(); got != "Hello world" {
+		t.Fatalf("snapshot text = %q, want %q", got, "Hello world")
+	}
+	if got := snapshot.Refusal(); got != "cannot comply" {
+		t.Fatalf("snapshot refusal = %q, want %q", got, "cannot comply")
+	}
+	if len(snapshot.toolCalls) != 1 {
+		t.Fatalf("snapshot tool calls len = %d, want 1", len(snapshot.toolCalls))
+	}
+	if snapshot.toolCalls[0].ID != "call-1" || snapshot.toolCalls[0].Name != "exec_shell" {
+		t.Fatalf("unexpected snapshot tool call: %#v", snapshot.toolCalls[0])
+	}
+}
+
+func TestMergeResultWithStreamSnapshotUsesSnapshotFallback(t *testing.T) {
+	snapshot := newStreamSnapshot()
+	snapshot.Record(responses.ResponseStreamEventUnion{
+		Type:   "response.output_text.delta",
+		ItemID: "msg-1",
+		Delta:  "Recovered text",
+	})
+	snapshot.Record(responses.ResponseStreamEventUnion{
+		Type: "response.output_item.done",
+		Item: responses.ResponseOutputItemUnion{
+			ID:        "fc-1",
+			Type:      "function_call",
+			CallID:    "call-1",
+			Name:      "exec_shell",
+			Arguments: `{"command":"pwd"}`,
+		},
+	})
+
+	result := mergeResultWithStreamSnapshot(agent.ModelClientResult{}, snapshot)
+	if result.Content != "Recovered text" {
+		t.Fatalf("content = %q, want %q", result.Content, "Recovered text")
+	}
+	if len(result.ToolCalls) != 1 {
+		t.Fatalf("tool calls len = %d, want 1", len(result.ToolCalls))
+	}
+	if result.FinishReason != "tool_calls" {
+		t.Fatalf("finish reason = %q, want %q", result.FinishReason, "tool_calls")
+	}
+}
+
+func TestMergeResultWithStreamSnapshotPreservesParsedContent(t *testing.T) {
+	snapshot := newStreamSnapshot()
+	snapshot.Record(responses.ResponseStreamEventUnion{
+		Type:   "response.output_text.delta",
+		ItemID: "msg-1",
+		Delta:  "Ignored",
+	})
+
+	result := mergeResultWithStreamSnapshot(agent.ModelClientResult{
+		Content:      "parsed",
+		FinishReason: "stop",
+	}, snapshot)
+	if result.Content != "parsed" {
+		t.Fatalf("content = %q, want %q", result.Content, "parsed")
+	}
+	if len(result.ToolCalls) != 0 {
+		t.Fatalf("tool calls len = %d, want 0", len(result.ToolCalls))
+	}
+}
+
+func marshalParamsToMap(t *testing.T, params responses.ResponseNewParams) map[string]any {
+	t.Helper()
+
+	data, err := json.Marshal(params)
+	if err != nil {
+		t.Fatalf("json.Marshal(params) error = %v", err)
+	}
+
+	var out map[string]any
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatalf("json.Unmarshal(params) error = %v", err)
+	}
+	return out
 }
