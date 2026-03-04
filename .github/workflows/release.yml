@@ -1,26 +1,64 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
 
 permissions:
   contents: write
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: release-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
 
 jobs:
   release:
     name: Release
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
+      - name: Checkout tested commit
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
+
+      - name: Create or reuse release tag
+        id: release_tag
+        run: |
+          set -euo pipefail
+
+          git fetch --force --tags origin
+
+          head_sha="${{ github.event.workflow_run.head_sha }}"
+          short_sha="$(printf '%s' "$head_sha" | cut -c1-7)"
+
+          read -r year month day < <(TZ=UTC git show -s --format=%cd --date=format:'%Y %m %d' "$head_sha")
+          month="$((10#$month))"
+          day="$((10#$day))"
+          tag="v${year}.${month}.${day}-${short_sha}"
+
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            tag_sha="$(git rev-list -n1 "$tag")"
+            if [ "$tag_sha" != "$head_sha" ]; then
+              echo "::error::Tag $tag already exists on $tag_sha, expected $head_sha"
+              exit 1
+            fi
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "$tag" "$head_sha" -m "Release ${tag}"
+            git push origin "$tag"
+          fi
+
+          git checkout -q "$tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Release tag: $tag" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Setup Go
         uses: actions/setup-go@v5

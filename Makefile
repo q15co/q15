@@ -10,7 +10,7 @@ RUN_ENV := BUILDAH_ISOLATION=chroot GOMAXPROCS=1 GODEBUG=updatemaxprocs=0
 
 .DEFAULT_GOAL := build
 
-.PHONY: all build build-main build-helper test run run-verbose clean fmt help
+.PHONY: all build build-main build-helper test run run-verbose clean fmt nix-update-vendor-hashes help
 
 all: build
 
@@ -40,6 +40,9 @@ run-verbose: build
 fmt:
 	gofmt -w $$(rg --files -g '*.go')
 
+nix-update-vendor-hashes:
+	./scripts/update-vendor-hashes.sh
+
 clean:
 	rm -rf $(BIN_DIR)
 	$(GO) clean -cache -testcache
@@ -53,6 +56,7 @@ help:
 	@echo "  run           Build and start q15 with dev runtime defaults"
 	@echo "  run-verbose   Same as run, with Q15_SANDBOX_VERBOSE=1"
 	@echo "  fmt           Run gofmt over all Go files"
+	@echo "  nix-update-vendor-hashes  Recompute flake buildGoModule vendorHash values"
 	@echo "  clean         Remove ./bin and Go build/test caches"
 	@echo ""
 	@echo "Notes:"

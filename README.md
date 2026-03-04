@@ -47,6 +47,76 @@ Default config path is `~/.config/q15/config.toml` and can be overridden with `-
 Use `--config-dir` or `Q15_CONFIG_DIR` to change the default base directory used by both config and
 auth paths.
 
+## Nix Flake Package
+
+This repo exposes a flake package for Linux (`x86_64-linux`) that installs both binaries:
+
+- `q15`
+- `q15-sandbox-helper`
+
+Build locally:
+
+```bash
+nix build .#q15
+```
+
+Run directly from the flake output:
+
+```bash
+./result/bin/q15 start --help
+```
+
+Use from another flake (for example your `dots` repo):
+
+```nix
+inputs.q15.url = "github:q15co/q15";
+```
+
+Then consume:
+
+```nix
+inputs.q15.packages.${pkgs.system}.q15
+```
+
+### Updating Flake Vendor Hashes
+
+When Go dependencies change, refresh flake `vendorHash` values automatically:
+
+```bash
+make nix-update-vendor-hashes
+```
+
+This updates both module hashes in `flake.nix` and validates with `nix build .#q15`.
+
+## CI/CD and Releases
+
+GitHub Actions now uses GitHub-hosted `ubuntu-latest` runners for CI and release jobs.
+
+- CI runs on:
+  - pull requests targeting `main`
+  - pushes to `main`
+- CI sets up Nix via `cachix/install-nix-action` and `cachix/cachix-action`.
+- Release runs only after a successful CI run on `main` (not from PRs).
+
+Releases are auto-tagged with a semver-compatible date+SHA format:
+
+- `vYYYY.M.D-<sha7>`
+- Example: `v2026.3.4-a1b2c3d`
+- Date is derived from the commit date in UTC and paired with the commit short SHA
+
+Because GoReleaser expects semver tags, this format keeps calendar-based versions while remaining
+compatible with release automation.
+
+### Main Branch Protection (GitHub Settings)
+
+Configure branch protection (or a ruleset) for `main` with these minimum controls:
+
+- Require a pull request before merging
+- Require status checks to pass before merging
+  - Required check: `CI` job from workflow `CI`
+- Restrict direct pushes to `main` (except trusted admins if you prefer)
+- Disallow force pushes and branch deletions
+
 ## Config
 
 `config.toml` defines providers and agents. By default q15 reads it from

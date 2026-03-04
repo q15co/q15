@@ -1,38 +1,68 @@
 name: CI
 
 on:
+  pull_request:
+    branches: [main]
   push:
     branches: [main]
-  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
   ci:
     name: CI
-    runs-on: [self-hosted]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Verify devenv available
-        run: |
-          if ! command -v devenv >/dev/null 2>&1; then
-            echo "::error::devenv not found on self-hosted runner"
-            exit 1
-          fi
-          echo "✓ devenv found at $(which devenv)"
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+
+      - name: Configure Cachix
+        uses: cachix/cachix-action@v15
+        with:
+          name: ${{ vars.CACHIX_CACHE_NAME || 'nix-community' }}
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+          skipPush: ${{ secrets.CACHIX_AUTH_TOKEN == '' || github.event_name == 'pull_request' }}
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.work
+
+      - name: Install devenv
+        run: nix profile install nixpkgs#devenv
 
       - name: Run devenv test (hooks/lint/static checks)
         run: devenv test
 
-      - name: Build binaries
-        run: devenv shell -- make build
+      - name: Build flake package
+        run: nix build .#q15
 
-      - name: Run tests
-        run: devenv shell -- make test
+      - name: Validate GoReleaser config
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: check
+
+      - name: Install Syft
+        if: github.event_name == 'pull_request'
+        uses: anchore/sbom-action/download-syft@v0
+
+      - name: Build snapshot release artifacts
+        if: github.event_name == 'pull_request'
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --snapshot --skip=publish --clean
