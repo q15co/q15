@@ -1,3 +1,4 @@
+// Package config loads, validates, and resolves q15 runtime configuration.
 package config
 
 import (
@@ -12,11 +13,13 @@ import (
 	"github.com/spf13/viper"
 )
 
+// Config is the top-level structure loaded from config.toml.
 type Config struct {
 	Providers []Provider `mapstructure:"provider"`
 	Agents    []Agent    `mapstructure:"agent"`
 }
 
+// Provider defines a named model provider entry in config.toml.
 type Provider struct {
 	Name    string `mapstructure:"name"`
 	Type    string `mapstructure:"type"`
@@ -24,6 +27,7 @@ type Provider struct {
 	KeyEnv  string `mapstructure:"key_env"`
 }
 
+// Agent defines one configured q15 agent instance.
 type Agent struct {
 	Name              string   `mapstructure:"name"`
 	Models            []string `mapstructure:"models"` // ordered fallback list of provider/model refs
@@ -32,6 +36,7 @@ type Agent struct {
 	Telegram          Telegram `mapstructure:"telegram"`
 }
 
+// Sandbox defines container and workspace settings for agent execution.
 type Sandbox struct {
 	ContainerName    string        `mapstructure:"container_name"`
 	WorkspaceHostDir string        `mapstructure:"workspace_host_dir"`
@@ -39,12 +44,14 @@ type Sandbox struct {
 	Proxy            *SandboxProxy `mapstructure:"proxy"`
 }
 
+// SandboxProxy defines optional egress-proxy settings for sandbox traffic.
 type SandboxProxy struct {
 	ContainerProxyHost string             `mapstructure:"container_proxy_host"` // optional override
 	Secrets            []string           `mapstructure:"secrets"`              // alias list, env name derived (e.g. gh_token -> GH_TOKEN)
 	Rules              []SandboxProxyRule `mapstructure:"rule"`
 }
 
+// SandboxProxyRule defines host/path matches and request mutations.
 type SandboxProxyRule struct {
 	Name               string                               `mapstructure:"name"`
 	MatchHosts         []string                             `mapstructure:"match_hosts"`
@@ -53,20 +60,21 @@ type SandboxProxyRule struct {
 	ReplacePlaceholder []SandboxProxyPlaceholderReplacement `mapstructure:"replace_placeholder"`
 }
 
+// SandboxProxyPlaceholderReplacement replaces placeholders with secret values.
 type SandboxProxyPlaceholderReplacement struct {
 	Placeholder string   `mapstructure:"placeholder"`
 	Secret      string   `mapstructure:"secret"`
 	In          []string `mapstructure:"in"` // allowed v1: header, query, path
 }
 
+// Telegram defines Telegram integration settings for an agent.
 type Telegram struct {
 	Token          string  `mapstructure:"token"`
 	TokenEnv       string  `mapstructure:"token_env"`
 	AllowedUserIDs []int64 `mapstructure:"allowed_user_ids"`
 }
 
-// AgentRuntime is the resolved runtime config for one agent after env vars and
-// provider/model references have been processed.
+// AgentModelRuntime is the resolved runtime config for one provider/model ref.
 type AgentModelRuntime struct {
 	Ref             string
 	ProviderName    string
@@ -76,6 +84,7 @@ type AgentModelRuntime struct {
 	ModelName       string
 }
 
+// SandboxProxyRuntime is the resolved runtime form of SandboxProxy.
 type SandboxProxyRuntime struct {
 	Enabled              bool
 	ListenAddr           string
@@ -99,6 +108,7 @@ var (
 	defaultSandboxProxyNoProxy = []string{"localhost", "127.0.0.1", "::1"}
 )
 
+// AgentRuntime is the resolved runtime config for one configured agent.
 type AgentRuntime struct {
 	Name                   string
 	Models                 []AgentModelRuntime
@@ -113,6 +123,7 @@ type AgentRuntime struct {
 	TelegramAllowedUserIDs []int64
 }
 
+// Load reads config.toml from path and validates it.
 func Load(path string) (Config, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
@@ -135,6 +146,7 @@ func Load(path string) (Config, error) {
 	return cfg, nil
 }
 
+// LoadAgentRuntimes reads and resolves agent runtime settings from path.
 func LoadAgentRuntimes(path string) ([]AgentRuntime, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
@@ -148,6 +160,7 @@ func LoadAgentRuntimes(path string) ([]AgentRuntime, error) {
 	return cfg.resolveAgentRuntimes("")
 }
 
+// FindAgent returns the configured agent by name.
 func (c Config) FindAgent(name string) (Agent, bool) {
 	for _, agent := range c.Agents {
 		if agent.Name == name {
@@ -157,6 +170,7 @@ func (c Config) FindAgent(name string) (Agent, bool) {
 	return Agent{}, false
 }
 
+// FindProvider returns the configured provider by name.
 func (c Config) FindProvider(name string) (Provider, bool) {
 	for _, provider := range c.Providers {
 		if provider.Name == name {
@@ -166,10 +180,12 @@ func (c Config) FindProvider(name string) (Provider, bool) {
 	return Provider{}, false
 }
 
+// Validate checks that the config is internally consistent.
 func (c Config) Validate() error {
 	return c.validate()
 }
 
+// TelegramToken resolves the Telegram token from inline value or token_env.
 func (a Agent) TelegramToken() (string, error) {
 	token := strings.TrimSpace(a.Telegram.Token)
 	if token != "" {
@@ -191,6 +207,7 @@ func (a Agent) TelegramToken() (string, error) {
 	return envValue, nil
 }
 
+// ResolveAgentRuntimes resolves all configured agents into runtime values.
 func (c Config) ResolveAgentRuntimes() ([]AgentRuntime, error) {
 	return c.resolveAgentRuntimes("")
 }
@@ -309,11 +326,11 @@ func (c Config) resolveAgentRuntimes(_ string) ([]AgentRuntime, error) {
 }
 
 func (c Config) validate() error {
-	if len(c.Providers) == 0 {
-		return errors.New("provider cannot be empty")
-	}
 	if len(c.Agents) == 0 {
-		return errors.New("agent cannot be empty")
+		return nil
+	}
+	if len(c.Providers) == 0 {
+		return errors.New("provider cannot be empty when agent is configured")
 	}
 
 	providers := make(map[string]struct{}, len(c.Providers))

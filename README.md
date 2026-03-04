@@ -47,6 +47,9 @@ Default config path is `~/.config/q15/config.toml` and can be overridden with `-
 Use `--config-dir` or `Q15_CONFIG_DIR` to change the default base directory used by both config and
 auth paths.
 
+If the config file is missing, `q15 start` now creates a minimal starter file and exits cleanly with
+no running agents. Add your `[[provider]]` / `[[agent]]` blocks and start again.
+
 ## Nix Flake Package
 
 This repo exposes a flake package for Linux (`x86_64-linux`) that installs both binaries:
@@ -121,6 +124,8 @@ Configure branch protection (or a ruleset) for `main` with these minimum control
 
 `config.toml` defines providers and agents. By default q15 reads it from
 `~/.config/q15/config.toml`.
+
+An empty starter config is valid and runs zero agents until you add entries.
 
 `agent.models` is an ordered fallback list of `provider/model` references.
 

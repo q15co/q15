@@ -93,10 +93,7 @@ in {
 
     govet.enable = true;
     staticcheck.enable = true;
-    revive = {
-      enable = true;
-      args = ["-config" "revive.toml"];
-    };
+    revive.enable = true;
     golangci-lint = {
       enable = true;
       pass_filenames = false;

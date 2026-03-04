@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -128,6 +129,49 @@ allowed_user_ids = [123456789]
 	}
 	if got := runtimes[0].MemoryRecentTurns; got != 42 {
 		t.Fatalf("unexpected memory recent turns: %d", got)
+	}
+}
+
+func TestLoadAgentRuntimes_TOML_EmptyConfigReturnsNoRuntimes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("# starter config\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	runtimes, err := LoadAgentRuntimes(path)
+	if err != nil {
+		t.Fatalf("load runtimes: %v", err)
+	}
+	if len(runtimes) != 0 {
+		t.Fatalf("expected 0 runtimes, got %d", len(runtimes))
+	}
+}
+
+func TestValidateRequiresProviderWhenAgentConfigured(t *testing.T) {
+	cfg := Config{
+		Agents: []Agent{
+			{
+				Name:   "missing-provider",
+				Models: []string{"moonshot/kimi-k2.5"},
+				Sandbox: Sandbox{
+					ContainerName:    "q15-missing-provider",
+					WorkspaceHostDir: "/tmp/q15-workspaces/missing-provider",
+					WorkspaceDir:     "/workspace",
+				},
+				Telegram: Telegram{
+					TokenEnv:       "TEST_TELEGRAM_TOKEN",
+					AllowedUserIDs: []int64{123456789},
+				},
+			},
+		},
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatalf("expected validation error when providers are missing")
+	}
+	if !strings.Contains(err.Error(), "provider cannot be empty") {
+		t.Fatalf("unexpected validation error: %v", err)
 	}
 }
 
