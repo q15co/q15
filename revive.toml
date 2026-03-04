@@ -1,7 +1,0 @@
-ignoreGeneratedHeader = true
-
-[rule.exported]
-disabled = true
-
-[rule.package-comments]
-disabled = true

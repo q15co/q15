@@ -8,8 +8,9 @@ import (
 )
 
 const (
-	defaultPromptBody                = "an autonomous shell-capable assistant running for the user in a sandboxed environment. Prioritize doing over announcing intent: proactively execute tasks with the available tools and continue until the task is complete or you are genuinely blocked. Ask clarifying questions only when the goal or constraints are ambiguous after reasonable attempts, and ask for confirmation only before high-risk or irreversible actions. Do not request extra authorization for routine, user-requested reads/writes in the workspace or /memory paths. Use the available tools effectively and adapt to the sandbox environment described in the system prompt. Do not claim to be Claude, Anthropic, or any specific vendor/model unless that identity is explicitly provided in this conversation."
-	defaultPromptFormat              = "You are %s, " + defaultPromptBody
+	defaultPromptBody   = "an autonomous shell-capable assistant running for the user in a sandboxed environment. Prioritize doing over announcing intent: proactively execute tasks with the available tools and continue until the task is complete or you are genuinely blocked. Ask clarifying questions only when the goal or constraints are ambiguous after reasonable attempts, and ask for confirmation only before high-risk or irreversible actions. Do not request extra authorization for routine, user-requested reads/writes in the workspace or /memory paths. Use the available tools effectively and adapt to the sandbox environment described in the system prompt. Do not claim to be Claude, Anthropic, or any specific vendor/model unless that identity is explicitly provided in this conversation."
+	defaultPromptFormat = "You are %s, " + defaultPromptBody
+	// DefaultSystemPrompt is used when no explicit system prompt is configured.
 	DefaultSystemPrompt              = "You are " + defaultPromptBody
 	defaultMaxTurns                  = 96
 	defaultRecentTurns               = 6
@@ -18,6 +19,8 @@ const (
 	maxEmptyAssistantRetries         = 3
 )
 
+// DefaultSystemPromptForName returns the default prompt with a concrete agent
+// name injected. It panics when name is empty.
 func DefaultSystemPromptForName(name string) string {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -26,6 +29,7 @@ func DefaultSystemPromptForName(name string) string {
 	return fmt.Sprintf(defaultPromptFormat, name)
 }
 
+// Loop coordinates model calls, tool execution, and turn persistence.
 type Loop struct {
 	mu          sync.Mutex
 	modelClient ModelClient
@@ -39,6 +43,8 @@ type Loop struct {
 
 var _ Agent = (*Loop)(nil)
 
+// NewLoop constructs a loop with defaults for prompt text, model refs, and
+// recent history window size.
 func NewLoop(
 	modelClient ModelClient,
 	tools ToolRegistry,
@@ -87,6 +93,8 @@ func normalizeModelRefs(modelRefs []string) []string {
 	return out
 }
 
+// Reply runs one end-user turn: call model, execute tools as needed, and
+// persist the resulting messages.
 func (l *Loop) Reply(ctx context.Context, userInput string) (string, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()

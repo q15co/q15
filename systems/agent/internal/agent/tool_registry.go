@@ -6,6 +6,7 @@ import (
 	"strings"
 )
 
+// Registry is an in-memory tool registry keyed by tool name.
 type Registry struct {
 	definitions []ToolDefinition
 	toolsByName map[string]Tool
@@ -13,6 +14,8 @@ type Registry struct {
 
 var _ ToolRegistry = (*Registry)(nil)
 
+// NewToolRegistry builds a registry from tool implementations.
+// Nil tools are ignored and duplicate or empty names return an error.
 func NewToolRegistry(tools ...Tool) (*Registry, error) {
 	reg := &Registry{
 		definitions: make([]ToolDefinition, 0, len(tools)),
@@ -42,6 +45,7 @@ func NewToolRegistry(tools ...Tool) (*Registry, error) {
 	return reg, nil
 }
 
+// Definitions returns a defensive copy of registered tool definitions.
 func (r *Registry) Definitions() []ToolDefinition {
 	if r == nil || len(r.definitions) == 0 {
 		return nil
@@ -51,6 +55,7 @@ func (r *Registry) Definitions() []ToolDefinition {
 	return out
 }
 
+// Run executes a single tool call by name.
 func (r *Registry) Run(ctx context.Context, call ToolCall) (string, error) {
 	if r == nil {
 		return "", fmt.Errorf("no tool registry configured")

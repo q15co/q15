@@ -1,3 +1,5 @@
+// Package auth handles persistent provider credentials and OpenAI device-flow
+// authentication.
 package auth
 
 import (
@@ -24,6 +26,7 @@ const (
 )
 
 var (
+	// ErrAuthorizationPending indicates device login is still awaiting user approval.
 	ErrAuthorizationPending = errors.New("authorization pending")
 	openAIHTTPClient        = &http.Client{Timeout: 15 * time.Second}
 )
@@ -34,11 +37,16 @@ type openAIOAuthConfig struct {
 	Originator string
 }
 
+// DeviceCodeInfo contains the user-facing data needed to complete device auth.
 type DeviceCodeInfo struct {
+	// DeviceAuthID identifies the in-progress device authorization session.
 	DeviceAuthID string `json:"device_auth_id"`
-	UserCode     string `json:"user_code"`
-	VerifyURL    string `json:"verify_url"`
-	Interval     int    `json:"interval"`
+	// UserCode is the short code the user enters in the browser.
+	UserCode string `json:"user_code"`
+	// VerifyURL is the URL where the user completes authorization.
+	VerifyURL string `json:"verify_url"`
+	// Interval is the recommended polling interval in seconds.
+	Interval int `json:"interval"`
 }
 
 type deviceCodeResponse struct {
@@ -55,6 +63,8 @@ func defaultOpenAIOAuthConfig() openAIOAuthConfig {
 	}
 }
 
+// LoginOpenAIDeviceCode performs OpenAI OAuth device login and returns the
+// resulting credential on success.
 func LoginOpenAIDeviceCode(ctx context.Context, out io.Writer) (*Credential, error) {
 	return loginOpenAIDeviceCode(ctx, out, defaultOpenAIOAuthConfig())
 }
@@ -107,6 +117,7 @@ func loginOpenAIDeviceCode(
 	}
 }
 
+// RequestOpenAIDeviceCode requests a new OpenAI device code challenge.
 func RequestOpenAIDeviceCode(ctx context.Context) (*DeviceCodeInfo, error) {
 	return requestOpenAIDeviceCode(ctx, defaultOpenAIOAuthConfig())
 }
@@ -149,6 +160,7 @@ func requestOpenAIDeviceCode(ctx context.Context, cfg openAIOAuthConfig) (*Devic
 	}, nil
 }
 
+// RefreshOpenAIToken uses a refresh token to obtain a new OpenAI access token.
 func RefreshOpenAIToken(ctx context.Context, cred *Credential) (*Credential, error) {
 	return refreshOpenAIToken(ctx, defaultOpenAIOAuthConfig(), cred)
 }
@@ -199,6 +211,8 @@ func refreshOpenAIToken(
 	return refreshed, nil
 }
 
+// LoadOpenAIToken loads and refreshes persisted OpenAI credentials as needed,
+// returning access token and account ID.
 func LoadOpenAIToken(ctx context.Context) (string, string, error) {
 	cred, err := resolveOpenAICredential(ctx)
 	if err != nil {

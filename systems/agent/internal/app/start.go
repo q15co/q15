@@ -9,6 +9,7 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/config"
 )
 
+// Start loads configured agent runtimes from disk and starts them together.
 func Start(ctx context.Context, configPath string) error {
 	configPath = strings.TrimSpace(configPath)
 	if configPath == "" {

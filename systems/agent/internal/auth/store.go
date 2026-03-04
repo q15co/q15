@@ -11,21 +11,30 @@ import (
 	q15paths "github.com/q15co/q15/systems/agent/internal/paths"
 )
 
+// Credential represents a persisted provider authentication credential.
 type Credential struct {
-	AccessToken  string    `json:"access_token"`
-	RefreshToken string    `json:"refresh_token,omitempty"`
-	AccountID    string    `json:"account_id,omitempty"`
-	ExpiresAt    time.Time `json:"expires_at,omitempty"`
-	Provider     string    `json:"provider"`
-	AuthMethod   string    `json:"auth_method"`
+	// AccessToken is the bearer token used for API calls.
+	AccessToken string `json:"access_token"`
+	// RefreshToken is used to refresh AccessToken when supported.
+	RefreshToken string `json:"refresh_token,omitempty"`
+	// AccountID is the provider account identifier, when available.
+	AccountID string `json:"account_id,omitempty"`
+	// ExpiresAt is the access token expiry timestamp.
+	ExpiresAt time.Time `json:"expires_at,omitempty"`
+	// Provider is the logical provider key (for example "openai").
+	Provider string `json:"provider"`
+	// AuthMethod describes how the credential was obtained (for example "oauth").
+	AuthMethod string `json:"auth_method"`
 }
 
+// Store is the on-disk credential container keyed by provider name.
 type Store struct {
 	Credentials map[string]*Credential `json:"credentials"`
 }
 
 var authStorePath = defaultAuthStorePath
 
+// IsExpired reports whether the credential access token is already expired.
 func (c *Credential) IsExpired() bool {
 	if c == nil || c.ExpiresAt.IsZero() {
 		return false
@@ -33,6 +42,7 @@ func (c *Credential) IsExpired() bool {
 	return time.Now().After(c.ExpiresAt)
 }
 
+// NeedsRefresh reports whether the credential should be refreshed soon.
 func (c *Credential) NeedsRefresh() bool {
 	if c == nil || c.ExpiresAt.IsZero() {
 		return false
@@ -40,6 +50,7 @@ func (c *Credential) NeedsRefresh() bool {
 	return time.Now().Add(5 * time.Minute).After(c.ExpiresAt)
 }
 
+// SetStorePath overrides the auth store path resolver for this process.
 func SetStorePath(path string) error {
 	path = strings.TrimSpace(path)
 	if path == "" {
@@ -53,6 +64,7 @@ func defaultAuthStorePath() (string, error) {
 	return q15paths.DefaultAuthPath()
 }
 
+// LoadStore reads credentials from disk and returns an empty store when missing.
 func LoadStore() (*Store, error) {
 	path, err := authStorePath()
 	if err != nil {
@@ -77,6 +89,7 @@ func LoadStore() (*Store, error) {
 	return &store, nil
 }
 
+// SaveStore writes the credential store to disk atomically.
 func SaveStore(store *Store) error {
 	if store == nil {
 		store = &Store{}
@@ -99,6 +112,7 @@ func SaveStore(store *Store) error {
 	return writeFileAtomic(path, data, 0o600)
 }
 
+// GetCredential returns the credential for a provider, or nil when absent.
 func GetCredential(provider string) (*Credential, error) {
 	provider = strings.TrimSpace(provider)
 	if provider == "" {
@@ -117,6 +131,7 @@ func GetCredential(provider string) (*Credential, error) {
 	return cred, nil
 }
 
+// SetCredential stores a provider credential.
 func SetCredential(provider string, cred *Credential) error {
 	provider = strings.TrimSpace(provider)
 	if provider == "" {
@@ -139,6 +154,7 @@ func SetCredential(provider string, cred *Credential) error {
 	return SaveStore(store)
 }
 
+// DeleteCredential removes one provider credential from the store.
 func DeleteCredential(provider string) error {
 	provider = strings.TrimSpace(provider)
 	if provider == "" {
@@ -154,6 +170,7 @@ func DeleteCredential(provider string) error {
 	return SaveStore(store)
 }
 
+// DeleteAllCredentials removes the entire auth store file.
 func DeleteAllCredentials() error {
 	path, err := authStorePath()
 	if err != nil {

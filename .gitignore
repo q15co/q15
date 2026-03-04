@@ -8,3 +8,5 @@ q15-sandbox-helper
 .direnv/
 .devcontainer.json
 .pre-commit-config.yaml
+
+*.log

@@ -1,3 +1,4 @@
+// Package app wires runtime configuration into running bot instances.
 package app
 
 import (
