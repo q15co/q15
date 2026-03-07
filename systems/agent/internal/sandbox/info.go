@@ -54,7 +54,7 @@ func (s *Sandbox) Describe(ctx context.Context) (Info, error) {
 		return info, fmt.Errorf("sandbox is not prepared")
 	}
 
-	out, err := s.Exec(ctx, sandboxProbeCommand())
+	out, err := s.ExecRaw(ctx, sandboxProbeCommand())
 	if err != nil {
 		if metadataErr != nil {
 			return info, errors.Join(fmt.Errorf("load sandbox metadata: %w", metadataErr), err)

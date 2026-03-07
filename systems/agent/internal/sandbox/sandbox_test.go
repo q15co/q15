@@ -3,6 +3,7 @@ package sandbox
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -62,5 +63,58 @@ func TestToContractSettingsMapsCoreFields(t *testing.T) {
 	}
 	if got.Proxy.HTTPProxyURL != cfg.Proxy.HTTPProxyURL {
 		t.Fatalf("unexpected proxy URL in contract settings: %q", got.Proxy.HTTPProxyURL)
+	}
+}
+
+func TestNewExecNixShellBashRequestNormalizesValues(t *testing.T) {
+	req, err := newExecNixShellBashRequest(
+		"  git --version  ",
+		[]string{" nixpkgs#git ", "nixpkgs#jq"},
+	)
+	if err != nil {
+		t.Fatalf("newExecNixShellBashRequest() error = %v", err)
+	}
+	if got, want := req.Command, "git --version"; got != want {
+		t.Fatalf("Command = %q, want %q", got, want)
+	}
+	if got, want := strings.Join(req.Packages, ","), "nixpkgs#git,nixpkgs#jq"; got != want {
+		t.Fatalf("Packages = %q, want %q", got, want)
+	}
+}
+
+func TestNewExecNixShellBashHelperRequestIncludesStructuredPayload(t *testing.T) {
+	cfg := Settings{
+		ContainerName:    "q15-test",
+		WorkspaceHostDir: "/tmp/q15-test",
+		WorkspaceDir:     "/workspace",
+		MemoryHostDir:    "/tmp/q15-test/.q15-memory",
+		MemoryDir:        "/memory",
+	}
+	req := newExecNixShellBashHelperRequest(
+		cfg,
+		ExecNixShellBashRequest{
+			Command:  "git --version",
+			Packages: []string{"nixpkgs#git"},
+		},
+	)
+
+	if req.Command != "" {
+		t.Fatalf("raw Command should be empty, got %q", req.Command)
+	}
+	if req.ExecNixShellBash == nil {
+		t.Fatal("expected ExecNixShellBash payload")
+	}
+	if got, want := req.ExecNixShellBash.Command, "git --version"; got != want {
+		t.Fatalf("ExecNixShellBash.Command = %q, want %q", got, want)
+	}
+	if got, want := strings.Join(req.ExecNixShellBash.Packages, ","), "nixpkgs#git"; got != want {
+		t.Fatalf("ExecNixShellBash.Packages = %q, want %q", got, want)
+	}
+	if req.Settings.ContainerName != cfg.ContainerName {
+		t.Fatalf(
+			"Settings.ContainerName = %q, want %q",
+			req.Settings.ContainerName,
+			cfg.ContainerName,
+		)
 	}
 }

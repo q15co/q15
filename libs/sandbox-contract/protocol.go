@@ -25,10 +25,18 @@ type ProxySettings struct {
 	Env                  map[string]string `json:"env,omitempty"`
 }
 
+// ExecNixShellBashRequest describes a command run that requires explicit Nix
+// packages and executes via bash inside a nix shell.
+type ExecNixShellBashRequest struct {
+	Command  string   `json:"command"`
+	Packages []string `json:"packages"`
+}
+
 // HelperRequest is sent from the agent runtime to the sandbox helper.
 type HelperRequest struct {
-	Settings Settings `json:"settings"`
-	Command  string   `json:"command,omitempty"`
+	Settings         Settings                 `json:"settings"`
+	Command          string                   `json:"command,omitempty"`
+	ExecNixShellBash *ExecNixShellBashRequest `json:"exec_nix_shell_bash,omitempty"`
 }
 
 // RuntimeMetadata describes sandbox runtime properties owned by the helper.

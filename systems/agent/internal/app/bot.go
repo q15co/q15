@@ -76,7 +76,7 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 		}
 	}
 	systemPrompt = composeSystemPrompt(systemPrompt, rt.Name, info, rt.MemoryDir)
-	toolList := []agent.Tool{tools.NewShell(agentSandbox), tools.NewWebFetch()}
+	toolList := []agent.Tool{tools.NewNixShellBash(agentSandbox), tools.NewWebFetch()}
 	if sandbox.VerboseEnabled() {
 		fmt.Printf("[app] enabled tool web_fetch for agent=%q\n", rt.Name)
 	}
@@ -217,14 +217,14 @@ func composeSystemPrompt(
 			),
 		)
 	}
-	lines = append(lines, "- Package management model: nix-only via exec_shell.")
+	lines = append(lines, "- Package management model: nix-only via exec_nix_shell_bash.")
 	lines = append(
 		lines,
-		"- Every exec_shell call must include a non-empty `packages` array of nix installables (for example `nixpkgs#git`).",
+		"- Every exec_nix_shell_bash call must include a non-empty `packages` array of nix installables (for example `nixpkgs#git`).",
 	)
 	lines = append(
 		lines,
-		"- Use exec_shell to run `nix shell ... --command /bin/bash -c '<command>'`; the runtime assembles this automatically from `packages` + `command`.",
+		"- Use exec_nix_shell_bash by providing the user command in `command` and the needed nix installables in `packages`; the sandbox runtime provisions those packages and executes the command via nix shell and bash.",
 	)
 	lines = append(
 		lines,
@@ -232,7 +232,7 @@ func composeSystemPrompt(
 	)
 	lines = append(
 		lines,
-		"- Use web_fetch for known web page URLs: it returns cleaned markdown plus slice metadata and is preferred over exec_shell with curl for ordinary webpage reads.",
+		"- Use web_fetch for known web page URLs: it returns cleaned markdown plus slice metadata and is preferred over using exec_nix_shell_bash with curl for ordinary webpage reads.",
 		"- Use web_search for discovering current sources, then use web_fetch on a chosen result URL when you need page contents.",
 	)
 	if nixSummary := formatBinarySummary(info.NixPath, info.NixVersion); nixSummary != "" {

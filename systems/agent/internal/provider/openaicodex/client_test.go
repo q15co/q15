@@ -310,7 +310,7 @@ func TestStreamSnapshotRecordsTextRefusalAndToolCalls(t *testing.T) {
 			ID:        "fc-1",
 			Type:      "function_call",
 			CallID:    "call-1",
-			Name:      "exec_shell",
+			Name:      "exec_nix_shell_bash",
 			Arguments: `{"command":"pwd"}`,
 		},
 	})
@@ -324,7 +324,7 @@ func TestStreamSnapshotRecordsTextRefusalAndToolCalls(t *testing.T) {
 	if len(snapshot.toolCalls) != 1 {
 		t.Fatalf("snapshot tool calls len = %d, want 1", len(snapshot.toolCalls))
 	}
-	if snapshot.toolCalls[0].ID != "call-1" || snapshot.toolCalls[0].Name != "exec_shell" {
+	if snapshot.toolCalls[0].ID != "call-1" || snapshot.toolCalls[0].Name != "exec_nix_shell_bash" {
 		t.Fatalf("unexpected snapshot tool call: %#v", snapshot.toolCalls[0])
 	}
 }
@@ -342,7 +342,7 @@ func TestMergeResultWithStreamSnapshotUsesSnapshotFallback(t *testing.T) {
 			ID:        "fc-1",
 			Type:      "function_call",
 			CallID:    "call-1",
-			Name:      "exec_shell",
+			Name:      "exec_nix_shell_bash",
 			Arguments: `{"command":"pwd"}`,
 		},
 	})

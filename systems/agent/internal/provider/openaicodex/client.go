@@ -1,3 +1,4 @@
+// Package openaicodex implements the OpenAI Codex-backed model client.
 package openaicodex
 
 import (
@@ -21,6 +22,7 @@ const (
 
 type tokenSource func(context.Context) (token string, accountID string, err error)
 
+// Client adapts the OpenAI Codex responses API to the agent model interface.
 type Client struct {
 	client      openai.Client
 	tokenSource tokenSource
@@ -28,6 +30,7 @@ type Client struct {
 
 var _ agent.ModelClient = (*Client)(nil)
 
+// NewClient constructs a Codex-backed model client with q15 defaults.
 func NewClient() (*Client, error) {
 	client := openai.NewClient(
 		option.WithBaseURL(codexBaseURL),
@@ -40,6 +43,7 @@ func NewClient() (*Client, error) {
 	}, nil
 }
 
+// Complete sends a completion request to the Codex responses API.
 func (c *Client) Complete(
 	ctx context.Context,
 	model string,

@@ -164,48 +164,56 @@ func Prepare(ctx context.Context, cfg Settings) error {
 	return nil
 }
 
-// Exec runs command inside the prepared sandbox and returns stdout.
-func Exec(ctx context.Context, cfg Settings, command string) (string, error) {
+// ExecRaw runs a raw command inside the prepared sandbox and returns stdout.
+func ExecRaw(ctx context.Context, cfg Settings, command string) (string, error) {
 	cfg = normalizeSettings(cfg)
 	command = strings.TrimSpace(command)
 	if command == "" {
 		return "", errors.New("command is required")
 	}
-	if err := cfg.Validate(); err != nil {
-		return "", fmt.Errorf("invalid sandbox config: %w", err)
-	}
-	if err := ctx.Err(); err != nil {
-		verbosef("Exec: context error before start: %v", err)
-		return "", err
-	}
-	if err := ensureBuildahProcessEnvironment(); err != nil {
-		verbosef("Exec: buildah process environment failed: %v", err)
-		return "", fmt.Errorf("prepare buildah process environment: %w", err)
-	}
-	if _, err := ensureSharedNixHostDir(); err != nil {
-		verbosef("Exec: shared nix host dir setup failed: %v", err)
-		return "", fmt.Errorf("prepare shared nix host dir: %w", err)
-	}
-
-	store, err := openStore()
-	if err != nil {
-		verbosef("Exec: openStore failed: %v", err)
-		return "", fmt.Errorf("open container storage: %w", err)
-	}
-	builder, err := openOrCreateBuilder(ctx, store, cfg)
-	if err != nil {
-		verbosef("Exec: openOrCreateBuilder failed: %v", err)
-		return "", fmt.Errorf("ensure build container %q: %w", cfg.ContainerName, err)
-	}
-
 	verbosef(
-		"Exec: running command in container=%q workdir=%q mount=%q->%q command=%q",
+		"ExecRaw: running command in container=%q workdir=%q mount=%q->%q command=%q",
 		cfg.ContainerName,
 		cfg.WorkspaceDir,
 		cfg.WorkspaceHostDir,
 		cfg.WorkspaceDir,
 		command,
 	)
+	return execPreparedCommand(ctx, cfg, command, "ExecRaw")
+}
+
+func execPreparedCommand(
+	ctx context.Context,
+	cfg Settings,
+	command string,
+	actionName string,
+) (string, error) {
+	if err := cfg.Validate(); err != nil {
+		return "", fmt.Errorf("invalid sandbox config: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		verbosef("%s: context error before start: %v", actionName, err)
+		return "", err
+	}
+	if err := ensureBuildahProcessEnvironment(); err != nil {
+		verbosef("%s: buildah process environment failed: %v", actionName, err)
+		return "", fmt.Errorf("prepare buildah process environment: %w", err)
+	}
+	if _, err := ensureSharedNixHostDir(); err != nil {
+		verbosef("%s: shared nix host dir setup failed: %v", actionName, err)
+		return "", fmt.Errorf("prepare shared nix host dir: %w", err)
+	}
+
+	store, err := openStore()
+	if err != nil {
+		verbosef("%s: openStore failed: %v", actionName, err)
+		return "", fmt.Errorf("open container storage: %w", err)
+	}
+	builder, err := openOrCreateBuilder(ctx, store, cfg)
+	if err != nil {
+		verbosef("%s: openOrCreateBuilder failed: %v", actionName, err)
+		return "", fmt.Errorf("ensure build container %q: %w", cfg.ContainerName, err)
+	}
 	return runInBuilder(builder, cfg, command), nil
 }
 

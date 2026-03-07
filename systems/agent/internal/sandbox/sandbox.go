@@ -126,7 +126,7 @@ func (s *Sandbox) Prepare(ctx context.Context) error {
 		return err
 	}
 
-	if _, err := s.runHelperLocked(ctx, "prepare", ""); err != nil {
+	if _, err := s.runHelperLocked(ctx, "prepare", newHelperRequest(s.cfg)); err != nil {
 		verbosef("Prepare: helper failed: %v", err)
 		return err
 	}
@@ -136,8 +136,8 @@ func (s *Sandbox) Prepare(ctx context.Context) error {
 	return nil
 }
 
-// Exec runs command inside the prepared sandbox and returns stdout.
-func (s *Sandbox) Exec(ctx context.Context, command string) (string, error) {
+// ExecRaw runs a raw command inside the prepared sandbox and returns stdout.
+func (s *Sandbox) ExecRaw(ctx context.Context, command string) (string, error) {
 	command = strings.TrimSpace(command)
 	if command == "" {
 		return "", errors.New("command is required")
@@ -150,27 +150,67 @@ func (s *Sandbox) Exec(ctx context.Context, command string) (string, error) {
 		return "", errors.New("sandbox is not prepared")
 	}
 	if err := ctx.Err(); err != nil {
-		verbosef("Exec: context error before run for container=%q: %v", s.cfg.ContainerName, err)
+		verbosef("ExecRaw: context error before run for container=%q: %v", s.cfg.ContainerName, err)
 		return "", err
 	}
 
 	verbosef(
-		"Exec: running command in container=%q workdir=%q mount=%q->%q command=%q",
+		"ExecRaw: running command in container=%q workdir=%q mount=%q->%q command=%q",
 		s.cfg.ContainerName,
 		s.cfg.WorkspaceDir,
 		s.cfg.WorkspaceHostDir,
 		s.cfg.WorkspaceDir,
 		command,
 	)
-	return s.runHelperLocked(ctx, "exec", command)
+	return s.runHelperLocked(ctx, "exec-raw", newRawExecHelperRequest(s.cfg, command))
+}
+
+// ExecNixShellBash runs a command inside the prepared sandbox via nix shell and
+// bash with explicit Nix packages.
+func (s *Sandbox) ExecNixShellBash(
+	ctx context.Context,
+	command string,
+	packages []string,
+) (string, error) {
+	req, err := newExecNixShellBashRequest(command, packages)
+	if err != nil {
+		return "", err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.prepared {
+		return "", errors.New("sandbox is not prepared")
+	}
+	if err := ctx.Err(); err != nil {
+		verbosef(
+			"ExecNixShellBash: context error before run for container=%q: %v",
+			s.cfg.ContainerName,
+			err,
+		)
+		return "", err
+	}
+
+	logExecNixShellBashRequest(s.cfg.ContainerName, req)
+	output, err := s.runHelperLocked(
+		ctx,
+		"exec-nix-shell-bash",
+		newExecNixShellBashHelperRequest(s.cfg, req),
+	)
+	if err != nil {
+		logExecNixShellBashFailure(s.cfg.ContainerName, req, err)
+		return "", err
+	}
+	return output, nil
 }
 
 func (s *Sandbox) runHelperLocked(
 	ctx context.Context,
 	action string,
-	command string,
+	req sandboxcontract.HelperRequest,
 ) (string, error) {
-	resp, err := s.callHelperLocked(ctx, action, command)
+	resp, err := s.callHelperLocked(ctx, action, req)
 	if err != nil {
 		return "", err
 	}
@@ -181,7 +221,7 @@ func (s *Sandbox) helperMetadata(ctx context.Context) (RuntimeMetadata, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	resp, err := s.callHelperLocked(ctx, "metadata", "")
+	resp, err := s.callHelperLocked(ctx, "metadata", newHelperRequest(s.cfg))
 	if err != nil {
 		return RuntimeMetadata{}, err
 	}
@@ -194,17 +234,14 @@ func (s *Sandbox) helperMetadata(ctx context.Context) (RuntimeMetadata, error) {
 func (s *Sandbox) callHelperLocked(
 	ctx context.Context,
 	action string,
-	command string,
+	req sandboxcontract.HelperRequest,
 ) (sandboxcontract.HelperResponse, error) {
 	helperBin, err := s.helperBinaryLocked()
 	if err != nil {
 		return sandboxcontract.HelperResponse{}, err
 	}
 
-	reqBytes, err := json.Marshal(sandboxcontract.HelperRequest{
-		Settings: toContractSettings(s.cfg),
-		Command:  command,
-	})
+	reqBytes, err := json.Marshal(req)
 	if err != nil {
 		return sandboxcontract.HelperResponse{}, fmt.Errorf("marshal helper request: %w", err)
 	}
@@ -283,6 +320,61 @@ func toContractSettings(cfg Settings) sandboxcontract.Settings {
 		MemoryDir:        cfg.MemoryDir,
 		Proxy:            cfg.Proxy,
 	}
+}
+
+func newHelperRequest(cfg Settings) sandboxcontract.HelperRequest {
+	return sandboxcontract.HelperRequest{Settings: toContractSettings(cfg)}
+}
+
+func newRawExecHelperRequest(cfg Settings, command string) sandboxcontract.HelperRequest {
+	req := newHelperRequest(cfg)
+	req.Command = command
+	return req
+}
+
+func newExecNixShellBashHelperRequest(
+	cfg Settings,
+	req ExecNixShellBashRequest,
+) sandboxcontract.HelperRequest {
+	payload := newHelperRequest(cfg)
+	payload.ExecNixShellBash = &sandboxcontract.ExecNixShellBashRequest{
+		Command:  req.Command,
+		Packages: append([]string(nil), req.Packages...),
+	}
+	return payload
+}
+
+func newExecNixShellBashRequest(
+	command string,
+	packages []string,
+) (ExecNixShellBashRequest, error) {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return ExecNixShellBashRequest{}, errors.New("command is required")
+	}
+	normalizedPackages, err := normalizePackages(packages)
+	if err != nil {
+		return ExecNixShellBashRequest{}, err
+	}
+	return ExecNixShellBashRequest{
+		Command:  command,
+		Packages: normalizedPackages,
+	}, nil
+}
+
+func normalizePackages(packages []string) ([]string, error) {
+	if len(packages) == 0 {
+		return nil, errors.New("packages are required")
+	}
+	out := make([]string, 0, len(packages))
+	for i, pkg := range packages {
+		pkg = strings.TrimSpace(pkg)
+		if pkg == "" {
+			return nil, fmt.Errorf("packages[%d] must not be empty", i)
+		}
+		out = append(out, pkg)
+	}
+	return out, nil
 }
 
 func helperCommand(ctx context.Context, helperBin, action string) *exec.Cmd {

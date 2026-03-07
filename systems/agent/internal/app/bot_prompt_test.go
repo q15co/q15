@@ -27,7 +27,10 @@ func TestComposeSystemPromptIncludesOSRuntimeAndNixBashDetails(t *testing.T) {
 		"- OS: Debian GNU/Linux 12 (bookworm)",
 		"- Sandbox runtime: nix-only",
 		"- Base image: registry.example/sandbox:test",
-		"- Use web_fetch for known web page URLs: it returns cleaned markdown plus slice metadata and is preferred over exec_shell with curl for ordinary webpage reads.",
+		"- Package management model: nix-only via exec_nix_shell_bash.",
+		"- Every exec_nix_shell_bash call must include a non-empty `packages` array of nix installables (for example `nixpkgs#git`).",
+		"- Use exec_nix_shell_bash by providing the user command in `command` and the needed nix installables in `packages`; the sandbox runtime provisions those packages and executes the command via nix shell and bash.",
+		"- Use web_fetch for known web page URLs: it returns cleaned markdown plus slice metadata and is preferred over using exec_nix_shell_bash with curl for ordinary webpage reads.",
 		"- Use web_search for discovering current sources, then use web_fetch on a chosen result URL when you need page contents.",
 		"- Nix: /root/.nix-profile/bin/nix (nix (Nix) 2.33.3)",
 		"- Bash: /bin/bash (GNU bash, version 5.2.15(1)-release (x86_64-pc-linux-gnu))",
@@ -41,6 +44,7 @@ func TestComposeSystemPromptIncludesOSRuntimeAndNixBashDetails(t *testing.T) {
 		"- Detected package manager binary:",
 		"- Available shells:",
 		"- Preinstalled tools detected:",
+		"exec_shell",
 	} {
 		if strings.Contains(prompt, notWanted) {
 			t.Fatalf("prompt should not contain %q:\n%s", notWanted, prompt)

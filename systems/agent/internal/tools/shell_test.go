@@ -7,16 +7,22 @@ import (
 )
 
 type recordingExec struct {
-	lastCommand string
+	lastCommand  string
+	lastPackages []string
 }
 
-func (r *recordingExec) Exec(_ context.Context, command string) (string, error) {
+func (r *recordingExec) ExecNixShellBash(
+	_ context.Context,
+	command string,
+	packages []string,
+) (string, error) {
 	r.lastCommand = command
+	r.lastPackages = append([]string(nil), packages...)
 	return "ok", nil
 }
 
-func TestShellRunRejectsMissingPackages(t *testing.T) {
-	shell := NewShell(&recordingExec{})
+func TestNixShellBashRunRejectsMissingPackages(t *testing.T) {
+	shell := NewNixShellBash(&recordingExec{})
 
 	_, err := shell.Run(context.Background(), `{"command":"echo hi"}`)
 	if err == nil {
@@ -27,8 +33,8 @@ func TestShellRunRejectsMissingPackages(t *testing.T) {
 	}
 }
 
-func TestShellRunRejectsEmptyPackageEntries(t *testing.T) {
-	shell := NewShell(&recordingExec{})
+func TestNixShellBashRunRejectsEmptyPackageEntries(t *testing.T) {
+	shell := NewNixShellBash(&recordingExec{})
 
 	_, err := shell.Run(
 		context.Background(),
@@ -42,41 +48,9 @@ func TestShellRunRejectsEmptyPackageEntries(t *testing.T) {
 	}
 }
 
-func TestBuildNixShellExecCommand(t *testing.T) {
-	got := buildNixShellExecCommand("echo 'hello world'", []string{"nixpkgs#git", "nixpkgs#jq"})
-
-	if !strings.Contains(
-		got,
-		"nix --extra-experimental-features 'nix-command flakes' --option ssl-cert-file",
-	) {
-		t.Fatalf("missing nix flakes invocation: %q", got)
-	}
-	if !strings.Contains(
-		got,
-		"if [ -n \"${NIX_SSL_CERT_FILE:-}\" ] && [ ! -r \"${NIX_SSL_CERT_FILE}\" ]",
-	) {
-		t.Fatalf("missing NIX_SSL_CERT_FILE readability precheck: %q", got)
-	}
-	if !strings.Contains(
-		got,
-		"--option ssl-cert-file \"${NIX_SSL_CERT_FILE:-/etc/ssl/certs/ca-certificates.crt}\"",
-	) {
-		t.Fatalf("missing nix ssl-cert-file option: %q", got)
-	}
-	if !strings.Contains(got, "'nixpkgs#git' 'nixpkgs#jq'") {
-		t.Fatalf("missing packages in generated command: %q", got)
-	}
-	if !strings.Contains(got, "--command /bin/bash -c") {
-		t.Fatalf("missing shell command invocation: %q", got)
-	}
-	if !strings.Contains(got, `'echo '"'"'hello world'"'"''`) {
-		t.Fatalf("missing quoted command payload: %q", got)
-	}
-}
-
-func TestShellRunExecutesBuiltNixCommand(t *testing.T) {
+func TestNixShellBashRunForwardsStructuredExecNixShellBashRequest(t *testing.T) {
 	rec := &recordingExec{}
-	shell := NewShell(rec)
+	shell := NewNixShellBash(rec)
 
 	out, err := shell.Run(
 		context.Background(),
@@ -88,10 +62,10 @@ func TestShellRunExecutesBuiltNixCommand(t *testing.T) {
 	if out != "ok" {
 		t.Fatalf("Run() output = %q, want %q", out, "ok")
 	}
-	if !strings.Contains(
-		rec.lastCommand,
-		"nix --extra-experimental-features 'nix-command flakes' --option ssl-cert-file \"${NIX_SSL_CERT_FILE:-/etc/ssl/certs/ca-certificates.crt}\" shell 'nixpkgs#git'",
-	) {
-		t.Fatalf("unexpected executed command: %q", rec.lastCommand)
+	if got, want := rec.lastCommand, "git --version"; got != want {
+		t.Fatalf("forwarded command = %q, want %q", got, want)
+	}
+	if got, want := strings.Join(rec.lastPackages, ","), "nixpkgs#git"; got != want {
+		t.Fatalf("forwarded packages = %q, want %q", got, want)
 	}
 }

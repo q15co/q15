@@ -39,14 +39,17 @@ func main() {
 
 func parseAction(args []string) (string, error) {
 	if len(args) != 2 {
-		return "", fmt.Errorf("usage: %s <prepare|exec|metadata>", os.Args[0])
+		return "", fmt.Errorf(
+			"usage: %s <prepare|exec-raw|exec-nix-shell-bash|metadata>",
+			os.Args[0],
+		)
 	}
 	return args[1], nil
 }
 
 func actionRequiresBuildahEnv(action string) bool {
 	switch action {
-	case "prepare", "exec":
+	case "prepare", "exec-raw", "exec-nix-shell-bash":
 		return true
 	case "metadata":
 		return false
@@ -66,7 +69,7 @@ func run(action string) error {
 			},
 		})
 		return nil
-	case "prepare", "exec":
+	case "prepare", "exec-raw", "exec-nix-shell-bash":
 	default:
 		return fmt.Errorf("unsupported action %q", action)
 	}
@@ -92,8 +95,25 @@ func run(action string) error {
 		}
 		writeResponse(sandboxcontract.HelperResponse{})
 		return nil
-	case "exec":
-		out, err := sandboxbuildah.Exec(context.Background(), cfg, req.Command)
+	case "exec-raw":
+		out, err := sandboxbuildah.ExecRaw(context.Background(), cfg, req.Command)
+		if err != nil {
+			return err
+		}
+		writeResponse(sandboxcontract.HelperResponse{Output: out})
+		return nil
+	case "exec-nix-shell-bash":
+		if req.ExecNixShellBash == nil {
+			return fmt.Errorf("missing exec_nix_shell_bash request payload")
+		}
+		out, err := sandboxbuildah.ExecNixShellBash(
+			context.Background(),
+			cfg,
+			sandboxbuildah.ExecNixShellBashRequest{
+				Command:  req.ExecNixShellBash.Command,
+				Packages: append([]string(nil), req.ExecNixShellBash.Packages...),
+			},
+		)
 		if err != nil {
 			return err
 		}

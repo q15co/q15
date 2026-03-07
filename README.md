@@ -222,9 +222,9 @@ Sandbox runtime is hardcoded to a rootless-Buildah-friendly nix-only mode:
 - Sandbox networking is always enabled
 - Nix is auto-bootstrapped during `Prepare` if not already installed
 
-### exec_shell Usage
+### exec_nix_shell_bash Usage
 
-`exec_shell` is nix-first and requires packages per call.
+`exec_nix_shell_bash` runs commands via nix shell and bash, and requires packages per call.
 
 Required arguments:
 
@@ -240,11 +240,12 @@ Example tool payload:
 }
 ```
 
-Runtime execution shape:
+Runtime behavior:
 
-```bash
-nix --extra-experimental-features "nix-command flakes" shell <packages...> --command /bin/bash -c '<command>'
-```
+- Pass the user shell snippet in `command`.
+- Pass the required Nix installables in `packages`.
+- The sandbox runtime provisions those packages and executes the command.
+- The exact Nix invocation is sandbox-owned and may change without changing the tool schema.
 
 First run may require network access to bootstrap nix and fetch packages.
 

@@ -10,26 +10,29 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/agent"
 )
 
-// CommandExecutor runs a prepared shell command inside the sandbox runtime.
-type CommandExecutor interface {
-	Exec(ctx context.Context, command string) (string, error)
+// NixShellBashExecutor runs a command inside the sandbox via nix shell and
+// bash with explicit packages.
+type NixShellBashExecutor interface {
+	ExecNixShellBash(ctx context.Context, command string, packages []string) (string, error)
 }
 
-// Shell executes commands in the sandbox through a nix shell wrapper.
-type Shell struct {
-	exec CommandExecutor
+// NixShellBash executes commands in the sandbox via nix shell and bash with
+// explicitly requested packages.
+type NixShellBash struct {
+	exec NixShellBashExecutor
 }
 
-// NewShell constructs an exec_shell tool backed by the provided executor.
-func NewShell(exec CommandExecutor) *Shell {
-	return &Shell{exec: exec}
+// NewNixShellBash constructs an exec_nix_shell_bash tool backed by the
+// provided executor.
+func NewNixShellBash(exec NixShellBashExecutor) *NixShellBash {
+	return &NixShellBash{exec: exec}
 }
 
 // Definition returns the tool schema exposed to the model.
-func (s *Shell) Definition() agent.ToolDefinition {
+func (s *NixShellBash) Definition() agent.ToolDefinition {
 	return agent.ToolDefinition{
-		Name:        "exec_shell",
-		Description: "Execute a command in the sandbox using nix shell with explicitly requested packages",
+		Name:        "exec_nix_shell_bash",
+		Description: "Execute a command in the sandbox via nix shell and /bin/bash -c with explicitly requested packages",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -50,7 +53,7 @@ func (s *Shell) Definition() agent.ToolDefinition {
 }
 
 // Run executes one shell command from raw JSON tool arguments.
-func (s *Shell) Run(ctx context.Context, arguments string) (string, error) {
+func (s *NixShellBash) Run(ctx context.Context, arguments string) (string, error) {
 	var args struct {
 		Command  string   `json:"command"`
 		Packages []string `json:"packages"`
@@ -70,14 +73,7 @@ func (s *Shell) Run(ctx context.Context, arguments string) (string, error) {
 		return "", fmt.Errorf("no command executor configured")
 	}
 
-	command := buildNixShellExecCommand(args.Command, packages)
-	fmt.Printf("CMD> %s\n", command)
-	output, err := s.exec.Exec(ctx, command)
-	if err != nil {
-		return "", err
-	}
-	fmt.Printf("OUT> %s\n", output)
-	return output, nil
+	return s.exec.ExecNixShellBash(ctx, args.Command, packages)
 }
 
 func normalizePackages(packages []string) ([]string, error) {
@@ -93,33 +89,4 @@ func normalizePackages(packages []string) ([]string, error) {
 		out = append(out, pkg)
 	}
 	return out, nil
-}
-
-func buildNixShellExecCommand(command string, packages []string) string {
-	parts := []string{
-		"command -v nix >/dev/null 2>&1 || { echo 'nix not found in sandbox' >&2; exit 127; };",
-		"if [ -n \"${NIX_SSL_CERT_FILE:-}\" ] && [ ! -r \"${NIX_SSL_CERT_FILE}\" ]; then echo \"NIX_SSL_CERT_FILE is set but not readable: ${NIX_SSL_CERT_FILE}\" >&2; exit 78; fi;",
-		"nix",
-		"--extra-experimental-features",
-		shellSingleQuote("nix-command flakes"),
-		"--option",
-		"ssl-cert-file",
-		"\"${NIX_SSL_CERT_FILE:-/etc/ssl/certs/ca-certificates.crt}\"",
-		"shell",
-	}
-	for _, pkg := range packages {
-		parts = append(parts, shellSingleQuote(pkg))
-	}
-	parts = append(
-		parts,
-		"--command",
-		"/bin/bash",
-		"-c",
-		shellSingleQuote(command),
-	)
-	return strings.Join(parts, " ")
-}
-
-func shellSingleQuote(value string) string {
-	return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'"
 }
