@@ -128,3 +128,31 @@ func TestStartSandboxProxy_AllowsReplacePlaceholderRules(t *testing.T) {
 		t.Fatalf("expected sandbox proxy handle/settings")
 	}
 }
+
+func TestStartSandboxProxy_AllowsSetBasicAuthRules(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	handle, err := startSandboxProxy(ctx, &config.SandboxProxyRuntime{
+		Enabled:             true,
+		ListenAddr:          "127.0.0.1:0",
+		ContainerProxyHost:  "10.0.2.2",
+		CACertContainerPath: "/run/q15-proxy/ca.crt",
+		SecretValues:        map[string]string{"gh_token": "abc"},
+		Rules: []config.SandboxProxyRule{
+			{
+				MatchHosts: []string{"github.com"},
+				SetBasicAuth: &config.SandboxProxyBasicAuth{
+					Username: "x-access-token",
+					Secret:   "gh_token",
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected basic-auth-enabled proxy config to start, got %v", err)
+	}
+	if handle == nil || handle.sandboxSettings == nil {
+		t.Fatalf("expected sandbox proxy handle/settings")
+	}
+}

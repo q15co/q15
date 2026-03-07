@@ -1,9 +1,11 @@
 package egressproxy
 
 import (
+	"encoding/base64"
 	"fmt"
 	"net"
 	"net/http"
+	"net/textproto"
 	"strings"
 )
 
@@ -13,7 +15,14 @@ type Rule struct {
 	MatchHosts         []string
 	MatchPathPrefixes  []string
 	SetHeader          map[string]string
+	SetBasicAuth       *BasicAuth
 	ReplacePlaceholder []PlaceholderReplacement
+}
+
+// BasicAuth injects an Authorization Basic header from a named secret.
+type BasicAuth struct {
+	Username string
+	Secret   string
 }
 
 // PlaceholderReplacement swaps an opaque placeholder for a named secret value.
@@ -28,6 +37,7 @@ type compiledRule struct {
 	matchHosts         map[string]struct{}
 	matchPathPrefixes  []string
 	setHeader          map[string]string
+	setBasicAuthHeader string
 	replacePlaceholder []compiledPlaceholderReplacement
 }
 
@@ -64,12 +74,44 @@ func compileRules(rules []Rule, secretValues map[string]string) ([]compiledRule,
 
 		if len(rule.SetHeader) > 0 {
 			compiled.setHeader = make(map[string]string, len(rule.SetHeader))
+			hasAuthorizationHeader := false
 			for k, v := range rule.SetHeader {
+				headerName := textproto.CanonicalMIMEHeaderKey(strings.TrimSpace(k))
+				if headerName == "" {
+					return nil, fmt.Errorf("rule[%d].set_header contains an empty header name", i)
+				}
 				if _, err := renderSecretTemplate(v, secretValues); err != nil {
 					return nil, fmt.Errorf("rule[%d].set_header[%q]: %w", i, k, err)
 				}
-				compiled.setHeader[k] = v
+				if headerName == "Authorization" {
+					hasAuthorizationHeader = true
+				}
+				compiled.setHeader[headerName] = v
 			}
+			if hasAuthorizationHeader && rule.SetBasicAuth != nil {
+				return nil, fmt.Errorf(
+					"rule[%d] cannot set both set_basic_auth and set_header.Authorization",
+					i,
+				)
+			}
+		}
+		if rule.SetBasicAuth != nil {
+			username := strings.TrimSpace(rule.SetBasicAuth.Username)
+			if username == "" {
+				return nil, fmt.Errorf("rule[%d].set_basic_auth.username is required", i)
+			}
+			secretAlias := strings.ToLower(strings.TrimSpace(rule.SetBasicAuth.Secret))
+			secretValue := strings.TrimSpace(secretValues[secretAlias])
+			if secretValue == "" {
+				return nil, fmt.Errorf(
+					"rule[%d].set_basic_auth.secret missing value for alias %q",
+					i,
+					secretAlias,
+				)
+			}
+			compiled.setBasicAuthHeader = "Basic " + base64.StdEncoding.EncodeToString(
+				[]byte(username+":"+secretValue),
+			)
 		}
 		if len(rule.ReplacePlaceholder) > 0 {
 			compiled.replacePlaceholder = make(
@@ -154,6 +196,9 @@ func (r compiledRule) apply(req *http.Request, secretValues map[string]string) e
 	}
 	for _, repl := range r.replacePlaceholder {
 		applyCompiledPlaceholderReplacement(req, repl)
+	}
+	if r.setBasicAuthHeader != "" {
+		req.Header.Set("Authorization", r.setBasicAuthHeader)
 	}
 	return nil
 }

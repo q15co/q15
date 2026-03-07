@@ -509,6 +509,106 @@ allowed_user_ids = [123456789]
 	}
 }
 
+func TestLoadAgentRuntimes_TOML_WithSandboxProxySetBasicAuth(t *testing.T) {
+	t.Setenv("MOONSHOT_API_KEY", "api-123")
+	t.Setenv("JARED_TELEGRAM_TOKEN", "tg-123")
+	t.Setenv("GH_TOKEN", "ghp_test_123")
+
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte(`
+[[provider]]
+name = "moonshot"
+type = "openai-compatible"
+base_url = "https://api.moonshot.ai/v1"
+key_env = "MOONSHOT_API_KEY"
+
+[[agent]]
+name = "Jared"
+models = ["moonshot/kimi-k2.5"]
+
+[agent.sandbox]
+container_name = "q15-jared"
+workspace_host_dir = "/tmp/q15-workspaces/jared"
+workspace_dir = "/workspace"
+
+[agent.sandbox.proxy]
+secrets = ["gh_token"]
+
+[[agent.sandbox.proxy.rule]]
+name = "github-api"
+match_hosts = ["api.github.com"]
+set_header = { Authorization = "token {{secret.gh_token}}" }
+
+[[agent.sandbox.proxy.rule]]
+name = "github-git"
+match_hosts = ["github.com"]
+set_basic_auth = { username = "x-access-token", secret = "gh_token" }
+
+[[agent.sandbox.proxy.env]]
+name = "GH_TOKEN"
+secret = "gh_token"
+rules = ["github-api"]
+
+[agent.telegram]
+token_env = "JARED_TELEGRAM_TOKEN"
+allowed_user_ids = [123456789]
+`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	runtimes, err := LoadAgentRuntimes(path)
+	if err != nil {
+		t.Fatalf("load runtimes: %v", err)
+	}
+	if len(runtimes) != 1 {
+		t.Fatalf("expected 1 runtime, got %d", len(runtimes))
+	}
+
+	rt := runtimes[0]
+	if rt.SandboxProxy == nil {
+		t.Fatalf("expected sandbox proxy runtime to be resolved")
+	}
+	if got := rt.SandboxProxy.SecretValues["gh_token"]; got != "ghp_test_123" {
+		t.Fatalf("unexpected resolved proxy secret value: %q", got)
+	}
+
+	rulesByName := make(map[string]SandboxProxyRule, len(rt.SandboxProxy.Rules))
+	for _, rule := range rt.SandboxProxy.Rules {
+		rulesByName[rule.Name] = rule
+	}
+
+	apiRule, ok := rulesByName["github-api"]
+	if !ok {
+		t.Fatalf("expected github-api rule, got %#v", rt.SandboxProxy.Rules)
+	}
+	if apiRule.SetBasicAuth != nil {
+		t.Fatalf("expected github-api rule to omit basic auth, got %#v", apiRule.SetBasicAuth)
+	}
+	if len(apiRule.ReplacePlaceholder) != 1 {
+		t.Fatalf("expected github-api placeholder replacement, got %#v", apiRule.ReplacePlaceholder)
+	}
+
+	gitRule, ok := rulesByName["github-git"]
+	if !ok {
+		t.Fatalf("expected github-git rule, got %#v", rt.SandboxProxy.Rules)
+	}
+	if gitRule.SetBasicAuth == nil {
+		t.Fatalf("expected github-git rule to include basic auth")
+	}
+	if got := gitRule.SetBasicAuth.Username; got != "x-access-token" {
+		t.Fatalf("unexpected basic auth username: %q", got)
+	}
+	if got := gitRule.SetBasicAuth.Secret; got != "gh_token" {
+		t.Fatalf("unexpected basic auth secret alias: %q", got)
+	}
+	if len(gitRule.ReplacePlaceholder) != 0 {
+		t.Fatalf(
+			"expected github-git rule to avoid placeholder replacement, got %#v",
+			gitRule.ReplacePlaceholder,
+		)
+	}
+}
+
 func TestValidateRejectsSandboxProxyBodyPlaceholderReplacement(t *testing.T) {
 	cfg := Config{
 		Providers: []Provider{
@@ -554,6 +654,92 @@ func TestValidateRejectsSandboxProxyBodyPlaceholderReplacement(t *testing.T) {
 
 	if err := cfg.Validate(); err == nil {
 		t.Fatalf("expected validation error for body placeholder replacement in v1")
+	}
+}
+
+func TestValidateRejectsInvalidSandboxProxySetBasicAuthConfig(t *testing.T) {
+	baseConfig := func() Config {
+		return Config{
+			Providers: []Provider{
+				{
+					Name:    "moonshot",
+					Type:    "openai-compatible",
+					BaseURL: "https://api.moonshot.ai/v1",
+					KeyEnv:  "MOONSHOT_API_KEY",
+				},
+			},
+			Agents: []Agent{
+				{
+					Name:   "proxy-agent",
+					Models: []string{"moonshot/kimi-k2.5"},
+					Sandbox: Sandbox{
+						ContainerName:    "q15-proxy-agent",
+						WorkspaceHostDir: "/tmp/q15-workspaces/proxy-agent",
+						WorkspaceDir:     "/workspace",
+						Proxy: &SandboxProxy{
+							Secrets: []string{"gh_token"},
+							Rules: []SandboxProxyRule{
+								{Name: "github-git", MatchHosts: []string{"github.com"}},
+							},
+						},
+					},
+					Telegram: Telegram{
+						TokenEnv:       "TEST_TELEGRAM_TOKEN",
+						AllowedUserIDs: []int64{123456789},
+					},
+				},
+			},
+		}
+	}
+
+	tests := []struct {
+		name    string
+		mutate  func(*SandboxProxyRule)
+		wantErr string
+	}{
+		{
+			name: "empty username",
+			mutate: func(rule *SandboxProxyRule) {
+				rule.SetBasicAuth = &SandboxProxyBasicAuth{Secret: "gh_token"}
+			},
+			wantErr: "set_basic_auth.username is required",
+		},
+		{
+			name: "unknown secret alias",
+			mutate: func(rule *SandboxProxyRule) {
+				rule.SetBasicAuth = &SandboxProxyBasicAuth{
+					Username: "x-access-token",
+					Secret:   "other_token",
+				}
+			},
+			wantErr: `set_basic_auth.secret "other_token" is not defined in proxy.secrets`,
+		},
+		{
+			name: "conflicts with authorization header",
+			mutate: func(rule *SandboxProxyRule) {
+				rule.SetHeader = map[string]string{
+					"authorization": "token {{secret.gh_token}}",
+				}
+				rule.SetBasicAuth = &SandboxProxyBasicAuth{
+					Username: "x-access-token",
+					Secret:   "gh_token",
+				}
+			},
+			wantErr: "cannot set both set_basic_auth and set_header.Authorization",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := baseConfig()
+			rule := &cfg.Agents[0].Sandbox.Proxy.Rules[0]
+			tc.mutate(rule)
+			if err := cfg.Validate(); err == nil {
+				t.Fatalf("expected validation error")
+			} else if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("unexpected validation error: %v", err)
+			}
+		})
 	}
 }
 

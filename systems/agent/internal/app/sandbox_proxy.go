@@ -83,10 +83,21 @@ func toEgressProxyRules(rules []config.SandboxProxyRule) []egressproxy.Rule {
 			MatchHosts:         append([]string(nil), rule.MatchHosts...),
 			MatchPathPrefixes:  append([]string(nil), rule.MatchPathPrefixes...),
 			SetHeader:          maps.Clone(rule.SetHeader),
+			SetBasicAuth:       cloneBasicAuth(rule.SetBasicAuth),
 			ReplacePlaceholder: clonePlaceholderReplacements(rule.ReplacePlaceholder),
 		})
 	}
 	return out
+}
+
+func cloneBasicAuth(value *config.SandboxProxyBasicAuth) *egressproxy.BasicAuth {
+	if value == nil {
+		return nil
+	}
+	return &egressproxy.BasicAuth{
+		Username: value.Username,
+		Secret:   value.Secret,
+	}
 }
 
 func clonePlaceholderReplacements(

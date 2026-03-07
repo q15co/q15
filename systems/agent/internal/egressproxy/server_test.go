@@ -2,6 +2,9 @@ package egressproxy
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -180,6 +183,67 @@ func TestStart_AppliesSetHeaderAndStripsSensitiveResponseHeaders(t *testing.T) {
 	}
 }
 
+func TestStart_AppliesSetBasicAuthAndStripsSensitiveResponseHeaders(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var sawAuthHeader atomic.Value
+	sawAuthHeader.Store("")
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sawAuthHeader.Store(r.Header.Get("Authorization"))
+		w.Header().Set("Authorization", "upstream-secret")
+		_, _ = io.WriteString(w, "ok")
+	}))
+	defer upstream.Close()
+
+	upstreamURL, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatalf("url.Parse(upstream.URL) error = %v", err)
+	}
+
+	proxy, err := Start(ctx, Config{
+		SecretValues: map[string]string{"gh_token": "test-token"},
+		Rules: []Rule{
+			{
+				Name:              "github-git",
+				MatchHosts:        []string{upstreamURL.Host},
+				MatchPathPrefixes: []string{"/"},
+				SetBasicAuth: &BasicAuth{
+					Username: "x-access-token",
+					Secret:   "gh_token",
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	resp, err := newProxyClient(
+		t,
+		proxy,
+	).Get(upstream.URL + "/repo.git/info/refs?service=git-upload-pack")
+	if err != nil {
+		t.Fatalf("client.Get() error = %v", err)
+	}
+	defer resp.Body.Close()
+
+	if got := sawAuthHeader.Load().(string); got != basicAuthHeader(
+		"x-access-token",
+		"test-token",
+	) {
+		t.Fatalf(
+			"upstream Authorization header = %q, want %q",
+			got,
+			basicAuthHeader("x-access-token", "test-token"),
+		)
+	}
+	if got := resp.Header.Get("Authorization"); got != "" {
+		t.Fatalf("expected response Authorization header to be stripped, got %q", got)
+	}
+}
+
 func TestStart_ReplacesConfiguredPlaceholdersInHeaderQueryAndPath(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -250,6 +314,74 @@ func TestStart_ReplacesConfiguredPlaceholdersInHeaderQueryAndPath(t *testing.T) 
 	}
 	if got := sawQueryToken.Load().(string); got != "test-token" {
 		t.Fatalf("upstream query token = %q, want %q", got, "test-token")
+	}
+}
+
+func TestStart_DoesNotApplySetBasicAuthForUnmatchedRules(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var matchedAuth atomic.Value
+	var unmatchedAuth atomic.Value
+	matchedAuth.Store("")
+	unmatchedAuth.Store("")
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/match") {
+			matchedAuth.Store(r.Header.Get("Authorization"))
+		} else {
+			unmatchedAuth.Store(r.Header.Get("Authorization"))
+		}
+		_, _ = io.WriteString(w, "ok")
+	}))
+	defer upstream.Close()
+
+	upstreamURL, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatalf("url.Parse(upstream.URL) error = %v", err)
+	}
+
+	proxy, err := Start(ctx, Config{
+		SecretValues: map[string]string{"gh_token": "test-token"},
+		Rules: []Rule{
+			{
+				Name:              "github-git",
+				MatchHosts:        []string{upstreamURL.Host},
+				MatchPathPrefixes: []string{"/match"},
+				SetBasicAuth: &BasicAuth{
+					Username: "x-access-token",
+					Secret:   "gh_token",
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	client := newProxyClient(t, proxy)
+
+	resp, err := client.Get(upstream.URL + "/match/repo.git")
+	if err != nil {
+		t.Fatalf("client.Get(matched) error = %v", err)
+	}
+	resp.Body.Close()
+
+	resp, err = client.Get(upstream.URL + "/other/repo.git")
+	if err != nil {
+		t.Fatalf("client.Get(unmatched) error = %v", err)
+	}
+	resp.Body.Close()
+
+	if got := matchedAuth.Load().(string); got != basicAuthHeader("x-access-token", "test-token") {
+		t.Fatalf(
+			"matched upstream Authorization header = %q, want %q",
+			got,
+			basicAuthHeader("x-access-token", "test-token"),
+		)
+	}
+	if got := unmatchedAuth.Load().(string); got != "" {
+		t.Fatalf("unmatched upstream Authorization header = %q, want empty", got)
 	}
 }
 
@@ -434,6 +566,74 @@ func TestStart_KeepsProxyReplacementStateIsolatedPerServer(t *testing.T) {
 	}
 }
 
+func TestStart_AppliesSetBasicAuthOverHTTPS(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var sawAuthHeader atomic.Value
+	sawAuthHeader.Store("")
+
+	upstream := httptest.NewTLSServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			sawAuthHeader.Store(r.Header.Get("Authorization"))
+			_, _ = io.WriteString(w, "ok")
+		}),
+	)
+	defer upstream.Close()
+
+	upstreamTransport, ok := upstream.Client().Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("unexpected upstream transport type %T", upstream.Client().Transport)
+	}
+	oldDefaultTransport := http.DefaultTransport
+	http.DefaultTransport = upstreamTransport.Clone()
+	defer func() {
+		http.DefaultTransport = oldDefaultTransport
+	}()
+
+	upstreamURL, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatalf("url.Parse(upstream.URL) error = %v", err)
+	}
+
+	proxy, err := Start(ctx, Config{
+		SecretValues: map[string]string{"gh_token": "test-token"},
+		Rules: []Rule{
+			{
+				Name:              "github-git",
+				MatchHosts:        []string{upstreamURL.Host},
+				MatchPathPrefixes: []string{"/"},
+				SetBasicAuth: &BasicAuth{
+					Username: "x-access-token",
+					Secret:   "gh_token",
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	resp, err := newMITMProxyClient(t, proxy).Get(
+		upstream.URL + "/repo.git/info/refs?service=git-receive-pack",
+	)
+	if err != nil {
+		t.Fatalf("client.Get() error = %v", err)
+	}
+	resp.Body.Close()
+
+	if got := sawAuthHeader.Load().(string); got != basicAuthHeader(
+		"x-access-token",
+		"test-token",
+	) {
+		t.Fatalf(
+			"upstream Authorization header = %q, want %q",
+			got,
+			basicAuthHeader("x-access-token", "test-token"),
+		)
+	}
+}
+
 func TestServer_ShouldMITMHostForMatchedRule(t *testing.T) {
 	s := &Server{
 		compiledRules: []compiledRule{
@@ -452,6 +652,10 @@ func TestServer_ShouldMITMHostForMatchedRule(t *testing.T) {
 	}
 }
 
+func basicAuthHeader(username string, password string) string {
+	return "Basic " + base64.StdEncoding.EncodeToString([]byte(username+":"+password))
+}
+
 func newProxyClient(t *testing.T, proxy *Server) *http.Client {
 	t.Helper()
 
@@ -468,6 +672,38 @@ func newProxyClient(t *testing.T, proxy *Server) *http.Client {
 		Timeout: 5 * time.Second,
 		Transport: &http.Transport{
 			Proxy: http.ProxyURL(parsedProxyURL),
+		},
+	}
+}
+
+func newMITMProxyClient(t *testing.T, proxy *Server) *http.Client {
+	t.Helper()
+
+	proxyURL, err := proxy.ProxyURLForContainerHost("127.0.0.1")
+	if err != nil {
+		t.Fatalf("ProxyURLForContainerHost() error = %v", err)
+	}
+	parsedProxyURL, err := url.Parse(proxyURL)
+	if err != nil {
+		t.Fatalf("url.Parse(proxyURL) error = %v", err)
+	}
+
+	caPEM, err := os.ReadFile(proxy.CACertHostPath())
+	if err != nil {
+		t.Fatalf("os.ReadFile(proxy CA cert) error = %v", err)
+	}
+	rootCAs := x509.NewCertPool()
+	if !rootCAs.AppendCertsFromPEM(caPEM) {
+		t.Fatalf("AppendCertsFromPEM() returned false")
+	}
+
+	return &http.Client{
+		Timeout: 5 * time.Second,
+		Transport: &http.Transport{
+			Proxy: http.ProxyURL(parsedProxyURL),
+			TLSClientConfig: &tls.Config{
+				RootCAs: rootCAs,
+			},
 		},
 	}
 }

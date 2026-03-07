@@ -68,7 +68,14 @@ type SandboxProxyRule struct {
 	MatchHosts         []string                             `mapstructure:"match_hosts"`
 	MatchPathPrefixes  []string                             `mapstructure:"match_path_prefixes"`
 	SetHeader          map[string]string                    `mapstructure:"set_header"`
+	SetBasicAuth       *SandboxProxyBasicAuth               `mapstructure:"set_basic_auth"`
 	ReplacePlaceholder []SandboxProxyPlaceholderReplacement `mapstructure:"replace_placeholder"`
+}
+
+// SandboxProxyBasicAuth injects an Authorization Basic header from a managed secret.
+type SandboxProxyBasicAuth struct {
+	Username string `mapstructure:"username"`
+	Secret   string `mapstructure:"secret"`
 }
 
 // SandboxProxyPlaceholderReplacement replaces placeholders with secret values.
@@ -520,9 +527,36 @@ func validateSandboxProxy(proxy *SandboxProxy) error {
 				return fmt.Errorf("rule[%d].match_path_prefixes[%d] must start with /", i, j)
 			}
 		}
+		hasAuthorizationHeader := false
 		for headerName := range rule.SetHeader {
-			if strings.TrimSpace(headerName) == "" {
+			trimmedName := strings.TrimSpace(headerName)
+			if trimmedName == "" {
 				return fmt.Errorf("rule[%d].set_header contains an empty header name", i)
+			}
+			if textproto.CanonicalMIMEHeaderKey(trimmedName) == "Authorization" {
+				hasAuthorizationHeader = true
+			}
+		}
+		if rule.SetBasicAuth != nil {
+			if strings.TrimSpace(rule.SetBasicAuth.Username) == "" {
+				return fmt.Errorf("rule[%d].set_basic_auth.username is required", i)
+			}
+			secretAlias, err := normalizeProxySecretAlias(rule.SetBasicAuth.Secret)
+			if err != nil {
+				return fmt.Errorf("rule[%d].set_basic_auth.secret: %w", i, err)
+			}
+			if _, ok := secretEnvByAlias[secretAlias]; !ok {
+				return fmt.Errorf(
+					"rule[%d].set_basic_auth.secret %q is not defined in proxy.secrets",
+					i,
+					secretAlias,
+				)
+			}
+			if hasAuthorizationHeader {
+				return fmt.Errorf(
+					"rule[%d] cannot set both set_basic_auth and set_header.Authorization",
+					i,
+				)
 			}
 		}
 		for j, repl := range rule.ReplacePlaceholder {
@@ -713,6 +747,12 @@ func normalizeSandboxProxyRules(rules []SandboxProxyRule) []SandboxProxyRule {
 			for k, v := range rule.SetHeader {
 				headerName := textproto.CanonicalMIMEHeaderKey(strings.TrimSpace(k))
 				normalizedRule.SetHeader[headerName] = strings.TrimSpace(v)
+			}
+		}
+		if rule.SetBasicAuth != nil {
+			normalizedRule.SetBasicAuth = &SandboxProxyBasicAuth{
+				Username: strings.TrimSpace(rule.SetBasicAuth.Username),
+				Secret:   strings.ToLower(strings.TrimSpace(rule.SetBasicAuth.Secret)),
 			}
 		}
 		if len(rule.ReplacePlaceholder) > 0 {
