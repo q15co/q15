@@ -27,6 +27,8 @@ func TestComposeSystemPromptIncludesOSRuntimeAndNixBashDetails(t *testing.T) {
 		"- OS: Debian GNU/Linux 12 (bookworm)",
 		"- Sandbox runtime: nix-only",
 		"- Base image: registry.example/sandbox:test",
+		"- Use web_fetch for known web page URLs: it returns cleaned markdown plus slice metadata and is preferred over exec_shell with curl for ordinary webpage reads.",
+		"- Use web_search for discovering current sources, then use web_fetch on a chosen result URL when you need page contents.",
 		"- Nix: /root/.nix-profile/bin/nix (nix (Nix) 2.33.3)",
 		"- Bash: /bin/bash (GNU bash, version 5.2.15(1)-release (x86_64-pc-linux-gnu))",
 	} {

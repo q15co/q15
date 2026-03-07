@@ -1,3 +1,4 @@
+// Package tools provides model-callable runtime tools for the agent.
 package tools
 
 import (
@@ -20,6 +21,7 @@ const (
 	maxErrorResponseBody  = 200
 )
 
+// BraveWebSearch queries the Brave Search API and formats a text result list.
 type BraveWebSearch struct {
 	apiKey     string
 	maxResults int
@@ -27,6 +29,7 @@ type BraveWebSearch struct {
 	baseURL    string
 }
 
+// NewBraveWebSearch constructs a Brave-backed web search tool.
 func NewBraveWebSearch(apiKey string) (*BraveWebSearch, error) {
 	apiKey = strings.TrimSpace(apiKey)
 	if apiKey == "" {
@@ -41,6 +44,7 @@ func NewBraveWebSearch(apiKey string) (*BraveWebSearch, error) {
 	}, nil
 }
 
+// Definition returns the tool schema exposed to the model.
 func (b *BraveWebSearch) Definition() agent.ToolDefinition {
 	return agent.ToolDefinition{
 		Name:        "web_search",
@@ -64,6 +68,7 @@ func (b *BraveWebSearch) Definition() agent.ToolDefinition {
 	}
 }
 
+// Run executes one Brave search request from raw JSON tool arguments.
 func (b *BraveWebSearch) Run(ctx context.Context, arguments string) (string, error) {
 	if b == nil {
 		return "", fmt.Errorf("web search tool is not configured")

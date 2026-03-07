@@ -88,7 +88,7 @@ func TestBraveWebSearchRunFormatsResults(t *testing.T) {
 }
 
 func TestBraveWebSearchRunNoResults(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"web":{"results":[]}}`))
 	}))
@@ -108,7 +108,7 @@ func TestBraveWebSearchRunNoResults(t *testing.T) {
 }
 
 func TestBraveWebSearchRunHTTPError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "rate limited", http.StatusTooManyRequests)
 	}))
 	defer server.Close()

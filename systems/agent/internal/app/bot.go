@@ -76,7 +76,10 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 		}
 	}
 	systemPrompt = composeSystemPrompt(systemPrompt, rt.Name, info, rt.MemoryDir)
-	toolList := []agent.Tool{tools.NewShell(agentSandbox)}
+	toolList := []agent.Tool{tools.NewShell(agentSandbox), tools.NewWebFetch()}
+	if sandbox.VerboseEnabled() {
+		fmt.Printf("[app] enabled tool web_fetch for agent=%q\n", rt.Name)
+	}
 	braveAPIKey := strings.TrimSpace(os.Getenv("Q15_BRAVE_API_KEY"))
 	if braveAPIKey != "" {
 		webSearchTool, err := tools.NewBraveWebSearch(braveAPIKey)
@@ -226,6 +229,11 @@ func composeSystemPrompt(
 	lines = append(
 		lines,
 		"- First run may bootstrap nix and fetch package indexes, so network access is required.",
+	)
+	lines = append(
+		lines,
+		"- Use web_fetch for known web page URLs: it returns cleaned markdown plus slice metadata and is preferred over exec_shell with curl for ordinary webpage reads.",
+		"- Use web_search for discovering current sources, then use web_fetch on a chosen result URL when you need page contents.",
 	)
 	if nixSummary := formatBinarySummary(info.NixPath, info.NixVersion); nixSummary != "" {
 		lines = append(lines, fmt.Sprintf("- Nix: %s", nixSummary))

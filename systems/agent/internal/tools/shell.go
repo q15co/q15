@@ -1,3 +1,4 @@
+// Package tools provides model-callable runtime tools for the agent.
 package tools
 
 import (
@@ -9,18 +10,22 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/agent"
 )
 
+// CommandExecutor runs a prepared shell command inside the sandbox runtime.
 type CommandExecutor interface {
 	Exec(ctx context.Context, command string) (string, error)
 }
 
+// Shell executes commands in the sandbox through a nix shell wrapper.
 type Shell struct {
 	exec CommandExecutor
 }
 
+// NewShell constructs an exec_shell tool backed by the provided executor.
 func NewShell(exec CommandExecutor) *Shell {
 	return &Shell{exec: exec}
 }
 
+// Definition returns the tool schema exposed to the model.
 func (s *Shell) Definition() agent.ToolDefinition {
 	return agent.ToolDefinition{
 		Name:        "exec_shell",
@@ -44,6 +49,7 @@ func (s *Shell) Definition() agent.ToolDefinition {
 	}
 }
 
+// Run executes one shell command from raw JSON tool arguments.
 func (s *Shell) Run(ctx context.Context, arguments string) (string, error) {
 	var args struct {
 		Command  string   `json:"command"`
