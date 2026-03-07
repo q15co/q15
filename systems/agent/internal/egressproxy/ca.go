@@ -1,3 +1,4 @@
+// Package egressproxy implements the embedded MITM proxy used for sandbox egress.
 package egressproxy
 
 import (

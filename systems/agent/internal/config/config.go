@@ -2,6 +2,8 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/textproto"
@@ -48,7 +50,16 @@ type Sandbox struct {
 type SandboxProxy struct {
 	ContainerProxyHost string             `mapstructure:"container_proxy_host"` // optional override
 	Secrets            []string           `mapstructure:"secrets"`              // alias list, env name derived (e.g. gh_token -> GH_TOKEN)
+	Env                []SandboxProxyEnv  `mapstructure:"env"`
 	Rules              []SandboxProxyRule `mapstructure:"rule"`
+}
+
+// SandboxProxyEnv defines one sandbox env var backed by a proxy-managed secret.
+type SandboxProxyEnv struct {
+	Name   string   `mapstructure:"name"`
+	Secret string   `mapstructure:"secret"`
+	Rules  []string `mapstructure:"rules"`
+	In     []string `mapstructure:"in"` // allowed v1: header, query, path
 }
 
 // SandboxProxyRule defines host/path matches and request mutations.
@@ -93,6 +104,7 @@ type SandboxProxyRuntime struct {
 	NoProxy              []string
 	SetLowercaseProxyEnv bool
 	SecretValues         map[string]string // alias -> resolved secret value
+	EnvValues            map[string]string // env var name -> generated placeholder
 	Rules                []SandboxProxyRule
 }
 
@@ -105,6 +117,7 @@ const (
 
 var (
 	proxySecretAliasRE         = regexp.MustCompile(`^[a-z0-9_-]+$`)
+	proxyEnvNameRE             = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 	defaultSandboxProxyNoProxy = []string{"localhost", "127.0.0.1", "::1"}
 )
 
@@ -555,6 +568,82 @@ func validateSandboxProxy(proxy *SandboxProxy) error {
 		}
 	}
 
+	ruleNameCounts := make(map[string]int, len(proxy.Rules))
+	for _, rule := range proxy.Rules {
+		name := strings.TrimSpace(rule.Name)
+		if name == "" {
+			continue
+		}
+		ruleNameCounts[name]++
+	}
+
+	seenEnvNames := make(map[string]struct{}, len(proxy.Env))
+	for i, env := range proxy.Env {
+		name, err := normalizeProxyEnvName(env.Name)
+		if err != nil {
+			return fmt.Errorf("env[%d].name: %w", i, err)
+		}
+		if _, ok := seenEnvNames[name]; ok {
+			return fmt.Errorf("env[%d].name duplicates %q", i, name)
+		}
+		seenEnvNames[name] = struct{}{}
+
+		secretAlias, err := normalizeProxySecretAlias(env.Secret)
+		if err != nil {
+			return fmt.Errorf("env[%d].secret: %w", i, err)
+		}
+		if _, ok := secretEnvByAlias[secretAlias]; !ok {
+			return fmt.Errorf(
+				"env[%d].secret %q is not defined in proxy.secrets",
+				i,
+				secretAlias,
+			)
+		}
+
+		rules := normalizeStringList(env.Rules, false)
+		if len(rules) == 0 {
+			return fmt.Errorf("env[%d].rules must contain at least one rule name", i)
+		}
+		for j, ruleName := range rules {
+			count := ruleNameCounts[ruleName]
+			switch {
+			case count == 0:
+				return fmt.Errorf(
+					"env[%d].rules[%d] %q does not match any proxy rule name",
+					i,
+					j,
+					ruleName,
+				)
+			case count > 1:
+				return fmt.Errorf(
+					"env[%d].rules[%d] %q matches multiple proxy rules; rule names must be unique when referenced by proxy.env",
+					i,
+					j,
+					ruleName,
+				)
+			}
+		}
+
+		if len(env.In) == 0 {
+			continue
+		}
+		for j, where := range env.In {
+			where = strings.ToLower(strings.TrimSpace(where))
+			switch where {
+			case "header", "query", "path":
+				// supported in v1
+			case "body":
+				return fmt.Errorf("env[%d].in[%d]=body is not supported in v1", i, j)
+			default:
+				return fmt.Errorf(
+					"env[%d].in[%d] must be header, query, or path",
+					i,
+					j,
+				)
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -586,6 +675,14 @@ func resolveSandboxProxyRuntime(
 		secretValues[alias] = value
 	}
 
+	rules, envValues, err := resolveSandboxProxyRuleRuntime(
+		normalizeSandboxProxyRules(proxy.Rules),
+		normalizeSandboxProxyEnv(proxy.Env),
+	)
+	if err != nil {
+		return nil, err
+	}
+
 	return &SandboxProxyRuntime{
 		Enabled:              true,
 		ListenAddr:           defaultSandboxProxyListenAddr,
@@ -594,7 +691,8 @@ func resolveSandboxProxyRuntime(
 		NoProxy:              append([]string(nil), defaultSandboxProxyNoProxy...),
 		SetLowercaseProxyEnv: true,
 		SecretValues:         secretValues,
-		Rules:                normalizeSandboxProxyRules(proxy.Rules),
+		EnvValues:            envValues,
+		Rules:                rules,
 	}, nil
 }
 
@@ -639,6 +737,27 @@ func normalizeSandboxProxyRules(rules []SandboxProxyRule) []SandboxProxyRule {
 	return out
 }
 
+func normalizeSandboxProxyEnv(values []SandboxProxyEnv) []SandboxProxyEnv {
+	if len(values) == 0 {
+		return nil
+	}
+
+	out := make([]SandboxProxyEnv, 0, len(values))
+	for _, env := range values {
+		normalized := SandboxProxyEnv{
+			Name:   strings.TrimSpace(env.Name),
+			Secret: strings.ToLower(strings.TrimSpace(env.Secret)),
+			Rules:  normalizeStringList(env.Rules, false),
+			In:     normalizeStringList(env.In, true),
+		}
+		if len(normalized.In) == 0 {
+			normalized.In = []string{"header"}
+		}
+		out = append(out, normalized)
+	}
+	return out
+}
+
 func normalizeStringList(values []string, lower bool) []string {
 	if len(values) == 0 {
 		return nil
@@ -660,6 +779,52 @@ func normalizeStringList(values []string, lower bool) []string {
 		out = append(out, v)
 	}
 	return out
+}
+
+func resolveSandboxProxyRuleRuntime(
+	rules []SandboxProxyRule,
+	envMappings []SandboxProxyEnv,
+) ([]SandboxProxyRule, map[string]string, error) {
+	if len(envMappings) == 0 {
+		return rules, nil, nil
+	}
+
+	ruleIndexByName := make(map[string]int, len(rules))
+	for i, rule := range rules {
+		name := strings.TrimSpace(rule.Name)
+		if name == "" {
+			continue
+		}
+		ruleIndexByName[name] = i
+	}
+
+	envValues := make(map[string]string, len(envMappings))
+	for _, env := range envMappings {
+		placeholder, err := generateSandboxProxyPlaceholder()
+		if err != nil {
+			return nil, nil, fmt.Errorf("generate placeholder for env %q: %w", env.Name, err)
+		}
+		envValues[env.Name] = placeholder
+
+		replacement := SandboxProxyPlaceholderReplacement{
+			Placeholder: placeholder,
+			Secret:      env.Secret,
+			In:          append([]string(nil), env.In...),
+		}
+		for _, ruleName := range env.Rules {
+			idx, ok := ruleIndexByName[ruleName]
+			if !ok {
+				return nil, nil, fmt.Errorf(
+					"env %q references missing proxy rule %q",
+					env.Name,
+					ruleName,
+				)
+			}
+			rules[idx].ReplacePlaceholder = append(rules[idx].ReplacePlaceholder, replacement)
+		}
+	}
+
+	return rules, envValues, nil
 }
 
 func normalizeProxySecretAliases(aliases []string) ([]string, error) {
@@ -693,9 +858,30 @@ func normalizeProxySecretAlias(alias string) (string, error) {
 	return alias, nil
 }
 
+func normalizeProxyEnvName(name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", errors.New("must not be empty")
+	}
+	if !proxyEnvNameRE.MatchString(name) {
+		return "", errors.New(
+			"must start with a letter or underscore and contain only letters, digits, or underscores",
+		)
+	}
+	return name, nil
+}
+
 func proxySecretEnvName(alias string) string {
 	alias = strings.ReplaceAll(alias, "-", "_")
 	return strings.ToUpper(alias)
+}
+
+func generateSandboxProxyPlaceholder() (string, error) {
+	var randomBytes [16]byte
+	if _, err := rand.Read(randomBytes[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(randomBytes[:]), nil
 }
 
 func normalizeSandboxProxyContainerHost(raw string) string {

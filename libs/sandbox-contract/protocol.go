@@ -14,14 +14,15 @@ type Settings struct {
 
 // ProxySettings describes optional proxy/trust wiring for sandbox command runs.
 type ProxySettings struct {
-	Enabled              bool   `json:"enabled"`
-	HTTPProxyURL         string `json:"http_proxy_url,omitempty"`
-	HTTPSProxyURL        string `json:"https_proxy_url,omitempty"`
-	AllProxyURL          string `json:"all_proxy_url,omitempty"`
-	NoProxy              string `json:"no_proxy,omitempty"`
-	CACertHostPath       string `json:"ca_cert_host_path,omitempty"`
-	CACertContainerPath  string `json:"ca_cert_container_path,omitempty"`
-	SetLowercaseProxyEnv bool   `json:"set_lowercase_proxy_env,omitempty"`
+	Enabled              bool              `json:"enabled"`
+	HTTPProxyURL         string            `json:"http_proxy_url,omitempty"`
+	HTTPSProxyURL        string            `json:"https_proxy_url,omitempty"`
+	AllProxyURL          string            `json:"all_proxy_url,omitempty"`
+	NoProxy              string            `json:"no_proxy,omitempty"`
+	CACertHostPath       string            `json:"ca_cert_host_path,omitempty"`
+	CACertContainerPath  string            `json:"ca_cert_container_path,omitempty"`
+	SetLowercaseProxyEnv bool              `json:"set_lowercase_proxy_env,omitempty"`
+	Env                  map[string]string `json:"env,omitempty"`
 }
 
 // HelperRequest is sent from the agent runtime to the sandbox helper.

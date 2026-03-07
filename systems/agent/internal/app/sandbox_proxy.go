@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"strings"
 
@@ -22,14 +23,6 @@ func startSandboxProxy(
 ) (*startedSandboxProxy, error) {
 	if rtProxy == nil {
 		return nil, nil
-	}
-	for i, rule := range rtProxy.Rules {
-		if len(rule.ReplacePlaceholder) > 0 {
-			return nil, fmt.Errorf(
-				"proxy rule[%d] replace_placeholder is not implemented yet in embedded proxy",
-				i,
-			)
-		}
 	}
 
 	server, err := egressproxy.Start(ctx, egressproxy.Config{
@@ -74,6 +67,7 @@ func startSandboxProxy(
 			SetLowercaseProxyEnv: rtProxy.SetLowercaseProxyEnv,
 			CACertHostPath:       caCertHostPath,
 			CACertContainerPath:  caCertContainerPath,
+			Env:                  maps.Clone(rtProxy.EnvValues),
 		},
 	}, nil
 }
@@ -85,22 +79,29 @@ func toEgressProxyRules(rules []config.SandboxProxyRule) []egressproxy.Rule {
 	out := make([]egressproxy.Rule, 0, len(rules))
 	for _, rule := range rules {
 		out = append(out, egressproxy.Rule{
-			Name:              rule.Name,
-			MatchHosts:        append([]string(nil), rule.MatchHosts...),
-			MatchPathPrefixes: append([]string(nil), rule.MatchPathPrefixes...),
-			SetHeader:         cloneStringMap(rule.SetHeader),
+			Name:               rule.Name,
+			MatchHosts:         append([]string(nil), rule.MatchHosts...),
+			MatchPathPrefixes:  append([]string(nil), rule.MatchPathPrefixes...),
+			SetHeader:          maps.Clone(rule.SetHeader),
+			ReplacePlaceholder: clonePlaceholderReplacements(rule.ReplacePlaceholder),
 		})
 	}
 	return out
 }
 
-func cloneStringMap(m map[string]string) map[string]string {
-	if len(m) == 0 {
+func clonePlaceholderReplacements(
+	values []config.SandboxProxyPlaceholderReplacement,
+) []egressproxy.PlaceholderReplacement {
+	if len(values) == 0 {
 		return nil
 	}
-	out := make(map[string]string, len(m))
-	for k, v := range m {
-		out[k] = v
+	out := make([]egressproxy.PlaceholderReplacement, 0, len(values))
+	for _, value := range values {
+		out = append(out, egressproxy.PlaceholderReplacement{
+			Placeholder: value.Placeholder,
+			Secret:      value.Secret,
+			In:          append([]string(nil), value.In...),
+		})
 	}
 	return out
 }

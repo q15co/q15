@@ -68,6 +68,7 @@ func TestStartSandboxProxy_BuildsSandboxProxySettings(t *testing.T) {
 		CACertContainerPath:  "/run/q15-proxy/ca.crt",
 		NoProxy:              []string{"localhost", "127.0.0.1"},
 		SetLowercaseProxyEnv: true,
+		EnvValues:            map[string]string{"GH_TOKEN": "__Q15_PROXY_ENV_test__"},
 	})
 	if err != nil {
 		t.Fatalf("startSandboxProxy() error = %v", err)
@@ -93,16 +94,19 @@ func TestStartSandboxProxy_BuildsSandboxProxySettings(t *testing.T) {
 			handle.sandboxSettings.CACertContainerPath,
 		)
 	}
+	if got := handle.sandboxSettings.Env["GH_TOKEN"]; got != "__Q15_PROXY_ENV_test__" {
+		t.Fatalf("unexpected proxy env placeholder value: %q", got)
+	}
 	if _, err := os.Stat(handle.sandboxSettings.CACertHostPath); err != nil {
 		t.Fatalf("expected CA cert host path to exist, stat error = %v", err)
 	}
 }
 
-func TestStartSandboxProxy_RejectsReplacePlaceholderRules(t *testing.T) {
+func TestStartSandboxProxy_AllowsReplacePlaceholderRules(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	_, err := startSandboxProxy(ctx, &config.SandboxProxyRuntime{
+	handle, err := startSandboxProxy(ctx, &config.SandboxProxyRuntime{
 		Enabled:             true,
 		ListenAddr:          "127.0.0.1:0",
 		ContainerProxyHost:  "10.0.2.2",
@@ -117,7 +121,10 @@ func TestStartSandboxProxy_RejectsReplacePlaceholderRules(t *testing.T) {
 			},
 		},
 	})
-	if err == nil {
-		t.Fatalf("expected error for replace_placeholder rules")
+	if err != nil {
+		t.Fatalf("expected placeholder-enabled proxy config to start, got %v", err)
+	}
+	if handle == nil || handle.sandboxSettings == nil {
+		t.Fatalf("expected sandbox proxy handle/settings")
 	}
 }

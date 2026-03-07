@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -348,6 +349,7 @@ func normalizeProxySettings(proxy *ProxySettings) *ProxySettings {
 	} else {
 		normalized.CACertContainerPath = ""
 	}
+	normalized.Env = maps.Clone(proxy.Env)
 	return &normalized
 }
 

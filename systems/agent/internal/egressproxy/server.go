@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"net/http"
 	"os"
@@ -16,12 +17,14 @@ import (
 
 const defaultListenAddr = "0.0.0.0:0"
 
+// Config configures the embedded egress proxy listener and request rules.
 type Config struct {
 	ListenAddr   string
 	SecretValues map[string]string
 	Rules        []Rule
 }
 
+// Server owns the embedded egress proxy and its exported CA bundle.
 type Server struct {
 	mu       sync.Mutex
 	listener net.Listener
@@ -36,6 +39,7 @@ type Server struct {
 	mitmAction    *goproxy.ConnectAction
 }
 
+// Start launches the embedded proxy and shuts it down when ctx is canceled.
 func Start(ctx context.Context, cfg Config) (*Server, error) {
 	listenAddr := strings.TrimSpace(cfg.ListenAddr)
 	if listenAddr == "" {
@@ -74,7 +78,7 @@ func Start(ctx context.Context, cfg Config) (*Server, error) {
 		errCh:         make(chan error, 1),
 		ca:            ca,
 		compiledRules: compiledRules,
-		secretValues:  cloneStringMap(cfg.SecretValues),
+		secretValues:  maps.Clone(cfg.SecretValues),
 		mitmAction: &goproxy.ConnectAction{
 			Action:    goproxy.ConnectMitm,
 			TLSConfig: goproxy.TLSConfigFromCA(&ca.TLSCert),
@@ -105,6 +109,7 @@ func Start(ctx context.Context, cfg Config) (*Server, error) {
 	return s, nil
 }
 
+// Stop gracefully shuts down the proxy and removes the exported CA bundle.
 func (s *Server) Stop(ctx context.Context) error {
 	if s == nil {
 		return nil
@@ -131,6 +136,7 @@ func (s *Server) Stop(ctx context.Context) error {
 	return s.stopErr
 }
 
+// Addr returns the listener address for the running proxy.
 func (s *Server) Addr() string {
 	if s == nil {
 		return ""
@@ -143,6 +149,7 @@ func (s *Server) Addr() string {
 	return s.listener.Addr().String()
 }
 
+// Errors returns asynchronous serve errors from the proxy.
 func (s *Server) Errors() <-chan error {
 	if s == nil {
 		return nil
@@ -150,6 +157,7 @@ func (s *Server) Errors() <-chan error {
 	return s.errCh
 }
 
+// CACertHostPath returns the host path of the exported proxy CA certificate.
 func (s *Server) CACertHostPath() string {
 	if s == nil {
 		return ""
@@ -162,6 +170,7 @@ func (s *Server) CACertHostPath() string {
 	return s.ca.CertHostPath
 }
 
+// ProxyURLForContainerHost builds the proxy URL reachable from the sandbox host alias.
 func (s *Server) ProxyURLForContainerHost(containerHost string) (string, error) {
 	if s == nil {
 		return "", errors.New("egress proxy server is nil")
@@ -213,17 +222,13 @@ func (s *Server) handleRequest(
 		if !rule.matchesRequest(req) {
 			continue
 		}
-		for headerName, tmpl := range rule.setHeader {
-			value, err := renderSecretTemplate(tmpl, s.secretValues)
-			if err != nil {
-				return req, goproxy.NewResponse(
-					req,
-					goproxy.ContentTypeText,
-					http.StatusBadGateway,
-					fmt.Sprintf("proxy rule %q header render failed", displayRuleName(rule)),
-				)
-			}
-			req.Header.Set(headerName, value)
+		if err := rule.apply(req, s.secretValues); err != nil {
+			return req, goproxy.NewResponse(
+				req,
+				goproxy.ContentTypeText,
+				http.StatusBadGateway,
+				fmt.Sprintf("proxy rule %q header render failed", displayRuleName(rule)),
+			)
 		}
 	}
 	return req, nil
@@ -237,17 +242,6 @@ func (s *Server) handleResponse(resp *http.Response, _ *goproxy.ProxyCtx) *http.
 		resp.Header.Del(key)
 	}
 	return resp
-}
-
-func cloneStringMap(m map[string]string) map[string]string {
-	if len(m) == 0 {
-		return nil
-	}
-	out := make(map[string]string, len(m))
-	for k, v := range m {
-		out[k] = v
-	}
-	return out
 }
 
 func displayRuleName(r compiledRule) string {

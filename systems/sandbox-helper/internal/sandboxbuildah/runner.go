@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/containers/buildah"
@@ -43,6 +45,7 @@ type ProxySettings struct {
 	CACertHostPath       string
 	CACertContainerPath  string
 	SetLowercaseProxyEnv bool
+	Env                  map[string]string
 }
 
 // Validate checks that required sandbox paths and identifiers are present.
@@ -549,6 +552,7 @@ func normalizeProxySettings(proxy *ProxySettings) *ProxySettings {
 	} else {
 		normalized.CACertContainerPath = ""
 	}
+	normalized.Env = maps.Clone(proxy.Env)
 	return &normalized
 }
 
@@ -587,6 +591,17 @@ func proxyRunEnv(cfg Settings) []string {
 			return
 		}
 		env = append(env, key+"="+value)
+	}
+
+	if len(p.Env) > 0 {
+		keys := make([]string, 0, len(p.Env))
+		for key := range p.Env {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			appendKV(key, p.Env[key])
+		}
 	}
 
 	appendKV("HTTP_PROXY", p.HTTPProxyURL)

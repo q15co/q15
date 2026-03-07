@@ -16,10 +16,14 @@ func TestProxyRunEnvIncludesProxyAndTrustVars(t *testing.T) {
 			NoProxy:              "localhost,127.0.0.1",
 			CACertContainerPath:  "/run/q15-proxy/ca.crt",
 			SetLowercaseProxyEnv: true,
+			Env: map[string]string{
+				"GH_TOKEN": "__Q15_PROXY_ENV_test__",
+			},
 		},
 	}
 
 	env := proxyRunEnv(cfg)
+	assertContainsKV(t, env, "GH_TOKEN", "__Q15_PROXY_ENV_test__")
 	assertContainsKV(t, env, "HTTP_PROXY", "http://10.0.2.2:8080")
 	assertContainsKV(t, env, "HTTPS_PROXY", "http://10.0.2.2:8080")
 	assertContainsKV(t, env, "ALL_PROXY", "http://10.0.2.2:8080")

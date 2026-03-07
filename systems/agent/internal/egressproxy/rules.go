@@ -7,18 +7,36 @@ import (
 	"strings"
 )
 
+// Rule describes one host/path-matched request mutation applied by the proxy.
 type Rule struct {
-	Name              string
-	MatchHosts        []string
-	MatchPathPrefixes []string
-	SetHeader         map[string]string
+	Name               string
+	MatchHosts         []string
+	MatchPathPrefixes  []string
+	SetHeader          map[string]string
+	ReplacePlaceholder []PlaceholderReplacement
+}
+
+// PlaceholderReplacement swaps an opaque placeholder for a named secret value.
+type PlaceholderReplacement struct {
+	Placeholder string
+	Secret      string
+	In          []string
 }
 
 type compiledRule struct {
-	name              string
-	matchHosts        map[string]struct{}
-	matchPathPrefixes []string
-	setHeader         map[string]string
+	name               string
+	matchHosts         map[string]struct{}
+	matchPathPrefixes  []string
+	setHeader          map[string]string
+	replacePlaceholder []compiledPlaceholderReplacement
+}
+
+type compiledPlaceholderReplacement struct {
+	placeholder string
+	secretValue string
+	inHeader    bool
+	inQuery     bool
+	inPath      bool
 }
 
 func compileRules(rules []Rule, secretValues map[string]string) ([]compiledRule, error) {
@@ -51,6 +69,40 @@ func compileRules(rules []Rule, secretValues map[string]string) ([]compiledRule,
 					return nil, fmt.Errorf("rule[%d].set_header[%q]: %w", i, k, err)
 				}
 				compiled.setHeader[k] = v
+			}
+		}
+		if len(rule.ReplacePlaceholder) > 0 {
+			compiled.replacePlaceholder = make(
+				[]compiledPlaceholderReplacement,
+				0,
+				len(rule.ReplacePlaceholder),
+			)
+			for j, repl := range rule.ReplacePlaceholder {
+				secretAlias := strings.ToLower(strings.TrimSpace(repl.Secret))
+				secretValue := strings.TrimSpace(secretValues[secretAlias])
+				if secretValue == "" {
+					return nil, fmt.Errorf(
+						"rule[%d].replace_placeholder[%d].secret missing value for alias %q",
+						i,
+						j,
+						secretAlias,
+					)
+				}
+				compiledRepl := compiledPlaceholderReplacement{
+					placeholder: strings.TrimSpace(repl.Placeholder),
+					secretValue: secretValue,
+				}
+				for _, where := range repl.In {
+					switch strings.ToLower(strings.TrimSpace(where)) {
+					case "header":
+						compiledRepl.inHeader = true
+					case "query":
+						compiledRepl.inQuery = true
+					case "path":
+						compiledRepl.inPath = true
+					}
+				}
+				compiled.replacePlaceholder = append(compiled.replacePlaceholder, compiledRepl)
 			}
 		}
 
@@ -90,6 +142,90 @@ func (r compiledRule) matchesConnectHost(host string) bool {
 	}
 	_, ok := r.matchHosts[host]
 	return ok
+}
+
+func (r compiledRule) apply(req *http.Request, secretValues map[string]string) error {
+	for headerName, tmpl := range r.setHeader {
+		value, err := renderSecretTemplate(tmpl, secretValues)
+		if err != nil {
+			return err
+		}
+		req.Header.Set(headerName, value)
+	}
+	for _, repl := range r.replacePlaceholder {
+		applyCompiledPlaceholderReplacement(req, repl)
+	}
+	return nil
+}
+
+func applyCompiledPlaceholderReplacement(req *http.Request, repl compiledPlaceholderReplacement) {
+	if req == nil || repl.placeholder == "" {
+		return
+	}
+
+	if repl.inHeader {
+		for headerName, values := range req.Header {
+			changed := false
+			for i, value := range values {
+				replaced := strings.ReplaceAll(value, repl.placeholder, repl.secretValue)
+				if replaced == value {
+					continue
+				}
+				values[i] = replaced
+				changed = true
+			}
+			if changed {
+				req.Header[headerName] = values
+			}
+		}
+	}
+
+	if req.URL == nil {
+		return
+	}
+
+	if repl.inQuery {
+		query := req.URL.Query()
+		changed := false
+		for key, values := range query {
+			for i, value := range values {
+				replaced := strings.ReplaceAll(value, repl.placeholder, repl.secretValue)
+				if replaced == value {
+					continue
+				}
+				values[i] = replaced
+				changed = true
+			}
+			query[key] = values
+		}
+		if changed {
+			req.URL.RawQuery = query.Encode()
+			req.RequestURI = req.URL.RequestURI()
+		}
+	}
+
+	if repl.inPath {
+		pathChanged := false
+		replacedPath := strings.ReplaceAll(req.URL.Path, repl.placeholder, repl.secretValue)
+		if replacedPath != req.URL.Path {
+			req.URL.Path = replacedPath
+			pathChanged = true
+		}
+		if req.URL.RawPath != "" {
+			replacedRawPath := strings.ReplaceAll(
+				req.URL.RawPath,
+				repl.placeholder,
+				repl.secretValue,
+			)
+			if replacedRawPath != req.URL.RawPath {
+				req.URL.RawPath = replacedRawPath
+				pathChanged = true
+			}
+		}
+		if pathChanged {
+			req.RequestURI = req.URL.RequestURI()
+		}
+	}
 }
 
 func normalizePathPrefixes(values []string) []string {

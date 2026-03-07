@@ -169,6 +169,51 @@ token_env = "JARED_TELEGRAM_TOKEN"
 allowed_user_ids = [123456789]
 ```
 
+### Sandbox Proxy Auth Env
+
+Use `agent.sandbox.proxy.env` when a sandboxed tool expects an env var such as `GH_TOKEN`, but the
+real credential should stay outside the sandbox and be injected only by the MITM proxy on matched
+requests.
+
+Example for `gh`:
+
+```toml
+[agent.sandbox.proxy]
+secrets = ["jared_gh_token"]
+
+[[agent.sandbox.proxy.rule]]
+name = "github-api"
+match_hosts = ["api.github.com"]
+
+[[agent.sandbox.proxy.env]]
+name = "GH_TOKEN"
+secret = "jared_gh_token"
+rules = ["github-api"]
+```
+
+Host environment:
+
+```bash
+export JARED_GH_TOKEN=github_pat_real_token_here
+```
+
+Sandbox behavior:
+
+- q15 injects a generated placeholder into sandbox env `GH_TOKEN`
+- `gh` treats that as an authenticated token and sends it
+- the embedded proxy rewrites that placeholder to the real secret only for the referenced proxy
+  rules
+
+Multi-agent pattern:
+
+- agent A can use `name = "GH_TOKEN"` with `secret = "jared_gh_token"`
+- agent B can use `name = "GH_TOKEN"` with `secret = "dinesh_gh_token"`
+- both agents may share the same sandbox env var name, but they must use distinct secret aliases if
+  they need different real upstream tokens
+
+Low-level `rule.replace_placeholder` remains supported for advanced/manual configurations. Prefer
+`proxy.env` for tool-facing auth env vars.
+
 ### Sandbox Runtime (Nix-Only)
 
 Sandbox runtime is hardcoded to a rootless-Buildah-friendly nix-only mode:

@@ -419,6 +419,96 @@ allowed_user_ids = [123456789]
 	}
 }
 
+func TestLoadAgentRuntimes_TOML_WithSandboxProxyEnv(t *testing.T) {
+	t.Setenv("MOONSHOT_API_KEY", "api-123")
+	t.Setenv("JARED_TELEGRAM_TOKEN", "tg-123")
+	t.Setenv("JARED_GH_TOKEN", "ghp_test_123")
+
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte(`
+[[provider]]
+name = "moonshot"
+type = "openai-compatible"
+base_url = "https://api.moonshot.ai/v1"
+key_env = "MOONSHOT_API_KEY"
+
+[[agent]]
+name = "Jared"
+models = ["moonshot/kimi-k2.5"]
+
+[agent.sandbox]
+container_name = "q15-jared"
+workspace_host_dir = "/tmp/q15-workspaces/jared"
+workspace_dir = "/workspace"
+
+[agent.sandbox.proxy]
+secrets = ["jared_gh_token"]
+
+[[agent.sandbox.proxy.rule]]
+name = "github-api"
+match_hosts = ["api.github.com"]
+match_path_prefixes = ["/"]
+
+[[agent.sandbox.proxy.env]]
+name = "GH_TOKEN"
+secret = "jared_gh_token"
+rules = ["github-api"]
+
+[agent.telegram]
+token_env = "JARED_TELEGRAM_TOKEN"
+allowed_user_ids = [123456789]
+`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	runtimes, err := LoadAgentRuntimes(path)
+	if err != nil {
+		t.Fatalf("load runtimes: %v", err)
+	}
+	if len(runtimes) != 1 {
+		t.Fatalf("expected 1 runtime, got %d", len(runtimes))
+	}
+
+	rt := runtimes[0]
+	if rt.SandboxProxy == nil {
+		t.Fatalf("expected sandbox proxy runtime to be resolved")
+	}
+	if got := rt.SandboxProxy.SecretValues["jared_gh_token"]; got != "ghp_test_123" {
+		t.Fatalf("unexpected resolved proxy secret value: %q", got)
+	}
+	placeholder := rt.SandboxProxy.EnvValues["GH_TOKEN"]
+	if placeholder == "" {
+		t.Fatalf("expected GH_TOKEN placeholder env value")
+	}
+	if placeholder == "ghp_test_123" {
+		t.Fatalf("expected placeholder env value to differ from real secret")
+	}
+	if len(placeholder) != 32 {
+		t.Fatalf("unexpected placeholder length: got %d value %q", len(placeholder), placeholder)
+	}
+	for _, ch := range placeholder {
+		if (ch < '0' || ch > '9') && (ch < 'a' || ch > 'f') {
+			t.Fatalf("expected opaque hex placeholder, got %q", placeholder)
+		}
+	}
+	if len(rt.SandboxProxy.Rules) != 1 {
+		t.Fatalf("unexpected proxy rules: %#v", rt.SandboxProxy.Rules)
+	}
+	rule := rt.SandboxProxy.Rules[0]
+	if len(rule.ReplacePlaceholder) != 1 {
+		t.Fatalf("expected expanded placeholder replacement, got %#v", rule.ReplacePlaceholder)
+	}
+	if got := rule.ReplacePlaceholder[0].Placeholder; got != placeholder {
+		t.Fatalf("unexpected expanded placeholder: %q", got)
+	}
+	if got := rule.ReplacePlaceholder[0].Secret; got != "jared_gh_token" {
+		t.Fatalf("unexpected expanded secret alias: %q", got)
+	}
+	if got := rule.ReplacePlaceholder[0].In; len(got) != 1 || got[0] != "header" {
+		t.Fatalf("unexpected default replacement scope: %#v", got)
+	}
+}
+
 func TestValidateRejectsSandboxProxyBodyPlaceholderReplacement(t *testing.T) {
 	cfg := Config{
 		Providers: []Provider{
@@ -464,6 +554,126 @@ func TestValidateRejectsSandboxProxyBodyPlaceholderReplacement(t *testing.T) {
 
 	if err := cfg.Validate(); err == nil {
 		t.Fatalf("expected validation error for body placeholder replacement in v1")
+	}
+}
+
+func TestValidateRejectsInvalidSandboxProxyEnvConfig(t *testing.T) {
+	baseConfig := func() Config {
+		return Config{
+			Providers: []Provider{
+				{
+					Name:    "moonshot",
+					Type:    "openai-compatible",
+					BaseURL: "https://api.moonshot.ai/v1",
+					KeyEnv:  "MOONSHOT_API_KEY",
+				},
+			},
+			Agents: []Agent{
+				{
+					Name:   "proxy-agent",
+					Models: []string{"moonshot/kimi-k2.5"},
+					Sandbox: Sandbox{
+						ContainerName:    "q15-proxy-agent",
+						WorkspaceHostDir: "/tmp/q15-workspaces/proxy-agent",
+						WorkspaceDir:     "/workspace",
+						Proxy: &SandboxProxy{
+							Secrets: []string{"gh_token"},
+							Rules: []SandboxProxyRule{
+								{Name: "github-api", MatchHosts: []string{"api.github.com"}},
+							},
+						},
+					},
+					Telegram: Telegram{
+						TokenEnv:       "TEST_TELEGRAM_TOKEN",
+						AllowedUserIDs: []int64{123456789},
+					},
+				},
+			},
+		}
+	}
+
+	tests := []struct {
+		name    string
+		mutate  func(*SandboxProxy)
+		wantErr string
+	}{
+		{
+			name: "invalid env name",
+			mutate: func(proxy *SandboxProxy) {
+				proxy.Env = []SandboxProxyEnv{
+					{Name: "GH-TOKEN", Secret: "gh_token", Rules: []string{"github-api"}},
+				}
+			},
+			wantErr: "env[0].name",
+		},
+		{
+			name: "duplicate env name",
+			mutate: func(proxy *SandboxProxy) {
+				proxy.Env = []SandboxProxyEnv{
+					{Name: "GH_TOKEN", Secret: "gh_token", Rules: []string{"github-api"}},
+					{Name: "GH_TOKEN", Secret: "gh_token", Rules: []string{"github-api"}},
+				}
+			},
+			wantErr: `duplicates "GH_TOKEN"`,
+		},
+		{
+			name: "unknown secret alias",
+			mutate: func(proxy *SandboxProxy) {
+				proxy.Env = []SandboxProxyEnv{
+					{Name: "GH_TOKEN", Secret: "other_token", Rules: []string{"github-api"}},
+				}
+			},
+			wantErr: `env[0].secret "other_token" is not defined in proxy.secrets`,
+		},
+		{
+			name: "missing rule reference",
+			mutate: func(proxy *SandboxProxy) {
+				proxy.Env = []SandboxProxyEnv{
+					{Name: "GH_TOKEN", Secret: "gh_token", Rules: []string{"missing-rule"}},
+				}
+			},
+			wantErr: `does not match any proxy rule name`,
+		},
+		{
+			name: "duplicate referenced rule name",
+			mutate: func(proxy *SandboxProxy) {
+				proxy.Rules = append(proxy.Rules, SandboxProxyRule{
+					Name:       "github-api",
+					MatchHosts: []string{"uploads.github.com"},
+				})
+				proxy.Env = []SandboxProxyEnv{
+					{Name: "GH_TOKEN", Secret: "gh_token", Rules: []string{"github-api"}},
+				}
+			},
+			wantErr: `matches multiple proxy rules`,
+		},
+		{
+			name: "invalid replacement scope",
+			mutate: func(proxy *SandboxProxy) {
+				proxy.Env = []SandboxProxyEnv{
+					{
+						Name:   "GH_TOKEN",
+						Secret: "gh_token",
+						Rules:  []string{"github-api"},
+						In:     []string{"cookie"},
+					},
+				}
+			},
+			wantErr: `env[0].in[0] must be header, query, or path`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := baseConfig()
+			proxy := cfg.Agents[0].Sandbox.Proxy
+			tc.mutate(proxy)
+			if err := cfg.Validate(); err == nil {
+				t.Fatalf("expected validation error")
+			} else if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("unexpected validation error: %v", err)
+			}
+		})
 	}
 }
 
@@ -602,6 +812,109 @@ func TestResolveAgentRuntimesUsesDefaultProxyContainerHostOverrideEnv(t *testing
 	}
 	if got := runtimes[0].SandboxProxy.ContainerProxyHost; got != "10.0.2.2" {
 		t.Fatalf("unexpected proxy container host override: %q", got)
+	}
+}
+
+func TestResolveAgentRuntimesIsolatesProxyEnvPlaceholdersPerAgent(t *testing.T) {
+	t.Setenv("MOONSHOT_API_KEY", "api-123")
+	t.Setenv("TEST_TELEGRAM_TOKEN", "tg-123")
+	t.Setenv("JARED_GH_TOKEN", "ghp_jared")
+	t.Setenv("DINESH_GH_TOKEN", "ghp_dinesh")
+
+	cfg := Config{
+		Providers: []Provider{
+			{
+				Name:    "moonshot",
+				Type:    "openai-compatible",
+				BaseURL: "https://api.moonshot.ai/v1",
+				KeyEnv:  "MOONSHOT_API_KEY",
+			},
+		},
+		Agents: []Agent{
+			{
+				Name:   "jared",
+				Models: []string{"moonshot/kimi-k2.5"},
+				Sandbox: Sandbox{
+					ContainerName:    "q15-jared",
+					WorkspaceHostDir: "/tmp/q15-workspaces/jared",
+					WorkspaceDir:     "/workspace",
+					Proxy: &SandboxProxy{
+						Secrets: []string{"jared_gh_token"},
+						Rules: []SandboxProxyRule{
+							{Name: "github-api", MatchHosts: []string{"api.github.com"}},
+						},
+						Env: []SandboxProxyEnv{
+							{
+								Name:   "GH_TOKEN",
+								Secret: "jared_gh_token",
+								Rules:  []string{"github-api"},
+							},
+						},
+					},
+				},
+				Telegram: Telegram{
+					TokenEnv:       "TEST_TELEGRAM_TOKEN",
+					AllowedUserIDs: []int64{123456789},
+				},
+			},
+			{
+				Name:   "dinesh",
+				Models: []string{"moonshot/kimi-k2.5"},
+				Sandbox: Sandbox{
+					ContainerName:    "q15-dinesh",
+					WorkspaceHostDir: "/tmp/q15-workspaces/dinesh",
+					WorkspaceDir:     "/workspace",
+					Proxy: &SandboxProxy{
+						Secrets: []string{"dinesh_gh_token"},
+						Rules: []SandboxProxyRule{
+							{Name: "github-api", MatchHosts: []string{"api.github.com"}},
+						},
+						Env: []SandboxProxyEnv{
+							{
+								Name:   "GH_TOKEN",
+								Secret: "dinesh_gh_token",
+								Rules:  []string{"github-api"},
+							},
+						},
+					},
+				},
+				Telegram: Telegram{
+					TokenEnv:       "TEST_TELEGRAM_TOKEN",
+					AllowedUserIDs: []int64{123456789},
+				},
+			},
+		},
+	}
+
+	runtimes, err := cfg.ResolveAgentRuntimes()
+	if err != nil {
+		t.Fatalf("resolve runtimes: %v", err)
+	}
+	if len(runtimes) != 2 {
+		t.Fatalf("expected 2 runtimes, got %d", len(runtimes))
+	}
+
+	jaredProxy := runtimes[0].SandboxProxy
+	dineshProxy := runtimes[1].SandboxProxy
+	if got := jaredProxy.SecretValues["jared_gh_token"]; got != "ghp_jared" {
+		t.Fatalf("unexpected Jared proxy secret value: %q", got)
+	}
+	if got := dineshProxy.SecretValues["dinesh_gh_token"]; got != "ghp_dinesh" {
+		t.Fatalf("unexpected Dinesh proxy secret value: %q", got)
+	}
+	jaredPlaceholder := jaredProxy.EnvValues["GH_TOKEN"]
+	dineshPlaceholder := dineshProxy.EnvValues["GH_TOKEN"]
+	if jaredPlaceholder == "" || dineshPlaceholder == "" {
+		t.Fatalf("expected generated GH_TOKEN placeholders for both agents")
+	}
+	if jaredPlaceholder == dineshPlaceholder {
+		t.Fatalf("expected unique placeholders per agent, got %q", jaredPlaceholder)
+	}
+	if got := jaredProxy.Rules[0].ReplacePlaceholder[0].Placeholder; got != jaredPlaceholder {
+		t.Fatalf("unexpected Jared replacement placeholder: %q", got)
+	}
+	if got := dineshProxy.Rules[0].ReplacePlaceholder[0].Placeholder; got != dineshPlaceholder {
+		t.Fatalf("unexpected Dinesh replacement placeholder: %q", got)
 	}
 }
 

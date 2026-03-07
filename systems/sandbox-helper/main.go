@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 
 	sandboxcontract "github.com/q15co/q15/libs/sandbox-contract"
@@ -116,6 +117,7 @@ func toBuildahProxySettings(proxy *sandboxcontract.ProxySettings) *sandboxbuilda
 		CACertHostPath:       proxy.CACertHostPath,
 		CACertContainerPath:  proxy.CACertContainerPath,
 		SetLowercaseProxyEnv: proxy.SetLowercaseProxyEnv,
+		Env:                  maps.Clone(proxy.Env),
 	}
 }
 
