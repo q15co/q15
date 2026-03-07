@@ -32,7 +32,7 @@
           src = ./.;
           modRoot = "systems/agent";
           subPackages = ["."];
-          vendorHash = "sha256-g13jou28HSjEQuyb/jymoqVqrsPC5C5QdQBf8uev9i8=";
+          vendorHash = "sha256-j3HT/RwZmRLsBoW8SBWbzyUliYCuuQQYqzUjpLokWss=";
           env = {
             GOWORK = "off";
           };
@@ -47,7 +47,7 @@
           src = ./.;
           modRoot = "systems/sandbox-helper";
           subPackages = ["."];
-          vendorHash = "sha256-mefh8B3vhmTzpKm3vGFSowHPtn7sKTjKwMMm2KbpXRE=";
+          vendorHash = "sha256-n/NuOY9KC9/4XD25OmMaxlK8Ys8zdXsxcSkjoskG7ho=";
           tags = [
             "containers_image_openpgp"
             "exclude_graphdriver_btrfs"
