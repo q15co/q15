@@ -12,6 +12,7 @@ func TestComposeSystemPromptIncludesOSRuntimeAndNixBashDetails(t *testing.T) {
 	info := sandbox.Info{
 		ContainerName: "q15-jared",
 		WorkspaceDir:  "/workspace",
+		SkillsDir:     "/skills",
 		Runtime:       "nix-only",
 		BaseImage:     "registry.example/sandbox:test",
 		OSPrettyName:  "Debian GNU/Linux 12 (bookworm)",
@@ -28,11 +29,15 @@ func TestComposeSystemPromptIncludesOSRuntimeAndNixBashDetails(t *testing.T) {
 		"- OS: Debian GNU/Linux 12 (bookworm)",
 		"- Sandbox runtime: nix-only",
 		"- Base image: registry.example/sandbox:test",
+		"- Shared skills root: /skills (bind-mounted when skills.host_dir is configured)",
 		"- Package management model: nix-only via exec_nix_shell_bash.",
-		"- Use read_file for routine UTF-8 text reads from the workspace or memory roots; paths may be relative to the workspace or absolute under `/workspace/...` or `/memory/...`.",
-		"- Use write_file to create or fully replace UTF-8 text files in the workspace or memory roots.",
-		"- Use edit_file for a single exact text replacement in an existing UTF-8 text file when you know the current text.",
-		"- Use apply_patch for multi-file or diff-style edits using the high-level patch envelope.",
+		"- Built-in skills are available read-only under `/skills/@builtin/...` via read_file even when no shared skills mount is configured.",
+		"- Shared skills, when configured, are available under `/skills/<name>/...` and may be edited with the normal file tools.",
+		"- Use read_file for routine UTF-8 text reads from the workspace, memory, or skills roots; paths may be relative to the workspace or absolute under `/workspace/...`, `/memory/...`, `/skills/...`, or `/skills/@builtin/...`.",
+		"- Use write_file to create or fully replace UTF-8 text files in the workspace, memory, or shared skills roots.",
+		"- Use edit_file for a single exact text replacement in an existing UTF-8 text file in the workspace, memory, or shared skills roots when you know the current text.",
+		"- Use apply_patch for multi-file or diff-style edits in the workspace, memory, or shared skills roots using the high-level patch envelope.",
+		"- Use validate_skill after creating or updating a skill directory.",
 		"- apply_patch does not accept unified diff, git diff, or context diff syntax. Never send `diff --git`, `--- a/...`, `+++ b/...`, `*** a/...`, `*** b/...`, or bare path lines.",
 		"- apply_patch patches must start with `*** Begin Patch` and end with `*** End Patch`.",
 		"- Inside apply_patch, use exactly one of `*** Add File: PATH`, `*** Delete File: PATH`, or `*** Update File: PATH`. For renames, put `*** Move to: NEW_PATH` immediately after `*** Update File: PATH`.",
@@ -121,7 +126,7 @@ func TestFormatBinarySummarySupportsPartialValues(t *testing.T) {
 func TestBuildToolListIncludesFileToolsInStableOrder(t *testing.T) {
 	t.Parallel()
 
-	toolList, err := buildToolList(nil, "")
+	toolList, err := buildToolList(nil, nil, "")
 	if err != nil {
 		t.Fatalf("buildToolList() error = %v", err)
 	}
@@ -131,6 +136,7 @@ func TestBuildToolListIncludesFileToolsInStableOrder(t *testing.T) {
 		"write_file",
 		"edit_file",
 		"apply_patch",
+		"validate_skill",
 		"exec_nix_shell_bash",
 		"web_fetch",
 	}; !equalStrings(got, want) {
@@ -141,7 +147,7 @@ func TestBuildToolListIncludesFileToolsInStableOrder(t *testing.T) {
 func TestBuildToolListAppendsWebSearchWhenConfigured(t *testing.T) {
 	t.Parallel()
 
-	toolList, err := buildToolList(nil, "brave-key")
+	toolList, err := buildToolList(nil, nil, "brave-key")
 	if err != nil {
 		t.Fatalf("buildToolList() error = %v", err)
 	}
@@ -151,6 +157,7 @@ func TestBuildToolListAppendsWebSearchWhenConfigured(t *testing.T) {
 		"write_file",
 		"edit_file",
 		"apply_patch",
+		"validate_skill",
 		"exec_nix_shell_bash",
 		"web_fetch",
 		"web_search",

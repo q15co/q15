@@ -13,6 +13,9 @@ func TestLoadAgentRuntimes_TOML(t *testing.T) {
 
 	path := filepath.Join(t.TempDir(), "config.toml")
 	if err := os.WriteFile(path, []byte(`
+[skills]
+host_dir = "/tmp/q15-shared-skills"
+
 [[provider]]
 name = "moonshot"
 type = "openai-compatible"
@@ -80,6 +83,12 @@ key_env = "MOONSHOT_API_KEY"
 	if rt.MemoryDir != "/memory" {
 		t.Fatalf("unexpected memory dir: %q", rt.MemoryDir)
 	}
+	if rt.SkillsHostDir != "/tmp/q15-shared-skills" {
+		t.Fatalf("unexpected skills host dir: %q", rt.SkillsHostDir)
+	}
+	if rt.SkillsDir != "/skills" {
+		t.Fatalf("unexpected skills dir: %q", rt.SkillsDir)
+	}
 	if rt.MemoryRecentTurns != 6 {
 		t.Fatalf("unexpected default memory recent turns: %d", rt.MemoryRecentTurns)
 	}
@@ -88,6 +97,19 @@ key_env = "MOONSHOT_API_KEY"
 	}
 	if len(rt.TelegramAllowedUserIDs) != 1 || rt.TelegramAllowedUserIDs[0] != 123456789 {
 		t.Fatalf("unexpected allowed telegram user ids: %#v", rt.TelegramAllowedUserIDs)
+	}
+}
+
+func TestValidateRejectsRelativeSkillsHostDir(t *testing.T) {
+	cfg := Config{
+		Skills: Skills{
+			HostDir: "relative/skills",
+		},
+	}
+
+	if err := cfg.Validate(); err == nil ||
+		!strings.Contains(err.Error(), "skills: host_dir must be an absolute path") {
+		t.Fatalf("Validate() error = %v, want skills host dir validation", err)
 	}
 }
 

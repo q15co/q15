@@ -16,6 +16,10 @@ func buildSandboxSettings(
 		MemoryHostDir:    rt.MemoryHostDir,
 		MemoryDir:        rt.MemoryDir,
 	}
+	if rt.SkillsHostDir != "" {
+		settings.SkillsHostDir = rt.SkillsHostDir
+		settings.SkillsDir = rt.SkillsDir
+	}
 	settings.Proxy = proxySettings
 
 	return settings

@@ -9,6 +9,8 @@ type Settings struct {
 	WorkspaceDir     string         `json:"workspace_dir"`
 	MemoryHostDir    string         `json:"memory_host_dir"`
 	MemoryDir        string         `json:"memory_dir"`
+	SkillsHostDir    string         `json:"skills_host_dir,omitempty"`
+	SkillsDir        string         `json:"skills_dir,omitempty"`
 	Proxy            *ProxySettings `json:"proxy,omitempty"`
 }
 

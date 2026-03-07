@@ -141,6 +141,48 @@ func TestWriteFileCreatesParentsAndSupportsMemoryRoot(t *testing.T) {
 	}
 }
 
+func TestSkillsRootSupportsReadWriteAndEdit(t *testing.T) {
+	t.Parallel()
+
+	cfg := newTestSettings(t)
+	writeHostFile(t, cfg.SkillsHostDir, "shared/SKILL.md", "one\ntwo\n")
+
+	readResult, err := ReadFile(cfg, sandboxcontract.ReadFileRequest{
+		Path: "/skills/shared/SKILL.md",
+	})
+	if err != nil {
+		t.Fatalf("ReadFile(skills) error = %v", err)
+	}
+	if readResult.Content != "one\ntwo" {
+		t.Fatalf("ReadFile(skills).Content = %q", readResult.Content)
+	}
+
+	writeResult, err := WriteFile(cfg, sandboxcontract.WriteFileRequest{
+		Path:    "/skills/shared/references/info.md",
+		Content: "hello\n",
+	})
+	if err != nil {
+		t.Fatalf("WriteFile(skills) error = %v", err)
+	}
+	if writeResult.Path != "/skills/shared/references/info.md" {
+		t.Fatalf("WriteFile(skills).Path = %q", writeResult.Path)
+	}
+
+	editResult, err := EditFile(cfg, sandboxcontract.EditFileRequest{
+		Path:    "/skills/shared/SKILL.md",
+		OldText: "two\n",
+		NewText: "three\n",
+	})
+	if err != nil {
+		t.Fatalf("EditFile(skills) error = %v", err)
+	}
+	if editResult.Path != "/skills/shared/SKILL.md" {
+		t.Fatalf("EditFile(skills).Path = %q", editResult.Path)
+	}
+	assertHostFileContentFileOps(t, cfg.SkillsHostDir, "shared/SKILL.md", "one\nthree\n")
+	assertHostFileContentFileOps(t, cfg.SkillsHostDir, "shared/references/info.md", "hello\n")
+}
+
 func TestEditFilePreservesBOMAndLineEndings(t *testing.T) {
 	t.Parallel()
 
@@ -279,6 +321,8 @@ func newTestSettings(t *testing.T) Settings {
 		WorkspaceDir:     "/workspace",
 		MemoryHostDir:    memoryHostDir,
 		MemoryDir:        "/memory",
+		SkillsHostDir:    filepath.Join(root, "skills"),
+		SkillsDir:        "/skills",
 	}
 }
 
@@ -296,5 +340,16 @@ func writeHostFileBytes(t *testing.T, root, rel string, content []byte) {
 	}
 	if err := os.WriteFile(full, content, 0o600); err != nil {
 		t.Fatalf("WriteFile(%q) error = %v", full, err)
+	}
+}
+
+func assertHostFileContentFileOps(t *testing.T, root, rel, want string) {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", rel, err)
+	}
+	if string(raw) != want {
+		t.Fatalf("%s content = %q, want %q", rel, string(raw), want)
 	}
 }

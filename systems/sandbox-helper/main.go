@@ -92,6 +92,8 @@ func run(action string) error {
 		WorkspaceDir:     req.Settings.WorkspaceDir,
 		MemoryHostDir:    req.Settings.MemoryHostDir,
 		MemoryDir:        req.Settings.MemoryDir,
+		SkillsHostDir:    req.Settings.SkillsHostDir,
+		SkillsDir:        req.Settings.SkillsDir,
 		Proxy:            toBuildahProxySettings(req.Settings.Proxy),
 	}
 	fileCfg := sandboxfiles.Settings{
@@ -99,6 +101,8 @@ func run(action string) error {
 		WorkspaceDir:     req.Settings.WorkspaceDir,
 		MemoryHostDir:    req.Settings.MemoryHostDir,
 		MemoryDir:        req.Settings.MemoryDir,
+		SkillsHostDir:    req.Settings.SkillsHostDir,
+		SkillsDir:        req.Settings.SkillsDir,
 	}
 
 	switch action {

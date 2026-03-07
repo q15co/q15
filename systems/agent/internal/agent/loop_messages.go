@@ -43,6 +43,54 @@ func injectCoreMemory(systemText string, core CoreMemory) string {
 	return out.String()
 }
 
+func injectSkillCatalog(systemText string, catalog SkillCatalog) string {
+	systemText = strings.TrimSpace(systemText)
+	if len(catalog.Entries) == 0 && len(catalog.Warnings) == 0 {
+		return systemText
+	}
+
+	var out strings.Builder
+	out.WriteString(systemText)
+	out.WriteString("\n\n")
+	out.WriteString("Available Skills (dynamic; load on demand):\n")
+	for _, entry := range catalog.Entries {
+		name := strings.TrimSpace(entry.Name)
+		if name == "" {
+			continue
+		}
+		out.WriteString("- ")
+		out.WriteString(name)
+		if source := strings.TrimSpace(entry.Source); source != "" {
+			out.WriteString(" [")
+			out.WriteString(source)
+			out.WriteString("]")
+		}
+		if desc := strings.TrimSpace(entry.Description); desc != "" {
+			out.WriteString(": ")
+			out.WriteString(desc)
+		}
+		if skillFilePath := strings.TrimSpace(entry.SkillFilePath); skillFilePath != "" {
+			out.WriteString(" Load with read_file from ")
+			out.WriteString(skillFilePath)
+			out.WriteString(".")
+		}
+		out.WriteString("\n")
+	}
+	if len(catalog.Warnings) > 0 {
+		out.WriteString("Skill Catalog Warnings:\n")
+		for _, warning := range catalog.Warnings {
+			warning = strings.TrimSpace(warning)
+			if warning == "" {
+				continue
+			}
+			out.WriteString("- ")
+			out.WriteString(warning)
+			out.WriteString("\n")
+		}
+	}
+	return strings.TrimSpace(out.String())
+}
+
 func copyMessages(in []Message) []Message {
 	if len(in) == 0 {
 		return nil

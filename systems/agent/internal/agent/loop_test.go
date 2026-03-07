@@ -34,6 +34,7 @@ func (f *fakeModelClient) Complete(
 type fakeConversationStore struct {
 	loadMessages []Message
 	coreMemory   CoreMemory
+	skillCatalog SkillCatalog
 	appendCalls  int
 	lastAppend   []Message
 }
@@ -57,6 +58,11 @@ func (f *fakeConversationStore) AppendTurn(ctx context.Context, messages []Messa
 func (f *fakeConversationStore) LoadCoreMemory(ctx context.Context) (CoreMemory, error) {
 	_ = ctx
 	return f.coreMemory, nil
+}
+
+func (f *fakeConversationStore) LoadSkillCatalog(ctx context.Context) (SkillCatalog, error) {
+	_ = ctx
+	return f.skillCatalog, nil
 }
 
 func TestDefaultSystemPromptIncludesAutonomousGuidance(t *testing.T) {
@@ -366,6 +372,42 @@ func TestLoopReply_IncludesCoreMemoryInSystemMessage(t *testing.T) {
 	}
 	if !strings.Contains(system, "# AGENT.md\n- Be precise.") {
 		t.Fatalf("system prompt missing core file body: %q", system)
+	}
+}
+
+func TestLoopReply_IncludesSkillCatalogInSystemMessage(t *testing.T) {
+	store := &fakeConversationStore{
+		skillCatalog: SkillCatalog{
+			Entries: []SkillCatalogEntry{
+				{
+					Name:          "skill-creator",
+					Description:   "Create or update skills.",
+					Source:        "builtin",
+					SkillFilePath: "/skills/@builtin/skill-creator/SKILL.md",
+				},
+			},
+			Warnings: []string{"skipping invalid shared skill \"broken\": missing SKILL.md"},
+		},
+	}
+	model := &fakeModelClient{
+		results: []ModelClientResult{{Content: "ok"}},
+	}
+
+	loop := NewLoop(model, nil, []string{"m1"}, DefaultSystemPrompt, store, 3)
+	if _, err := loop.Reply(context.Background(), "hello"); err != nil {
+		t.Fatalf("Reply() error = %v", err)
+	}
+
+	system := model.callMsgs[0][0].Content
+	for _, want := range []string{
+		"Available Skills (dynamic; load on demand):",
+		"- skill-creator [builtin]: Create or update skills. Load with read_file from /skills/@builtin/skill-creator/SKILL.md.",
+		"Skill Catalog Warnings:",
+		`- skipping invalid shared skill "broken": missing SKILL.md`,
+	} {
+		if !strings.Contains(system, want) {
+			t.Fatalf("system prompt missing %q:\n%s", want, system)
+		}
 	}
 }
 

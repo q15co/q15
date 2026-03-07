@@ -113,6 +113,13 @@ func (l *Loop) Reply(ctx context.Context, userInput string) (string, error) {
 			}
 			systemText = injectCoreMemory(systemText, coreMemory)
 		}
+		if skillStore, ok := l.store.(SkillCatalogStore); ok {
+			skillCatalog, err := skillStore.LoadSkillCatalog(ctx)
+			if err != nil {
+				return "", fmt.Errorf("load skill catalog: %w", err)
+			}
+			systemText = injectSkillCatalog(systemText, skillCatalog)
+		}
 	}
 
 	var recentMessages []Message

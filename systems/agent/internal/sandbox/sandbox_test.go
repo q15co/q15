@@ -34,6 +34,8 @@ func TestSettingsValidateRequiresAbsolutePaths(t *testing.T) {
 		WorkspaceDir:     "/workspace",
 		MemoryHostDir:    "/tmp/q15-test/.q15-memory",
 		MemoryDir:        "/memory",
+		SkillsHostDir:    "/tmp/q15-skills",
+		SkillsDir:        "/skills",
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("unexpected validation error: %v", err)
@@ -52,6 +54,8 @@ func TestToContractSettingsMapsCoreFields(t *testing.T) {
 		WorkspaceDir:     "/workspace",
 		MemoryHostDir:    "/tmp/q15-test/.q15-memory",
 		MemoryDir:        "/memory",
+		SkillsHostDir:    "/tmp/q15-skills",
+		SkillsDir:        "/skills",
 		Proxy: &ProxySettings{
 			Enabled:      true,
 			HTTPProxyURL: "http://127.0.0.1:18080",
@@ -67,6 +71,9 @@ func TestToContractSettingsMapsCoreFields(t *testing.T) {
 	}
 	if got.Proxy.HTTPProxyURL != cfg.Proxy.HTTPProxyURL {
 		t.Fatalf("unexpected proxy URL in contract settings: %q", got.Proxy.HTTPProxyURL)
+	}
+	if got.SkillsHostDir != cfg.SkillsHostDir || got.SkillsDir != cfg.SkillsDir {
+		t.Fatalf("unexpected skills settings in contract payload: %#v", got)
 	}
 }
 
@@ -93,6 +100,8 @@ func TestNewExecNixShellBashHelperRequestIncludesStructuredPayload(t *testing.T)
 		WorkspaceDir:     "/workspace",
 		MemoryHostDir:    "/tmp/q15-test/.q15-memory",
 		MemoryDir:        "/memory",
+		SkillsHostDir:    "/tmp/q15-skills",
+		SkillsDir:        "/skills",
 	}
 	req := newExecNixShellBashHelperRequest(
 		cfg,
@@ -194,6 +203,8 @@ func TestSandboxFileMethodsDecodeTypedResponses(t *testing.T) {
 			WorkspaceDir:     "/workspace",
 			MemoryHostDir:    "/tmp/q15-test/.q15-memory",
 			MemoryDir:        "/memory",
+			SkillsHostDir:    "/tmp/q15-skills",
+			SkillsDir:        "/skills",
 		},
 		helperBin: helperBin,
 		prepared:  true,

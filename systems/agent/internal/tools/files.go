@@ -33,7 +33,7 @@ type FileToolExecutor interface {
 	ApplyPatch(ctx context.Context, patch string) (sandboxcontract.ApplyPatchResult, error)
 }
 
-// ReadFile reads a UTF-8 text file from /workspace or /memory.
+// ReadFile reads a UTF-8 text file from /workspace, /memory, or /skills.
 type ReadFile struct {
 	exec FileToolExecutor
 }
@@ -47,7 +47,7 @@ func NewReadFile(exec FileToolExecutor) *ReadFile {
 func (r *ReadFile) Definition() agent.ToolDefinition {
 	return agent.ToolDefinition{
 		Name:        "read_file",
-		Description: "Read a UTF-8 text file from the sandbox workspace or memory roots with optional line-based pagination",
+		Description: "Read a UTF-8 text file from the sandbox workspace, memory, or skills roots with optional line-based pagination",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -109,7 +109,7 @@ func (r *ReadFile) Run(ctx context.Context, arguments string) (string, error) {
 	return strings.Join(lines, "\n"), nil
 }
 
-// WriteFile creates or replaces a UTF-8 text file in /workspace or /memory.
+// WriteFile creates or replaces a UTF-8 text file in /workspace, /memory, or /skills.
 type WriteFile struct {
 	exec FileToolExecutor
 }
@@ -123,7 +123,7 @@ func NewWriteFile(exec FileToolExecutor) *WriteFile {
 func (w *WriteFile) Definition() agent.ToolDefinition {
 	return agent.ToolDefinition{
 		Name:        "write_file",
-		Description: "Create or replace a UTF-8 text file in the sandbox workspace or memory roots",
+		Description: "Create or replace a UTF-8 text file in the sandbox workspace, memory, or shared skills roots",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -177,7 +177,7 @@ func NewEditFile(exec FileToolExecutor) *EditFile {
 func (e *EditFile) Definition() agent.ToolDefinition {
 	return agent.ToolDefinition{
 		Name:        "edit_file",
-		Description: "Perform one exact text replacement in an existing UTF-8 text file in the sandbox workspace or memory roots",
+		Description: "Perform one exact text replacement in an existing UTF-8 text file in the sandbox workspace, memory, or shared skills roots",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -243,7 +243,7 @@ func NewApplyPatch(exec FileToolExecutor) *ApplyPatch {
 func (a *ApplyPatch) Definition() agent.ToolDefinition {
 	return agent.ToolDefinition{
 		Name:        "apply_patch",
-		Description: "Apply a multi-file high-level patch inside the sandbox workspace or memory roots using the Codex patch envelope, not unified diff or git diff syntax",
+		Description: "Apply a multi-file high-level patch inside the sandbox workspace, memory, or shared skills roots using the Codex patch envelope, not unified diff or git diff syntax",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

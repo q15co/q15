@@ -13,6 +13,7 @@ type Info struct {
 	ContainerName    string
 	WorkspaceHostDir string
 	WorkspaceDir     string
+	SkillsDir        string
 	Runtime          string
 	BaseImage        string
 
@@ -37,6 +38,7 @@ func (s *Sandbox) Describe(ctx context.Context) (Info, error) {
 		ContainerName:    cfg.ContainerName,
 		WorkspaceHostDir: cfg.WorkspaceHostDir,
 		WorkspaceDir:     cfg.WorkspaceDir,
+		SkillsDir:        cfg.SkillsDir,
 	}
 	metadata, metadataErr := s.helperMetadata(ctx)
 	if metadataErr == nil {

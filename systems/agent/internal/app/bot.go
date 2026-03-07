@@ -16,6 +16,7 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/provider/openaicodex"
 	"github.com/q15co/q15/systems/agent/internal/provider/openaicompatible"
 	"github.com/q15co/q15/systems/agent/internal/sandbox"
+	q15skills "github.com/q15co/q15/systems/agent/internal/skills"
 	"github.com/q15co/q15/systems/agent/internal/tools"
 )
 
@@ -76,8 +77,14 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 		}
 	}
 	systemPrompt = composeSystemPrompt(systemPrompt, rt.Name, info, rt.MemoryDir)
+	skillManager := q15skills.NewManager(q15skills.Settings{
+		WorkspaceHostDir: rt.WorkspaceHostDir,
+		WorkspaceDir:     rt.WorkspaceDir,
+		SkillsHostDir:    rt.SkillsHostDir,
+		SkillsDir:        rt.SkillsDir,
+	})
 	braveAPIKey := strings.TrimSpace(os.Getenv("Q15_BRAVE_API_KEY"))
-	toolList, err := buildToolList(agentSandbox, braveAPIKey)
+	toolList, err := buildToolList(agentSandbox, skillManager, braveAPIKey)
 	if err != nil {
 		return fmt.Errorf("configure tools for agent %q: %w", rt.Name, err)
 	}
@@ -103,9 +110,13 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 		return fmt.Errorf("build tool registry for agent %q: %w", rt.Name, err)
 	}
 
-	agentMemoryStore := memory.NewStore(rt.MemoryHostDir, rt.Name, nil)
-	if err := agentMemoryStore.Init(ctx); err != nil {
+	memoryStore := memory.NewStore(rt.MemoryHostDir, rt.Name, nil)
+	if err := memoryStore.Init(ctx); err != nil {
 		return fmt.Errorf("initialize memory store for agent %q: %w", rt.Name, err)
+	}
+	store := &runtimeStore{
+		memory: memoryStore,
+		skills: skillManager,
 	}
 
 	botAgent := agent.NewLoop(
@@ -113,7 +124,7 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 		toolRegistry,
 		models,
 		systemPrompt,
-		agentMemoryStore,
+		store,
 		rt.MemoryRecentTurns,
 	)
 	messageBus := bus.New(bus.DefaultBufferSize)
@@ -155,12 +166,18 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 	}
 }
 
-func buildToolList(agentSandbox *sandbox.Sandbox, braveAPIKey string) ([]agent.Tool, error) {
+func buildToolList(
+	agentSandbox *sandbox.Sandbox,
+	skillManager *q15skills.Manager,
+	braveAPIKey string,
+) ([]agent.Tool, error) {
+	fileExec := q15skills.NewFileExecutor(agentSandbox, skillManager)
 	toolList := []agent.Tool{
-		tools.NewReadFile(agentSandbox),
-		tools.NewWriteFile(agentSandbox),
-		tools.NewEditFile(agentSandbox),
-		tools.NewApplyPatch(agentSandbox),
+		tools.NewReadFile(fileExec),
+		tools.NewWriteFile(fileExec),
+		tools.NewEditFile(fileExec),
+		tools.NewApplyPatch(fileExec),
+		tools.NewValidateSkill(skillManager),
 		tools.NewNixShellBash(agentSandbox),
 		tools.NewWebFetch(),
 	}
@@ -224,6 +241,15 @@ func composeSystemPrompt(
 			),
 		)
 	}
+	if info.SkillsDir != "" {
+		lines = append(
+			lines,
+			fmt.Sprintf(
+				"- Shared skills root: %s (bind-mounted when skills.host_dir is configured)",
+				info.SkillsDir,
+			),
+		)
+	}
 	memoryDir = strings.TrimSpace(memoryDir)
 	if memoryDir != "" {
 		lines = append(
@@ -246,10 +272,13 @@ func composeSystemPrompt(
 	lines = append(lines, "- Package management model: nix-only via exec_nix_shell_bash.")
 	lines = append(
 		lines,
-		"- Use read_file for routine UTF-8 text reads from the workspace or memory roots; paths may be relative to the workspace or absolute under `/workspace/...` or `/memory/...`.",
-		"- Use write_file to create or fully replace UTF-8 text files in the workspace or memory roots.",
-		"- Use edit_file for a single exact text replacement in an existing UTF-8 text file when you know the current text.",
-		"- Use apply_patch for multi-file or diff-style edits using the high-level patch envelope.",
+		"- Built-in skills are available read-only under `/skills/@builtin/...` via read_file even when no shared skills mount is configured.",
+		"- Shared skills, when configured, are available under `/skills/<name>/...` and may be edited with the normal file tools.",
+		"- Use read_file for routine UTF-8 text reads from the workspace, memory, or skills roots; paths may be relative to the workspace or absolute under `/workspace/...`, `/memory/...`, `/skills/...`, or `/skills/@builtin/...`.",
+		"- Use write_file to create or fully replace UTF-8 text files in the workspace, memory, or shared skills roots.",
+		"- Use edit_file for a single exact text replacement in an existing UTF-8 text file in the workspace, memory, or shared skills roots when you know the current text.",
+		"- Use apply_patch for multi-file or diff-style edits in the workspace, memory, or shared skills roots using the high-level patch envelope.",
+		"- Use validate_skill after creating or updating a skill directory.",
 		"- apply_patch does not accept unified diff, git diff, or context diff syntax. Never send `diff --git`, `--- a/...`, `+++ b/...`, `*** a/...`, `*** b/...`, or bare path lines.",
 		"- apply_patch patches must start with `*** Begin Patch` and end with `*** End Patch`.",
 		"- Inside apply_patch, use exactly one of `*** Add File: PATH`, `*** Delete File: PATH`, or `*** Update File: PATH`. For renames, put `*** Move to: NEW_PATH` immediately after `*** Update File: PATH`.",

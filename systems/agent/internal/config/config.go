@@ -19,6 +19,7 @@ import (
 type Config struct {
 	Providers []Provider `mapstructure:"provider"`
 	Agents    []Agent    `mapstructure:"agent"`
+	Skills    Skills     `mapstructure:"skills"`
 }
 
 // Provider defines a named model provider entry in config.toml.
@@ -44,6 +45,11 @@ type Sandbox struct {
 	WorkspaceHostDir string        `mapstructure:"workspace_host_dir"`
 	WorkspaceDir     string        `mapstructure:"workspace_dir"`
 	Proxy            *SandboxProxy `mapstructure:"proxy"`
+}
+
+// Skills defines the optional shared host directory for agent-authored skills.
+type Skills struct {
+	HostDir string `mapstructure:"host_dir"`
 }
 
 // SandboxProxy defines optional egress-proxy settings for sandbox traffic.
@@ -119,6 +125,7 @@ const (
 	defaultSandboxProxyListenAddr          = "0.0.0.0:0"
 	defaultSandboxProxyCACertContainerPath = "/run/q15-proxy/ca.crt"
 	defaultMemoryDir                       = "/memory"
+	defaultSkillsDir                       = "/skills"
 	defaultMemoryRecentTurns               = 6
 )
 
@@ -137,6 +144,8 @@ type AgentRuntime struct {
 	WorkspaceDir           string
 	MemoryHostDir          string
 	MemoryDir              string
+	SkillsHostDir          string
+	SkillsDir              string
 	MemoryRecentTurns      int
 	SandboxProxy           *SandboxProxyRuntime
 	TelegramToken          string
@@ -326,6 +335,7 @@ func (c Config) resolveAgentRuntimes(_ string) ([]AgentRuntime, error) {
 			memoryRecentTurns = defaultMemoryRecentTurns
 		}
 		workspaceHostDir := strings.TrimSpace(agentCfg.Sandbox.WorkspaceHostDir)
+		skillsHostDir := strings.TrimSpace(c.Skills.HostDir)
 
 		runtimes = append(runtimes, AgentRuntime{
 			Name:                   strings.TrimSpace(agentCfg.Name),
@@ -335,6 +345,8 @@ func (c Config) resolveAgentRuntimes(_ string) ([]AgentRuntime, error) {
 			WorkspaceDir:           strings.TrimSpace(agentCfg.Sandbox.WorkspaceDir),
 			MemoryHostDir:          filepath.Join(workspaceHostDir, ".q15-memory"),
 			MemoryDir:              defaultMemoryDir,
+			SkillsHostDir:          skillsHostDir,
+			SkillsDir:              defaultSkillsDir,
 			MemoryRecentTurns:      memoryRecentTurns,
 			SandboxProxy:           sandboxProxy,
 			TelegramToken:          token,
@@ -347,10 +359,16 @@ func (c Config) resolveAgentRuntimes(_ string) ([]AgentRuntime, error) {
 
 func (c Config) validate() error {
 	if len(c.Agents) == 0 {
+		if err := validateSkills(c.Skills); err != nil {
+			return fmt.Errorf("skills: %w", err)
+		}
 		return nil
 	}
 	if len(c.Providers) == 0 {
 		return errors.New("provider cannot be empty when agent is configured")
+	}
+	if err := validateSkills(c.Skills); err != nil {
+		return fmt.Errorf("skills: %w", err)
 	}
 
 	providers := make(map[string]struct{}, len(c.Providers))
@@ -422,6 +440,17 @@ func (c Config) validate() error {
 		}
 	}
 
+	return nil
+}
+
+func validateSkills(skills Skills) error {
+	hostDir := strings.TrimSpace(skills.HostDir)
+	if hostDir == "" {
+		return nil
+	}
+	if !filepath.IsAbs(hostDir) {
+		return errors.New("host_dir must be an absolute path")
+	}
 	return nil
 }
 

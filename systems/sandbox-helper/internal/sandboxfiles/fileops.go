@@ -30,6 +30,8 @@ type Settings struct {
 	WorkspaceDir     string
 	MemoryHostDir    string
 	MemoryDir        string
+	SkillsHostDir    string
+	SkillsDir        string
 }
 
 type resolvedPath struct {
@@ -288,11 +290,12 @@ func resolvePath(cfg Settings, raw string) (resolvedPath, error) {
 
 	workspaceDir := normalizeContainerRoot(cfg.WorkspaceDir)
 	memoryDir := normalizeContainerRoot(cfg.MemoryDir)
+	skillsDir := normalizeContainerRoot(cfg.SkillsDir)
 
 	if path.IsAbs(raw) {
 		cleaned := path.Clean(raw)
 		switch {
-		case cleaned == workspaceDir || cleaned == memoryDir:
+		case cleaned == workspaceDir || cleaned == memoryDir || cleaned == skillsDir:
 			return resolvedPath{}, fmt.Errorf("path must reference a file, not a root")
 		case strings.HasPrefix(cleaned, workspaceDir+"/"):
 			rel := strings.TrimPrefix(cleaned, workspaceDir+"/")
@@ -316,11 +319,23 @@ func resolvePath(cfg Settings, raw string) (resolvedPath, error) {
 				rel:           filepath.FromSlash(rel),
 				containerPath: cleaned,
 			}, nil
+		case skillsDir != "" && strings.HasPrefix(cleaned, skillsDir+"/"):
+			rel := strings.TrimPrefix(cleaned, skillsDir+"/")
+			if err := validateRelativePath(rel); err != nil {
+				return resolvedPath{}, err
+			}
+			return resolvedPath{
+				rootHostDir:   strings.TrimSpace(cfg.SkillsHostDir),
+				rootContainer: skillsDir,
+				rel:           filepath.FromSlash(rel),
+				containerPath: cleaned,
+			}, nil
 		default:
 			return resolvedPath{}, fmt.Errorf(
-				"absolute paths must be under %s or %s",
+				"absolute paths must be under %s, %s, or %s",
 				workspaceDir,
 				memoryDir,
+				skillsDir,
 			)
 		}
 	}

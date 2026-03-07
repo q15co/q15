@@ -16,6 +16,8 @@ func TestSettingsValidateRequiresAbsolutePaths(t *testing.T) {
 		WorkspaceDir:     "/workspace",
 		MemoryHostDir:    "/tmp/q15-test/.q15-memory",
 		MemoryDir:        "/memory",
+		SkillsHostDir:    "/tmp/q15-skills",
+		SkillsDir:        "/skills",
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("unexpected validation error: %v", err)

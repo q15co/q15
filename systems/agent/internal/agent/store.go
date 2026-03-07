@@ -27,3 +27,24 @@ type CoreMemoryFile struct {
 type CoreMemoryStore interface {
 	LoadCoreMemory(ctx context.Context) (CoreMemory, error)
 }
+
+// SkillCatalog describes dynamically available skills that may be loaded by
+// the model on demand.
+type SkillCatalog struct {
+	Entries  []SkillCatalogEntry
+	Warnings []string
+}
+
+// SkillCatalogEntry is one prompt-visible skill.
+type SkillCatalogEntry struct {
+	Name          string
+	Description   string
+	Source        string
+	SkillPath     string
+	SkillFilePath string
+}
+
+// SkillCatalogStore can provide a fresh skills catalog for each reply.
+type SkillCatalogStore interface {
+	LoadSkillCatalog(ctx context.Context) (SkillCatalog, error)
+}

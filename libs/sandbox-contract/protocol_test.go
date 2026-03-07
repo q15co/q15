@@ -13,6 +13,8 @@ func TestHelperRequestRoundTripsNewFilePayloads(t *testing.T) {
 			WorkspaceDir:     "/workspace",
 			MemoryHostDir:    "/tmp/workspace/.q15-memory",
 			MemoryDir:        "/memory",
+			SkillsHostDir:    "/tmp/shared-skills",
+			SkillsDir:        "/skills",
 		},
 		ReadFile: &ReadFileRequest{
 			Path:        "/workspace/notes.txt",
@@ -54,6 +56,10 @@ func TestHelperRequestRoundTripsNewFilePayloads(t *testing.T) {
 	}
 	if got.ApplyPatch == nil || got.ApplyPatch.Patch != req.ApplyPatch.Patch {
 		t.Fatalf("ApplyPatch round-trip mismatch: %#v", got.ApplyPatch)
+	}
+	if got.Settings.SkillsHostDir != req.Settings.SkillsHostDir ||
+		got.Settings.SkillsDir != req.Settings.SkillsDir {
+		t.Fatalf("skills settings round-trip mismatch: %#v", got.Settings)
 	}
 }
 

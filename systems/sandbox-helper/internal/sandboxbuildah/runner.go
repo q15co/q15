@@ -32,6 +32,8 @@ type Settings struct {
 	WorkspaceDir     string
 	MemoryHostDir    string
 	MemoryDir        string
+	SkillsHostDir    string
+	SkillsDir        string
 	Proxy            *ProxySettings
 }
 
@@ -77,6 +79,20 @@ func (s Settings) Validate() error {
 	if !filepath.IsAbs(strings.TrimSpace(s.MemoryDir)) {
 		return errors.New("memory dir must be an absolute path")
 	}
+	if strings.TrimSpace(s.SkillsHostDir) != "" || strings.TrimSpace(s.SkillsDir) != "" {
+		if strings.TrimSpace(s.SkillsHostDir) == "" {
+			return errors.New("skills host dir is required when skills dir is set")
+		}
+		if strings.TrimSpace(s.SkillsDir) == "" {
+			return errors.New("skills dir is required when skills host dir is set")
+		}
+		if !filepath.IsAbs(strings.TrimSpace(s.SkillsHostDir)) {
+			return errors.New("skills host dir must be an absolute path")
+		}
+		if !filepath.IsAbs(strings.TrimSpace(s.SkillsDir)) {
+			return errors.New("skills dir must be an absolute path")
+		}
+	}
 	if err := validateProxySettings(s); err != nil {
 		return fmt.Errorf("proxy: %w", err)
 	}
@@ -109,6 +125,13 @@ func Prepare(ctx context.Context, cfg Settings) error {
 	if err := os.MkdirAll(cfg.MemoryHostDir, 0o755); err != nil {
 		verbosef("Prepare: memory mkdir failed: %v", err)
 		return fmt.Errorf("create memory host dir %q: %w", cfg.MemoryHostDir, err)
+	}
+	if strings.TrimSpace(cfg.SkillsHostDir) != "" {
+		verbosef("Prepare: ensuring skills host dir exists: %q", cfg.SkillsHostDir)
+		if err := os.MkdirAll(cfg.SkillsHostDir, 0o755); err != nil {
+			verbosef("Prepare: skills mkdir failed: %v", err)
+			return fmt.Errorf("create skills host dir %q: %w", cfg.SkillsHostDir, err)
+		}
 	}
 	storageHostDir, _ := defaultStorageHostDir()
 	if storageHostDir != "" {
@@ -219,12 +242,26 @@ func execPreparedCommand(
 
 func normalizeSettings(cfg Settings) Settings {
 	cfg.ContainerName = strings.TrimSpace(cfg.ContainerName)
-	cfg.WorkspaceHostDir = filepath.Clean(strings.TrimSpace(cfg.WorkspaceHostDir))
-	cfg.WorkspaceDir = filepath.Clean(strings.TrimSpace(cfg.WorkspaceDir))
-	cfg.MemoryHostDir = filepath.Clean(strings.TrimSpace(cfg.MemoryHostDir))
-	cfg.MemoryDir = filepath.Clean(strings.TrimSpace(cfg.MemoryDir))
+	cfg.WorkspaceHostDir = cleanRequiredPath(cfg.WorkspaceHostDir)
+	cfg.WorkspaceDir = cleanRequiredPath(cfg.WorkspaceDir)
+	cfg.MemoryHostDir = cleanRequiredPath(cfg.MemoryHostDir)
+	cfg.MemoryDir = cleanRequiredPath(cfg.MemoryDir)
+	cfg.SkillsHostDir = cleanOptionalPath(cfg.SkillsHostDir)
+	cfg.SkillsDir = cleanOptionalPath(cfg.SkillsDir)
 	cfg.Proxy = normalizeProxySettings(cfg.Proxy)
 	return cfg
+}
+
+func cleanRequiredPath(raw string) string {
+	return filepath.Clean(strings.TrimSpace(raw))
+}
+
+func cleanOptionalPath(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	return filepath.Clean(raw)
 }
 
 func openStore() (storage.Store, error) {
@@ -464,6 +501,14 @@ func runInBuilderRaw(
 			Destination: cfg.MemoryDir,
 			Options:     []string{"rbind", "rw"},
 		},
+	}
+	if strings.TrimSpace(cfg.SkillsHostDir) != "" {
+		mounts = append(mounts, specs.Mount{
+			Type:        "bind",
+			Source:      cfg.SkillsHostDir,
+			Destination: cfg.SkillsDir,
+			Options:     []string{"rbind", "rw"},
+		})
 	}
 	sharedNixMount, err := sharedNixStoreMount()
 	if err != nil {
