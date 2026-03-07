@@ -32,11 +32,40 @@ type ExecNixShellBashRequest struct {
 	Packages []string `json:"packages"`
 }
 
+// ReadFileRequest describes a rooted text file read with optional paging.
+type ReadFileRequest struct {
+	Path        string `json:"path"`
+	OffsetLines int    `json:"offset_lines,omitempty"`
+	LimitLines  int    `json:"limit_lines,omitempty"`
+}
+
+// WriteFileRequest describes an atomic text file write inside a rooted area.
+type WriteFileRequest struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
+}
+
+// EditFileRequest describes an exact text replacement inside one rooted file.
+type EditFileRequest struct {
+	Path    string `json:"path"`
+	OldText string `json:"old_text"`
+	NewText string `json:"new_text"`
+}
+
+// ApplyPatchRequest describes a multi-file Codex-style patch application.
+type ApplyPatchRequest struct {
+	Patch string `json:"patch"`
+}
+
 // HelperRequest is sent from the agent runtime to the sandbox helper.
 type HelperRequest struct {
 	Settings         Settings                 `json:"settings"`
 	Command          string                   `json:"command,omitempty"`
 	ExecNixShellBash *ExecNixShellBashRequest `json:"exec_nix_shell_bash,omitempty"`
+	ReadFile         *ReadFileRequest         `json:"read_file,omitempty"`
+	WriteFile        *WriteFileRequest        `json:"write_file,omitempty"`
+	EditFile         *EditFileRequest         `json:"edit_file,omitempty"`
+	ApplyPatch       *ApplyPatchRequest       `json:"apply_patch,omitempty"`
 }
 
 // RuntimeMetadata describes sandbox runtime properties owned by the helper.
@@ -45,9 +74,41 @@ type RuntimeMetadata struct {
 	BaseImage string `json:"base_image,omitempty"`
 }
 
+// ReadFileResult describes one rooted text file read.
+type ReadFileResult struct {
+	Content         string `json:"content"`
+	Truncated       bool   `json:"truncated,omitempty"`
+	NextOffsetLines int    `json:"next_offset_lines,omitempty"`
+	TotalLines      int    `json:"total_lines,omitempty"`
+}
+
+// WriteFileResult describes one successful atomic file write.
+type WriteFileResult struct {
+	Path         string `json:"path"`
+	BytesWritten int    `json:"bytes_written"`
+}
+
+// EditFileResult describes one exact text replacement.
+type EditFileResult struct {
+	Path             string `json:"path"`
+	Diff             string `json:"diff,omitempty"`
+	FirstChangedLine int    `json:"first_changed_line,omitempty"`
+}
+
+// ApplyPatchResult describes one successful multi-file patch application.
+type ApplyPatchResult struct {
+	ChangedFiles []string `json:"changed_files,omitempty"`
+	Diff         string   `json:"diff,omitempty"`
+	Summary      string   `json:"summary,omitempty"`
+}
+
 // HelperResponse is returned by the sandbox helper.
 type HelperResponse struct {
-	Output   string           `json:"output,omitempty"`
-	Metadata *RuntimeMetadata `json:"metadata,omitempty"`
-	Error    string           `json:"error,omitempty"`
+	Output     string            `json:"output,omitempty"`
+	Metadata   *RuntimeMetadata  `json:"metadata,omitempty"`
+	ReadFile   *ReadFileResult   `json:"read_file,omitempty"`
+	WriteFile  *WriteFileResult  `json:"write_file,omitempty"`
+	EditFile   *EditFileResult   `json:"edit_file,omitempty"`
+	ApplyPatch *ApplyPatchResult `json:"apply_patch,omitempty"`
+	Error      string            `json:"error,omitempty"`
 }

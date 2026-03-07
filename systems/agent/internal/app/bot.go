@@ -76,17 +76,21 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 		}
 	}
 	systemPrompt = composeSystemPrompt(systemPrompt, rt.Name, info, rt.MemoryDir)
-	toolList := []agent.Tool{tools.NewNixShellBash(agentSandbox), tools.NewWebFetch()}
+	braveAPIKey := strings.TrimSpace(os.Getenv("Q15_BRAVE_API_KEY"))
+	toolList, err := buildToolList(agentSandbox, braveAPIKey)
+	if err != nil {
+		return fmt.Errorf("configure tools for agent %q: %w", rt.Name, err)
+	}
+	if sandbox.VerboseEnabled() {
+		fmt.Printf(
+			"[app] enabled tools read_file, write_file, edit_file, apply_patch for agent=%q\n",
+			rt.Name,
+		)
+	}
 	if sandbox.VerboseEnabled() {
 		fmt.Printf("[app] enabled tool web_fetch for agent=%q\n", rt.Name)
 	}
-	braveAPIKey := strings.TrimSpace(os.Getenv("Q15_BRAVE_API_KEY"))
 	if braveAPIKey != "" {
-		webSearchTool, err := tools.NewBraveWebSearch(braveAPIKey)
-		if err != nil {
-			return fmt.Errorf("configure brave web search tool for agent %q: %w", rt.Name, err)
-		}
-		toolList = append(toolList, webSearchTool)
 		if sandbox.VerboseEnabled() {
 			fmt.Printf("[app] enabled tool web_search (Brave) for agent=%q\n", rt.Name)
 		}
@@ -149,6 +153,28 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 		}
 		return err
 	}
+}
+
+func buildToolList(agentSandbox *sandbox.Sandbox, braveAPIKey string) ([]agent.Tool, error) {
+	toolList := []agent.Tool{
+		tools.NewReadFile(agentSandbox),
+		tools.NewWriteFile(agentSandbox),
+		tools.NewEditFile(agentSandbox),
+		tools.NewApplyPatch(agentSandbox),
+		tools.NewNixShellBash(agentSandbox),
+		tools.NewWebFetch(),
+	}
+
+	braveAPIKey = strings.TrimSpace(braveAPIKey)
+	if braveAPIKey == "" {
+		return toolList, nil
+	}
+
+	webSearchTool, err := tools.NewBraveWebSearch(braveAPIKey)
+	if err != nil {
+		return nil, err
+	}
+	return append(toolList, webSearchTool), nil
 }
 
 func composeSystemPrompt(
@@ -218,6 +244,21 @@ func composeSystemPrompt(
 		)
 	}
 	lines = append(lines, "- Package management model: nix-only via exec_nix_shell_bash.")
+	lines = append(
+		lines,
+		"- Use read_file for routine UTF-8 text reads from the workspace or memory roots; paths may be relative to the workspace or absolute under `/workspace/...` or `/memory/...`.",
+		"- Use write_file to create or fully replace UTF-8 text files in the workspace or memory roots.",
+		"- Use edit_file for a single exact text replacement in an existing UTF-8 text file when you know the current text.",
+		"- Use apply_patch for multi-file or diff-style edits using the high-level patch envelope.",
+		"- apply_patch does not accept unified diff, git diff, or context diff syntax. Never send `diff --git`, `--- a/...`, `+++ b/...`, `*** a/...`, `*** b/...`, or bare path lines.",
+		"- apply_patch patches must start with `*** Begin Patch` and end with `*** End Patch`.",
+		"- Inside apply_patch, use exactly one of `*** Add File: PATH`, `*** Delete File: PATH`, or `*** Update File: PATH`. For renames, put `*** Move to: NEW_PATH` immediately after `*** Update File: PATH`.",
+		"- In `*** Add File`, every file-content line must start with `+`.",
+		"- In `*** Update File`, each hunk must start with `@@`, then use a leading space for context lines, `-` for removed lines, and `+` for added lines.",
+		"- Minimal apply_patch example:",
+		"```text\n*** Begin Patch\n*** Update File: /memory/notes/todo.md\n@@\n unchanged line\n-old value\n+new value\n unchanged tail\n*** End Patch\n```",
+		"- Use exec_nix_shell_bash for commands, builds, tests, formatting, git, and other CLI workflows, not for routine file reads or edits.",
+	)
 	lines = append(
 		lines,
 		"- Every exec_nix_shell_bash call must include a non-empty `packages` array of nix installables (for example `nixpkgs#git`).",

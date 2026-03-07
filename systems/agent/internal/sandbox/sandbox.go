@@ -205,6 +205,131 @@ func (s *Sandbox) ExecNixShellBash(
 	return output, nil
 }
 
+// ReadFile reads text from the sandbox workspace or memory roots through the helper.
+func (s *Sandbox) ReadFile(
+	ctx context.Context,
+	path string,
+	offsetLines int,
+	limitLines int,
+) (ReadFileResult, error) {
+	req, err := newReadFileRequest(path, offsetLines, limitLines)
+	if err != nil {
+		return ReadFileResult{}, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.prepared {
+		return ReadFileResult{}, errors.New("sandbox is not prepared")
+	}
+	if err := ctx.Err(); err != nil {
+		return ReadFileResult{}, err
+	}
+
+	resp, err := s.callHelperLocked(ctx, "read-file", newReadFileHelperRequest(s.cfg, req))
+	if err != nil {
+		return ReadFileResult{}, err
+	}
+	if resp.ReadFile == nil {
+		return ReadFileResult{}, errors.New("sandbox helper returned empty read_file result")
+	}
+	return *resp.ReadFile, nil
+}
+
+// WriteFile writes text into the sandbox workspace or memory roots through the helper.
+func (s *Sandbox) WriteFile(
+	ctx context.Context,
+	path string,
+	content string,
+) (WriteFileResult, error) {
+	req, err := newWriteFileRequest(path, content)
+	if err != nil {
+		return WriteFileResult{}, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.prepared {
+		return WriteFileResult{}, errors.New("sandbox is not prepared")
+	}
+	if err := ctx.Err(); err != nil {
+		return WriteFileResult{}, err
+	}
+
+	resp, err := s.callHelperLocked(ctx, "write-file", newWriteFileHelperRequest(s.cfg, req))
+	if err != nil {
+		return WriteFileResult{}, err
+	}
+	if resp.WriteFile == nil {
+		return WriteFileResult{}, errors.New("sandbox helper returned empty write_file result")
+	}
+	return *resp.WriteFile, nil
+}
+
+// EditFile performs one exact text replacement through the sandbox helper.
+func (s *Sandbox) EditFile(
+	ctx context.Context,
+	path string,
+	oldText string,
+	newText string,
+) (EditFileResult, error) {
+	req, err := newEditFileRequest(path, oldText, newText)
+	if err != nil {
+		return EditFileResult{}, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.prepared {
+		return EditFileResult{}, errors.New("sandbox is not prepared")
+	}
+	if err := ctx.Err(); err != nil {
+		return EditFileResult{}, err
+	}
+
+	resp, err := s.callHelperLocked(ctx, "edit-file", newEditFileHelperRequest(s.cfg, req))
+	if err != nil {
+		return EditFileResult{}, err
+	}
+	if resp.EditFile == nil {
+		return EditFileResult{}, errors.New("sandbox helper returned empty edit_file result")
+	}
+	return *resp.EditFile, nil
+}
+
+// ApplyPatch applies a multi-file patch through the sandbox helper.
+func (s *Sandbox) ApplyPatch(
+	ctx context.Context,
+	patch string,
+) (ApplyPatchResult, error) {
+	req, err := newApplyPatchRequest(patch)
+	if err != nil {
+		return ApplyPatchResult{}, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.prepared {
+		return ApplyPatchResult{}, errors.New("sandbox is not prepared")
+	}
+	if err := ctx.Err(); err != nil {
+		return ApplyPatchResult{}, err
+	}
+
+	resp, err := s.callHelperLocked(ctx, "apply-patch", newApplyPatchHelperRequest(s.cfg, req))
+	if err != nil {
+		return ApplyPatchResult{}, err
+	}
+	if resp.ApplyPatch == nil {
+		return ApplyPatchResult{}, errors.New("sandbox helper returned empty apply_patch result")
+	}
+	return *resp.ApplyPatch, nil
+}
+
 func (s *Sandbox) runHelperLocked(
 	ctx context.Context,
 	action string,
@@ -344,6 +469,53 @@ func newExecNixShellBashHelperRequest(
 	return payload
 }
 
+func newReadFileHelperRequest(
+	cfg Settings,
+	req sandboxcontract.ReadFileRequest,
+) sandboxcontract.HelperRequest {
+	payload := newHelperRequest(cfg)
+	payload.ReadFile = &sandboxcontract.ReadFileRequest{
+		Path:        req.Path,
+		OffsetLines: req.OffsetLines,
+		LimitLines:  req.LimitLines,
+	}
+	return payload
+}
+
+func newWriteFileHelperRequest(
+	cfg Settings,
+	req sandboxcontract.WriteFileRequest,
+) sandboxcontract.HelperRequest {
+	payload := newHelperRequest(cfg)
+	payload.WriteFile = &sandboxcontract.WriteFileRequest{
+		Path:    req.Path,
+		Content: req.Content,
+	}
+	return payload
+}
+
+func newEditFileHelperRequest(
+	cfg Settings,
+	req sandboxcontract.EditFileRequest,
+) sandboxcontract.HelperRequest {
+	payload := newHelperRequest(cfg)
+	payload.EditFile = &sandboxcontract.EditFileRequest{
+		Path:    req.Path,
+		OldText: req.OldText,
+		NewText: req.NewText,
+	}
+	return payload
+}
+
+func newApplyPatchHelperRequest(
+	cfg Settings,
+	req sandboxcontract.ApplyPatchRequest,
+) sandboxcontract.HelperRequest {
+	payload := newHelperRequest(cfg)
+	payload.ApplyPatch = &sandboxcontract.ApplyPatchRequest{Patch: req.Patch}
+	return payload
+}
+
 func newExecNixShellBashRequest(
 	command string,
 	packages []string,
@@ -360,6 +532,68 @@ func newExecNixShellBashRequest(
 		Command:  command,
 		Packages: normalizedPackages,
 	}, nil
+}
+
+func newReadFileRequest(
+	path string,
+	offsetLines int,
+	limitLines int,
+) (sandboxcontract.ReadFileRequest, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return sandboxcontract.ReadFileRequest{}, errors.New("path is required")
+	}
+	if offsetLines < 0 {
+		return sandboxcontract.ReadFileRequest{}, errors.New("offset_lines must be >= 0")
+	}
+	if limitLines < 0 {
+		return sandboxcontract.ReadFileRequest{}, errors.New("limit_lines must be >= 0")
+	}
+	return sandboxcontract.ReadFileRequest{
+		Path:        path,
+		OffsetLines: offsetLines,
+		LimitLines:  limitLines,
+	}, nil
+}
+
+func newWriteFileRequest(
+	path string,
+	content string,
+) (sandboxcontract.WriteFileRequest, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return sandboxcontract.WriteFileRequest{}, errors.New("path is required")
+	}
+	return sandboxcontract.WriteFileRequest{
+		Path:    path,
+		Content: content,
+	}, nil
+}
+
+func newEditFileRequest(
+	path string,
+	oldText string,
+	newText string,
+) (sandboxcontract.EditFileRequest, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return sandboxcontract.EditFileRequest{}, errors.New("path is required")
+	}
+	if oldText == "" {
+		return sandboxcontract.EditFileRequest{}, errors.New("old_text is required")
+	}
+	return sandboxcontract.EditFileRequest{
+		Path:    path,
+		OldText: oldText,
+		NewText: newText,
+	}, nil
+}
+
+func newApplyPatchRequest(patch string) (sandboxcontract.ApplyPatchRequest, error) {
+	if strings.TrimSpace(patch) == "" {
+		return sandboxcontract.ApplyPatchRequest{}, errors.New("patch is required")
+	}
+	return sandboxcontract.ApplyPatchRequest{Patch: patch}, nil
 }
 
 func normalizePackages(packages []string) ([]string, error) {

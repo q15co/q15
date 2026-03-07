@@ -12,5 +12,17 @@ type HelperResponse = sandboxcontract.HelperResponse
 // split.
 type ExecNixShellBashRequest = sandboxcontract.ExecNixShellBashRequest
 
+// ReadFileResult is retained as a temporary alias during the module split.
+type ReadFileResult = sandboxcontract.ReadFileResult
+
+// WriteFileResult is retained as a temporary alias during the module split.
+type WriteFileResult = sandboxcontract.WriteFileResult
+
+// EditFileResult is retained as a temporary alias during the module split.
+type EditFileResult = sandboxcontract.EditFileResult
+
+// ApplyPatchResult is retained as a temporary alias during the module split.
+type ApplyPatchResult = sandboxcontract.ApplyPatchResult
+
 // RuntimeMetadata is retained as a temporary alias during the module split.
 type RuntimeMetadata = sandboxcontract.RuntimeMetadata

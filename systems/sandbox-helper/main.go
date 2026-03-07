@@ -12,6 +12,7 @@ import (
 
 	sandboxcontract "github.com/q15co/q15/libs/sandbox-contract"
 	"github.com/q15co/q15/systems/sandbox-helper/internal/sandboxbuildah"
+	"github.com/q15co/q15/systems/sandbox-helper/internal/sandboxfiles"
 )
 
 const helperRequestEnv = "Q15_SANDBOX_HELPER_REQUEST_B64"
@@ -40,7 +41,7 @@ func main() {
 func parseAction(args []string) (string, error) {
 	if len(args) != 2 {
 		return "", fmt.Errorf(
-			"usage: %s <prepare|exec-raw|exec-nix-shell-bash|metadata>",
+			"usage: %s <prepare|exec-raw|exec-nix-shell-bash|read-file|write-file|edit-file|apply-patch|metadata>",
 			os.Args[0],
 		)
 	}
@@ -51,7 +52,7 @@ func actionRequiresBuildahEnv(action string) bool {
 	switch action {
 	case "prepare", "exec-raw", "exec-nix-shell-bash":
 		return true
-	case "metadata":
+	case "metadata", "read-file", "write-file", "edit-file", "apply-patch":
 		return false
 	default:
 		return false
@@ -69,7 +70,13 @@ func run(action string) error {
 			},
 		})
 		return nil
-	case "prepare", "exec-raw", "exec-nix-shell-bash":
+	case "prepare",
+		"exec-raw",
+		"exec-nix-shell-bash",
+		"read-file",
+		"write-file",
+		"edit-file",
+		"apply-patch":
 	default:
 		return fmt.Errorf("unsupported action %q", action)
 	}
@@ -86,6 +93,12 @@ func run(action string) error {
 		MemoryHostDir:    req.Settings.MemoryHostDir,
 		MemoryDir:        req.Settings.MemoryDir,
 		Proxy:            toBuildahProxySettings(req.Settings.Proxy),
+	}
+	fileCfg := sandboxfiles.Settings{
+		WorkspaceHostDir: req.Settings.WorkspaceHostDir,
+		WorkspaceDir:     req.Settings.WorkspaceDir,
+		MemoryHostDir:    req.Settings.MemoryHostDir,
+		MemoryDir:        req.Settings.MemoryDir,
 	}
 
 	switch action {
@@ -118,6 +131,46 @@ func run(action string) error {
 			return err
 		}
 		writeResponse(sandboxcontract.HelperResponse{Output: out})
+		return nil
+	case "read-file":
+		if req.ReadFile == nil {
+			return fmt.Errorf("missing read_file request payload")
+		}
+		result, err := sandboxfiles.ReadFile(fileCfg, *req.ReadFile)
+		if err != nil {
+			return err
+		}
+		writeResponse(sandboxcontract.HelperResponse{ReadFile: &result})
+		return nil
+	case "write-file":
+		if req.WriteFile == nil {
+			return fmt.Errorf("missing write_file request payload")
+		}
+		result, err := sandboxfiles.WriteFile(fileCfg, *req.WriteFile)
+		if err != nil {
+			return err
+		}
+		writeResponse(sandboxcontract.HelperResponse{WriteFile: &result})
+		return nil
+	case "edit-file":
+		if req.EditFile == nil {
+			return fmt.Errorf("missing edit_file request payload")
+		}
+		result, err := sandboxfiles.EditFile(fileCfg, *req.EditFile)
+		if err != nil {
+			return err
+		}
+		writeResponse(sandboxcontract.HelperResponse{EditFile: &result})
+		return nil
+	case "apply-patch":
+		if req.ApplyPatch == nil {
+			return fmt.Errorf("missing apply_patch request payload")
+		}
+		result, err := sandboxfiles.ApplyPatch(fileCfg, *req.ApplyPatch)
+		if err != nil {
+			return err
+		}
+		writeResponse(sandboxcontract.HelperResponse{ApplyPatch: &result})
 		return nil
 	default:
 		return fmt.Errorf("unsupported action %q", action)
