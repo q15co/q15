@@ -6,7 +6,7 @@ import (
 )
 
 func TestApplySandboxProbeOutputParsesOSNixAndBash(t *testing.T) {
-	info := SandboxInfo{}
+	info := Info{}
 
 	applySandboxProbeOutput(
 		&info,
@@ -45,7 +45,7 @@ func TestApplySandboxProbeOutputParsesOSNixAndBash(t *testing.T) {
 }
 
 func TestApplySandboxProbeOutputIgnoresUnknownAndMalformed(t *testing.T) {
-	info := SandboxInfo{}
+	info := Info{}
 
 	applySandboxProbeOutput(
 		&info,
@@ -66,7 +66,7 @@ func TestApplySandboxProbeOutputIgnoresUnknownAndMalformed(t *testing.T) {
 }
 
 func TestApplySandboxProbeOutputHandlesMissingOptionalRuntimeFields(t *testing.T) {
-	info := SandboxInfo{}
+	info := Info{}
 
 	applySandboxProbeOutput(
 		&info,

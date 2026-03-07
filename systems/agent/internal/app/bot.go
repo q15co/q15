@@ -69,20 +69,13 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 	}
 
 	systemPrompt := agent.DefaultSystemPromptForName(rt.Name)
-	if info, err := agentSandbox.Describe(ctx); err != nil {
+	info, err := agentSandbox.Describe(ctx)
+	if err != nil {
 		if sandbox.VerboseEnabled() {
-			fmt.Fprintf(os.Stderr, "[app] sandbox probe failed for agent=%q: %v\n", rt.Name, err)
+			fmt.Fprintf(os.Stderr, "[app] sandbox describe failed for agent=%q: %v\n", rt.Name, err)
 		}
-		systemPrompt = composeSystemPrompt(systemPrompt, rt.Name, sandbox.SandboxInfo{
-			ContainerName:    rt.SandboxContainerName,
-			WorkspaceHostDir: rt.WorkspaceHostDir,
-			WorkspaceDir:     rt.WorkspaceDir,
-			Runtime:          "nix-only",
-			BaseImage:        "docker.io/library/debian:bookworm-slim",
-		}, rt.MemoryDir)
-	} else {
-		systemPrompt = composeSystemPrompt(systemPrompt, rt.Name, info, rt.MemoryDir)
 	}
+	systemPrompt = composeSystemPrompt(systemPrompt, rt.Name, info, rt.MemoryDir)
 	toolList := []agent.Tool{tools.NewShell(agentSandbox)}
 	braveAPIKey := strings.TrimSpace(os.Getenv("Q15_BRAVE_API_KEY"))
 	if braveAPIKey != "" {
@@ -158,7 +151,7 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 func composeSystemPrompt(
 	base string,
 	agentName string,
-	info sandbox.SandboxInfo,
+	info sandbox.Info,
 	memoryDir string,
 ) string {
 	base = strings.TrimSpace(base)

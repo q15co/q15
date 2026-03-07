@@ -19,21 +19,56 @@ func main() {
 	if sandboxbuildah.InitProcess() {
 		return
 	}
-	if err := sandboxbuildah.EnsureProcessEnvironment(); err != nil {
+	action, err := parseAction(os.Args)
+	if err != nil {
 		writeResponse(sandboxcontract.HelperResponse{Error: err.Error()})
 		os.Exit(1)
 	}
-	if err := run(); err != nil {
+	if actionRequiresBuildahEnv(action) {
+		if err := sandboxbuildah.EnsureProcessEnvironment(); err != nil {
+			writeResponse(sandboxcontract.HelperResponse{Error: err.Error()})
+			os.Exit(1)
+		}
+	}
+	if err := run(action); err != nil {
 		writeResponse(sandboxcontract.HelperResponse{Error: err.Error()})
 		os.Exit(1)
 	}
 }
 
-func run() error {
-	if len(os.Args) != 2 {
-		return fmt.Errorf("usage: %s <prepare|exec>", os.Args[0])
+func parseAction(args []string) (string, error) {
+	if len(args) != 2 {
+		return "", fmt.Errorf("usage: %s <prepare|exec|metadata>", os.Args[0])
 	}
-	action := os.Args[1]
+	return args[1], nil
+}
+
+func actionRequiresBuildahEnv(action string) bool {
+	switch action {
+	case "prepare", "exec":
+		return true
+	case "metadata":
+		return false
+	default:
+		return false
+	}
+}
+
+func run(action string) error {
+	switch action {
+	case "metadata":
+		metadata := sandboxbuildah.Metadata()
+		writeResponse(sandboxcontract.HelperResponse{
+			Metadata: &sandboxcontract.RuntimeMetadata{
+				Runtime:   metadata.Runtime,
+				BaseImage: metadata.BaseImage,
+			},
+		})
+		return nil
+	case "prepare", "exec":
+	default:
+		return fmt.Errorf("unsupported action %q", action)
+	}
 
 	req, err := loadRequest()
 	if err != nil {

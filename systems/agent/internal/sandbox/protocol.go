@@ -7,3 +7,6 @@ type HelperRequest = sandboxcontract.HelperRequest
 
 // HelperResponse is retained as a temporary alias during the module split.
 type HelperResponse = sandboxcontract.HelperResponse
+
+// RuntimeMetadata is retained as a temporary alias during the module split.
+type RuntimeMetadata = sandboxcontract.RuntimeMetadata

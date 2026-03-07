@@ -1,12 +1,15 @@
+// Package sandbox manages the agent's helper-backed execution sandbox.
 package sandbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 )
 
-type SandboxInfo struct {
+// Info describes authoritative sandbox runtime metadata and probed tool details.
+type Info struct {
 	ContainerName    string
 	WorkspaceHostDir string
 	WorkspaceDir     string
@@ -23,33 +26,50 @@ type SandboxInfo struct {
 	BashVersion string
 }
 
-func (s *Sandbox) Describe(ctx context.Context) (SandboxInfo, error) {
+// Describe returns helper-owned sandbox metadata and probed runtime details.
+func (s *Sandbox) Describe(ctx context.Context) (Info, error) {
 	s.mu.Lock()
 	cfg := s.cfg
 	prepared := s.prepared
 	s.mu.Unlock()
 
-	info := SandboxInfo{
+	info := Info{
 		ContainerName:    cfg.ContainerName,
 		WorkspaceHostDir: cfg.WorkspaceHostDir,
 		WorkspaceDir:     cfg.WorkspaceDir,
-		Runtime:          "nix-only",
-		BaseImage:        "docker.io/library/debian:bookworm-slim",
 	}
+	metadata, metadataErr := s.helperMetadata(ctx)
+	if metadataErr == nil {
+		info.Runtime = metadata.Runtime
+		info.BaseImage = metadata.BaseImage
+	}
+
 	if !prepared {
+		if metadataErr != nil {
+			return info, errors.Join(
+				fmt.Errorf("load sandbox metadata: %w", metadataErr),
+				fmt.Errorf("sandbox is not prepared"),
+			)
+		}
 		return info, fmt.Errorf("sandbox is not prepared")
 	}
 
 	out, err := s.Exec(ctx, sandboxProbeCommand())
 	if err != nil {
+		if metadataErr != nil {
+			return info, errors.Join(fmt.Errorf("load sandbox metadata: %w", metadataErr), err)
+		}
 		return info, err
 	}
 
 	applySandboxProbeOutput(&info, out)
+	if metadataErr != nil {
+		return info, fmt.Errorf("load sandbox metadata: %w", metadataErr)
+	}
 	return info, nil
 }
 
-func applySandboxProbeOutput(info *SandboxInfo, out string) {
+func applySandboxProbeOutput(info *Info, out string) {
 	if info == nil {
 		return
 	}

@@ -6,6 +6,7 @@ import (
 	"strings"
 )
 
+// VerboseEnabled reports whether sandbox-helper debug logging is enabled.
 func VerboseEnabled() bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("Q15_SANDBOX_VERBOSE"))) {
 	case "1", "true", "yes", "on":

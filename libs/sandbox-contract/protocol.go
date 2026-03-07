@@ -30,8 +30,15 @@ type HelperRequest struct {
 	Command  string   `json:"command,omitempty"`
 }
 
+// RuntimeMetadata describes sandbox runtime properties owned by the helper.
+type RuntimeMetadata struct {
+	Runtime   string `json:"runtime,omitempty"`
+	BaseImage string `json:"base_image,omitempty"`
+}
+
 // HelperResponse is returned by the sandbox helper.
 type HelperResponse struct {
-	Output string `json:"output,omitempty"`
-	Error  string `json:"error,omitempty"`
+	Output   string           `json:"output,omitempty"`
+	Metadata *RuntimeMetadata `json:"metadata,omitempty"`
+	Error    string           `json:"error,omitempty"`
 }

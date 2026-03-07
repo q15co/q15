@@ -17,11 +17,13 @@ import (
 
 const (
 	sandboxBaseImage         = "docker.io/library/debian:bookworm-slim"
+	sandboxRuntimeLabel      = "nix-only"
 	sandboxRuntimeAnnotation = "io.q15.sandbox.runtime"
 	sandboxRuntimeValue      = "nix-only-v1"
 	sharedNixHostDirEnv      = "Q15_SANDBOX_NIX_STORE_HOST_DIR"
 )
 
+// Settings configures the persistent sandbox container and its mounted paths.
 type Settings struct {
 	ContainerName    string
 	WorkspaceHostDir string
@@ -31,6 +33,7 @@ type Settings struct {
 	Proxy            *ProxySettings
 }
 
+// ProxySettings controls proxy and CA wiring for sandbox command execution.
 type ProxySettings struct {
 	Enabled              bool
 	HTTPProxyURL         string
@@ -42,6 +45,7 @@ type ProxySettings struct {
 	SetLowercaseProxyEnv bool
 }
 
+// Validate checks that required sandbox paths and identifiers are present.
 func (s Settings) Validate() error {
 	if strings.TrimSpace(s.ContainerName) == "" {
 		return errors.New("container name is required")
@@ -76,6 +80,7 @@ func (s Settings) Validate() error {
 	return nil
 }
 
+// Prepare ensures the persistent sandbox container and host directories exist.
 func Prepare(ctx context.Context, cfg Settings) error {
 	cfg = normalizeSettings(cfg)
 	verbosef("Prepare: begin for container=%q", cfg.ContainerName)
@@ -156,6 +161,7 @@ func Prepare(ctx context.Context, cfg Settings) error {
 	return nil
 }
 
+// Exec runs command inside the prepared sandbox and returns stdout.
 func Exec(ctx context.Context, cfg Settings, command string) (string, error) {
 	cfg = normalizeSettings(cfg)
 	command = strings.TrimSpace(command)

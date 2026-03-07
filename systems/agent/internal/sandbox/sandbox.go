@@ -16,6 +16,7 @@ import (
 	sandboxcontract "github.com/q15co/q15/libs/sandbox-contract"
 )
 
+// Settings configures the persistent sandbox container and its mounted paths.
 type Settings struct {
 	ContainerName    string
 	WorkspaceHostDir string
@@ -29,6 +30,7 @@ type Settings struct {
 // Keeping this as an alias removes one translation layer in the agent sandbox adapter.
 type ProxySettings = sandboxcontract.ProxySettings
 
+// Validate checks that required sandbox paths and identifiers are present.
 func (s Settings) Validate() error {
 	if strings.TrimSpace(s.ContainerName) == "" {
 		return errors.New("container name is required")
@@ -63,6 +65,7 @@ func (s Settings) Validate() error {
 	return nil
 }
 
+// Sandbox manages a persistent helper-backed execution environment.
 type Sandbox struct {
 	cfg       Settings
 	mu        sync.Mutex
@@ -70,6 +73,7 @@ type Sandbox struct {
 	helperBin string
 }
 
+// New normalizes cfg and returns a sandbox handle.
 func New(cfg Settings) *Sandbox {
 	cfg.ContainerName = strings.TrimSpace(cfg.ContainerName)
 	cfg.WorkspaceHostDir = filepath.Clean(strings.TrimSpace(cfg.WorkspaceHostDir))
@@ -87,6 +91,7 @@ func New(cfg Settings) *Sandbox {
 	return &Sandbox{cfg: cfg}
 }
 
+// Prepare ensures the sandbox container and required host directories exist.
 func (s *Sandbox) Prepare(ctx context.Context) error {
 	verbosef("Prepare: begin for container=%q", s.cfg.ContainerName)
 	if err := ctx.Err(); err != nil {
@@ -130,6 +135,7 @@ func (s *Sandbox) Prepare(ctx context.Context) error {
 	return nil
 }
 
+// Exec runs command inside the prepared sandbox and returns stdout.
 func (s *Sandbox) Exec(ctx context.Context, command string) (string, error) {
 	command = strings.TrimSpace(command)
 	if command == "" {
@@ -163,9 +169,35 @@ func (s *Sandbox) runHelperLocked(
 	action string,
 	command string,
 ) (string, error) {
-	helperBin, err := s.helperBinaryLocked()
+	resp, err := s.callHelperLocked(ctx, action, command)
 	if err != nil {
 		return "", err
+	}
+	return resp.Output, nil
+}
+
+func (s *Sandbox) helperMetadata(ctx context.Context) (RuntimeMetadata, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	resp, err := s.callHelperLocked(ctx, "metadata", "")
+	if err != nil {
+		return RuntimeMetadata{}, err
+	}
+	if resp.Metadata == nil {
+		return RuntimeMetadata{}, errors.New("sandbox helper returned empty metadata")
+	}
+	return *resp.Metadata, nil
+}
+
+func (s *Sandbox) callHelperLocked(
+	ctx context.Context,
+	action string,
+	command string,
+) (sandboxcontract.HelperResponse, error) {
+	helperBin, err := s.helperBinaryLocked()
+	if err != nil {
+		return sandboxcontract.HelperResponse{}, err
 	}
 
 	reqBytes, err := json.Marshal(sandboxcontract.HelperRequest{
@@ -173,7 +205,7 @@ func (s *Sandbox) runHelperLocked(
 		Command:  command,
 	})
 	if err != nil {
-		return "", fmt.Errorf("marshal helper request: %w", err)
+		return sandboxcontract.HelperResponse{}, fmt.Errorf("marshal helper request: %w", err)
 	}
 
 	cmd := helperCommand(ctx, helperBin, action)
@@ -205,24 +237,40 @@ func (s *Sandbox) runHelperLocked(
 
 	if runErr != nil {
 		if resp.Error != "" {
-			return "", fmt.Errorf("sandbox helper %q failed: %s", action, resp.Error)
+			return sandboxcontract.HelperResponse{}, fmt.Errorf(
+				"sandbox helper %q failed: %s",
+				action,
+				resp.Error,
+			)
 		}
 		msg := strings.TrimSpace(stderr.String())
 		if msg == "" {
 			msg = strings.TrimSpace(stdout.String())
 		}
 		if msg == "" {
-			return "", fmt.Errorf("sandbox helper %q failed: %w", action, runErr)
+			return sandboxcontract.HelperResponse{}, fmt.Errorf(
+				"sandbox helper %q failed: %w",
+				action,
+				runErr,
+			)
 		}
-		return "", fmt.Errorf("sandbox helper %q failed: %s", action, msg)
+		return sandboxcontract.HelperResponse{}, fmt.Errorf(
+			"sandbox helper %q failed: %s",
+			action,
+			msg,
+		)
 	}
 	if parseErr != nil {
-		return "", fmt.Errorf("decode sandbox helper response for %q: %w", action, parseErr)
+		return sandboxcontract.HelperResponse{}, fmt.Errorf(
+			"decode sandbox helper response for %q: %w",
+			action,
+			parseErr,
+		)
 	}
 	if resp.Error != "" {
-		return "", errors.New(resp.Error)
+		return sandboxcontract.HelperResponse{}, errors.New(resp.Error)
 	}
-	return resp.Output, nil
+	return resp, nil
 }
 
 func toContractSettings(cfg Settings) sandboxcontract.Settings {

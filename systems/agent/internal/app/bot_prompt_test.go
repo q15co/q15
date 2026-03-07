@@ -8,11 +8,11 @@ import (
 )
 
 func TestComposeSystemPromptIncludesOSRuntimeAndNixBashDetails(t *testing.T) {
-	info := sandbox.SandboxInfo{
+	info := sandbox.Info{
 		ContainerName: "q15-jared",
 		WorkspaceDir:  "/workspace",
 		Runtime:       "nix-only",
-		BaseImage:     "docker.io/library/debian:bookworm-slim",
+		BaseImage:     "registry.example/sandbox:test",
 		OSPrettyName:  "Debian GNU/Linux 12 (bookworm)",
 		NixPath:       "/root/.nix-profile/bin/nix",
 		NixVersion:    "nix (Nix) 2.33.3",
@@ -26,7 +26,7 @@ func TestComposeSystemPromptIncludesOSRuntimeAndNixBashDetails(t *testing.T) {
 		"Sandbox Environment (authoritative runtime info):",
 		"- OS: Debian GNU/Linux 12 (bookworm)",
 		"- Sandbox runtime: nix-only",
-		"- Base image: docker.io/library/debian:bookworm-slim",
+		"- Base image: registry.example/sandbox:test",
 		"- Nix: /root/.nix-profile/bin/nix (nix (Nix) 2.33.3)",
 		"- Bash: /bin/bash (GNU bash, version 5.2.15(1)-release (x86_64-pc-linux-gnu))",
 	} {
