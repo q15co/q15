@@ -37,6 +37,12 @@ func TestComposeSystemPromptIncludesOSRuntimeAndNixBashDetails(t *testing.T) {
 				"Use for commands, builds, tests, formatting, git, and other CLI workflows.",
 			},
 		},
+		{
+			Name: "exec_browser_shell",
+			PromptGuidance: []string{
+				"Use for browser automation, screenshots, scraping, Playwright, Puppeteer, and browser tests.",
+			},
+		},
 	})
 
 	for _, want := range []string{
@@ -45,7 +51,7 @@ func TestComposeSystemPromptIncludesOSRuntimeAndNixBashDetails(t *testing.T) {
 		"- Sandbox runtime: nix-only",
 		"- Base image: registry.example/sandbox:test",
 		"- Shared skills root: /skills (bind-mounted when skills.host_dir is configured)",
-		"- Package management model: nix-only via exec_nix_shell_bash.",
+		"- Package management model: nix-only via exec_nix_shell_bash and exec_browser_shell.",
 		"- Built-in skills are available read-only under `/skills/@builtin/...` via read_file even when no shared skills mount is configured.",
 		"- Shared skills, when configured, are available under `/skills/<name>/...` and may be edited with the normal file tools.",
 		"- Use read_file for routine UTF-8 text reads from the workspace, memory, or skills roots; paths may be relative to the workspace or absolute under `/workspace/...`, `/memory/...`, `/skills/...`, or `/skills/@builtin/...`.",
@@ -68,6 +74,10 @@ func TestComposeSystemPromptIncludesOSRuntimeAndNixBashDetails(t *testing.T) {
 		"- Use exec_nix_shell_bash for commands, builds, tests, formatting, git, and other CLI workflows, not for routine file reads or edits.",
 		"- Every exec_nix_shell_bash call must include a non-empty `packages` array of nix installables (for example `nixpkgs#git`).",
 		"- Use exec_nix_shell_bash by providing the user command in `command` and the needed nix installables in `packages`; the sandbox runtime provisions those packages and executes the command via nix shell and bash.",
+		"- Use exec_browser_shell for browser automation, screenshots, scraping, Playwright, Puppeteer, and browser tests.",
+		"- exec_browser_shell provisions the browser-ready nix package set automatically; use `display_mode` `headless` by default and switch to `xvfb` only for headed browser commands that still terminate on their own.",
+		"- exec_browser_shell waits for the command to exit before returning; avoid long-running interactive commands such as `playwright open` or `playwright codegen`.",
+		"- Use the nixpkgs-provided `playwright` and `puppeteer` wrappers in exec_browser_shell, and do not rely on `playwright install` or `playwright install-deps` inside the sandbox.",
 		"- Use web_fetch for known web page URLs: it returns cleaned markdown plus slice metadata and is preferred over using exec_nix_shell_bash with curl for ordinary webpage reads.",
 		"- Use web_search for discovering current sources, then use web_fetch on a chosen result URL when you need page contents.",
 		"- Nix: /root/.nix-profile/bin/nix (nix (Nix) 2.33.3)",
@@ -75,6 +85,7 @@ func TestComposeSystemPromptIncludesOSRuntimeAndNixBashDetails(t *testing.T) {
 		"<tool_advice>",
 		`<tool name="read_file" summary="Read a file">`,
 		`<tool name="exec_nix_shell_bash">`,
+		`<tool name="exec_browser_shell">`,
 		"- Use for routine UTF-8 text reads instead of shelling out.",
 	} {
 		if !strings.Contains(prompt, want) {
@@ -167,6 +178,7 @@ func TestBuildToolListIncludesFileToolsInStableOrder(t *testing.T) {
 		"apply_patch",
 		"validate_skill",
 		"exec_nix_shell_bash",
+		"exec_browser_shell",
 		"web_fetch",
 	}; !equalStrings(got, want) {
 		t.Fatalf("tool names = %v, want %v", got, want)
@@ -188,6 +200,7 @@ func TestBuildToolListAppendsWebSearchWhenConfigured(t *testing.T) {
 		"apply_patch",
 		"validate_skill",
 		"exec_nix_shell_bash",
+		"exec_browser_shell",
 		"web_fetch",
 		"web_search",
 	}; !equalStrings(got, want) {

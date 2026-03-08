@@ -21,7 +21,7 @@ const (
 	sandboxBaseImage         = "docker.io/library/debian:bookworm-slim"
 	sandboxRuntimeLabel      = "nix-only"
 	sandboxRuntimeAnnotation = "io.q15.sandbox.runtime"
-	sandboxRuntimeValue      = "nix-only-v1"
+	sandboxRuntimeValue      = "nix-only-v5"
 	sharedNixHostDirEnv      = "Q15_SANDBOX_NIX_STORE_HOST_DIR"
 )
 
@@ -442,14 +442,25 @@ func ensureNixBootstrap(builder *buildah.Builder, cfg Settings) error {
 }
 
 func nixBootstrapCommand() string {
-	return strings.TrimSpace(`
-set -eu
-if command -v nix >/dev/null 2>&1 && nix --version >/dev/null 2>&1; then
-  exit 0
+	lines := []string{
+		"set -eu",
+		"mkdir -p /etc/nix",
+	}
+	lines = append(
+		lines,
+		strings.TrimSpace(`
+need_base_packages=0
+for required_path in /bin/bash /usr/bin/curl /usr/bin/xz /etc/ssl/certs/ca-certificates.crt; do
+  if [ ! -e "$required_path" ]; then
+    need_base_packages=1
+    break
+  fi
+done
+if [ "$need_base_packages" -eq 1 ]; then
+  apt-get -o APT::Sandbox::User=root update
+  DEBIAN_FRONTEND=noninteractive apt-get -o APT::Sandbox::User=root install -y bash ca-certificates curl xz-utils
 fi
 
-apt-get -o APT::Sandbox::User=root update
-DEBIAN_FRONTEND=noninteractive apt-get -o APT::Sandbox::User=root install -y bash ca-certificates curl xz-utils
 if [ ! -d /nix ]; then
   echo "/nix is not mounted in the sandbox; configure shared nix store bind mount via Q15_SANDBOX_NIX_STORE_HOST_DIR" >&2
   exit 1
@@ -459,10 +470,20 @@ if [ ! -w /nix ]; then
   exit 1
 fi
 mkdir -p /nix/store /nix/var/nix /etc/nix
+cat > /etc/nix/nix.conf <<'EOF'
+build-users-group =
+experimental-features = nix-command flakes
+sandbox = false
+accept-flake-config = true
+EOF
+if command -v nix >/dev/null 2>&1 && nix --version >/dev/null 2>&1; then
+  exit 0
+fi
 NIX_CONFIG="$(cat <<'EOF'
 build-users-group =
 experimental-features = nix-command flakes
 sandbox = false
+accept-flake-config = true
 EOF
 )"
 export NIX_CONFIG
@@ -473,7 +494,9 @@ experimental-features = nix-command flakes
 sandbox = false
 accept-flake-config = true
 EOF
-`)
+`),
+	)
+	return strings.Join(lines, "\n")
 }
 
 func runInBuilder(builder *buildah.Builder, cfg Settings, command string) string {

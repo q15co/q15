@@ -532,4 +532,12 @@ func TestSummarizeToolCall_ProgressAndVerboseModes(t *testing.T) {
 	if verboseSummary != "🌐 Fetching `example.com`" {
 		t.Fatalf("verbose summary = %q, want %q", verboseSummary, "🌐 Fetching `example.com`")
 	}
+
+	browserSummary := summarizeToolCall(agent.ToolCall{
+		Name:      "exec_browser_shell",
+		Arguments: `{"command":"playwright screenshot https://example.com out.png"}`,
+	}, progressModeProgress)
+	if browserSummary != "🌐 Running browser command" {
+		t.Fatalf("browser summary = %q, want %q", browserSummary, "🌐 Running browser command")
+	}
 }

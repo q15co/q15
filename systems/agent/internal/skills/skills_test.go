@@ -28,11 +28,11 @@ description: Shared skill description.
 	manager := NewManager(cfg)
 	catalog := manager.LoadCatalog()
 
-	if len(catalog.Entries) != 3 {
-		t.Fatalf("catalog entries = %#v, want 2 builtins + shared", catalog.Entries)
+	if len(catalog.Entries) != 4 {
+		t.Fatalf("catalog entries = %#v, want 3 builtins + shared", catalog.Entries)
 	}
 	names := entryNames(catalog.Entries)
-	for _, want := range []string{"skill-creator", "skill-discovery", "my-skill"} {
+	for _, want := range []string{"browser-use", "skill-creator", "skill-discovery", "my-skill"} {
 		if !contains(names, want) {
 			t.Fatalf("catalog names = %v, want %q present", names, want)
 		}
@@ -83,6 +83,36 @@ func TestBuiltinSkillDiscoveryGuidesExternalDiscoveryAndAdaptation(t *testing.T)
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("builtin skill-discovery missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestBuiltinBrowserUseCoversHeadlessAndXvfbFlows(t *testing.T) {
+	t.Parallel()
+
+	raw, err := builtinSkillFS.ReadFile("builtins/browser-use/SKILL.md")
+	if err != nil {
+		t.Fatalf("ReadFile(browser-use) error = %v", err)
+	}
+	text := string(raw)
+	for _, want := range []string{
+		"exec_browser_shell",
+		"display_mode: \"headless\"",
+		"display_mode: \"xvfb\"",
+		"Prefer the simplest built-in CLI command before writing custom scripts.",
+		"Do not use long-running interactive commands such as `playwright open` or",
+		"Do not assume `python` or `node` are directly available unless you verify them first.",
+		"playwright --help",
+		"playwright test",
+		"playwright screenshot --full-page",
+		"playwright pdf",
+		"playwright open https://example.com",
+		"playwright screenshot -b chromium",
+		"puppeteer screenshot",
+		"Do not run `playwright install` or `playwright install-deps`",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("builtin browser-use missing %q:\n%s", want, text)
 		}
 	}
 }

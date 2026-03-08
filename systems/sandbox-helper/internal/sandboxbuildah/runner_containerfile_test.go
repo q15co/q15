@@ -70,9 +70,15 @@ func TestNixBootstrapCommandIncludesRootlessSafeAptFlags(t *testing.T) {
 	cmd := nixBootstrapCommand()
 	if !strings.Contains(
 		cmd,
-		"if command -v nix >/dev/null 2>&1 && nix --version >/dev/null 2>&1; then",
+		"need_base_packages=0",
 	) {
-		t.Fatalf("bootstrap command missing precheck for existing working nix binary: %q", cmd)
+		t.Fatalf("bootstrap command missing base package precheck initialization: %q", cmd)
+	}
+	if !strings.Contains(
+		cmd,
+		"for required_path in /bin/bash /usr/bin/curl /usr/bin/xz /etc/ssl/certs/ca-certificates.crt; do",
+	) {
+		t.Fatalf("bootstrap command missing base package readiness check: %q", cmd)
 	}
 	if !strings.Contains(cmd, "apt-get -o APT::Sandbox::User=root update") {
 		t.Fatalf("bootstrap command missing apt update sandbox override: %q", cmd)
@@ -92,6 +98,12 @@ func TestNixBootstrapCommandIncludesRootlessSafeAptFlags(t *testing.T) {
 	if !strings.Contains(cmd, "mkdir -p /nix/store /nix/var/nix") {
 		t.Fatalf("bootstrap command missing nix store dir creation: %q", cmd)
 	}
+	if !strings.Contains(
+		cmd,
+		"if command -v nix >/dev/null 2>&1 && nix --version >/dev/null 2>&1; then",
+	) {
+		t.Fatalf("bootstrap command missing nix precheck: %q", cmd)
+	}
 	if !strings.Contains(cmd, "NIX_CONFIG=\"$(cat <<'EOF'") {
 		t.Fatalf("bootstrap command missing inline NIX_CONFIG template: %q", cmd)
 	}
@@ -101,6 +113,9 @@ func TestNixBootstrapCommandIncludesRootlessSafeAptFlags(t *testing.T) {
 	if !strings.Contains(cmd, "export NIX_CONFIG") {
 		t.Fatalf("bootstrap command missing NIX_CONFIG export: %q", cmd)
 	}
+	if !strings.Contains(cmd, "accept-flake-config = true") {
+		t.Fatalf("bootstrap command missing accept-flake-config override: %q", cmd)
+	}
 	if !strings.Contains(
 		cmd,
 		"curl -fsSL https://nixos.org/nix/install | sh -s -- --no-daemon --yes --no-channel-add --no-modify-profile",
@@ -109,6 +124,20 @@ func TestNixBootstrapCommandIncludesRootlessSafeAptFlags(t *testing.T) {
 	}
 	if !strings.Contains(cmd, "cat > /etc/nix/nix.conf <<'EOF'") {
 		t.Fatalf("bootstrap command missing persistent /etc/nix/nix.conf write: %q", cmd)
+	}
+}
+
+func TestNixBootstrapCommandEnsuresBasePackagesBeforeNixPrecheck(t *testing.T) {
+	cmd := nixBootstrapCommand()
+	aptCheck := "DEBIAN_FRONTEND=noninteractive apt-get -o APT::Sandbox::User=root install -y bash ca-certificates curl xz-utils"
+	nixCheck := "if command -v nix >/dev/null 2>&1 && nix --version >/dev/null 2>&1; then"
+	aptIndex := strings.Index(cmd, aptCheck)
+	nixIndex := strings.Index(cmd, nixCheck)
+	if aptIndex == -1 || nixIndex == -1 {
+		t.Fatalf("bootstrap command missing expected snippets: %q", cmd)
+	}
+	if aptIndex > nixIndex {
+		t.Fatalf("bootstrap command checks nix before ensuring CA/base packages: %q", cmd)
 	}
 }
 

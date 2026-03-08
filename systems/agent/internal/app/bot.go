@@ -185,6 +185,7 @@ func buildToolList(
 		tools.NewApplyPatch(fileExec),
 		tools.NewValidateSkill(skillManager),
 		tools.NewNixShellBash(agentSandbox),
+		tools.NewBrowserShell(agentSandbox),
 		tools.NewWebFetch(),
 	}
 
@@ -290,7 +291,10 @@ func renderSandboxEnvironmentPrompt(
 			),
 		)
 	}
-	lines = append(lines, "- Package management model: nix-only via exec_nix_shell_bash.")
+	lines = append(
+		lines,
+		"- Package management model: nix-only via exec_nix_shell_bash and exec_browser_shell.",
+	)
 	lines = append(
 		lines,
 		"- Built-in skills are available read-only under `/skills/@builtin/...` via read_file even when no shared skills mount is configured.",
@@ -320,6 +324,13 @@ func renderSandboxEnvironmentPrompt(
 	lines = append(
 		lines,
 		"- First run may bootstrap nix and fetch package indexes, so network access is required.",
+	)
+	lines = append(
+		lines,
+		"- Use exec_browser_shell for browser automation, screenshots, scraping, Playwright, Puppeteer, and browser tests.",
+		"- exec_browser_shell provisions the browser-ready nix package set automatically; use `display_mode` `headless` by default and switch to `xvfb` only for headed browser commands that still terminate on their own.",
+		"- exec_browser_shell waits for the command to exit before returning; avoid long-running interactive commands such as `playwright open` or `playwright codegen`.",
+		"- Use the nixpkgs-provided `playwright` and `puppeteer` wrappers in exec_browser_shell, and do not rely on `playwright install` or `playwright install-deps` inside the sandbox.",
 	)
 	lines = append(
 		lines,
