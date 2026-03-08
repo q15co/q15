@@ -1,3 +1,5 @@
+// Package agent contains the core orchestration loop and contracts used by the
+// runtime to talk to models, tools, and conversation persistence.
 package agent
 
 import (
@@ -94,8 +96,12 @@ func normalizeModelRefs(modelRefs []string) []string {
 }
 
 // Reply runs one end-user turn: call model, execute tools as needed, and
-// persist the resulting messages.
-func (l *Loop) Reply(ctx context.Context, userInput string) (string, error) {
+// persist the resulting messages while optionally reporting progress events.
+func (l *Loop) Reply(
+	ctx context.Context,
+	userInput string,
+	observer RunObserver,
+) (string, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -105,10 +111,17 @@ func (l *Loop) Reply(ctx context.Context, userInput string) (string, error) {
 	}
 
 	systemText := l.systemText
+	emitRunEvent(ctx, observer, RunEvent{
+		Type: RunEventRunStarted,
+	})
 	if l.store != nil {
 		if coreStore, ok := l.store.(CoreMemoryStore); ok {
 			coreMemory, err := coreStore.LoadCoreMemory(ctx)
 			if err != nil {
+				emitRunEvent(ctx, observer, RunEvent{
+					Type: RunEventRunFailed,
+					Err:  err,
+				})
 				return "", fmt.Errorf("load core memory: %w", err)
 			}
 			systemText = injectCoreMemory(systemText, coreMemory)
@@ -116,6 +129,10 @@ func (l *Loop) Reply(ctx context.Context, userInput string) (string, error) {
 		if skillStore, ok := l.store.(SkillCatalogStore); ok {
 			skillCatalog, err := skillStore.LoadSkillCatalog(ctx)
 			if err != nil {
+				emitRunEvent(ctx, observer, RunEvent{
+					Type: RunEventRunFailed,
+					Err:  err,
+				})
 				return "", fmt.Errorf("load skill catalog: %w", err)
 			}
 			systemText = injectSkillCatalog(systemText, skillCatalog)
@@ -127,6 +144,10 @@ func (l *Loop) Reply(ctx context.Context, userInput string) (string, error) {
 		var err error
 		recentMessages, err = l.store.LoadRecentMessages(ctx, l.recentTurns)
 		if err != nil {
+			emitRunEvent(ctx, observer, RunEvent{
+				Type: RunEventRunFailed,
+				Err:  err,
+			})
 			return "", fmt.Errorf("load recent messages: %w", err)
 		}
 	}
@@ -162,8 +183,20 @@ func (l *Loop) Reply(ctx context.Context, userInput string) (string, error) {
 				Content: emptyResponseRetrySteeringPrompt,
 			})
 		}
-		result, err := l.complete(ctx, requestMessages, toolDefs)
+		modelRef, result, err := l.completeWithObserver(
+			ctx,
+			requestMessages,
+			toolDefs,
+			turn,
+			observer,
+		)
 		if err != nil {
+			emitRunEvent(ctx, observer, RunEvent{
+				Type:     RunEventRunFailed,
+				Turn:     turn,
+				ModelRef: modelRef,
+				Err:      err,
+			})
 			return "", fmt.Errorf("model complete: %w", err)
 		}
 
@@ -189,16 +222,43 @@ func (l *Loop) Reply(ctx context.Context, userInput string) (string, error) {
 				answer = "(assistant returned no text)"
 			}
 			if err := l.persistTurn(ctx, messages, turnStart); err != nil {
+				emitRunEvent(ctx, observer, RunEvent{
+					Type:      RunEventRunFailed,
+					Turn:      turn,
+					ModelRef:  modelRef,
+					FinalText: answer,
+					Err:       err,
+				})
 				return "", fmt.Errorf("persist turn: %w", err)
 			}
+			emitRunEvent(ctx, observer, RunEvent{
+				Type:      RunEventRunFinished,
+				Turn:      turn,
+				ModelRef:  modelRef,
+				FinalText: answer,
+			})
 			return answer, nil
 		}
 
 		for _, call := range result.ToolCalls {
+			emitRunEvent(ctx, observer, RunEvent{
+				Type:     RunEventToolStarted,
+				Turn:     turn,
+				ModelRef: modelRef,
+				ToolCall: call,
+			})
 			output, err := l.runTool(ctx, call)
 			if err != nil {
 				output = "tool error: " + err.Error()
 			}
+			emitRunEvent(ctx, observer, RunEvent{
+				Type:       RunEventToolFinished,
+				Turn:       turn,
+				ModelRef:   modelRef,
+				ToolCall:   call,
+				ToolOutput: output,
+				Err:        err,
+			})
 			messages = append(messages, Message{
 				Role:       ToolRole,
 				Content:    output,
@@ -217,9 +277,16 @@ func (l *Loop) Reply(ctx context.Context, userInput string) (string, error) {
 					Content: stopSummary,
 				})
 				if err := l.persistTurn(ctx, messages, turnStart); err != nil {
+					emitRunEvent(ctx, observer, RunEvent{
+						Type:      RunEventRunFailed,
+						Turn:      turn,
+						ModelRef:  modelRef,
+						FinalText: stopSummary,
+						Err:       err,
+					})
 					return "", fmt.Errorf("persist interrupted turn: %w", err)
 				}
-				return "", &StopError{
+				stopErr := &StopError{
 					Reason: StopReasonToolLoopDetected,
 					Detail: fmt.Sprintf(
 						"tool loop detected (repeat=%d, no_progress=%d)",
@@ -227,6 +294,14 @@ func (l *Loop) Reply(ctx context.Context, userInput string) (string, error) {
 						assessment.NoProgressCount,
 					),
 				}
+				emitRunEvent(ctx, observer, RunEvent{
+					Type:      RunEventRunFailed,
+					Turn:      turn,
+					ModelRef:  modelRef,
+					FinalText: stopSummary,
+					Err:       stopErr,
+				})
+				return "", stopErr
 			}
 		}
 	}
@@ -242,12 +317,23 @@ func (l *Loop) Reply(ctx context.Context, userInput string) (string, error) {
 		Content: stopSummary,
 	})
 	if err := l.persistTurn(ctx, messages, turnStart); err != nil {
+		emitRunEvent(ctx, observer, RunEvent{
+			Type:      RunEventRunFailed,
+			FinalText: stopSummary,
+			Err:       err,
+		})
 		return "", fmt.Errorf("persist interrupted turn: %w", err)
 	}
-	return "", &StopError{
+	stopErr := &StopError{
 		Reason: StopReasonToolTurnLimit,
 		Detail: fmt.Sprintf("max tool-call turns reached (%d)", l.maxTurns),
 	}
+	emitRunEvent(ctx, observer, RunEvent{
+		Type:      RunEventRunFailed,
+		FinalText: stopSummary,
+		Err:       stopErr,
+	})
+	return "", stopErr
 }
 
 func (l *Loop) runTool(ctx context.Context, call ToolCall) (string, error) {
@@ -260,25 +346,38 @@ func (l *Loop) runTool(ctx context.Context, call ToolCall) (string, error) {
 	return l.tools.Run(ctx, call)
 }
 
-func (l *Loop) complete(
+func (l *Loop) completeWithObserver(
 	ctx context.Context,
 	messages []Message,
 	tools []ToolDefinition,
-) (ModelClientResult, error) {
+	turn int,
+	observer RunObserver,
+) (string, ModelClientResult, error) {
 	var lastErr error
+	lastModelRef := ""
 
 	for _, modelRef := range l.modelRefs {
+		lastModelRef = modelRef
+		emitRunEvent(ctx, observer, RunEvent{
+			Type:     RunEventModelTurnStarted,
+			Turn:     turn,
+			ModelRef: modelRef,
+		})
 		result, err := l.modelClient.Complete(ctx, modelRef, messages, tools)
 		if err == nil {
-			return result, nil
+			return modelRef, result, nil
 		}
 		lastErr = err
 	}
 
 	if lastErr == nil {
-		return ModelClientResult{}, fmt.Errorf("no models configured")
+		return "", ModelClientResult{}, fmt.Errorf("no models configured")
 	}
-	return ModelClientResult{}, fmt.Errorf("all models failed (%v): %w", l.modelRefs, lastErr)
+	return lastModelRef, ModelClientResult{}, fmt.Errorf(
+		"all models failed (%v): %w",
+		l.modelRefs,
+		lastErr,
+	)
 }
 
 func (l *Loop) persistTurn(ctx context.Context, messages []Message, turnStart int) error {

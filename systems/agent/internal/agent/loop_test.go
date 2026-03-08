@@ -13,6 +13,10 @@ type fakeModelClient struct {
 	callMsgs [][]Message
 }
 
+type failingModelClient struct {
+	err error
+}
+
 func (f *fakeModelClient) Complete(
 	ctx context.Context,
 	model string,
@@ -29,6 +33,19 @@ func (f *fakeModelClient) Complete(
 	out := f.results[0]
 	f.results = f.results[1:]
 	return out, nil
+}
+
+func (f *failingModelClient) Complete(
+	ctx context.Context,
+	model string,
+	messages []Message,
+	tools []ToolDefinition,
+) (ModelClientResult, error) {
+	_ = ctx
+	_ = model
+	_ = messages
+	_ = tools
+	return ModelClientResult{}, f.err
 }
 
 type fakeConversationStore struct {
@@ -113,7 +130,7 @@ func TestLoopReply_LoadsRecentAndPersistsTurn(t *testing.T) {
 
 	loop := NewLoop(model, nil, []string{"m1"}, DefaultSystemPrompt, store, 5)
 
-	out, err := loop.Reply(context.Background(), "new-question")
+	out, err := loop.Reply(context.Background(), "new-question", nil)
 	if err != nil {
 		t.Fatalf("Reply() error = %v", err)
 	}
@@ -177,7 +194,7 @@ func TestLoopReply_PersistsToolCallFlow(t *testing.T) {
 
 	loop := NewLoop(model, registry, []string{"m1"}, DefaultSystemPrompt, store, 3)
 
-	out, err := loop.Reply(context.Background(), "question")
+	out, err := loop.Reply(context.Background(), "question", nil)
 	if err != nil {
 		t.Fatalf("Reply() error = %v", err)
 	}
@@ -217,7 +234,7 @@ func TestLoopReply_AppendsSteeringPromptWhenToolsEnabled(t *testing.T) {
 	}
 
 	loop := NewLoop(model, registry, []string{"m1"}, DefaultSystemPrompt, store, 3)
-	out, err := loop.Reply(context.Background(), "please check the workspace")
+	out, err := loop.Reply(context.Background(), "please check the workspace", nil)
 	if err != nil {
 		t.Fatalf("Reply() error = %v", err)
 	}
@@ -241,6 +258,113 @@ func TestLoopReply_AppendsSteeringPromptWhenToolsEnabled(t *testing.T) {
 	}
 }
 
+func TestLoopReply_EmitsProgressEventsInSuccessOrder(t *testing.T) {
+	store := &fakeConversationStore{}
+	model := &fakeModelClient{
+		results: []ModelClientResult{
+			{
+				ToolCalls: []ToolCall{
+					{ID: "call-1", Name: "read_file", Arguments: `{"path":"/workspace/README.md"}`},
+				},
+			},
+			{Content: "done"},
+		},
+	}
+
+	registry, err := NewToolRegistry(&testTool{
+		def: ToolDefinition{Name: "read_file"},
+		run: func(context.Context, string) (string, error) {
+			return "Path: /workspace/README.md\n--- CONTENT ---\nhello", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewToolRegistry() error = %v", err)
+	}
+
+	loop := NewLoop(model, registry, []string{"m1"}, DefaultSystemPrompt, store, 3)
+
+	var got []RunEvent
+	out, err := loop.Reply(
+		context.Background(),
+		"read the readme",
+		RunObserverFunc(func(_ context.Context, event RunEvent) {
+			got = append(got, event)
+		}),
+	)
+	if err != nil {
+		t.Fatalf("Reply() error = %v", err)
+	}
+	if out != "done" {
+		t.Fatalf("Reply() = %q, want done", out)
+	}
+
+	wantTypes := []RunEventType{
+		RunEventRunStarted,
+		RunEventModelTurnStarted,
+		RunEventToolStarted,
+		RunEventToolFinished,
+		RunEventModelTurnStarted,
+		RunEventRunFinished,
+	}
+	if len(got) != len(wantTypes) {
+		t.Fatalf("event len = %d, want %d", len(got), len(wantTypes))
+	}
+	for i, want := range wantTypes {
+		if got[i].Type != want {
+			t.Fatalf("event[%d].Type = %q, want %q", i, got[i].Type, want)
+		}
+	}
+	if got[2].ToolCall.Name != "read_file" {
+		t.Fatalf("tool started name = %q, want read_file", got[2].ToolCall.Name)
+	}
+	if got[3].ToolOutput == "" {
+		t.Fatal("tool finished output should not be empty")
+	}
+	if got[5].FinalText != "done" {
+		t.Fatalf("run finished final text = %q, want done", got[5].FinalText)
+	}
+}
+
+func TestLoopReply_EmitsRunFailedOnModelError(t *testing.T) {
+	loop := NewLoop(
+		&failingModelClient{err: errors.New("boom")},
+		nil,
+		[]string{"m1"},
+		DefaultSystemPrompt,
+		nil,
+		3,
+	)
+
+	var got []RunEvent
+	_, err := loop.Reply(
+		context.Background(),
+		"hello",
+		RunObserverFunc(func(_ context.Context, event RunEvent) {
+			got = append(got, event)
+		}),
+	)
+	if err == nil {
+		t.Fatal("Reply() error = nil, want non-nil")
+	}
+
+	wantTypes := []RunEventType{
+		RunEventRunStarted,
+		RunEventModelTurnStarted,
+		RunEventRunFailed,
+	}
+	if len(got) != len(wantTypes) {
+		t.Fatalf("event len = %d, want %d", len(got), len(wantTypes))
+	}
+	for i, want := range wantTypes {
+		if got[i].Type != want {
+			t.Fatalf("event[%d].Type = %q, want %q", i, got[i].Type, want)
+		}
+	}
+	if got[2].Err == nil {
+		t.Fatal("run failed error should not be nil")
+	}
+}
+
 func TestLoopReply_DoesNotAppendSteeringPromptWithoutTools(t *testing.T) {
 	store := &fakeConversationStore{}
 	model := &fakeModelClient{
@@ -250,7 +374,7 @@ func TestLoopReply_DoesNotAppendSteeringPromptWithoutTools(t *testing.T) {
 	}
 
 	loop := NewLoop(model, nil, []string{"m1"}, DefaultSystemPrompt, store, 3)
-	out, err := loop.Reply(context.Background(), "what is 2 + 2?")
+	out, err := loop.Reply(context.Background(), "what is 2 + 2?", nil)
 	if err != nil {
 		t.Fatalf("Reply() error = %v", err)
 	}
@@ -276,7 +400,7 @@ func TestLoopReply_RetriesOnceOnEmptyAssistantResponse(t *testing.T) {
 	}
 
 	loop := NewLoop(model, nil, []string{"m1"}, DefaultSystemPrompt, store, 3)
-	out, err := loop.Reply(context.Background(), "answer me")
+	out, err := loop.Reply(context.Background(), "answer me", nil)
 	if err != nil {
 		t.Fatalf("Reply() error = %v", err)
 	}
@@ -313,7 +437,7 @@ func TestLoopReply_ReturnsNoTextAfterEmptyRetryExhausted(t *testing.T) {
 	}
 
 	loop := NewLoop(model, nil, []string{"m1"}, DefaultSystemPrompt, store, 3)
-	out, err := loop.Reply(context.Background(), "still there?")
+	out, err := loop.Reply(context.Background(), "still there?", nil)
 	if err != nil {
 		t.Fatalf("Reply() error = %v", err)
 	}
@@ -352,7 +476,7 @@ func TestLoopReply_IncludesCoreMemoryInSystemMessage(t *testing.T) {
 
 	loop := NewLoop(model, nil, []string{"m1"}, DefaultSystemPrompt, store, 3)
 
-	_, err := loop.Reply(context.Background(), "hello")
+	_, err := loop.Reply(context.Background(), "hello", nil)
 	if err != nil {
 		t.Fatalf("Reply() error = %v", err)
 	}
@@ -394,7 +518,7 @@ func TestLoopReply_IncludesSkillCatalogInSystemMessage(t *testing.T) {
 	}
 
 	loop := NewLoop(model, nil, []string{"m1"}, DefaultSystemPrompt, store, 3)
-	if _, err := loop.Reply(context.Background(), "hello"); err != nil {
+	if _, err := loop.Reply(context.Background(), "hello", nil); err != nil {
 		t.Fatalf("Reply() error = %v", err)
 	}
 
@@ -455,7 +579,7 @@ func TestLoopReply_AllowsMoreThanTwelveToolCallTurns(t *testing.T) {
 	}
 
 	loop := NewLoop(model, registry, []string{"m1"}, DefaultSystemPrompt, store, 3)
-	out, err := loop.Reply(context.Background(), "question")
+	out, err := loop.Reply(context.Background(), "question", nil)
 	if err != nil {
 		t.Fatalf("Reply() error = %v", err)
 	}
@@ -495,7 +619,7 @@ func TestLoopReply_StopsAtHardLimitAndPersistsInterruptedTurn(t *testing.T) {
 	}
 
 	loop := NewLoop(model, registry, []string{"m1"}, DefaultSystemPrompt, store, 3)
-	out, err := loop.Reply(context.Background(), "question")
+	out, err := loop.Reply(context.Background(), "question", nil)
 	if out != "" {
 		t.Fatalf("Reply() output = %q, want empty", out)
 	}
@@ -549,7 +673,7 @@ func TestLoopReply_StopsOnNoProgressToolLoop(t *testing.T) {
 	}
 
 	loop := NewLoop(model, registry, []string{"m1"}, DefaultSystemPrompt, store, 3)
-	out, err := loop.Reply(context.Background(), "question")
+	out, err := loop.Reply(context.Background(), "question", nil)
 	if out != "" {
 		t.Fatalf("Reply() output = %q, want empty", out)
 	}

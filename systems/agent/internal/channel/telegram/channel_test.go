@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mymmrac/telego"
 	ta "github.com/mymmrac/telego/telegoapi"
@@ -109,6 +110,32 @@ func TestSendText_UsesHTMLParseMode(t *testing.T) {
 	}
 }
 
+func TestSendText_SplitsLongMessages(t *testing.T) {
+	prevLimit := telegramTextChunkRunes
+	telegramTextChunkRunes = 8
+	defer func() {
+		telegramTextChunkRunes = prevLimit
+	}()
+
+	caller := &mockAPICaller{}
+	ch := newTestChannelWithCaller(t, caller)
+
+	err := ch.SendText(t.Context(), "12345", "alpha beta")
+	if err != nil {
+		t.Fatalf("SendText() error = %v", err)
+	}
+
+	if len(caller.calls) != 2 {
+		t.Fatalf("calls = %d, want 2", len(caller.calls))
+	}
+	if got := caller.calls[0].body["text"]; got != "alpha" {
+		t.Fatalf("first chunk text = %#v, want %q", got, "alpha")
+	}
+	if got := caller.calls[1].body["text"]; got != "beta" {
+		t.Fatalf("second chunk text = %#v, want %q", got, "beta")
+	}
+}
+
 func TestSendText_FallbacksToPlainText(t *testing.T) {
 	caller := &mockAPICaller{
 		responses: []*ta.Response{
@@ -184,6 +211,132 @@ func TestSendText_ReturnsErrorWhenBothAttemptsFail(t *testing.T) {
 	}
 	if len(caller.calls) != 2 {
 		t.Fatalf("calls = %d, want 2", len(caller.calls))
+	}
+}
+
+func TestEditText_FallbacksToPlainText(t *testing.T) {
+	caller := &mockAPICaller{
+		responses: []*ta.Response{
+			{
+				Ok: false,
+				Error: &ta.Error{
+					ErrorCode:   400,
+					Description: "Bad Request: can't parse entities",
+				},
+			},
+			{
+				Ok:     true,
+				Result: []byte(`{}`),
+			},
+		},
+	}
+	ch := newTestChannelWithCaller(t, caller)
+
+	err := ch.EditText(t.Context(), "123", "456", "**bold**")
+	if err != nil {
+		t.Fatalf("EditText() error = %v", err)
+	}
+
+	if len(caller.calls) != 2 {
+		t.Fatalf("calls = %d, want 2", len(caller.calls))
+	}
+	if !strings.HasSuffix(caller.calls[0].url, "/editMessageText") {
+		t.Fatalf("first URL = %q, want suffix /editMessageText", caller.calls[0].url)
+	}
+	if got := caller.calls[1].body["text"]; got != "**bold**" {
+		t.Fatalf("plain fallback text = %#v, want %q", got, "**bold**")
+	}
+}
+
+func TestStartTyping_SendsImmediateChatAction(t *testing.T) {
+	prevInterval := telegramTypingKeepaliveInterval
+	telegramTypingKeepaliveInterval = 10 * time.Millisecond
+	defer func() {
+		telegramTypingKeepaliveInterval = prevInterval
+	}()
+
+	caller := &mockAPICaller{}
+	ch := newTestChannelWithCaller(t, caller)
+
+	stop, err := ch.StartTyping(t.Context(), "123")
+	if err != nil {
+		t.Fatalf("StartTyping() error = %v", err)
+	}
+	defer stop()
+
+	time.Sleep(15 * time.Millisecond)
+
+	if len(caller.calls) == 0 {
+		t.Fatal("expected at least one typing call")
+	}
+	if !strings.HasSuffix(caller.calls[0].url, "/sendChatAction") {
+		t.Fatalf("first URL = %q, want suffix /sendChatAction", caller.calls[0].url)
+	}
+	if got := caller.calls[0].body["action"]; got != telego.ChatActionTyping {
+		t.Fatalf("action = %#v, want %q", got, telego.ChatActionTyping)
+	}
+}
+
+func TestSetReactionAndClearReaction(t *testing.T) {
+	caller := &mockAPICaller{}
+	ch := newTestChannelWithCaller(t, caller)
+
+	if err := ch.SetReaction(t.Context(), "123", "456", "👀"); err != nil {
+		t.Fatalf("SetReaction() error = %v", err)
+	}
+	if err := ch.ClearReaction(t.Context(), "123", "456"); err != nil {
+		t.Fatalf("ClearReaction() error = %v", err)
+	}
+
+	if len(caller.calls) != 2 {
+		t.Fatalf("calls = %d, want 2", len(caller.calls))
+	}
+	if !strings.HasSuffix(caller.calls[0].url, "/setMessageReaction") {
+		t.Fatalf("first URL = %q, want suffix /setMessageReaction", caller.calls[0].url)
+	}
+
+	reaction, ok := caller.calls[0].body["reaction"].([]any)
+	if !ok || len(reaction) != 1 {
+		t.Fatalf("reaction body = %#v, want one entry", caller.calls[0].body["reaction"])
+	}
+	if _, ok := caller.calls[1].body["reaction"]; ok {
+		t.Fatalf(
+			"clear reaction should omit reaction body, got %#v",
+			caller.calls[1].body["reaction"],
+		)
+	}
+}
+
+func TestHandleMessage_IncludesMessageID(t *testing.T) {
+	var got IncomingMessage
+	ch := &Channel{
+		onMessage: func(msg IncomingMessage) {
+			got = msg
+		},
+	}
+
+	err := ch.handleMessage(context.Background(), &telego.Message{
+		MessageID: 42,
+		Text:      "hello",
+		Chat: telego.Chat{
+			ID: 123,
+		},
+		From: &telego.User{
+			ID: 7,
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleMessage() error = %v", err)
+	}
+
+	if got.MessageID != "42" {
+		t.Fatalf("MessageID = %q, want %q", got.MessageID, "42")
+	}
+	if got.ChatID != "123" {
+		t.Fatalf("ChatID = %q, want %q", got.ChatID, "123")
+	}
+	if got.UserID != "7" {
+		t.Fatalf("UserID = %q, want %q", got.UserID, "7")
 	}
 }
 

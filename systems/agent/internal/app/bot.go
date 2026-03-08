@@ -131,10 +131,11 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 
 	channel, err := telegram.NewChannel(token, func(msg telegram.IncomingMessage) {
 		err := messageBus.PublishInbound(ctx, bus.InboundMessage{
-			Channel: bus.ChannelTelegram,
-			ChatID:  msg.ChatID,
-			UserID:  msg.UserID,
-			Text:    msg.Text,
+			Channel:   bus.ChannelTelegram,
+			ChatID:    msg.ChatID,
+			UserID:    msg.UserID,
+			MessageID: msg.MessageID,
+			Text:      msg.Text,
 		})
 		if err != nil && !errors.Is(err, context.Canceled) {
 			fmt.Fprintf(os.Stderr, "publish inbound error: %v\n", err)
@@ -147,12 +148,10 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 		return err
 	}
 
-	errCh := make(chan error, 2)
+	telegramEndpoint := telegram.NewAgentEndpoint(channel)
+	errCh := make(chan error, 1)
 	go func() {
-		errCh <- runAgentWorker(ctx, messageBus, botAgent)
-	}()
-	go func() {
-		errCh <- runOutboundWorker(ctx, messageBus, bus.ChannelTelegram, channel.SendText)
+		errCh <- runAgentWorker(ctx, messageBus, botAgent, telegramEndpoint)
 	}()
 
 	select {

@@ -3,19 +3,122 @@ package app
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/bus"
+	channelport "github.com/q15co/q15/systems/agent/internal/channel"
 )
 
-type fakeAgent struct {
-	reply func(context.Context, string) (string, error)
+type fakeObservedAgent struct {
+	mu         sync.Mutex
+	replyCalls int
+	reply      func(context.Context, string, agent.RunObserver) (string, error)
 }
 
-func (f *fakeAgent) Reply(ctx context.Context, userInput string) (string, error) {
-	return f.reply(ctx, userInput)
+func (f *fakeObservedAgent) Reply(
+	ctx context.Context,
+	userInput string,
+	observer agent.RunObserver,
+) (string, error) {
+	f.mu.Lock()
+	f.replyCalls++
+	f.mu.Unlock()
+
+	if f.reply != nil {
+		return f.reply(ctx, userInput, observer)
+	}
+	return "ok", nil
+}
+
+func (f *fakeObservedAgent) Calls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.replyCalls
+}
+
+type fakeEndpoint struct {
+	channel string
+
+	mu        sync.Mutex
+	openCalls int
+	open      func(context.Context, bus.InboundMessage) (channelport.AgentSession, error)
+}
+
+func (f *fakeEndpoint) Channel() string {
+	return f.channel
+}
+
+func (f *fakeEndpoint) OpenSession(
+	ctx context.Context,
+	msg bus.InboundMessage,
+) (channelport.AgentSession, error) {
+	f.mu.Lock()
+	f.openCalls++
+	f.mu.Unlock()
+
+	if f.open != nil {
+		return f.open(ctx, msg)
+	}
+	return nil, nil
+}
+
+func (f *fakeEndpoint) OpenCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.openCalls
+}
+
+type fakeSession struct {
+	mu sync.Mutex
+
+	events        []agent.RunEvent
+	finishedTexts []string
+	abortReasons  []string
+}
+
+func (f *fakeSession) OnRunEvent(_ context.Context, event agent.RunEvent) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.events = append(f.events, event)
+}
+
+func (f *fakeSession) Finish(_ context.Context, finalText string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.finishedTexts = append(f.finishedTexts, finalText)
+}
+
+func (f *fakeSession) Abort(_ context.Context, reason string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.abortReasons = append(f.abortReasons, reason)
+}
+
+func waitForCondition(t *testing.T, timeout time.Duration, fn func() bool) {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if fn() {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	t.Fatal("timed out waiting for condition")
+}
+
+func TestBuildEndpointRegistry_RejectsDuplicates(t *testing.T) {
+	_, err := buildEndpointRegistry(
+		&fakeEndpoint{channel: bus.ChannelTelegram},
+		&fakeEndpoint{channel: bus.ChannelTelegram},
+	)
+	if err == nil {
+		t.Fatal("buildEndpointRegistry() error = nil, want non-nil")
+	}
 }
 
 func TestFormatReplyError_StopReasons(t *testing.T) {
@@ -51,23 +154,28 @@ func TestFormatReplyError_Generic(t *testing.T) {
 	}
 }
 
-func TestRunAgentWorker_FormatsStopErrors(t *testing.T) {
+func TestRunAgentWorker_FinishesSessionAndForwardsEvents(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	messageBus := bus.New(8)
-	agentImpl := &fakeAgent{
-		reply: func(context.Context, string) (string, error) {
-			return "", &agent.StopError{
-				Reason: agent.StopReasonToolLoopDetected,
-				Detail: "tool loop detected",
-			}
+	session := &fakeSession{}
+	agentImpl := &fakeObservedAgent{
+		reply: func(ctx context.Context, _ string, observer agent.RunObserver) (string, error) {
+			observer.OnRunEvent(ctx, agent.RunEvent{Type: agent.RunEventRunStarted})
+			return "done", nil
+		},
+	}
+	endpoint := &fakeEndpoint{
+		channel: bus.ChannelTelegram,
+		open: func(context.Context, bus.InboundMessage) (channelport.AgentSession, error) {
+			return session, nil
 		},
 	}
 
 	done := make(chan error, 1)
 	go func() {
-		done <- runAgentWorker(ctx, messageBus, agentImpl)
+		done <- runAgentWorker(ctx, messageBus, agentImpl, endpoint)
 	}()
 
 	if err := messageBus.PublishInbound(ctx, bus.InboundMessage{
@@ -78,14 +186,81 @@ func TestRunAgentWorker_FormatsStopErrors(t *testing.T) {
 		t.Fatalf("PublishInbound() error = %v", err)
 	}
 
+	waitForCondition(t, 2*time.Second, func() bool {
+		session.mu.Lock()
+		defer session.mu.Unlock()
+		return len(session.finishedTexts) == 1 && len(session.events) == 1
+	})
+
+	session.mu.Lock()
+	if got := session.finishedTexts[0]; got != "done" {
+		session.mu.Unlock()
+		t.Fatalf("finishedTexts[0] = %q, want %q", got, "done")
+	}
+	if got := session.events[0].Type; got != agent.RunEventRunStarted {
+		session.mu.Unlock()
+		t.Fatalf("events[0].Type = %q, want %q", got, agent.RunEventRunStarted)
+	}
+	session.mu.Unlock()
+
+	cancel()
 	select {
-	case out := <-messageBus.Outbound():
-		want := "I stopped this run because tool calls appeared stuck in a loop. Progress was saved."
-		if out.Text != want {
-			t.Fatalf("outbound text = %q, want %q", out.Text, want)
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("runAgentWorker() error = %v", err)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for outbound message")
+		t.Fatal("timed out waiting for worker exit")
+	}
+}
+
+func TestRunAgentWorker_FormatsStopErrors(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	messageBus := bus.New(8)
+	session := &fakeSession{}
+	agentImpl := &fakeObservedAgent{
+		reply: func(context.Context, string, agent.RunObserver) (string, error) {
+			return "", &agent.StopError{
+				Reason: agent.StopReasonToolLoopDetected,
+				Detail: "tool loop detected",
+			}
+		},
+	}
+	endpoint := &fakeEndpoint{
+		channel: bus.ChannelTelegram,
+		open: func(context.Context, bus.InboundMessage) (channelport.AgentSession, error) {
+			return session, nil
+		},
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- runAgentWorker(ctx, messageBus, agentImpl, endpoint)
+	}()
+
+	if err := messageBus.PublishInbound(ctx, bus.InboundMessage{
+		Channel: bus.ChannelTelegram,
+		ChatID:  "123",
+		Text:    "hello",
+	}); err != nil {
+		t.Fatalf("PublishInbound() error = %v", err)
+	}
+
+	waitForCondition(t, 2*time.Second, func() bool {
+		session.mu.Lock()
+		defer session.mu.Unlock()
+		return len(session.finishedTexts) == 1
+	})
+
+	session.mu.Lock()
+	got := session.finishedTexts[0]
+	session.mu.Unlock()
+
+	want := "I stopped this run because tool calls appeared stuck in a loop. Progress was saved."
+	if got != want {
+		t.Fatalf("finishedTexts[0] = %q, want %q", got, want)
 	}
 
 	cancel()
@@ -96,5 +271,103 @@ func TestRunAgentWorker_FormatsStopErrors(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for worker exit")
+	}
+}
+
+func TestRunAgentWorker_LocalControlMessageSkipsAgent(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	messageBus := bus.New(8)
+	agentImpl := &fakeObservedAgent{}
+	endpoint := &fakeEndpoint{
+		channel: bus.ChannelTelegram,
+		open: func(context.Context, bus.InboundMessage) (channelport.AgentSession, error) {
+			return nil, nil
+		},
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- runAgentWorker(ctx, messageBus, agentImpl, endpoint)
+	}()
+
+	if err := messageBus.PublishInbound(ctx, bus.InboundMessage{
+		Channel: bus.ChannelTelegram,
+		ChatID:  "123",
+		Text:    "/progress verbose",
+	}); err != nil {
+		t.Fatalf("PublishInbound() error = %v", err)
+	}
+
+	waitForCondition(t, 2*time.Second, func() bool {
+		return endpoint.OpenCalls() == 1
+	})
+
+	if agentImpl.Calls() != 0 {
+		t.Fatalf("agent calls = %d, want 0", agentImpl.Calls())
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("runAgentWorker() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for worker exit")
+	}
+}
+
+func TestRunAgentWorker_CancellationAbortsSession(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	messageBus := bus.New(8)
+	session := &fakeSession{}
+	agentImpl := &fakeObservedAgent{
+		reply: func(ctx context.Context, _ string, _ agent.RunObserver) (string, error) {
+			<-ctx.Done()
+			return "", ctx.Err()
+		},
+	}
+	endpoint := &fakeEndpoint{
+		channel: bus.ChannelTelegram,
+		open: func(context.Context, bus.InboundMessage) (channelport.AgentSession, error) {
+			return session, nil
+		},
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- runAgentWorker(ctx, messageBus, agentImpl, endpoint)
+	}()
+
+	if err := messageBus.PublishInbound(ctx, bus.InboundMessage{
+		Channel: bus.ChannelTelegram,
+		ChatID:  "123",
+		Text:    "hello",
+	}); err != nil {
+		t.Fatalf("PublishInbound() error = %v", err)
+	}
+
+	waitForCondition(t, 2*time.Second, func() bool {
+		return agentImpl.Calls() == 1
+	})
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("runAgentWorker() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for worker exit")
+	}
+
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if len(session.abortReasons) != 1 || session.abortReasons[0] != "canceled" {
+		t.Fatalf("abortReasons = %#v, want [canceled]", session.abortReasons)
 	}
 }
