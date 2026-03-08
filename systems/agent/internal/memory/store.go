@@ -40,6 +40,7 @@ var coreFrontmatterParser = goldmark.New(
 	goldmark.WithExtensions(meta.Meta),
 )
 
+// Store persists conversation turns and core memory files on disk.
 type Store struct {
 	mu        sync.Mutex
 	rootDir   string
@@ -50,6 +51,7 @@ type Store struct {
 var _ agent.ConversationStore = (*Store)(nil)
 var _ agent.CoreMemoryStore = (*Store)(nil)
 
+// NewStore constructs a memory store rooted at the provided directory.
 func NewStore(rootDir string, agentName string, committer Committer) *Store {
 	if committer == nil {
 		committer = NewGitCommitter()
@@ -61,6 +63,7 @@ func NewStore(rootDir string, agentName string, committer Committer) *Store {
 	}
 }
 
+// Init creates the on-disk memory scaffold and initializes git tracking.
 func (s *Store) Init(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -106,6 +109,7 @@ func (s *Store) Init(ctx context.Context) error {
 	return nil
 }
 
+// LoadRecentMessages loads the most recent persisted conversation turns.
 func (s *Store) LoadRecentMessages(ctx context.Context, turns int) ([]agent.Message, error) {
 	_ = ctx
 	if turns <= 0 {
@@ -139,6 +143,7 @@ func (s *Store) LoadRecentMessages(ctx context.Context, turns int) ([]agent.Mess
 	return out, nil
 }
 
+// LoadCoreMemory loads the current core memory files for prompt injection.
 func (s *Store) LoadCoreMemory(ctx context.Context) (agent.CoreMemory, error) {
 	_ = ctx
 
@@ -154,6 +159,7 @@ func (s *Store) LoadCoreMemory(ctx context.Context) (agent.CoreMemory, error) {
 	}, nil
 }
 
+// AppendTurn persists one completed conversation turn and commits it to git.
 func (s *Store) AppendTurn(ctx context.Context, messages []agent.Message) error {
 	if len(messages) == 0 {
 		return nil

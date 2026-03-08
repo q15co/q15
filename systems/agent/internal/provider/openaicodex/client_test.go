@@ -84,6 +84,37 @@ func TestMapMessagesConcatenatesSystemInstructions(t *testing.T) {
 	}
 }
 
+func TestMapMessagesPreservesAssistantPhaseOnReplay(t *testing.T) {
+	input, _, err := mapMessages([]agent.Message{
+		{
+			Role:    agent.AssistantRole,
+			Content: "resumed assistant message",
+			Phase:   "commentary",
+		},
+	})
+	if err != nil {
+		t.Fatalf("mapMessages() error = %v", err)
+	}
+	if len(input) != 1 {
+		t.Fatalf("input len = %d, want 1", len(input))
+	}
+
+	data, err := json.Marshal(input[0])
+	if err != nil {
+		t.Fatalf("json.Marshal(input[0]) error = %v", err)
+	}
+	body := string(data)
+	for _, want := range []string{
+		`"role":"assistant"`,
+		`"phase":"commentary"`,
+		`"text":"resumed assistant message"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("serialized input missing %q: %s", want, body)
+		}
+	}
+}
+
 func TestParseResponseContentAndToolCalls(t *testing.T) {
 	resp := &responses.Response{
 		Status: "completed",
@@ -140,6 +171,41 @@ func TestParseResponseIncompleteMapsToLengthFinishReason(t *testing.T) {
 	}
 }
 
+func TestParseResponsePreservesAssistantPhaseAndRawMessage(t *testing.T) {
+	var resp responses.Response
+	if err := json.Unmarshal([]byte(`{
+		"status": "completed",
+		"output": [
+			{
+				"type": "message",
+				"role": "assistant",
+				"phase": "commentary",
+				"content": [{"type": "output_text", "text": "hello"}]
+			}
+		]
+	}`), &resp); err != nil {
+		t.Fatalf("json.Unmarshal(response) error = %v", err)
+	}
+
+	got := parseResponse(&resp)
+	if got.Content != "hello" {
+		t.Fatalf("content = %q, want %q", got.Content, "hello")
+	}
+	if got.Phase != "commentary" {
+		t.Fatalf("phase = %q, want %q", got.Phase, "commentary")
+	}
+	var raw struct {
+		Phase string `json:"phase"`
+		Role  string `json:"role"`
+	}
+	if err := json.Unmarshal(got.ProviderRaw, &raw); err != nil {
+		t.Fatalf("json.Unmarshal(provider raw) error = %v", err)
+	}
+	if raw.Role != "assistant" || raw.Phase != "commentary" {
+		t.Fatalf("provider raw = %#v, want assistant commentary", raw)
+	}
+}
+
 func TestBuildRequestParamsSetsToolChoiceAndParallelToolCalls(t *testing.T) {
 	params, err := buildRequestParams(
 		"gpt-5-codex",
@@ -161,8 +227,18 @@ func TestBuildRequestParamsSetsToolChoiceAndParallelToolCalls(t *testing.T) {
 	}
 
 	body := marshalParamsToMap(t, params)
-	if got := body["instructions"]; got != "sys" {
-		t.Fatalf("instructions = %#v, want %q", got, "sys")
+	instructions, ok := body["instructions"].(string)
+	if !ok {
+		t.Fatalf("instructions = %#v, want string", body["instructions"])
+	}
+	for _, want := range []string{
+		"sys",
+		`provider="openai-codex"`,
+		"Brief commentary is allowed",
+	} {
+		if !strings.Contains(instructions, want) {
+			t.Fatalf("instructions missing %q:\n%s", want, instructions)
+		}
 	}
 	if got := body["store"]; got != false {
 		t.Fatalf("store = %#v, want false", got)
@@ -188,8 +264,15 @@ func TestBuildRequestParamsUsesDefaultInstructionsWhenMissingSystemMessage(t *te
 	}
 
 	body := marshalParamsToMap(t, params)
-	if got := body["instructions"]; got != agent.DefaultSystemPrompt {
-		t.Fatalf("instructions = %#v, want %q", got, agent.DefaultSystemPrompt)
+	instructions, ok := body["instructions"].(string)
+	if !ok {
+		t.Fatalf("instructions = %#v, want string", body["instructions"])
+	}
+	if !strings.Contains(instructions, agent.DefaultSystemPrompt) {
+		t.Fatalf("instructions should include default prompt:\n%s", instructions)
+	}
+	if !strings.Contains(instructions, `provider="openai-codex"`) {
+		t.Fatalf("instructions should include codex prompt profile:\n%s", instructions)
 	}
 	if _, ok := body["tool_choice"]; ok {
 		t.Fatalf(
@@ -202,6 +285,22 @@ func TestBuildRequestParamsUsesDefaultInstructionsWhenMissingSystemMessage(t *te
 			"parallel_tool_calls should be omitted when no tools are provided: %#v",
 			body["parallel_tool_calls"],
 		)
+	}
+}
+
+func TestAppendPromptProfileInstructionsAddsCodexProfile(t *testing.T) {
+	got := appendPromptProfileInstructions("base")
+	for _, want := range []string{
+		"base",
+		`provider="openai-codex"`,
+		"Brief commentary is allowed",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("instructions missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, `model="`) {
+		t.Fatalf("codex profile should not include model identity:\n%s", got)
 	}
 }
 

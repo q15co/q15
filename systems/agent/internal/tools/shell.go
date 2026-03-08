@@ -33,6 +33,11 @@ func (s *NixShellBash) Definition() agent.ToolDefinition {
 	return agent.ToolDefinition{
 		Name:        "exec_nix_shell_bash",
 		Description: "Execute a command in the sandbox via nix shell and /bin/bash -c with explicitly requested packages",
+		PromptGuidance: []string{
+			"Use for commands, builds, tests, formatting, git, and other CLI workflows.",
+			"Every call must include a non-empty packages array of required nix installables.",
+			"Do not use this tool for routine file reads or small text edits when file tools are sufficient.",
+		},
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

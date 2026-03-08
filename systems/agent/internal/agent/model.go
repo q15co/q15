@@ -25,6 +25,9 @@ type Message struct {
 	Role Role
 	// Content is the text payload for this message.
 	Content string
+	// Phase classifies assistant text when a provider supports commentary vs
+	// final-answer distinctions.
+	Phase string
 	// ToolCalls are requested tool invocations emitted by the model.
 	ToolCalls []ToolCall
 	// ToolCallID links a tool result message back to its originating call.
@@ -50,6 +53,9 @@ type ToolDefinition struct {
 	Name string
 	// Description explains what the tool does.
 	Description string
+	// PromptGuidance adds concise model-facing usage rules for prompt
+	// composition.
+	PromptGuidance []string
 	// Parameters is the JSON-schema-like parameter definition.
 	Parameters map[string]any
 }
@@ -58,6 +64,8 @@ type ToolDefinition struct {
 type ModelClientResult struct {
 	// Content is the assistant text returned by the model.
 	Content string
+	// Phase classifies assistant text when a provider supports message phases.
+	Phase string
 	// ToolCalls are requested tool invocations returned by the model.
 	ToolCalls []ToolCall
 	// FinishReason is the provider-reported completion reason when available.

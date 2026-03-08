@@ -22,10 +22,25 @@ func TestComposeSystemPromptIncludesOSRuntimeAndNixBashDetails(t *testing.T) {
 		BashVersion:   "GNU bash, version 5.2.15(1)-release (x86_64-pc-linux-gnu)",
 	}
 
-	prompt := composeSystemPrompt("Base prompt", "Jared", info, "/memory")
+	prompt := composeSystemPrompt("Base prompt", "Jared", info, "/memory", []agent.ToolDefinition{
+		{
+			Name:        "read_file",
+			Description: "Read a file",
+			PromptGuidance: []string{
+				"Use for routine UTF-8 text reads instead of shelling out.",
+				"Use for routine UTF-8 text reads instead of shelling out.",
+			},
+		},
+		{
+			Name: "exec_nix_shell_bash",
+			PromptGuidance: []string{
+				"Use for commands, builds, tests, formatting, git, and other CLI workflows.",
+			},
+		},
+	})
 
 	for _, want := range []string{
-		"Sandbox Environment (authoritative runtime info):",
+		"<sandbox_environment>",
 		"- OS: Debian GNU/Linux 12 (bookworm)",
 		"- Sandbox runtime: nix-only",
 		"- Base image: registry.example/sandbox:test",
@@ -57,6 +72,10 @@ func TestComposeSystemPromptIncludesOSRuntimeAndNixBashDetails(t *testing.T) {
 		"- Use web_search for discovering current sources, then use web_fetch on a chosen result URL when you need page contents.",
 		"- Nix: /root/.nix-profile/bin/nix (nix (Nix) 2.33.3)",
 		"- Bash: /bin/bash (GNU bash, version 5.2.15(1)-release (x86_64-pc-linux-gnu))",
+		"<tool_advice>",
+		`<tool name="read_file" summary="Read a file">`,
+		`<tool name="exec_nix_shell_bash">`,
+		"- Use for routine UTF-8 text reads instead of shelling out.",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, prompt)
@@ -72,6 +91,16 @@ func TestComposeSystemPromptIncludesOSRuntimeAndNixBashDetails(t *testing.T) {
 		if strings.Contains(prompt, notWanted) {
 			t.Fatalf("prompt should not contain %q:\n%s", notWanted, prompt)
 		}
+	}
+
+	if strings.Count(prompt, "Use for routine UTF-8 text reads instead of shelling out.") != 1 {
+		t.Fatalf("duplicate tool guidance should be deduplicated:\n%s", prompt)
+	}
+	if strings.Index(prompt, "<sandbox_environment>") < strings.Index(prompt, "Base prompt") {
+		t.Fatalf("sandbox section should be appended after base prompt:\n%s", prompt)
+	}
+	if strings.Index(prompt, "<tool_advice>") < strings.Index(prompt, "<sandbox_environment>") {
+		t.Fatalf("tool advice should appear after sandbox environment:\n%s", prompt)
 	}
 }
 

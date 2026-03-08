@@ -9,6 +9,7 @@ import (
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
+	"github.com/openai/openai-go/v3/packages/param"
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/auth"
@@ -114,7 +115,6 @@ func (c *Client) Complete(
 
 	result := parseResponse(resp)
 	result = mergeResultWithStreamSnapshot(result, snapshot)
-	result.ProviderRaw = json.RawMessage(resp.RawJSON())
 	return result, nil
 }
 
@@ -130,6 +130,7 @@ func buildRequestParams(
 	if strings.TrimSpace(instructions) == "" {
 		instructions = agent.DefaultSystemPrompt
 	}
+	instructions = appendPromptProfileInstructions(instructions)
 
 	params := responses.ResponseNewParams{
 		Model: model,
@@ -182,7 +183,11 @@ func mapMessages(messages []agent.Message) (responses.ResponseInputParam, string
 				},
 			})
 		case agent.AssistantRole:
-			if trimmed := strings.TrimSpace(msg.Content); trimmed != "" {
+			if raw, ok, err := buildAssistantReplayMessage(msg); err != nil {
+				return nil, "", err
+			} else if ok {
+				input = append(input, param.Override[responses.ResponseInputItemUnionParam](raw))
+			} else if trimmed := strings.TrimSpace(msg.Content); trimmed != "" {
 				input = append(input, responses.ResponseInputItemUnionParam{
 					OfMessage: &responses.EasyInputMessageParam{
 						Role: responses.EasyInputMessageRoleAssistant,
@@ -272,6 +277,8 @@ func parseResponse(resp *responses.Response) agent.ModelClientResult {
 	}
 
 	content := strings.TrimSpace(resp.OutputText())
+	assistantPhase := ""
+	var assistantRaw json.RawMessage
 	var toolCalls []agent.ToolCall
 	if len(resp.Output) > 0 {
 		toolCalls = make([]agent.ToolCall, 0)
@@ -280,6 +287,12 @@ func parseResponse(resp *responses.Response) agent.ModelClientResult {
 	for _, item := range resp.Output {
 		switch item.Type {
 		case "message":
+			if raw, phase, ok := responseAssistantMessageRaw(item); ok {
+				assistantRaw = raw
+				if phase != "" {
+					assistantPhase = phase
+				}
+			}
 			if content != "" {
 				continue
 			}
@@ -320,9 +333,84 @@ func parseResponse(resp *responses.Response) agent.ModelClientResult {
 
 	return agent.ModelClientResult{
 		Content:      content,
+		Phase:        assistantPhase,
 		ToolCalls:    toolCalls,
 		FinishReason: finishReason,
+		ProviderRaw:  assistantRaw,
 	}
+}
+
+func buildAssistantReplayMessage(msg agent.Message) (json.RawMessage, bool, error) {
+	phase := strings.TrimSpace(msg.Phase)
+	if phase == "" {
+		return nil, false, nil
+	}
+
+	content := strings.TrimSpace(msg.Content)
+	if content == "" {
+		if isAssistantResponseOutputMessage(msg.ProviderRaw) {
+			return append(json.RawMessage(nil), msg.ProviderRaw...), true, nil
+		}
+		return nil, false, nil
+	}
+
+	payload := map[string]any{
+		"type": "message",
+		"role": "assistant",
+		"content": []map[string]any{
+			{
+				"type": "output_text",
+				"text": content,
+			},
+		},
+		"phase": phase,
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return nil, false, fmt.Errorf("marshal assistant replay message: %w", err)
+	}
+	return raw, true, nil
+}
+
+func responseAssistantMessageRaw(
+	item responses.ResponseOutputItemUnion,
+) (json.RawMessage, string, bool) {
+	raw := strings.TrimSpace(item.RawJSON())
+	if raw == "" {
+		return nil, "", false
+	}
+
+	var probe struct {
+		Type  string `json:"type"`
+		Role  string `json:"role"`
+		Phase string `json:"phase"`
+	}
+	if err := json.Unmarshal([]byte(raw), &probe); err != nil {
+		return nil, "", false
+	}
+	if !strings.EqualFold(strings.TrimSpace(probe.Type), "message") {
+		return nil, "", false
+	}
+	if !strings.EqualFold(strings.TrimSpace(probe.Role), "assistant") {
+		return nil, "", false
+	}
+	return json.RawMessage(raw), strings.TrimSpace(probe.Phase), true
+}
+
+func isAssistantResponseOutputMessage(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return false
+	}
+
+	var probe struct {
+		Type string `json:"type"`
+		Role string `json:"role"`
+	}
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(probe.Type), "message") &&
+		strings.EqualFold(strings.TrimSpace(probe.Role), "assistant")
 }
 
 type streamSnapshot struct {

@@ -10,26 +10,11 @@ import (
 )
 
 const (
-	defaultPromptBody   = "an autonomous shell-capable assistant running for the user in a sandboxed environment. Prioritize doing over announcing intent: proactively execute tasks with the available tools and continue until the task is complete or you are genuinely blocked. Ask clarifying questions only when the goal or constraints are ambiguous after reasonable attempts, and ask for confirmation only before high-risk or irreversible actions. Do not request extra authorization for routine, user-requested reads/writes in the workspace or /memory paths. Use the available tools effectively and adapt to the sandbox environment described in the system prompt. Do not claim to be Claude, Anthropic, or any specific vendor/model unless that identity is explicitly provided in this conversation."
-	defaultPromptFormat = "You are %s, " + defaultPromptBody
-	// DefaultSystemPrompt is used when no explicit system prompt is configured.
-	DefaultSystemPrompt              = "You are " + defaultPromptBody
 	defaultMaxTurns                  = 96
 	defaultRecentTurns               = 6
-	toolExecutionSteeringPrompt      = "When tools are available and the user asks for an action, call the relevant tool(s) immediately instead of narrating intent. Avoid planning-only replies like \"I'll do that\" without tool calls. Do not ask for extra authorization for routine user-requested reads/writes in the workspace or /memory paths. Ask confirmation only for destructive or irreversible actions. If clarification is genuinely required, ask one concise question."
 	emptyResponseRetrySteeringPrompt = "Your previous response was empty. Return a non-empty result now: either call the required tool(s) immediately or provide a concise direct answer. Do not return an empty response."
 	maxEmptyAssistantRetries         = 3
 )
-
-// DefaultSystemPromptForName returns the default prompt with a concrete agent
-// name injected. It panics when name is empty.
-func DefaultSystemPromptForName(name string) string {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		panic("agent name is required")
-	}
-	return fmt.Sprintf(defaultPromptFormat, name)
-}
 
 // Loop coordinates model calls, tool execution, and turn persistence.
 type Loop struct {
@@ -171,12 +156,6 @@ func (l *Loop) Reply(
 
 	for turn := 0; turn < l.maxTurns; turn++ {
 		requestMessages := copyMessages(messages)
-		if len(toolDefs) > 0 || emptyAssistantRetries > 0 {
-			requestMessages = append(requestMessages, Message{
-				Role:    SystemRole,
-				Content: toolExecutionSteeringPrompt,
-			})
-		}
 		if emptyAssistantRetries > 0 {
 			requestMessages = append(requestMessages, Message{
 				Role:    SystemRole,
@@ -211,6 +190,7 @@ func (l *Loop) Reply(
 		assistantMsg := Message{
 			Role:        AssistantRole,
 			Content:     assistantContent,
+			Phase:       result.Phase,
 			ToolCalls:   result.ToolCalls,
 			ProviderRaw: result.ProviderRaw,
 		}

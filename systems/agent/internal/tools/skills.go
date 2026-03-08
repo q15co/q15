@@ -30,6 +30,9 @@ func (v *ValidateSkill) Definition() agent.ToolDefinition {
 	return agent.ToolDefinition{
 		Name:        "validate_skill",
 		Description: "Validate a q15 skill directory and return parsed metadata, errors, and warnings without modifying files",
+		PromptGuidance: []string{
+			"Run this after creating or editing a skill directory to catch metadata or structure issues.",
+		},
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

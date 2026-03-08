@@ -1,3 +1,5 @@
+// Package memory provides persistent agent memory storage and git-backed
+// history for conversation state.
 package memory
 
 import (
@@ -12,19 +14,23 @@ const (
 	defaultGitUserEmail = "q15@local"
 )
 
+// Committer ensures the memory repository exists and records committed turns.
 type Committer interface {
 	EnsureRepo(ctx context.Context, repoDir string) error
 	CommitAll(ctx context.Context, repoDir, message string) (string, error)
 }
 
+// GitCommitter records memory changes in a git repository.
 type GitCommitter struct {
 	bin string
 }
 
+// NewGitCommitter constructs a git-backed memory committer.
 func NewGitCommitter() *GitCommitter {
 	return &GitCommitter{bin: "git"}
 }
 
+// EnsureRepo initializes and configures the memory git repository when needed.
 func (g *GitCommitter) EnsureRepo(ctx context.Context, repoDir string) error {
 	if g == nil {
 		return fmt.Errorf("nil git committer")
@@ -50,6 +56,7 @@ func (g *GitCommitter) EnsureRepo(ctx context.Context, repoDir string) error {
 	return nil
 }
 
+// CommitAll stages and commits all pending memory changes.
 func (g *GitCommitter) CommitAll(ctx context.Context, repoDir, message string) (string, error) {
 	if g == nil {
 		return "", fmt.Errorf("nil git committer")

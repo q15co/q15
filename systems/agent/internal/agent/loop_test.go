@@ -82,13 +82,14 @@ func (f *fakeConversationStore) LoadSkillCatalog(ctx context.Context) (SkillCata
 	return f.skillCatalog, nil
 }
 
-func TestDefaultSystemPromptIncludesAutonomousGuidance(t *testing.T) {
+func TestDefaultSystemPromptUsesStructuredPromptSections(t *testing.T) {
 	for _, want := range []string{
-		"autonomous shell-capable assistant",
-		"Prioritize doing over announcing intent",
-		"continue until the task is complete or you are genuinely blocked",
-		"Ask clarifying questions only when the goal or constraints are ambiguous",
-		"ask for confirmation only before high-risk or irreversible actions",
+		"<identity>",
+		"<autonomy_and_persistence>",
+		"<execution_contract>",
+		"<core_memory_contract>",
+		"Prefer doing the work over announcing intent",
+		"Do not present intent, plans, or assumptions as completed work",
 	} {
 		if !strings.Contains(DefaultSystemPrompt, want) {
 			t.Fatalf("DefaultSystemPrompt missing %q:\n%s", want, DefaultSystemPrompt)
@@ -96,13 +97,16 @@ func TestDefaultSystemPromptIncludesAutonomousGuidance(t *testing.T) {
 	}
 }
 
-func TestDefaultSystemPromptForNameIncludesNameAndAutonomousGuidance(t *testing.T) {
+func TestDefaultSystemPromptForNameIncludesNameAndIdentityBlock(t *testing.T) {
 	prompt := DefaultSystemPromptForName("Jared")
-	if !strings.Contains(prompt, "You are Jared,") {
+	if !strings.Contains(prompt, "<identity>") {
+		t.Fatalf("named prompt missing identity block:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "You are Jared, a pragmatic software assistant.") {
 		t.Fatalf("named prompt missing agent name:\n%s", prompt)
 	}
-	if !strings.Contains(prompt, "Prioritize doing over announcing intent") {
-		t.Fatalf("named prompt missing autonomous guidance:\n%s", prompt)
+	if !strings.Contains(prompt, "<verification_loop>") {
+		t.Fatalf("named prompt missing verification block:\n%s", prompt)
 	}
 }
 
@@ -215,7 +219,30 @@ func TestLoopReply_PersistsToolCallFlow(t *testing.T) {
 	}
 }
 
-func TestLoopReply_AppendsSteeringPromptWhenToolsEnabled(t *testing.T) {
+func TestLoopReply_PersistsAssistantPhase(t *testing.T) {
+	store := &fakeConversationStore{}
+	model := &fakeModelClient{
+		results: []ModelClientResult{
+			{
+				Content: "working",
+				Phase:   "commentary",
+			},
+		},
+	}
+
+	loop := NewLoop(model, nil, []string{"m1"}, DefaultSystemPrompt, store, 3)
+	if _, err := loop.Reply(context.Background(), "say hi", nil); err != nil {
+		t.Fatalf("Reply() error = %v", err)
+	}
+	if len(store.lastAppend) != 2 {
+		t.Fatalf("persisted turn len = %d, want 2", len(store.lastAppend))
+	}
+	if got := store.lastAppend[1].Phase; got != "commentary" {
+		t.Fatalf("persisted assistant phase = %q, want %q", got, "commentary")
+	}
+}
+
+func TestLoopReply_DoesNotAppendGenericToolSteeringPromptWhenToolsEnabled(t *testing.T) {
 	store := &fakeConversationStore{}
 	model := &fakeModelClient{
 		results: []ModelClientResult{
@@ -245,15 +272,19 @@ func TestLoopReply_AppendsSteeringPromptWhenToolsEnabled(t *testing.T) {
 		t.Fatalf("model calls = %d, want 1", len(model.callMsgs))
 	}
 	last := model.callMsgs[0][len(model.callMsgs[0])-1]
-	if last.Role != SystemRole || last.Content != toolExecutionSteeringPrompt {
-		t.Fatalf("last model message = %#v, want steering system message", last)
+	if last.Role != UserRole || last.Content != "please check the workspace" {
+		t.Fatalf("last model message = %#v, want user input as last message", last)
 	}
 	if len(store.lastAppend) != 2 {
 		t.Fatalf("persisted turn len = %d, want 2", len(store.lastAppend))
 	}
-	for i, msg := range store.lastAppend {
-		if msg.Role == SystemRole && strings.Contains(msg.Content, toolExecutionSteeringPrompt) {
-			t.Fatalf("persisted turn should not include steering prompt, found at index %d", i)
+	for i, msg := range model.callMsgs[0] {
+		if msg.Role == SystemRole &&
+			strings.Contains(
+				msg.Content,
+				"call the relevant tool(s) immediately instead of narrating intent",
+			) {
+			t.Fatalf("model input should not include legacy steering prompt, found at index %d", i)
 		}
 	}
 }
@@ -485,12 +516,12 @@ func TestLoopReply_IncludesCoreMemoryInSystemMessage(t *testing.T) {
 	}
 
 	system := model.callMsgs[0][0].Content
-	if !strings.Contains(system, "Core Memory (persistent; always in-context):") {
-		t.Fatalf("system prompt missing core memory header: %q", system)
+	if !strings.Contains(system, "<core_memory>") {
+		t.Fatalf("system prompt missing core memory section: %q", system)
 	}
 	if !strings.Contains(
 		system,
-		"<core_file path=\"core/AGENT.md\" description=\"Core behavior guide\" limit=\"6000\">",
+		"<core_file description=\"Core behavior guide\" limit=\"6000\" path=\"core/AGENT.md\">",
 	) {
 		t.Fatalf("system prompt missing core file metadata: %q", system)
 	}
@@ -524,10 +555,11 @@ func TestLoopReply_IncludesSkillCatalogInSystemMessage(t *testing.T) {
 
 	system := model.callMsgs[0][0].Content
 	for _, want := range []string{
-		"Available Skills (dynamic; load on demand):",
-		"- skill-creator [builtin]: Create or update skills. Load with read_file from /skills/@builtin/skill-creator/SKILL.md.",
-		"Skill Catalog Warnings:",
-		`- skipping invalid shared skill "broken": missing SKILL.md`,
+		"<skill_catalog>",
+		`<skill name="skill-creator" path="/skills/@builtin/skill-creator/SKILL.md" source="builtin">`,
+		"Create or update skills.",
+		"<warning>",
+		`skipping invalid shared skill "broken": missing SKILL.md`,
 	} {
 		if !strings.Contains(system, want) {
 			t.Fatalf("system prompt missing %q:\n%s", want, system)

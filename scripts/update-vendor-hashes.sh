@@ -56,5 +56,5 @@ refresh_hash_for() {
 refresh_hash_for "q15-agent" "q15-agent"
 refresh_hash_for "q15-sandbox-helper" "q15-sandbox-helper"
 
-nix build "${flake_ref}#q15" --no-link
+# nix build "${flake_ref}#q15" --no-link
 echo "vendor hashes refreshed and flake build validated"

@@ -11,36 +11,36 @@ func injectCoreMemory(systemText string, core CoreMemory) string {
 		return systemText
 	}
 
-	var out strings.Builder
-	out.WriteString(systemText)
-	out.WriteString("\n\n")
-	out.WriteString("Core Memory (persistent; always in-context):\n")
+	files := make([]string, 0, len(core.Files))
 	for _, file := range core.Files {
 		path := strings.TrimSpace(file.RelativePath)
 		if path == "" {
 			continue
 		}
-		out.WriteString("<core_file path=\"")
-		out.WriteString(path)
-		out.WriteString("\"")
+		attrs := map[string]string{
+			"path": path,
+		}
 		if desc := strings.TrimSpace(file.Description); desc != "" {
-			out.WriteString(" description=\"")
-			out.WriteString(desc)
-			out.WriteString("\"")
+			attrs["description"] = desc
 		}
 		if file.Limit > 0 {
-			out.WriteString(" limit=\"")
-			out.WriteString(fmt.Sprintf("%d", file.Limit))
-			out.WriteString("\"")
+			attrs["limit"] = fmt.Sprintf("%d", file.Limit)
 		}
-		out.WriteString(">\n")
-		if content := strings.TrimSpace(file.Content); content != "" {
-			out.WriteString(content)
-			out.WriteString("\n")
+		rendered := RenderPromptElement("core_file", attrs, file.Content)
+		if rendered == "" {
+			continue
 		}
-		out.WriteString("</core_file>\n")
+		files = append(files, rendered)
 	}
-	return out.String()
+	if len(files) == 0 {
+		return systemText
+	}
+
+	return strings.TrimSpace(systemText + "\n\n" + RenderPromptElement(
+		"core_memory",
+		nil,
+		strings.Join(files, "\n\n"),
+	))
 }
 
 func injectSkillCatalog(systemText string, catalog SkillCatalog) string {
@@ -49,46 +49,47 @@ func injectSkillCatalog(systemText string, catalog SkillCatalog) string {
 		return systemText
 	}
 
-	var out strings.Builder
-	out.WriteString(systemText)
-	out.WriteString("\n\n")
-	out.WriteString("Available Skills (dynamic; load on demand):\n")
+	parts := make([]string, 0, len(catalog.Entries)+len(catalog.Warnings))
 	for _, entry := range catalog.Entries {
 		name := strings.TrimSpace(entry.Name)
 		if name == "" {
 			continue
 		}
-		out.WriteString("- ")
-		out.WriteString(name)
-		if source := strings.TrimSpace(entry.Source); source != "" {
-			out.WriteString(" [")
-			out.WriteString(source)
-			out.WriteString("]")
+		attrs := map[string]string{
+			"name": name,
 		}
-		if desc := strings.TrimSpace(entry.Description); desc != "" {
-			out.WriteString(": ")
-			out.WriteString(desc)
+		if source := strings.TrimSpace(entry.Source); source != "" {
+			attrs["source"] = source
 		}
 		if skillFilePath := strings.TrimSpace(entry.SkillFilePath); skillFilePath != "" {
-			out.WriteString(" Load with read_file from ")
-			out.WriteString(skillFilePath)
-			out.WriteString(".")
+			attrs["path"] = skillFilePath
 		}
-		out.WriteString("\n")
-	}
-	if len(catalog.Warnings) > 0 {
-		out.WriteString("Skill Catalog Warnings:\n")
-		for _, warning := range catalog.Warnings {
-			warning = strings.TrimSpace(warning)
-			if warning == "" {
-				continue
-			}
-			out.WriteString("- ")
-			out.WriteString(warning)
-			out.WriteString("\n")
+		body := strings.TrimSpace(entry.Description)
+		if body == "" {
+			body = "Available on demand."
 		}
+		rendered := RenderPromptElement("skill", attrs, body)
+		if rendered == "" {
+			continue
+		}
+		parts = append(parts, rendered)
 	}
-	return strings.TrimSpace(out.String())
+	for _, warning := range catalog.Warnings {
+		warning = strings.TrimSpace(warning)
+		if warning == "" {
+			continue
+		}
+		parts = append(parts, RenderPromptElement("warning", nil, warning))
+	}
+	if len(parts) == 0 {
+		return systemText
+	}
+
+	return strings.TrimSpace(systemText + "\n\n" + RenderPromptElement(
+		"skill_catalog",
+		nil,
+		strings.Join(parts, "\n\n"),
+	))
 }
 
 func copyMessages(in []Message) []Message {

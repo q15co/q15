@@ -89,17 +89,23 @@ func TestStoreLoadCoreMemory(t *testing.T) {
 			if !strings.Contains(file.Content, "You are Jared, a pragmatic software assistant.") {
 				t.Fatalf("AGENT.md did not render configured agent name: %q", file.Content)
 			}
-			if !strings.Contains(file.Content, "Operate as an autonomous agent") {
-				t.Fatalf("AGENT.md missing autonomous guidance: %q", file.Content)
-			}
-			if !strings.Contains(file.Content, "do not narrate routine, low-risk tool calls") {
-				t.Fatalf("AGENT.md missing no-narration tool-call guidance: %q", file.Content)
+			if !strings.Contains(
+				file.Content,
+				"Default to a direct, practical collaboration style.",
+			) {
+				t.Fatalf("AGENT.md missing durable collaboration preference: %q", file.Content)
 			}
 			if !strings.Contains(
 				file.Content,
-				"Do not ask extra authorization for routine user-requested reads/writes",
+				"Treat runtime policy about tool use, completion, and safety as code-owned",
 			) {
-				t.Fatalf("AGENT.md missing routine-authorization guidance: %q", file.Content)
+				t.Fatalf("AGENT.md missing code-owned policy reminder: %q", file.Content)
+			}
+			if strings.Contains(file.Content, "Execute -> Verify -> Report") {
+				t.Fatalf(
+					"AGENT.md should no longer carry runtime execution policy: %q",
+					file.Content,
+				)
 			}
 			break
 		}
@@ -152,7 +158,8 @@ func TestStoreInterruptedTurnPersistsAndReplays(t *testing.T) {
 	interrupted := []agent.Message{
 		{Role: agent.UserRole, Content: "do a long task"},
 		{
-			Role: agent.AssistantRole,
+			Role:  agent.AssistantRole,
+			Phase: "commentary",
 			ToolCalls: []agent.ToolCall{
 				{ID: "call-1", Name: "echo", Arguments: `{"value":"x"}`},
 			},
@@ -176,6 +183,9 @@ func TestStoreInterruptedTurnPersistsAndReplays(t *testing.T) {
 	}
 	if got[len(got)-1].Role != agent.AssistantRole {
 		t.Fatalf("last replayed role = %q, want assistant", got[len(got)-1].Role)
+	}
+	if got[1].Phase != "commentary" {
+		t.Fatalf("replayed assistant phase = %q, want %q", got[1].Phase, "commentary")
 	}
 	if !strings.Contains(got[len(got)-1].Content, "internal safety guard") {
 		t.Fatalf("last replayed message = %q", got[len(got)-1].Content)

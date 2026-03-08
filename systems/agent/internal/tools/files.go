@@ -48,6 +48,10 @@ func (r *ReadFile) Definition() agent.ToolDefinition {
 	return agent.ToolDefinition{
 		Name:        "read_file",
 		Description: "Read a UTF-8 text file from the sandbox workspace, memory, or skills roots with optional line-based pagination",
+		PromptGuidance: []string{
+			"Use for routine UTF-8 text reads instead of shelling out.",
+			"Use offset_lines and limit_lines when the file is large and continue from Next-Offset-Lines when needed.",
+		},
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -124,6 +128,10 @@ func (w *WriteFile) Definition() agent.ToolDefinition {
 	return agent.ToolDefinition{
 		Name:        "write_file",
 		Description: "Create or replace a UTF-8 text file in the sandbox workspace, memory, or shared skills roots",
+		PromptGuidance: []string{
+			"Use to create a new UTF-8 text file or fully replace an existing one.",
+			"Do not use when you need a small targeted edit in an existing file.",
+		},
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -178,6 +186,10 @@ func (e *EditFile) Definition() agent.ToolDefinition {
 	return agent.ToolDefinition{
 		Name:        "edit_file",
 		Description: "Perform one exact text replacement in an existing UTF-8 text file in the sandbox workspace, memory, or shared skills roots",
+		PromptGuidance: []string{
+			"Use for one exact replacement when you know the current text to match.",
+			"Prefer apply_patch when the edit spans multiple hunks, multiple files, or uncertain context.",
+		},
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -244,6 +256,11 @@ func (a *ApplyPatch) Definition() agent.ToolDefinition {
 	return agent.ToolDefinition{
 		Name:        "apply_patch",
 		Description: "Apply a multi-file high-level patch inside the sandbox workspace, memory, or shared skills roots using the Codex patch envelope, not unified diff or git diff syntax",
+		PromptGuidance: []string{
+			"Use for multi-file edits, diff-style updates, renames, or precise patch application.",
+			"Patches must start with *** Begin Patch and end with *** End Patch.",
+			"Do not send unified diff, git diff, context diff, or diff --git headers.",
+		},
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

@@ -32,7 +32,7 @@
           src = ./.;
           modRoot = "systems/agent";
           subPackages = ["."];
-          vendorHash = "sha256-j3HT/RwZmRLsBoW8SBWbzyUliYCuuQQYqzUjpLokWss=";
+          vendorHash = "sha256-ADxDeRyhdHc+4wvdozqcoaVqoSMUoXdSlb5KhbsgeDU=";
           env = {
             GOWORK = "off";
           };

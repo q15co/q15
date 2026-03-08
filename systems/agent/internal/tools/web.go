@@ -49,6 +49,10 @@ func (b *BraveWebSearch) Definition() agent.ToolDefinition {
 	return agent.ToolDefinition{
 		Name:        "web_search",
 		Description: "Search the web for current information using Brave Search and return titles, URLs, and snippets.",
+		PromptGuidance: []string{
+			"Use for discovery when the question depends on current web information.",
+			"After choosing a result, use web_fetch on the selected URL when you need the page contents.",
+		},
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

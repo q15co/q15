@@ -1,3 +1,5 @@
+// Package openaicompatible implements an OpenAI Chat Completions-compatible
+// model client.
 package openaicompatible
 
 import (
@@ -12,12 +14,15 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/agent"
 )
 
+// Client adapts an OpenAI-compatible Chat Completions API to the agent model
+// interface.
 type Client struct {
 	client openai.Client
 }
 
 var _ agent.ModelClient = (*Client)(nil)
 
+// NewClient constructs a Chat Completions-compatible model client.
 func NewClient(baseURL string, apiKey string) (*Client, error) {
 	baseURL = strings.TrimSpace(baseURL)
 	if baseURL == "" {
@@ -36,6 +41,7 @@ func NewClient(baseURL string, apiKey string) (*Client, error) {
 	return &Client{client: client}, nil
 }
 
+// Complete sends one completion request to the configured compatible endpoint.
 func (c *Client) Complete(
 	ctx context.Context,
 	model string,
@@ -46,7 +52,7 @@ func (c *Client) Complete(
 		return agent.ModelClientResult{}, fmt.Errorf("model name is required")
 	}
 
-	reqMessages, err := mapMessages(messages)
+	reqMessages, err := mapMessages(withPromptProfile(messages))
 	if err != nil {
 		return agent.ModelClientResult{}, err
 	}

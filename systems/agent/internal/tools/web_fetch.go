@@ -95,6 +95,10 @@ func (w *WebFetch) Definition() agent.ToolDefinition {
 	return agent.ToolDefinition{
 		Name:        "web_fetch",
 		Description: "Fetch a known web page URL, convert readable HTML content to markdown, and return a bounded slice with fetch metadata.",
+		PromptGuidance: []string{
+			"Use for known HTTP or HTTPS URLs when you need page content.",
+			"Prefer this over shelling out with curl for ordinary webpage reads.",
+		},
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

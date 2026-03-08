@@ -51,7 +51,12 @@ func (r *Registry) Definitions() []ToolDefinition {
 		return nil
 	}
 	out := make([]ToolDefinition, len(r.definitions))
-	copy(out, r.definitions)
+	for i, def := range r.definitions {
+		out[i] = def
+		if len(def.PromptGuidance) > 0 {
+			out[i].PromptGuidance = append([]string(nil), def.PromptGuidance...)
+		}
+	}
 	return out
 }
 

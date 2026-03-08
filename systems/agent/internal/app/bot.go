@@ -69,14 +69,6 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 		)
 	}
 
-	systemPrompt := agent.DefaultSystemPromptForName(rt.Name)
-	info, err := agentSandbox.Describe(ctx)
-	if err != nil {
-		if sandbox.VerboseEnabled() {
-			fmt.Fprintf(os.Stderr, "[app] sandbox describe failed for agent=%q: %v\n", rt.Name, err)
-		}
-	}
-	systemPrompt = composeSystemPrompt(systemPrompt, rt.Name, info, rt.MemoryDir)
 	skillManager := q15skills.NewManager(q15skills.Settings{
 		WorkspaceHostDir: rt.WorkspaceHostDir,
 		WorkspaceDir:     rt.WorkspaceDir,
@@ -109,6 +101,21 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 	if err != nil {
 		return fmt.Errorf("build tool registry for agent %q: %w", rt.Name, err)
 	}
+
+	systemPrompt := agent.DefaultSystemPromptForName(rt.Name)
+	info, err := agentSandbox.Describe(ctx)
+	if err != nil {
+		if sandbox.VerboseEnabled() {
+			fmt.Fprintf(os.Stderr, "[app] sandbox describe failed for agent=%q: %v\n", rt.Name, err)
+		}
+	}
+	systemPrompt = composeSystemPrompt(
+		systemPrompt,
+		rt.Name,
+		info,
+		rt.MemoryDir,
+		toolRegistry.Definitions(),
+	)
 
 	memoryStore := memory.NewStore(rt.MemoryHostDir, rt.Name, nil)
 	if err := memoryStore.Init(ctx); err != nil {
@@ -198,14 +205,29 @@ func composeSystemPrompt(
 	agentName string,
 	info sandbox.Info,
 	memoryDir string,
+	toolDefs []agent.ToolDefinition,
 ) string {
 	base = strings.TrimSpace(base)
 	if base == "" {
 		base = agent.DefaultSystemPromptForName(agentName)
 	}
 
+	parts := []string{base}
+	if sandboxSection := renderSandboxEnvironmentPrompt(agentName, info, memoryDir); sandboxSection != "" {
+		parts = append(parts, sandboxSection)
+	}
+	if toolAdviceSection := renderToolAdvicePrompt(toolDefs); toolAdviceSection != "" {
+		parts = append(parts, toolAdviceSection)
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+func renderSandboxEnvironmentPrompt(
+	agentName string,
+	info sandbox.Info,
+	memoryDir string,
+) string {
 	var lines []string
-	lines = append(lines, "Sandbox Environment (authoritative runtime info):")
 	agentName = strings.TrimSpace(agentName)
 	if agentName != "" {
 		lines = append(
@@ -310,8 +332,57 @@ func composeSystemPrompt(
 	if bashSummary := formatBinarySummary(info.BashPath, info.BashVersion); bashSummary != "" {
 		lines = append(lines, fmt.Sprintf("- Bash: %s", bashSummary))
 	}
+	if len(lines) == 0 {
+		return ""
+	}
 
-	return base + "\n\n" + strings.Join(lines, "\n")
+	return agent.RenderPromptElement("sandbox_environment", nil, strings.Join(lines, "\n"))
+}
+
+func renderToolAdvicePrompt(toolDefs []agent.ToolDefinition) string {
+	if len(toolDefs) == 0 {
+		return ""
+	}
+
+	renderedTools := make([]string, 0, len(toolDefs))
+	for _, tool := range toolDefs {
+		name := strings.TrimSpace(tool.Name)
+		if name == "" || len(tool.PromptGuidance) == 0 {
+			continue
+		}
+
+		lines := make([]string, 0, len(tool.PromptGuidance))
+		seen := make(map[string]struct{}, len(tool.PromptGuidance))
+		for _, line := range tool.PromptGuidance {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			if _, ok := seen[line]; ok {
+				continue
+			}
+			seen[line] = struct{}{}
+			lines = append(lines, "- "+line)
+		}
+		if len(lines) == 0 {
+			continue
+		}
+
+		attrs := map[string]string{"name": name}
+		if desc := strings.TrimSpace(tool.Description); desc != "" {
+			attrs["summary"] = desc
+		}
+		rendered := agent.RenderPromptElement("tool", attrs, strings.Join(lines, "\n"))
+		if rendered == "" {
+			continue
+		}
+		renderedTools = append(renderedTools, rendered)
+	}
+	if len(renderedTools) == 0 {
+		return ""
+	}
+
+	return agent.RenderPromptElement("tool_advice", nil, strings.Join(renderedTools, "\n\n"))
 }
 
 func formatBinarySummary(path, version string) string {
