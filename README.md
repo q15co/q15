@@ -122,17 +122,25 @@ Configure branch protection (or a ruleset) for `main` with these minimum control
 
 ## Config
 
-`config.toml` defines providers and agents. By default q15 reads it from
+`config.toml` defines providers, models, and agents. By default q15 reads it from
 `~/.config/q15/config.toml`.
 
 An empty starter config is valid and runs zero agents until you add entries.
 
-`agent.models` is an ordered fallback list of `provider/model` references.
+`agent.models` is an ordered fallback list of configured model names.
 
 - The agent tries models in order.
 - It falls back only when a model call fails.
-- Fallbacks can span providers (for example `moonshot/...` -> `zai/...`).
+- Fallbacks can span providers (for example `codex-primary` -> `moonshot-fast` -> `zai-backup`).
 - If you want one model, use a list of one item.
+- Each `[[model]]` entry points at a provider and can override the upstream provider model string
+  via `provider_model`.
+- If `capabilities` is omitted, q15 currently assumes `["text"]` only.
+- Opt into `tool_calling`, `image_input`, and `reasoning` explicitly per model instead of relying on
+  provider-family assumptions.
+- Today capability metadata is mostly foundation for future routing and multimodal work. In the
+  current runtime, the direct behavioral effect is limited to suppressing tool definitions when
+  `tool_calling` is absent.
 
 Example:
 
@@ -153,10 +161,28 @@ key_env = "ZAI_API_KEY"
 name = "openai-sub"
 type = "openai-codex"
 
+[[model]]
+name = "codex-primary"
+provider = "openai-sub"
+provider_model = "gpt-5-codex"
+capabilities = ["text", "tool_calling", "reasoning"]
+
+[[model]]
+name = "moonshot-fast"
+provider = "moonshot"
+provider_model = "kimi-k2.5"
+capabilities = ["text", "tool_calling"]
+
+[[model]]
+name = "zai-vision"
+provider = "zai"
+provider_model = "glm-5"
+capabilities = ["text", "image_input", "tool_calling"]
+
 [[agent]]
 # Authoritative agent identity used for prompt identity and core-memory rendering.
 name = "Jared"
-models = ["openai-sub/gpt-5-codex", "moonshot/kimi-k2.5", "zai/glm-5"]
+models = ["codex-primary", "moonshot-fast", "zai-vision"]
 memory_recent_turns = 6
 
 [agent.sandbox]

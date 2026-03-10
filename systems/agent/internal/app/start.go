@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	_ "embed"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -12,14 +13,8 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/config"
 )
 
-const starterConfigTemplate = `# q15 starter config
-# This file is intentionally minimal so first startup succeeds before any agents
-# are configured.
-#
-# Add one or more [[provider]] and [[agent]] blocks, then restart q15.
-# For env-backed secrets, set provider.key_env / agent.telegram.token_env to
-# variable names available in your runtime environment (for example q15.env).
-`
+//go:embed starter_config.toml
+var starterConfigTemplate string
 
 // Start loads configured agent runtimes from disk and starts them together.
 func Start(ctx context.Context, configPath string) error {

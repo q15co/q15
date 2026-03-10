@@ -7,6 +7,24 @@ import (
 	"testing"
 )
 
+func testModel(name, provider string, capabilities ...string) Model {
+	return testModelWithProviderModel(name, provider, "", capabilities...)
+}
+
+func testModelWithProviderModel(
+	name string,
+	provider string,
+	providerModel string,
+	capabilities ...string,
+) Model {
+	return Model{
+		Name:          name,
+		Provider:      provider,
+		ProviderModel: providerModel,
+		Capabilities:  capabilities,
+	}
+}
+
 func TestLoadAgentRuntimes_TOML(t *testing.T) {
 	t.Setenv("MOONSHOT_API_KEY", "api-123")
 	t.Setenv("JARED_TELEGRAM_TOKEN", "tg-123")
@@ -22,9 +40,17 @@ type = "openai-compatible"
 base_url = "https://api.moonshot.ai/v1"
 key_env = "MOONSHOT_API_KEY"
 
+[[model]]
+name = "kimi-k2.5"
+provider = "moonshot"
+
+[[model]]
+name = "kimi-k2"
+provider = "moonshot"
+
 	[[agent]]
 	name = "Jared"
-	models = ["moonshot/kimi-k2.5", "moonshot/kimi-k2"]
+	models = ["kimi-k2.5", "kimi-k2"]
 
 	[agent.sandbox]
 	container_name = "q15-jared"
@@ -53,7 +79,7 @@ key_env = "MOONSHOT_API_KEY"
 	if len(rt.Models) != 2 {
 		t.Fatalf("unexpected models: %#v", rt.Models)
 	}
-	if rt.Models[0].Ref != "moonshot/kimi-k2.5" || rt.Models[0].ModelName != "kimi-k2.5" {
+	if rt.Models[0].Ref != "kimi-k2.5" || rt.Models[0].ProviderModel != "kimi-k2.5" {
 		t.Fatalf("unexpected first model runtime: %#v", rt.Models[0])
 	}
 	if rt.Models[0].ProviderType != "openai-compatible" {
@@ -65,7 +91,15 @@ key_env = "MOONSHOT_API_KEY"
 	if rt.Models[0].ProviderAPIKey != "api-123" {
 		t.Fatalf("unexpected first model provider api key: %q", rt.Models[0].ProviderAPIKey)
 	}
-	if rt.Models[1].Ref != "moonshot/kimi-k2" || rt.Models[1].ModelName != "kimi-k2" {
+	if !rt.Models[0].Capabilities.Text {
+		t.Fatalf("unexpected default capabilities: %#v", rt.Models[0].Capabilities)
+	}
+	if rt.Models[0].Capabilities.ToolCalling ||
+		rt.Models[0].Capabilities.ImageInput ||
+		rt.Models[0].Capabilities.Reasoning {
+		t.Fatalf("unexpected extra default capabilities: %#v", rt.Models[0].Capabilities)
+	}
+	if rt.Models[1].Ref != "kimi-k2" || rt.Models[1].ProviderModel != "kimi-k2" {
 		t.Fatalf("unexpected second model runtime: %#v", rt.Models[1])
 	}
 	if rt.SandboxContainerName != "q15-jared" {
@@ -125,9 +159,13 @@ type = "openai-compatible"
 base_url = "https://api.moonshot.ai/v1"
 key_env = "MOONSHOT_API_KEY"
 
+[[model]]
+name = "kimi-k2.5"
+provider = "moonshot"
+
 [[agent]]
 name = "Jared"
-models = ["moonshot/kimi-k2.5"]
+models = ["kimi-k2.5"]
 memory_recent_turns = 42
 
 [agent.sandbox]
@@ -154,6 +192,63 @@ allowed_user_ids = [123456789]
 	}
 }
 
+func TestLoadAgentRuntimes_TOML_ExplicitModelMetadata(t *testing.T) {
+	t.Setenv("MOONSHOT_API_KEY", "api-123")
+	t.Setenv("JARED_TELEGRAM_TOKEN", "tg-123")
+
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte(`
+[[provider]]
+name = "moonshot"
+type = "openai-compatible"
+base_url = "https://api.moonshot.ai/v1"
+key_env = "MOONSHOT_API_KEY"
+
+[[model]]
+name = "vision-primary"
+provider = "moonshot"
+provider_model = "kimi-k2.5"
+capabilities = ["text", "image_input", "reasoning"]
+
+[[agent]]
+name = "Jared"
+models = ["vision-primary"]
+
+[agent.sandbox]
+container_name = "q15-jared"
+workspace_host_dir = "/tmp/q15-workspaces/jared"
+workspace_dir = "/workspace"
+
+[agent.telegram]
+token_env = "JARED_TELEGRAM_TOKEN"
+allowed_user_ids = [123456789]
+`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	runtimes, err := LoadAgentRuntimes(path)
+	if err != nil {
+		t.Fatalf("load runtimes: %v", err)
+	}
+	if len(runtimes) != 1 || len(runtimes[0].Models) != 1 {
+		t.Fatalf("unexpected runtimes: %#v", runtimes)
+	}
+
+	model := runtimes[0].Models[0]
+	if model.Ref != "vision-primary" {
+		t.Fatalf("model ref = %q, want %q", model.Ref, "vision-primary")
+	}
+	if model.ProviderModel != "kimi-k2.5" {
+		t.Fatalf("provider model = %q, want %q", model.ProviderModel, "kimi-k2.5")
+	}
+	if !model.Capabilities.Text || !model.Capabilities.ImageInput || !model.Capabilities.Reasoning {
+		t.Fatalf("unexpected capabilities: %#v", model.Capabilities)
+	}
+	if model.Capabilities.ToolCalling {
+		t.Fatalf("unexpected tool calling capability: %#v", model.Capabilities)
+	}
+}
+
 func TestLoadAgentRuntimes_TOML_EmptyConfigReturnsNoRuntimes(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	if err := os.WriteFile(path, []byte("# starter config\n"), 0o644); err != nil {
@@ -174,7 +269,7 @@ func TestValidateRequiresProviderWhenAgentConfigured(t *testing.T) {
 		Agents: []Agent{
 			{
 				Name:   "missing-provider",
-				Models: []string{"moonshot/kimi-k2.5"},
+				Models: []string{"kimi-k2.5"},
 				Sandbox: Sandbox{
 					ContainerName:    "q15-missing-provider",
 					WorkspaceHostDir: "/tmp/q15-workspaces/missing-provider",
@@ -207,6 +302,9 @@ func TestValidateRequiresAgentModels(t *testing.T) {
 				KeyEnv:  "MOONSHOT_API_KEY",
 			},
 		},
+		Models: []Model{
+			testModel("kimi-k2.5", "moonshot"),
+		},
 		Agents: []Agent{
 			{
 				Name: "legacy",
@@ -228,7 +326,7 @@ func TestValidateRequiresAgentModels(t *testing.T) {
 	}
 }
 
-func TestValidateRequiresTelegramAllowedUserIDs(t *testing.T) {
+func TestValidateRejectsLegacyAgentModelRefs(t *testing.T) {
 	cfg := Config{
 		Providers: []Provider{
 			{
@@ -240,8 +338,159 @@ func TestValidateRequiresTelegramAllowedUserIDs(t *testing.T) {
 		},
 		Agents: []Agent{
 			{
-				Name:   "no-allowlist",
+				Name:   "legacy",
 				Models: []string{"moonshot/kimi-k2.5"},
+				Sandbox: Sandbox{
+					ContainerName:    "q15-legacy",
+					WorkspaceHostDir: "/tmp/q15-workspaces/legacy",
+					WorkspaceDir:     "/workspace",
+				},
+				Telegram: Telegram{
+					TokenEnv:       "TEST_TELEGRAM_TOKEN",
+					AllowedUserIDs: []int64{123456789},
+				},
+			},
+		},
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatalf("expected validation error for legacy model ref")
+	}
+	if !strings.Contains(err.Error(), `legacy "provider/model" format`) {
+		t.Fatalf("unexpected validation error: %v", err)
+	}
+}
+
+func TestValidateRejectsUnknownAgentModel(t *testing.T) {
+	cfg := Config{
+		Providers: []Provider{
+			{
+				Name:    "moonshot",
+				Type:    "openai-compatible",
+				BaseURL: "https://api.moonshot.ai/v1",
+				KeyEnv:  "MOONSHOT_API_KEY",
+			},
+		},
+		Models: []Model{
+			testModel("kimi-k2.5", "moonshot"),
+		},
+		Agents: []Agent{
+			{
+				Name:   "legacy",
+				Models: []string{"missing-model"},
+				Sandbox: Sandbox{
+					ContainerName:    "q15-legacy",
+					WorkspaceHostDir: "/tmp/q15-workspaces/legacy",
+					WorkspaceDir:     "/workspace",
+				},
+				Telegram: Telegram{
+					TokenEnv:       "TEST_TELEGRAM_TOKEN",
+					AllowedUserIDs: []int64{123456789},
+				},
+			},
+		},
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatalf("expected validation error for unknown model")
+	}
+	if !strings.Contains(err.Error(), `model "missing-model" is not defined in models`) {
+		t.Fatalf("unexpected validation error: %v", err)
+	}
+}
+
+func TestValidateRejectsDuplicateModelNames(t *testing.T) {
+	cfg := Config{
+		Providers: []Provider{
+			{
+				Name:    "moonshot",
+				Type:    "openai-compatible",
+				BaseURL: "https://api.moonshot.ai/v1",
+				KeyEnv:  "MOONSHOT_API_KEY",
+			},
+		},
+		Models: []Model{
+			testModel("kimi-k2.5", "moonshot"),
+			testModel("kimi-k2.5", "moonshot"),
+		},
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatalf("expected validation error for duplicate model names")
+	}
+	if !strings.Contains(err.Error(), `duplicate model name "kimi-k2.5"`) {
+		t.Fatalf("unexpected validation error: %v", err)
+	}
+}
+
+func TestValidateRejectsModelNamesWithSlash(t *testing.T) {
+	cfg := Config{
+		Providers: []Provider{
+			{
+				Name:    "moonshot",
+				Type:    "openai-compatible",
+				BaseURL: "https://api.moonshot.ai/v1",
+				KeyEnv:  "MOONSHOT_API_KEY",
+			},
+		},
+		Models: []Model{
+			testModel("moonshot/kimi-k2.5", "moonshot"),
+		},
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatalf("expected validation error for slashy model names")
+	}
+	if !strings.Contains(err.Error(), "model[0].name must not contain /") {
+		t.Fatalf("unexpected validation error: %v", err)
+	}
+}
+
+func TestValidateRejectsUnsupportedModelCapability(t *testing.T) {
+	cfg := Config{
+		Providers: []Provider{
+			{
+				Name:    "moonshot",
+				Type:    "openai-compatible",
+				BaseURL: "https://api.moonshot.ai/v1",
+				KeyEnv:  "MOONSHOT_API_KEY",
+			},
+		},
+		Models: []Model{
+			testModel("kimi-k2.5", "moonshot", "text", "video_input"),
+		},
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatalf("expected validation error for unsupported capability")
+	}
+	if !strings.Contains(err.Error(), `model[0].capabilities: [1] "video_input" is not supported`) {
+		t.Fatalf("unexpected validation error: %v", err)
+	}
+}
+
+func TestValidateRequiresTelegramAllowedUserIDs(t *testing.T) {
+	cfg := Config{
+		Providers: []Provider{
+			{
+				Name:    "moonshot",
+				Type:    "openai-compatible",
+				BaseURL: "https://api.moonshot.ai/v1",
+				KeyEnv:  "MOONSHOT_API_KEY",
+			},
+		},
+		Models: []Model{
+			testModel("kimi-k2.5", "moonshot"),
+		},
+		Agents: []Agent{
+			{
+				Name:   "no-allowlist",
+				Models: []string{"kimi-k2.5"},
 				Sandbox: Sandbox{
 					ContainerName:    "q15-no-allowlist",
 					WorkspaceHostDir: "/tmp/q15-workspaces/no-allowlist",
@@ -268,10 +517,13 @@ func TestValidateRequiresBaseURLForOpenAICompatibleProvider(t *testing.T) {
 				KeyEnv: "ZAI_API_KEY",
 			},
 		},
+		Models: []Model{
+			testModel("glm-4.5", "zai"),
+		},
 		Agents: []Agent{
 			{
 				Name:   "zai-agent",
-				Models: []string{"zai/glm-4.5"},
+				Models: []string{"glm-4.5"},
 				Sandbox: Sandbox{
 					ContainerName:    "q15-zai",
 					WorkspaceHostDir: "/tmp/q15-workspaces/zai",
@@ -310,10 +562,14 @@ func TestResolveAgentRuntimesSupportsMixedProviderFallbacks(t *testing.T) {
 				KeyEnv:  "ZAI_API_KEY",
 			},
 		},
+		Models: []Model{
+			testModel("kimi-k2.5", "moonshot"),
+			testModel("glm-5", "zai"),
+		},
 		Agents: []Agent{
 			{
 				Name:   "mixed-fallbacks",
-				Models: []string{"moonshot/kimi-k2.5", "zai/glm-5"},
+				Models: []string{"kimi-k2.5", "glm-5"},
 				Sandbox: Sandbox{
 					ContainerName:    "q15-mixed-fallbacks",
 					WorkspaceHostDir: "/tmp/q15-workspaces/mixed-fallbacks",
@@ -338,10 +594,11 @@ func TestResolveAgentRuntimesSupportsMixedProviderFallbacks(t *testing.T) {
 		t.Fatalf("expected 2 resolved model fallbacks, got %#v", runtimes[0].Models)
 	}
 	if runtimes[0].Models[0].ProviderName != "moonshot" ||
-		runtimes[0].Models[0].ModelName != "kimi-k2.5" {
+		runtimes[0].Models[0].ProviderModel != "kimi-k2.5" {
 		t.Fatalf("unexpected first fallback: %#v", runtimes[0].Models[0])
 	}
-	if runtimes[0].Models[1].ProviderName != "zai" || runtimes[0].Models[1].ModelName != "glm-5" {
+	if runtimes[0].Models[1].ProviderName != "zai" ||
+		runtimes[0].Models[1].ProviderModel != "glm-5" {
 		t.Fatalf("unexpected second fallback: %#v", runtimes[0].Models[1])
 	}
 }
@@ -359,9 +616,13 @@ type = "openai-compatible"
 base_url = "https://api.moonshot.ai/v1"
 key_env = "MOONSHOT_API_KEY"
 
+[[model]]
+name = "kimi-k2.5"
+provider = "moonshot"
+
 [[agent]]
 name = "Jared"
-models = ["moonshot/kimi-k2.5"]
+models = ["kimi-k2.5"]
 
 [agent.sandbox]
 container_name = "q15-jared"
@@ -454,9 +715,13 @@ type = "openai-compatible"
 base_url = "https://api.moonshot.ai/v1"
 key_env = "MOONSHOT_API_KEY"
 
+[[model]]
+name = "kimi-k2.5"
+provider = "moonshot"
+
 [[agent]]
 name = "Jared"
-models = ["moonshot/kimi-k2.5"]
+models = ["kimi-k2.5"]
 
 [agent.sandbox]
 container_name = "q15-jared"
@@ -544,9 +809,13 @@ type = "openai-compatible"
 base_url = "https://api.moonshot.ai/v1"
 key_env = "MOONSHOT_API_KEY"
 
+[[model]]
+name = "kimi-k2.5"
+provider = "moonshot"
+
 [[agent]]
 name = "Jared"
-models = ["moonshot/kimi-k2.5"]
+models = ["kimi-k2.5"]
 
 [agent.sandbox]
 container_name = "q15-jared"
@@ -641,10 +910,13 @@ func TestValidateRejectsSandboxProxyBodyPlaceholderReplacement(t *testing.T) {
 				KeyEnv:  "MOONSHOT_API_KEY",
 			},
 		},
+		Models: []Model{
+			testModel("kimi-k2.5", "moonshot"),
+		},
 		Agents: []Agent{
 			{
 				Name:   "proxy-agent",
-				Models: []string{"moonshot/kimi-k2.5"},
+				Models: []string{"kimi-k2.5"},
 				Sandbox: Sandbox{
 					ContainerName:    "q15-proxy-agent",
 					WorkspaceHostDir: "/tmp/q15-workspaces/proxy-agent",
@@ -690,10 +962,13 @@ func TestValidateRejectsInvalidSandboxProxySetBasicAuthConfig(t *testing.T) {
 					KeyEnv:  "MOONSHOT_API_KEY",
 				},
 			},
+			Models: []Model{
+				testModel("kimi-k2.5", "moonshot"),
+			},
 			Agents: []Agent{
 				{
 					Name:   "proxy-agent",
-					Models: []string{"moonshot/kimi-k2.5"},
+					Models: []string{"kimi-k2.5"},
 					Sandbox: Sandbox{
 						ContainerName:    "q15-proxy-agent",
 						WorkspaceHostDir: "/tmp/q15-workspaces/proxy-agent",
@@ -776,10 +1051,13 @@ func TestValidateRejectsInvalidSandboxProxyEnvConfig(t *testing.T) {
 					KeyEnv:  "MOONSHOT_API_KEY",
 				},
 			},
+			Models: []Model{
+				testModel("kimi-k2.5", "moonshot"),
+			},
 			Agents: []Agent{
 				{
 					Name:   "proxy-agent",
-					Models: []string{"moonshot/kimi-k2.5"},
+					Models: []string{"kimi-k2.5"},
 					Sandbox: Sandbox{
 						ContainerName:    "q15-proxy-agent",
 						WorkspaceHostDir: "/tmp/q15-workspaces/proxy-agent",
@@ -888,6 +1166,7 @@ func TestValidateRejectsInvalidSandboxProxyEnvConfig(t *testing.T) {
 func TestResolveAgentRuntimesRequiresSandboxProxySecretEnv(t *testing.T) {
 	t.Setenv("MOONSHOT_API_KEY", "api-123")
 	t.Setenv("TEST_TELEGRAM_TOKEN", "tg-123")
+	t.Setenv("GH_TOKEN", "")
 
 	cfg := Config{
 		Providers: []Provider{
@@ -898,10 +1177,13 @@ func TestResolveAgentRuntimesRequiresSandboxProxySecretEnv(t *testing.T) {
 				KeyEnv:  "MOONSHOT_API_KEY",
 			},
 		},
+		Models: []Model{
+			testModel("kimi-k2.5", "moonshot"),
+		},
 		Agents: []Agent{
 			{
 				Name:   "proxy-agent",
-				Models: []string{"moonshot/kimi-k2.5"},
+				Models: []string{"kimi-k2.5"},
 				Sandbox: Sandbox{
 					ContainerName:    "q15-proxy-agent",
 					WorkspaceHostDir: "/tmp/q15-workspaces/proxy-agent",
@@ -943,10 +1225,13 @@ func TestResolveAgentRuntimesDerivesProxySecretEnvNameFromAlias(t *testing.T) {
 				KeyEnv:  "MOONSHOT_API_KEY",
 			},
 		},
+		Models: []Model{
+			testModel("kimi-k2.5", "moonshot"),
+		},
 		Agents: []Agent{
 			{
 				Name:   "proxy-agent",
-				Models: []string{"moonshot/kimi-k2.5"},
+				Models: []string{"kimi-k2.5"},
 				Sandbox: Sandbox{
 					ContainerName:    "q15-proxy-agent",
 					WorkspaceHostDir: "/tmp/q15-workspaces/proxy-agent",
@@ -991,10 +1276,13 @@ func TestResolveAgentRuntimesUsesDefaultProxyContainerHostOverrideEnv(t *testing
 				KeyEnv:  "MOONSHOT_API_KEY",
 			},
 		},
+		Models: []Model{
+			testModel("kimi-k2.5", "moonshot"),
+		},
 		Agents: []Agent{
 			{
 				Name:   "proxy-agent",
-				Models: []string{"moonshot/kimi-k2.5"},
+				Models: []string{"kimi-k2.5"},
 				Sandbox: Sandbox{
 					ContainerName:    "q15-proxy-agent",
 					WorkspaceHostDir: "/tmp/q15-workspaces/proxy-agent",
@@ -1038,10 +1326,13 @@ func TestResolveAgentRuntimesIsolatesProxyEnvPlaceholdersPerAgent(t *testing.T) 
 				KeyEnv:  "MOONSHOT_API_KEY",
 			},
 		},
+		Models: []Model{
+			testModel("kimi-k2.5", "moonshot"),
+		},
 		Agents: []Agent{
 			{
 				Name:   "jared",
-				Models: []string{"moonshot/kimi-k2.5"},
+				Models: []string{"kimi-k2.5"},
 				Sandbox: Sandbox{
 					ContainerName:    "q15-jared",
 					WorkspaceHostDir: "/tmp/q15-workspaces/jared",
@@ -1067,7 +1358,7 @@ func TestResolveAgentRuntimesIsolatesProxyEnvPlaceholdersPerAgent(t *testing.T) 
 			},
 			{
 				Name:   "dinesh",
-				Models: []string{"moonshot/kimi-k2.5"},
+				Models: []string{"kimi-k2.5"},
 				Sandbox: Sandbox{
 					ContainerName:    "q15-dinesh",
 					WorkspaceHostDir: "/tmp/q15-workspaces/dinesh",
@@ -1134,10 +1425,13 @@ func TestValidateAllowsOpenAICodexProviderWithoutBaseURLOrKeyEnv(t *testing.T) {
 				Type: "openai-codex",
 			},
 		},
+		Models: []Model{
+			testModel("gpt-5-codex", "openai-sub"),
+		},
 		Agents: []Agent{
 			{
 				Name:   "codex-agent",
-				Models: []string{"openai-sub/gpt-5-codex"},
+				Models: []string{"gpt-5-codex"},
 				Sandbox: Sandbox{
 					ContainerName:    "q15-codex-agent",
 					WorkspaceHostDir: "/tmp/q15-workspaces/codex",
@@ -1173,10 +1467,14 @@ func TestResolveAgentRuntimesSupportsOpenAICodexAndOpenAICompatibleFallbacks(t *
 				KeyEnv:  "MOONSHOT_API_KEY",
 			},
 		},
+		Models: []Model{
+			testModel("gpt-5-codex", "openai-sub"),
+			testModel("kimi-k2.5", "moonshot"),
+		},
 		Agents: []Agent{
 			{
 				Name:   "mixed-fallbacks",
-				Models: []string{"openai-sub/gpt-5-codex", "moonshot/kimi-k2.5"},
+				Models: []string{"gpt-5-codex", "kimi-k2.5"},
 				Sandbox: Sandbox{
 					ContainerName:    "q15-mixed-fallbacks",
 					WorkspaceHostDir: "/tmp/q15-workspaces/mixed-fallbacks",

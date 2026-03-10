@@ -18,6 +18,7 @@ import (
 // Config is the top-level structure loaded from config.toml.
 type Config struct {
 	Providers []Provider `mapstructure:"provider"`
+	Models    []Model    `mapstructure:"model"`
 	Agents    []Agent    `mapstructure:"agent"`
 	Skills    Skills     `mapstructure:"skills"`
 }
@@ -30,10 +31,18 @@ type Provider struct {
 	KeyEnv  string `mapstructure:"key_env"`
 }
 
+// Model defines a named model entry in config.toml.
+type Model struct {
+	Name          string   `mapstructure:"name"`
+	Provider      string   `mapstructure:"provider"`
+	ProviderModel string   `mapstructure:"provider_model"`
+	Capabilities  []string `mapstructure:"capabilities"`
+}
+
 // Agent defines one configured q15 agent instance.
 type Agent struct {
 	Name              string   `mapstructure:"name"`
-	Models            []string `mapstructure:"models"` // ordered fallback list of provider/model refs
+	Models            []string `mapstructure:"models"` // ordered fallback list of configured model names
 	MemoryRecentTurns int      `mapstructure:"memory_recent_turns"`
 	Sandbox           Sandbox  `mapstructure:"sandbox"`
 	Telegram          Telegram `mapstructure:"telegram"`
@@ -98,14 +107,25 @@ type Telegram struct {
 	AllowedUserIDs []int64 `mapstructure:"allowed_user_ids"`
 }
 
-// AgentModelRuntime is the resolved runtime config for one provider/model ref.
+// ModelCapabilities is the normalized capability set for one configured model.
+// In v1, ToolCalling is applied directly by routing code; the other fields are
+// carried as validated runtime metadata for later fallback and multimodal work.
+type ModelCapabilities struct {
+	Text        bool
+	ImageInput  bool
+	ToolCalling bool
+	Reasoning   bool
+}
+
+// AgentModelRuntime is the resolved runtime config for one configured model.
 type AgentModelRuntime struct {
 	Ref             string
 	ProviderName    string
 	ProviderType    string
 	ProviderBaseURL string
 	ProviderAPIKey  string
-	ModelName       string
+	ProviderModel   string
+	Capabilities    ModelCapabilities
 }
 
 // SandboxProxyRuntime is the resolved runtime form of SandboxProxy.
@@ -134,6 +154,12 @@ var (
 	proxyEnvNameRE             = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 	defaultSandboxProxyNoProxy = []string{"localhost", "127.0.0.1", "::1"}
 )
+
+// Default to text-only so custom providers do not implicitly opt into tools or
+// richer request handling they may not support.
+var defaultModelCapabilities = ModelCapabilities{
+	Text: true,
+}
 
 // AgentRuntime is the resolved runtime config for one configured agent.
 type AgentRuntime struct {
@@ -209,6 +235,16 @@ func (c Config) FindProvider(name string) (Provider, bool) {
 	return Provider{}, false
 }
 
+// FindModel returns the configured model by name.
+func (c Config) FindModel(name string) (Model, bool) {
+	for _, model := range c.Models {
+		if model.Name == name {
+			return model, true
+		}
+	}
+	return Model{}, false
+}
+
 // Validate checks that the config is internally consistent.
 func (c Config) Validate() error {
 	return c.validate()
@@ -255,18 +291,23 @@ func (c Config) resolveAgentRuntimes(_ string) ([]AgentRuntime, error) {
 
 		resolvedModels := make([]AgentModelRuntime, 0, len(modelRefs))
 		for j, modelRef := range modelRefs {
-			providerName, modelName, err := parseModelRef(modelRef)
-			if err != nil {
-				return nil, fmt.Errorf("agents[%d].models[%d]: %w", i, j, err)
+			fieldPath := fmt.Sprintf("agents[%d].models[%d]", i, j)
+			modelCfg, ok := c.FindModel(modelRef)
+			if !ok {
+				return nil, fmt.Errorf(
+					"%s model %q is not defined in models",
+					fieldPath,
+					modelRef,
+				)
 			}
 
-			fieldPath := fmt.Sprintf("agents[%d].models[%d]", i, j)
-
+			providerName := strings.TrimSpace(modelCfg.Provider)
 			provider, ok := c.FindProvider(providerName)
 			if !ok {
 				return nil, fmt.Errorf(
-					"%s provider %q is not defined in providers",
+					"%s model %q references undefined provider %q",
 					fieldPath,
+					modelRef,
 					providerName,
 				)
 			}
@@ -304,13 +345,20 @@ func (c Config) resolveAgentRuntimes(_ string) ([]AgentRuntime, error) {
 				)
 			}
 
+			capabilities, err := normalizeModelCapabilities(modelCfg.Capabilities)
+			if err != nil {
+				return nil, fmt.Errorf("%s capabilities: %w", fieldPath, err)
+			}
+
+			providerModel := modelCfg.resolvedProviderModel()
 			resolvedModels = append(resolvedModels, AgentModelRuntime{
 				Ref:             modelRef,
 				ProviderName:    provider.Name,
 				ProviderType:    providerType,
 				ProviderBaseURL: strings.TrimSpace(provider.BaseURL),
 				ProviderAPIKey:  apiKey,
-				ModelName:       modelName,
+				ProviderModel:   providerModel,
+				Capabilities:    capabilities,
 			})
 		}
 
@@ -358,17 +406,11 @@ func (c Config) resolveAgentRuntimes(_ string) ([]AgentRuntime, error) {
 }
 
 func (c Config) validate() error {
-	if len(c.Agents) == 0 {
-		if err := validateSkills(c.Skills); err != nil {
-			return fmt.Errorf("skills: %w", err)
-		}
-		return nil
-	}
-	if len(c.Providers) == 0 {
-		return errors.New("provider cannot be empty when agent is configured")
-	}
 	if err := validateSkills(c.Skills); err != nil {
 		return fmt.Errorf("skills: %w", err)
+	}
+	if len(c.Agents) > 0 && len(c.Providers) == 0 {
+		return errors.New("provider cannot be empty when agent is configured")
 	}
 
 	providers := make(map[string]struct{}, len(c.Providers))
@@ -399,6 +441,36 @@ func (c Config) validate() error {
 		}
 	}
 
+	models := make(map[string]struct{}, len(c.Models))
+	for i, model := range c.Models {
+		name := strings.TrimSpace(model.Name)
+		if name == "" {
+			return fmt.Errorf("model[%d].name is required", i)
+		}
+		if strings.Contains(name, "/") {
+			return fmt.Errorf("model[%d].name must not contain /", i)
+		}
+		if _, ok := models[name]; ok {
+			return fmt.Errorf("duplicate model name %q", name)
+		}
+		models[name] = struct{}{}
+
+		providerName := strings.TrimSpace(model.Provider)
+		if providerName == "" {
+			return fmt.Errorf("model[%d].provider is required", i)
+		}
+		if _, ok := providers[providerName]; !ok {
+			return fmt.Errorf(
+				"model[%d].provider %q is not defined in providers",
+				i,
+				providerName,
+			)
+		}
+		if _, err := normalizeModelCapabilities(model.Capabilities); err != nil {
+			return fmt.Errorf("model[%d].capabilities: %w", i, err)
+		}
+	}
+
 	agents := make(map[string]struct{}, len(c.Agents))
 	for i, agent := range c.Agents {
 		name := strings.TrimSpace(agent.Name)
@@ -414,9 +486,17 @@ func (c Config) validate() error {
 		if err != nil {
 			return fmt.Errorf("agent[%d].models: %w", i, err)
 		}
+		if len(c.Models) == 0 {
+			return errors.New("model cannot be empty when agent is configured")
+		}
 		for j, modelRef := range modelRefs {
-			if _, _, err := parseModelRef(modelRef); err != nil {
-				return fmt.Errorf("agent[%d].models[%d]: %w", i, j, err)
+			if _, ok := models[modelRef]; !ok {
+				return fmt.Errorf(
+					"agent[%d].models[%d] model %q is not defined in models",
+					i,
+					j,
+					modelRef,
+				)
 			}
 		}
 		if strings.TrimSpace(agent.Sandbox.ContainerName) == "" {
@@ -465,28 +545,48 @@ func (a Agent) modelRefs() ([]string, error) {
 		if modelRef == "" {
 			return nil, fmt.Errorf("[%d] must not be empty", i)
 		}
+		if strings.Contains(modelRef, "/") {
+			return nil, fmt.Errorf(
+				"[%d] uses legacy %q format; define [[model]] and reference its name",
+				i,
+				"provider/model",
+			)
+		}
 		refs = append(refs, modelRef)
 	}
 	return refs, nil
 }
 
-func parseModelRef(modelRef string) (providerName string, modelName string, err error) {
-	modelRef = strings.TrimSpace(modelRef)
-	if modelRef == "" {
-		return "", "", errors.New("is required")
+func (m Model) resolvedProviderModel() string {
+	providerModel := strings.TrimSpace(m.ProviderModel)
+	if providerModel != "" {
+		return providerModel
+	}
+	return strings.TrimSpace(m.Name)
+}
+
+func normalizeModelCapabilities(names []string) (ModelCapabilities, error) {
+	if len(names) == 0 {
+		return defaultModelCapabilities, nil
 	}
 
-	providerName, modelName, ok := strings.Cut(modelRef, "/")
-	if !ok {
-		return "", "", errors.New(`must be in "provider/model" format`)
-	}
-	providerName = strings.TrimSpace(providerName)
-	modelName = strings.TrimSpace(modelName)
-	if providerName == "" || modelName == "" {
-		return "", "", errors.New(`must be in "provider/model" format`)
+	var capabilities ModelCapabilities
+	for i, name := range names {
+		switch strings.ToLower(strings.TrimSpace(name)) {
+		case "text":
+			capabilities.Text = true
+		case "image_input":
+			capabilities.ImageInput = true
+		case "tool_calling":
+			capabilities.ToolCalling = true
+		case "reasoning":
+			capabilities.Reasoning = true
+		default:
+			return ModelCapabilities{}, fmt.Errorf("[%d] %q is not supported", i, name)
+		}
 	}
 
-	return providerName, modelName, nil
+	return capabilities, nil
 }
 
 func normalizeProviderType(providerType string) string {
