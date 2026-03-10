@@ -1166,6 +1166,7 @@ func TestValidateRejectsInvalidSandboxProxyEnvConfig(t *testing.T) {
 func TestResolveAgentRuntimesRequiresSandboxProxySecretEnv(t *testing.T) {
 	t.Setenv("MOONSHOT_API_KEY", "api-123")
 	t.Setenv("TEST_TELEGRAM_TOKEN", "tg-123")
+	t.Setenv("GH_TOKEN", "")
 
 	cfg := Config{
 		Providers: []Provider{
