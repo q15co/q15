@@ -91,10 +91,12 @@ provider = "moonshot"
 	if rt.Models[0].ProviderAPIKey != "api-123" {
 		t.Fatalf("unexpected first model provider api key: %q", rt.Models[0].ProviderAPIKey)
 	}
-	if !rt.Models[0].Capabilities.Text || !rt.Models[0].Capabilities.ToolCalling {
+	if !rt.Models[0].Capabilities.Text {
 		t.Fatalf("unexpected default capabilities: %#v", rt.Models[0].Capabilities)
 	}
-	if rt.Models[0].Capabilities.ImageInput || rt.Models[0].Capabilities.Reasoning {
+	if rt.Models[0].Capabilities.ToolCalling ||
+		rt.Models[0].Capabilities.ImageInput ||
+		rt.Models[0].Capabilities.Reasoning {
 		t.Fatalf("unexpected extra default capabilities: %#v", rt.Models[0].Capabilities)
 	}
 	if rt.Models[1].Ref != "kimi-k2" || rt.Models[1].ProviderModel != "kimi-k2" {

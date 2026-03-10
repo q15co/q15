@@ -16,6 +16,8 @@
 # provider = "openai-sub"
 # provider_model = "gpt-5-codex"
 # capabilities = ["text", "tool_calling", "reasoning"]
+# If omitted, q15 currently assumes ["text"] only. Add tool_calling,
+# image_input, and reasoning explicitly per model as supported.
 #
 # [[agent]]
 # name = "Jared"

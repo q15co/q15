@@ -135,7 +135,12 @@ An empty starter config is valid and runs zero agents until you add entries.
 - If you want one model, use a list of one item.
 - Each `[[model]]` entry points at a provider and can override the upstream provider model string
   via `provider_model`.
-- If `capabilities` is omitted, q15 defaults the model to `["text", "tool_calling"]`.
+- If `capabilities` is omitted, q15 currently assumes `["text"]` only.
+- Opt into `tool_calling`, `image_input`, and `reasoning` explicitly per model instead of relying on
+  provider-family assumptions.
+- Today capability metadata is mostly foundation for future routing and multimodal work. In the
+  current runtime, the direct behavioral effect is limited to suppressing tool definitions when
+  `tool_calling` is absent.
 
 Example:
 

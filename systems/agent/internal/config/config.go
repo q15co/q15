@@ -108,6 +108,8 @@ type Telegram struct {
 }
 
 // ModelCapabilities is the normalized capability set for one configured model.
+// In v1, ToolCalling is applied directly by routing code; the other fields are
+// carried as validated runtime metadata for later fallback and multimodal work.
 type ModelCapabilities struct {
 	Text        bool
 	ImageInput  bool
@@ -153,9 +155,10 @@ var (
 	defaultSandboxProxyNoProxy = []string{"localhost", "127.0.0.1", "::1"}
 )
 
+// Default to text-only so custom providers do not implicitly opt into tools or
+// richer request handling they may not support.
 var defaultModelCapabilities = ModelCapabilities{
-	Text:        true,
-	ToolCalling: true,
+	Text: true,
 }
 
 // AgentRuntime is the resolved runtime config for one configured agent.
