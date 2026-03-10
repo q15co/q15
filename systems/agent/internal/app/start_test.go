@@ -23,8 +23,21 @@ func TestEnsureStarterConfigCreatesMissingConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read starter config: %v", err)
 	}
-	if got := string(data); !strings.Contains(got, "# q15 starter config") {
+	got := string(data)
+	if !strings.Contains(got, "# q15 starter config") {
 		t.Fatalf("starter config missing expected header: %q", got)
+	}
+	if !strings.Contains(got, "# [[provider]]") {
+		t.Fatalf("starter config missing commented provider block: %q", got)
+	}
+	if !strings.Contains(got, "# [[model]]") {
+		t.Fatalf("starter config missing commented model block: %q", got)
+	}
+	if !strings.Contains(got, "# [[agent]]") {
+		t.Fatalf("starter config missing commented agent block: %q", got)
+	}
+	if got != starterConfigTemplate {
+		t.Fatalf("starter config contents differ from embedded template:\n%s", got)
 	}
 }
 

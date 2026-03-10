@@ -414,9 +414,12 @@ type routedModelAdapter struct {
 }
 
 type routedModelEndpoint struct {
-	client agent.ModelClient
-	model  string
+	client        agent.ModelClient
+	providerModel string
+	capabilities  config.ModelCapabilities
 }
+
+type modelClientFactory func(config.AgentModelRuntime) (agent.ModelClient, error)
 
 var _ agent.ModelClient = (*routedModelAdapter)(nil)
 
@@ -431,12 +434,27 @@ func (r *routedModelAdapter) Complete(
 	if !ok {
 		return agent.ModelClientResult{}, fmt.Errorf("unknown configured fallback model %q", model)
 	}
-	return endpoint.client.Complete(ctx, endpoint.model, messages, tools)
+
+	if !endpoint.capabilities.ToolCalling {
+		tools = nil
+	}
+
+	return endpoint.client.Complete(ctx, endpoint.providerModel, messages, tools)
 }
 
 func newModelAdapter(models []config.AgentModelRuntime) (agent.ModelClient, error) {
+	return newModelAdapterWithFactory(models, defaultModelClientFactory)
+}
+
+func newModelAdapterWithFactory(
+	models []config.AgentModelRuntime,
+	clientFactory modelClientFactory,
+) (agent.ModelClient, error) {
 	if len(models) == 0 {
 		return nil, errors.New("at least one model is required")
+	}
+	if clientFactory == nil {
+		return nil, errors.New("model client factory is required")
 	}
 
 	endpoints := make(map[string]routedModelEndpoint, len(models))
@@ -447,9 +465,9 @@ func newModelAdapter(models []config.AgentModelRuntime) (agent.ModelClient, erro
 		if ref == "" {
 			return nil, fmt.Errorf("models[%d].ref is required", i)
 		}
-		modelName := strings.TrimSpace(modelCfg.ModelName)
-		if modelName == "" {
-			return nil, fmt.Errorf("models[%d] (%q): model name is required", i, ref)
+		providerModel := strings.TrimSpace(modelCfg.ProviderModel)
+		if providerModel == "" {
+			return nil, fmt.Errorf("models[%d] (%q): provider model is required", i, ref)
 		}
 
 		providerName := strings.TrimSpace(modelCfg.ProviderName)
@@ -460,17 +478,7 @@ func newModelAdapter(models []config.AgentModelRuntime) (agent.ModelClient, erro
 		client, ok := modelClients[providerName]
 		if !ok {
 			var err error
-			switch strings.ToLower(strings.TrimSpace(modelCfg.ProviderType)) {
-			case "openai-compatible":
-				client, err = openaicompatible.NewClient(
-					modelCfg.ProviderBaseURL,
-					modelCfg.ProviderAPIKey,
-				)
-			case "openai-codex":
-				client, err = openaicodex.NewClient()
-			default:
-				err = fmt.Errorf("unsupported provider type %q", modelCfg.ProviderType)
-			}
+			client, err = clientFactory(modelCfg)
 			if err != nil {
 				return nil, fmt.Errorf("configure provider for model %q: %w", ref, err)
 			}
@@ -478,12 +486,27 @@ func newModelAdapter(models []config.AgentModelRuntime) (agent.ModelClient, erro
 		}
 
 		endpoints[ref] = routedModelEndpoint{
-			client: client,
-			model:  modelName,
+			client:        client,
+			providerModel: providerModel,
+			capabilities:  modelCfg.Capabilities,
 		}
 	}
 
 	return &routedModelAdapter{endpoints: endpoints}, nil
+}
+
+func defaultModelClientFactory(modelCfg config.AgentModelRuntime) (agent.ModelClient, error) {
+	switch strings.ToLower(strings.TrimSpace(modelCfg.ProviderType)) {
+	case "openai-compatible":
+		return openaicompatible.NewClient(
+			modelCfg.ProviderBaseURL,
+			modelCfg.ProviderAPIKey,
+		)
+	case "openai-codex":
+		return openaicodex.NewClient()
+	default:
+		return nil, fmt.Errorf("unsupported provider type %q", modelCfg.ProviderType)
+	}
 }
 
 func normalizeModelList(models []config.AgentModelRuntime) []string {

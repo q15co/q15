@@ -1,0 +1,32 @@
+# q15 starter config
+# Uncomment and edit the blocks below to configure one or more agents.
+#
+# For env-backed secrets, set provider.key_env / agent.telegram.token_env to
+# variable names available in your runtime environment (for example q15.env).
+#
+# [skills]
+# host_dir = "/home/you/.config/q15/skills"
+#
+# [[provider]]
+# name = "openai-sub"
+# type = "openai-codex"
+#
+# [[model]]
+# name = "codex-primary"
+# provider = "openai-sub"
+# provider_model = "gpt-5-codex"
+# capabilities = ["text", "tool_calling", "reasoning"]
+#
+# [[agent]]
+# name = "Jared"
+# models = ["codex-primary"]
+# memory_recent_turns = 6
+#
+# [agent.sandbox]
+# container_name = "q15-jared"
+# workspace_host_dir = "/home/you/q15-workspaces/jared"
+# workspace_dir = "/workspace"
+#
+# [agent.telegram]
+# token_env = "JARED_TELEGRAM_TOKEN"
+# allowed_user_ids = [123456789]
