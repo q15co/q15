@@ -12,6 +12,7 @@ Codex-subscription model providers.
 - API key(s) for your configured model provider(s)
 - A working C toolchain for building `q15-sandbox-helper` locally (`make run` builds it with cgo)
 - `q15-exec-service` if you enable `[agent.execution]`
+- `q15-proxy-service` if you enable proxy-backed auth env injection for exec sessions
 
 On NixOS, rootless sandbox startup requires the host wrapper helpers:
 
@@ -35,13 +36,56 @@ make run CONFIG=config.toml
 
 `q15` runs as a normal unprivileged user process. The `q15-sandbox-helper` process enters the
 rootless user namespace for Buildah. If you enable `[agent.execution]`, `q15-exec-service` runs as a
-separate long-lived process and the agent connects to it over gRPC.
+separate long-lived process and the agent connects to it over gRPC. Proxy-backed auth env injection
+for exec sessions is handled by a separate `q15-proxy-service` process.
 
 Or run the agent module directly:
 
 ```bash
 go run ./systems/agent start
 ```
+
+### Docker Compose
+
+For local testing of the 3-service boundary, this repo now includes Dockerfiles and a
+`docker-compose.yml` stack for one agent namespace:
+
+- `agent`
+- `exec-service`
+- `proxy-service`
+
+The local compose flow uses separate config files under `~/.config/q15`:
+
+- `config.compose.toml`
+- `proxy-service.compose.toml`
+
+Start the stack:
+
+```bash
+export JARED_GH_TOKEN=github_pat_real_token_here
+make compose-up
+```
+
+Inspect it:
+
+```bash
+make compose-ps
+make compose-logs SERVICE=agent
+```
+
+Stop it:
+
+```bash
+make compose-down
+```
+
+Notes:
+
+- `compose-up` currently targets the Jared local stack and expects `~/.config/q15/auth.json`.
+- The compose stack keeps service-to-service traffic on the internal Docker network, so it does not
+  publish host ports by default.
+- The agent container runs privileged to keep the current Buildah-backed sandbox working inside
+  Docker.
 
 Default config path is `~/.config/q15/config.toml` and can be overridden with `--config` or
 `Q15_CONFIG`.
@@ -58,6 +102,7 @@ This repo exposes a flake package for Linux (`x86_64-linux`) that installs these
 
 - `q15`
 - `q15-exec-service`
+- `q15-proxy-service`
 - `q15-sandbox-helper`
 
 Build locally:
@@ -92,7 +137,7 @@ When Go dependencies change, refresh flake `vendorHash` values automatically:
 make nix-update-vendor-hashes
 ```
 
-This updates both module hashes in `flake.nix` and validates with `nix build .#q15`.
+This updates all Go module hashes in `flake.nix` and validates with `nix build .#q15`.
 
 ## CI/CD and Releases
 
@@ -211,50 +256,57 @@ For local development, run the service separately:
 ./bin/q15-exec-service serve --listen 127.0.0.1:50051
 ```
 
-### Sandbox Proxy Auth Env
+### Proxy Service
 
-Use `agent.sandbox.proxy.env` when a sandboxed tool expects an env var such as `GH_TOKEN`, but the
-real credential should stay outside the sandbox and be injected only by the MITM proxy on matched
-requests.
+Proxy policy now lives in `q15-proxy-service` config, not in `[agent.sandbox.proxy]`. Proxy-backed
+auth env injection is supported for `exec` sessions owned by `q15-exec-service`.
 
-Example for `gh`:
+Example `proxy-service.toml`:
 
 ```toml
-[agent.sandbox.proxy]
+[service]
+admin_listen = "127.0.0.1:50052"
+proxy_listen = "127.0.0.1:18080"
+advertise_proxy_url = "http://127.0.0.1:18080"
+state_dir = "/tmp/q15-proxy-service"
+
+[proxy]
+no_proxy = ["localhost", "127.0.0.1"]
+set_lowercase_proxy_env = true
 secrets = ["jared_gh_token"]
 
-[[agent.sandbox.proxy.rule]]
+[[proxy.rule]]
 name = "github-api"
 match_hosts = ["api.github.com"]
 
-[[agent.sandbox.proxy.env]]
+[[proxy.env]]
 name = "GH_TOKEN"
 secret = "jared_gh_token"
 rules = ["github-api"]
 ```
 
-Host environment:
+Proxy-service environment:
 
 ```bash
 export JARED_GH_TOKEN=github_pat_real_token_here
 ```
 
-Sandbox behavior:
+Run both services locally:
 
-- q15 injects a generated placeholder into sandbox env `GH_TOKEN`
-- `gh` treats that as an authenticated token and sends it
-- the embedded proxy rewrites that placeholder to the real secret only for the referenced proxy
-  rules
+```bash
+./bin/q15-proxy-service serve --config ./proxy-service.toml
+./bin/q15-exec-service serve --listen 127.0.0.1:50051 --proxy-admin-address 127.0.0.1:50052
+```
 
-Multi-agent pattern:
+Runtime behavior:
 
-- agent A can use `name = "GH_TOKEN"` with `secret = "jared_gh_token"`
-- agent B can use `name = "GH_TOKEN"` with `secret = "dinesh_gh_token"`
-- both agents may share the same sandbox env var name, but they must use distinct secret aliases if
-  they need different real upstream tokens
+- `q15-exec-service` fetches derived proxy runtime info from `q15-proxy-service` at startup.
+- `exec` sessions receive placeholder env vars such as `GH_TOKEN`, proxy env vars, and CA env vars.
+- tools such as `gh`, `git`, and `curl` send the placeholder value through the HTTP proxy.
+- `q15-proxy-service` rewrites the placeholder to the real secret only for matched proxy rules.
 
-Low-level `rule.replace_placeholder` remains supported for advanced/manual configurations. Prefer
-`proxy.env` for tool-facing auth env vars.
+`[agent.sandbox.proxy]` is no longer supported. Move proxy policy into the proxy-service config and
+route proxy-authenticated CLI flows through `exec`.
 
 ### Sandbox Runtime (Nix-Only)
 
@@ -290,10 +342,16 @@ Example tool payload:
 q15-exec-service serve --listen 127.0.0.1:50051 --workspace-dir /workspace --memory-dir /memory --skills-dir /skills
 ```
 
+If proxy-backed auth env injection is enabled, also pass the proxy admin address:
+
+```bash
+q15-exec-service serve --listen 127.0.0.1:50051 --proxy-admin-address 127.0.0.1:50052
+```
+
 ### exec_nix_shell_bash Usage
 
 `exec_nix_shell_bash` remains available as a legacy compatibility tool when you still want the
-direct sandbox-helper path.
+direct sandbox-helper path. It does not receive proxy-service-managed auth env injection.
 
 `exec_nix_shell_bash` runs commands via nix shell and bash, and requires packages per call.
 

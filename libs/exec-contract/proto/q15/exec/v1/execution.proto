@@ -29,6 +29,8 @@ message GetRuntimeInfoResponse {
   string memory_dir = 4;
   string skills_dir = 5;
   repeated RuntimeCapability capabilities = 6;
+  bool proxy_enabled = 7;
+  string proxy_policy_revision = 8;
 }
 
 enum SessionState {

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/containers/buildah"
 	"go.podman.io/storage/pkg/unshare"
 )
 
@@ -130,6 +131,133 @@ func TestEnsureNixOSUIDMapWrappersFailsWithoutSetIDBits(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "setuid/setgid") {
 		t.Fatalf("error = %q, want setid failure", err)
+	}
+}
+
+func TestResolveOCIRuntimeBinaryPrefersExplicitEnv(t *testing.T) {
+	runtimePath := filepath.Join(t.TempDir(), "crun")
+	writeExecutableWithMode(t, runtimePath, 0o755)
+
+	oldRuntime := os.Getenv("BUILDAH_RUNTIME")
+	oldLookPath := lookPathFunc
+	t.Cleanup(func() {
+		if err := os.Setenv("BUILDAH_RUNTIME", oldRuntime); err != nil {
+			t.Fatalf("restore BUILDAH_RUNTIME: %v", err)
+		}
+		lookPathFunc = oldLookPath
+	})
+
+	if err := os.Setenv("BUILDAH_RUNTIME", runtimePath); err != nil {
+		t.Fatalf("set BUILDAH_RUNTIME: %v", err)
+	}
+	lookPathFunc = func(file string) (string, error) {
+		t.Fatalf("lookPathFunc(%q) should not be called for absolute BUILDAH_RUNTIME", file)
+		return "", exec.ErrNotFound
+	}
+
+	got, err := resolveOCIRuntimeBinary()
+	if err != nil {
+		t.Fatalf("resolveOCIRuntimeBinary(): %v", err)
+	}
+	if got != runtimePath {
+		t.Fatalf("resolveOCIRuntimeBinary() = %q, want %q", got, runtimePath)
+	}
+}
+
+func TestResolveOCIRuntimeBinaryFindsCandidateInPath(t *testing.T) {
+	oldRuntime := os.Getenv("BUILDAH_RUNTIME")
+	oldLookPath := lookPathFunc
+	t.Cleanup(func() {
+		if err := os.Setenv("BUILDAH_RUNTIME", oldRuntime); err != nil {
+			t.Fatalf("restore BUILDAH_RUNTIME: %v", err)
+		}
+		lookPathFunc = oldLookPath
+	})
+
+	if err := os.Setenv("BUILDAH_RUNTIME", ""); err != nil {
+		t.Fatalf("clear BUILDAH_RUNTIME: %v", err)
+	}
+	lookPathFunc = func(file string) (string, error) {
+		if file == "crun" {
+			return "/usr/bin/crun", nil
+		}
+		return "", exec.ErrNotFound
+	}
+
+	got, err := resolveOCIRuntimeBinary()
+	if err != nil {
+		t.Fatalf("resolveOCIRuntimeBinary(): %v", err)
+	}
+	if got != "/usr/bin/crun" {
+		t.Fatalf("resolveOCIRuntimeBinary() = %q, want %q", got, "/usr/bin/crun")
+	}
+}
+
+func TestResolveOCIRuntimeBinaryFailsWithoutCandidate(t *testing.T) {
+	oldRuntime := os.Getenv("BUILDAH_RUNTIME")
+	oldLookPath := lookPathFunc
+	t.Cleanup(func() {
+		if err := os.Setenv("BUILDAH_RUNTIME", oldRuntime); err != nil {
+			t.Fatalf("restore BUILDAH_RUNTIME: %v", err)
+		}
+		lookPathFunc = oldLookPath
+	})
+
+	if err := os.Setenv("BUILDAH_RUNTIME", ""); err != nil {
+		t.Fatalf("clear BUILDAH_RUNTIME: %v", err)
+	}
+	lookPathFunc = func(string) (string, error) {
+		return "", exec.ErrNotFound
+	}
+
+	_, err := resolveOCIRuntimeBinary()
+	if err == nil {
+		t.Fatal("resolveOCIRuntimeBinary() error = nil, want failure")
+	}
+	if !strings.Contains(err.Error(), "no OCI runtime found in PATH") {
+		t.Fatalf("error = %q, want OCI runtime lookup failure", err)
+	}
+}
+
+func TestResolveBuildahIsolationFromEnv(t *testing.T) {
+	oldValue := os.Getenv("BUILDAH_ISOLATION")
+	t.Cleanup(func() {
+		if err := os.Setenv("BUILDAH_ISOLATION", oldValue); err != nil {
+			t.Fatalf("restore BUILDAH_ISOLATION: %v", err)
+		}
+	})
+
+	if err := os.Setenv("BUILDAH_ISOLATION", "chroot"); err != nil {
+		t.Fatalf("set BUILDAH_ISOLATION: %v", err)
+	}
+
+	got, err := resolveBuildahIsolation()
+	if err != nil {
+		t.Fatalf("resolveBuildahIsolation(): %v", err)
+	}
+	if got != buildah.IsolationChroot {
+		t.Fatalf("resolveBuildahIsolation() = %v, want %v", got, buildah.IsolationChroot)
+	}
+}
+
+func TestResolveBuildahIsolationRejectsUnknownValue(t *testing.T) {
+	oldValue := os.Getenv("BUILDAH_ISOLATION")
+	t.Cleanup(func() {
+		if err := os.Setenv("BUILDAH_ISOLATION", oldValue); err != nil {
+			t.Fatalf("restore BUILDAH_ISOLATION: %v", err)
+		}
+	})
+
+	if err := os.Setenv("BUILDAH_ISOLATION", "wat"); err != nil {
+		t.Fatalf("set BUILDAH_ISOLATION: %v", err)
+	}
+
+	_, err := resolveBuildahIsolation()
+	if err == nil {
+		t.Fatal("resolveBuildahIsolation() error = nil, want failure")
+	}
+	if !strings.Contains(err.Error(), "unsupported BUILDAH_ISOLATION") {
+		t.Fatalf("error = %q, want unsupported-isolation failure", err)
 	}
 }
 

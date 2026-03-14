@@ -2,8 +2,10 @@ go 1.25.5
 
 use (
 	./libs/exec-contract
+	./libs/proxy-contract
 	./libs/sandbox-contract
 	./systems/agent
 	./systems/exec-service
+	./systems/proxy-service
 	./systems/sandbox-helper
 )

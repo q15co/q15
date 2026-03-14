@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package q15.proxy.v1;
+
+option go_package = "github.com/q15co/q15/libs/proxy-contract/proxypb;proxypb";
+
+service ProxyService {
+  rpc GetRuntimeInfo(GetRuntimeInfoRequest) returns (GetRuntimeInfoResponse);
+}
+
+message GetRuntimeInfoRequest {}
+
+message RuntimeCapability {
+  string name = 1;
+  bool enabled = 2;
+}
+
+message GetRuntimeInfoResponse {
+  string service_version = 1;
+  string advertise_proxy_url = 2;
+  string no_proxy = 3;
+  bool set_lowercase_proxy_env = 4;
+  bytes ca_cert_pem = 5;
+  map<string, string> env_values = 6;
+  string policy_revision = 7;
+  repeated RuntimeCapability capabilities = 8;
+}

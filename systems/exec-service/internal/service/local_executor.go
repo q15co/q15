@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"syscall"
 )
@@ -30,7 +31,7 @@ func (NixShellExecutor) Start(ctx context.Context, req CommandRequest) (*Running
 
 	cmd := exec.Command("/bin/sh", "-lc", buildNixShellBashCommand(req.Command, req.Packages))
 	cmd.Dir = req.WorkingDir
-	cmd.Env = os.Environ()
+	cmd.Env = mergeEnv(os.Environ(), req.Env)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -95,6 +96,7 @@ func (ShellExecutor) Start(ctx context.Context, req CommandRequest) (*RunningCom
 
 	cmd := exec.Command("/bin/sh", "-lc", req.Command)
 	cmd.Dir = req.WorkingDir
+	cmd.Env = mergeEnv(os.Environ(), req.Env)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -185,6 +187,48 @@ func buildNixShellBashCommand(command string, packages []string) string {
 
 func shellSingleQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'"
+}
+
+func mergeEnv(base []string, overrides []string) []string {
+	if len(overrides) == 0 {
+		return slices.Clone(base)
+	}
+
+	indexByKey := make(map[string]int, len(base))
+	out := make([]string, 0, len(base)+len(overrides))
+	for _, entry := range base {
+		key := envKey(entry)
+		if key == "" {
+			continue
+		}
+		indexByKey[key] = len(out)
+		out = append(out, entry)
+	}
+	for _, entry := range overrides {
+		key := envKey(entry)
+		if key == "" {
+			continue
+		}
+		if idx, ok := indexByKey[key]; ok {
+			out[idx] = entry
+			continue
+		}
+		indexByKey[key] = len(out)
+		out = append(out, entry)
+	}
+	return out
+}
+
+func envKey(entry string) string {
+	key, _, ok := strings.Cut(entry, "=")
+	if !ok {
+		return ""
+	}
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return ""
+	}
+	return key
 }
 
 func isAlreadyExited(err error) bool {

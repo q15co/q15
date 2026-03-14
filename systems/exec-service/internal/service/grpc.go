@@ -14,11 +14,13 @@ import (
 
 // RuntimeInfo describes service-owned runtime metadata.
 type RuntimeInfo struct {
-	ServiceVersion string
-	ExecutorType   string
-	WorkspaceDir   string
-	MemoryDir      string
-	SkillsDir      string
+	ServiceVersion      string
+	ExecutorType        string
+	WorkspaceDir        string
+	MemoryDir           string
+	SkillsDir           string
+	ProxyEnabled        bool
+	ProxyPolicyRevision string
 }
 
 // GRPCServer implements the execution service API.
@@ -55,11 +57,13 @@ func (s *GRPCServer) GetRuntimeInfo(
 	*execpb.GetRuntimeInfoRequest,
 ) (*execpb.GetRuntimeInfoResponse, error) {
 	return &execpb.GetRuntimeInfoResponse{
-		ServiceVersion: s.info.ServiceVersion,
-		ExecutorType:   s.info.ExecutorType,
-		WorkspaceDir:   s.info.WorkspaceDir,
-		MemoryDir:      s.info.MemoryDir,
-		SkillsDir:      s.info.SkillsDir,
+		ServiceVersion:      s.info.ServiceVersion,
+		ExecutorType:        s.info.ExecutorType,
+		WorkspaceDir:        s.info.WorkspaceDir,
+		MemoryDir:           s.info.MemoryDir,
+		SkillsDir:           s.info.SkillsDir,
+		ProxyEnabled:        s.info.ProxyEnabled,
+		ProxyPolicyRevision: s.info.ProxyPolicyRevision,
 		Capabilities: []*execpb.RuntimeCapability{
 			{Name: "sessions", Enabled: true},
 			{Name: "watch", Enabled: true},

@@ -4,8 +4,10 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -35,6 +37,9 @@ func (g *GitCommitter) EnsureRepo(ctx context.Context, repoDir string) error {
 	if g == nil {
 		return fmt.Errorf("nil git committer")
 	}
+	if err := g.ensureSafeDirectory(ctx, repoDir); err != nil {
+		return err
+	}
 
 	_, err := g.run(ctx, repoDir, "rev-parse", "--is-inside-work-tree")
 	if err != nil {
@@ -53,6 +58,29 @@ func (g *GitCommitter) EnsureRepo(ctx context.Context, repoDir string) error {
 		return fmt.Errorf("configure git commit.gpgsign: %w", err)
 	}
 
+	return nil
+}
+
+func (g *GitCommitter) ensureSafeDirectory(ctx context.Context, repoDir string) error {
+	repoDir = filepath.Clean(strings.TrimSpace(repoDir))
+	if repoDir == "" {
+		return fmt.Errorf("memory repo dir is required")
+	}
+
+	out, err := g.runGlobal(ctx, "config", "--global", "--get-all", "safe.directory")
+	if err != nil && !isGitConfigMissingValue(err) {
+		return fmt.Errorf("read git safe.directory: %w", err)
+	}
+
+	for _, line := range strings.Split(out, "\n") {
+		if filepath.Clean(strings.TrimSpace(line)) == repoDir {
+			return nil
+		}
+	}
+
+	if _, err := g.runGlobal(ctx, "config", "--global", "--add", "safe.directory", repoDir); err != nil {
+		return fmt.Errorf("configure git safe.directory: %w", err)
+	}
 	return nil
 }
 
@@ -92,6 +120,18 @@ func (g *GitCommitter) run(ctx context.Context, repoDir string, args ...string) 
 	}
 
 	cmdArgs := append([]string{"-C", repoDir}, args...)
+	return g.runArgs(ctx, bin, cmdArgs...)
+}
+
+func (g *GitCommitter) runGlobal(ctx context.Context, args ...string) (string, error) {
+	bin := strings.TrimSpace(g.bin)
+	if bin == "" {
+		bin = "git"
+	}
+	return g.runArgs(ctx, bin, args...)
+}
+
+func (g *GitCommitter) runArgs(ctx context.Context, bin string, cmdArgs ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, bin, cmdArgs...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -104,4 +144,9 @@ func (g *GitCommitter) run(ctx context.Context, repoDir string, args ...string) 
 		)
 	}
 	return string(out), nil
+}
+
+func isGitConfigMissingValue(err error) bool {
+	var exitErr *exec.ExitError
+	return errors.As(err, &exitErr) && exitErr.ExitCode() == 1
 }

@@ -7,7 +7,6 @@ import (
 
 func buildSandboxSettings(
 	rt config.AgentRuntime,
-	proxySettings *sandbox.ProxySettings,
 ) sandbox.Settings {
 	settings := sandbox.Settings{
 		ContainerName:    rt.SandboxContainerName,
@@ -20,7 +19,6 @@ func buildSandboxSettings(
 		settings.SkillsHostDir = rt.SkillsHostDir
 		settings.SkillsDir = rt.SkillsDir
 	}
-	settings.Proxy = proxySettings
 
 	return settings
 }

@@ -10,6 +10,7 @@ type CommandRequest struct {
 	Command    string
 	Packages   []string
 	WorkingDir string
+	Env        []string
 }
 
 // RunningCommand is one active executor-owned process handle.
