@@ -29,6 +29,11 @@
 # workspace_host_dir = "/home/you/q15-workspaces/jared"
 # workspace_dir = "/workspace"
 #
+# Optional session-backed exec service. Start q15-exec-service separately and
+# point service_address at it to expose the new exec tool.
+# [agent.execution]
+# service_address = "127.0.0.1:50051"
+#
 # [agent.telegram]
 # token_env = "JARED_TELEGRAM_TOKEN"
 # allowed_user_ids = [123456789]

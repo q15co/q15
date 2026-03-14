@@ -12,6 +12,7 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/bus"
 	"github.com/q15co/q15/systems/agent/internal/channel/telegram"
 	"github.com/q15co/q15/systems/agent/internal/config"
+	"github.com/q15co/q15/systems/agent/internal/execution"
 	"github.com/q15co/q15/systems/agent/internal/memory"
 	"github.com/q15co/q15/systems/agent/internal/provider/openaicodex"
 	"github.com/q15co/q15/systems/agent/internal/provider/openaicompatible"
@@ -46,6 +47,13 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 	}
 
 	sandboxSettings := buildSandboxSettings(rt, sandboxProxySettings)
+	executionClient, executionInfo, err := connectExecutionService(ctx, rt.Execution)
+	if err != nil {
+		return fmt.Errorf("connect execution service for agent %q: %w", rt.Name, err)
+	}
+	if executionClient != nil {
+		defer executionClient.Close()
+	}
 
 	agentSandbox := sandbox.New(sandboxSettings)
 	if sandbox.VerboseEnabled() {
@@ -76,7 +84,7 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 		SkillsDir:        rt.SkillsDir,
 	})
 	braveAPIKey := strings.TrimSpace(os.Getenv("Q15_BRAVE_API_KEY"))
-	toolList, err := buildToolList(agentSandbox, skillManager, braveAPIKey)
+	toolList, err := buildToolList(agentSandbox, executionClient, skillManager, braveAPIKey)
 	if err != nil {
 		return fmt.Errorf("configure tools for agent %q: %w", rt.Name, err)
 	}
@@ -88,6 +96,14 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 	}
 	if sandbox.VerboseEnabled() {
 		fmt.Printf("[app] enabled tool web_fetch for agent=%q\n", rt.Name)
+	}
+	if executionInfo != nil && sandbox.VerboseEnabled() {
+		fmt.Printf(
+			"[app] enabled tool exec for agent=%q via execution service=%q executor=%q\n",
+			rt.Name,
+			rt.Execution.ServiceAddress,
+			executionInfo.GetExecutorType(),
+		)
 	}
 	if braveAPIKey != "" {
 		if sandbox.VerboseEnabled() {
@@ -174,6 +190,7 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 
 func buildToolList(
 	agentSandbox *sandbox.Sandbox,
+	execClient execution.Service,
 	skillManager *q15skills.Manager,
 	braveAPIKey string,
 ) ([]agent.Tool, error) {
@@ -184,10 +201,16 @@ func buildToolList(
 		tools.NewEditFile(fileExec),
 		tools.NewApplyPatch(fileExec),
 		tools.NewValidateSkill(skillManager),
+	}
+	if execClient != nil {
+		toolList = append(toolList, tools.NewExec(execClient))
+	}
+	toolList = append(
+		toolList,
 		tools.NewNixShellBash(agentSandbox),
 		tools.NewBrowserShell(agentSandbox),
 		tools.NewWebFetch(),
-	}
+	)
 
 	braveAPIKey = strings.TrimSpace(braveAPIKey)
 	if braveAPIKey == "" {
@@ -214,7 +237,7 @@ func composeSystemPrompt(
 	}
 
 	parts := []string{base}
-	if sandboxSection := renderSandboxEnvironmentPrompt(agentName, info, memoryDir); sandboxSection != "" {
+	if sandboxSection := renderSandboxEnvironmentPrompt(agentName, info, memoryDir, toolDefs); sandboxSection != "" {
 		parts = append(parts, sandboxSection)
 	}
 	if toolAdviceSection := renderToolAdvicePrompt(toolDefs); toolAdviceSection != "" {
@@ -227,6 +250,7 @@ func renderSandboxEnvironmentPrompt(
 	agentName string,
 	info sandbox.Info,
 	memoryDir string,
+	toolDefs []agent.ToolDefinition,
 ) string {
 	var lines []string
 	agentName = strings.TrimSpace(agentName)
@@ -291,10 +315,17 @@ func renderSandboxEnvironmentPrompt(
 			),
 		)
 	}
-	lines = append(
-		lines,
-		"- Package management model: nix-only via exec_nix_shell_bash and exec_browser_shell.",
-	)
+	if hasToolNamed(toolDefs, "exec") {
+		lines = append(
+			lines,
+			"- Package management model: nix-only via exec and exec_browser_shell; exec_nix_shell_bash remains available as a legacy compatibility path.",
+		)
+	} else {
+		lines = append(
+			lines,
+			"- Package management model: nix-only via exec_nix_shell_bash and exec_browser_shell.",
+		)
+	}
 	lines = append(
 		lines,
 		"- Built-in skills are available read-only under `/skills/@builtin/...` via read_file even when no shared skills mount is configured.",
@@ -311,16 +342,23 @@ func renderSandboxEnvironmentPrompt(
 		"- In `*** Update File`, each hunk must start with `@@`, then use a leading space for context lines, `-` for removed lines, and `+` for added lines.",
 		"- Minimal apply_patch example:",
 		"```text\n*** Begin Patch\n*** Update File: /memory/notes/todo.md\n@@\n unchanged line\n-old value\n+new value\n unchanged tail\n*** End Patch\n```",
-		"- Use exec_nix_shell_bash for commands, builds, tests, formatting, git, and other CLI workflows, not for routine file reads or edits.",
 	)
-	lines = append(
-		lines,
-		"- Every exec_nix_shell_bash call must include a non-empty `packages` array of nix installables (for example `nixpkgs#git`).",
-	)
-	lines = append(
-		lines,
-		"- Use exec_nix_shell_bash by providing the user command in `command` and the needed nix installables in `packages`; the sandbox runtime provisions those packages and executes the command via nix shell and bash.",
-	)
+	if hasToolNamed(toolDefs, "exec") {
+		lines = append(
+			lines,
+			"- Prefer exec for commands, builds, tests, formatting, git, and other CLI workflows, not for routine file reads or edits.",
+			"- Every exec call must include a non-empty `packages` array of nix installables (for example `nixpkgs#git`).",
+			"- Use exec by providing the user command in `command` and the needed nix installables in `packages`; the execution service starts a session, streams stdout/stderr internally, and returns when the command exits.",
+			"- exec_nix_shell_bash remains available for legacy compatibility; prefer exec unless you specifically need the older direct sandbox-helper path.",
+		)
+	} else {
+		lines = append(
+			lines,
+			"- Use exec_nix_shell_bash for commands, builds, tests, formatting, git, and other CLI workflows, not for routine file reads or edits.",
+			"- Every exec_nix_shell_bash call must include a non-empty `packages` array of nix installables (for example `nixpkgs#git`).",
+			"- Use exec_nix_shell_bash by providing the user command in `command` and the needed nix installables in `packages`; the sandbox runtime provisions those packages and executes the command via nix shell and bash.",
+		)
+	}
 	lines = append(
 		lines,
 		"- First run may bootstrap nix and fetch package indexes, so network access is required.",
@@ -334,7 +372,7 @@ func renderSandboxEnvironmentPrompt(
 	)
 	lines = append(
 		lines,
-		"- Use web_fetch for known web page URLs: it returns cleaned markdown plus slice metadata and is preferred over using exec_nix_shell_bash with curl for ordinary webpage reads.",
+		"- Use web_fetch for known web page URLs: it returns cleaned markdown plus slice metadata and is preferred over using exec or exec_nix_shell_bash with curl for ordinary webpage reads.",
 		"- Use web_search for discovering current sources, then use web_fetch on a chosen result URL when you need page contents.",
 	)
 	if nixSummary := formatBinarySummary(info.NixPath, info.NixVersion); nixSummary != "" {
@@ -348,6 +386,16 @@ func renderSandboxEnvironmentPrompt(
 	}
 
 	return agent.RenderPromptElement("sandbox_environment", nil, strings.Join(lines, "\n"))
+}
+
+func hasToolNamed(toolDefs []agent.ToolDefinition, name string) bool {
+	name = strings.TrimSpace(name)
+	for _, tool := range toolDefs {
+		if strings.TrimSpace(tool.Name) == name {
+			return true
+		}
+	}
+	return false
 }
 
 func renderToolAdvicePrompt(toolDefs []agent.ToolDefinition) string {

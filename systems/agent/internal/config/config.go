@@ -41,11 +41,12 @@ type Model struct {
 
 // Agent defines one configured q15 agent instance.
 type Agent struct {
-	Name              string   `mapstructure:"name"`
-	Models            []string `mapstructure:"models"` // ordered fallback list of configured model names
-	MemoryRecentTurns int      `mapstructure:"memory_recent_turns"`
-	Sandbox           Sandbox  `mapstructure:"sandbox"`
-	Telegram          Telegram `mapstructure:"telegram"`
+	Name              string     `mapstructure:"name"`
+	Models            []string   `mapstructure:"models"` // ordered fallback list of configured model names
+	MemoryRecentTurns int        `mapstructure:"memory_recent_turns"`
+	Sandbox           Sandbox    `mapstructure:"sandbox"`
+	Execution         *Execution `mapstructure:"execution"`
+	Telegram          Telegram   `mapstructure:"telegram"`
 }
 
 // Sandbox defines container and workspace settings for agent execution.
@@ -54,6 +55,11 @@ type Sandbox struct {
 	WorkspaceHostDir string        `mapstructure:"workspace_host_dir"`
 	WorkspaceDir     string        `mapstructure:"workspace_dir"`
 	Proxy            *SandboxProxy `mapstructure:"proxy"`
+}
+
+// Execution defines optional execution-service settings for session-backed commands.
+type Execution struct {
+	ServiceAddress string `mapstructure:"service_address"`
 }
 
 // Skills defines the optional shared host directory for agent-authored skills.
@@ -141,6 +147,11 @@ type SandboxProxyRuntime struct {
 	Rules                []SandboxProxyRule
 }
 
+// ExecutionRuntime is the resolved runtime form of Execution.
+type ExecutionRuntime struct {
+	ServiceAddress string
+}
+
 const (
 	defaultSandboxProxyListenAddr          = "0.0.0.0:0"
 	defaultSandboxProxyCACertContainerPath = "/run/q15-proxy/ca.crt"
@@ -174,6 +185,7 @@ type AgentRuntime struct {
 	SkillsDir              string
 	MemoryRecentTurns      int
 	SandboxProxy           *SandboxProxyRuntime
+	Execution              *ExecutionRuntime
 	TelegramToken          string
 	TelegramAllowedUserIDs []int64
 }
@@ -378,6 +390,10 @@ func (c Config) resolveAgentRuntimes(_ string) ([]AgentRuntime, error) {
 		if err != nil {
 			return nil, fmt.Errorf("resolve sandbox proxy for agent %q: %w", agentCfg.Name, err)
 		}
+		executionRuntime, err := resolveExecutionRuntime(agentCfg.Execution)
+		if err != nil {
+			return nil, fmt.Errorf("resolve execution config for agent %q: %w", agentCfg.Name, err)
+		}
 		memoryRecentTurns := agentCfg.MemoryRecentTurns
 		if memoryRecentTurns == 0 {
 			memoryRecentTurns = defaultMemoryRecentTurns
@@ -397,6 +413,7 @@ func (c Config) resolveAgentRuntimes(_ string) ([]AgentRuntime, error) {
 			SkillsDir:              defaultSkillsDir,
 			MemoryRecentTurns:      memoryRecentTurns,
 			SandboxProxy:           sandboxProxy,
+			Execution:              executionRuntime,
 			TelegramToken:          token,
 			TelegramAllowedUserIDs: allowedUserIDs,
 		})
@@ -510,6 +527,9 @@ func (c Config) validate() error {
 		}
 		if err := validateSandboxProxy(agent.Sandbox.Proxy); err != nil {
 			return fmt.Errorf("agent[%d].sandbox.proxy: %w", i, err)
+		}
+		if err := validateExecution(agent.Execution); err != nil {
+			return fmt.Errorf("agent[%d].execution: %w", i, err)
 		}
 		if strings.TrimSpace(agent.Telegram.Token) == "" &&
 			strings.TrimSpace(agent.Telegram.TokenEnv) == "" {
@@ -808,6 +828,28 @@ func validateSandboxProxy(proxy *SandboxProxy) error {
 	}
 
 	return nil
+}
+
+func validateExecution(execution *Execution) error {
+	if execution == nil {
+		return nil
+	}
+	if strings.TrimSpace(execution.ServiceAddress) == "" {
+		return errors.New("service_address is required")
+	}
+	return nil
+}
+
+func resolveExecutionRuntime(execution *Execution) (*ExecutionRuntime, error) {
+	if execution == nil {
+		return nil, nil
+	}
+	if err := validateExecution(execution); err != nil {
+		return nil, err
+	}
+	return &ExecutionRuntime{
+		ServiceAddress: strings.TrimSpace(execution.ServiceAddress),
+	}, nil
 }
 
 func resolveSandboxProxyRuntime(

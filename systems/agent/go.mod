@@ -7,11 +7,13 @@ require (
 	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.0
 	github.com/mymmrac/telego v1.6.0
 	github.com/openai/openai-go/v3 v3.22.0
+	github.com/q15co/q15/libs/exec-contract v0.0.0
 	github.com/q15co/q15/libs/sandbox-contract v0.0.0
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0
 	github.com/yuin/goldmark v1.7.16
 	github.com/yuin/goldmark-meta v1.1.0
+	google.golang.org/grpc v1.72.2
 )
 
 require (
@@ -20,6 +22,8 @@ require (
 	github.com/araddon/dateparse v0.0.0-20210429162001-6b43995a97de // indirect
 	github.com/go-shiori/dom v0.0.0-20230515143342-73569d674e1c // indirect
 	github.com/gogs/chardet v0.0.0-20211120154057-b7413eaefb8f // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20250218202821-56aae31c358a // indirect
+	google.golang.org/protobuf v1.36.9 // indirect
 	gopkg.in/yaml.v2 v2.3.0 // indirect
 )
 
@@ -64,3 +68,5 @@ require (
 )
 
 replace github.com/q15co/q15/libs/sandbox-contract => ../../libs/sandbox-contract
+
+replace github.com/q15co/q15/libs/exec-contract => ../../libs/exec-contract
