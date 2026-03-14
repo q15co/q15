@@ -192,6 +192,56 @@ allowed_user_ids = [123456789]
 	}
 }
 
+func TestLoadAgentRuntimes_TOML_ExecutionService(t *testing.T) {
+	t.Setenv("MOONSHOT_API_KEY", "api-123")
+	t.Setenv("JARED_TELEGRAM_TOKEN", "tg-123")
+
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte(`
+[[provider]]
+name = "moonshot"
+type = "openai-compatible"
+base_url = "https://api.moonshot.ai/v1"
+key_env = "MOONSHOT_API_KEY"
+
+[[model]]
+name = "kimi-k2.5"
+provider = "moonshot"
+
+[[agent]]
+name = "Jared"
+models = ["kimi-k2.5"]
+
+[agent.sandbox]
+container_name = "q15-jared"
+workspace_host_dir = "/tmp/q15-workspaces/jared"
+workspace_dir = "/workspace"
+
+[agent.execution]
+service_address = "127.0.0.1:50051"
+
+[agent.telegram]
+token_env = "JARED_TELEGRAM_TOKEN"
+allowed_user_ids = [123456789]
+`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	runtimes, err := LoadAgentRuntimes(path)
+	if err != nil {
+		t.Fatalf("load runtimes: %v", err)
+	}
+	if len(runtimes) != 1 {
+		t.Fatalf("expected 1 runtime, got %d", len(runtimes))
+	}
+	if runtimes[0].Execution == nil {
+		t.Fatalf("expected execution runtime to be resolved")
+	}
+	if got := runtimes[0].Execution.ServiceAddress; got != "127.0.0.1:50051" {
+		t.Fatalf("execution service address = %q, want %q", got, "127.0.0.1:50051")
+	}
+}
+
 func TestLoadAgentRuntimes_TOML_ExplicitModelMetadata(t *testing.T) {
 	t.Setenv("MOONSHOT_API_KEY", "api-123")
 	t.Setenv("JARED_TELEGRAM_TOKEN", "tg-123")
@@ -261,6 +311,46 @@ func TestLoadAgentRuntimes_TOML_EmptyConfigReturnsNoRuntimes(t *testing.T) {
 	}
 	if len(runtimes) != 0 {
 		t.Fatalf("expected 0 runtimes, got %d", len(runtimes))
+	}
+}
+
+func TestValidateRejectsEmptyExecutionServiceAddress(t *testing.T) {
+	cfg := Config{
+		Providers: []Provider{
+			{
+				Name:    "moonshot",
+				Type:    "openai-compatible",
+				BaseURL: "https://api.moonshot.ai/v1",
+				KeyEnv:  "MOONSHOT_API_KEY",
+			},
+		},
+		Models: []Model{
+			{
+				Name:     "kimi-k2.5",
+				Provider: "moonshot",
+			},
+		},
+		Agents: []Agent{
+			{
+				Name:   "Jared",
+				Models: []string{"kimi-k2.5"},
+				Sandbox: Sandbox{
+					ContainerName:    "q15-jared",
+					WorkspaceHostDir: "/tmp/q15-workspaces/jared",
+					WorkspaceDir:     "/workspace",
+				},
+				Execution: &Execution{},
+				Telegram: Telegram{
+					Token:          "tg-123",
+					AllowedUserIDs: []int64{123456789},
+				},
+			},
+		},
+	}
+
+	if err := cfg.Validate(); err == nil ||
+		!strings.Contains(err.Error(), "agent[0].execution: service_address is required") {
+		t.Fatalf("Validate() error = %v, want execution service address validation", err)
 	}
 }
 

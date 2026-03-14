@@ -1,10 +1,14 @@
 package app
 
 import (
+	"context"
+	"io"
 	"strings"
 	"testing"
 
+	"github.com/q15co/q15/libs/exec-contract/execpb"
 	"github.com/q15co/q15/systems/agent/internal/agent"
+	"github.com/q15co/q15/systems/agent/internal/execution"
 	"github.com/q15co/q15/systems/agent/internal/sandbox"
 )
 
@@ -32,6 +36,12 @@ func TestComposeSystemPromptIncludesOSRuntimeAndNixBashDetails(t *testing.T) {
 			},
 		},
 		{
+			Name: "exec",
+			PromptGuidance: []string{
+				"Prefer this over exec_nix_shell_bash when the exec tool is available.",
+			},
+		},
+		{
 			Name: "exec_nix_shell_bash",
 			PromptGuidance: []string{
 				"Use for commands, builds, tests, formatting, git, and other CLI workflows.",
@@ -51,7 +61,7 @@ func TestComposeSystemPromptIncludesOSRuntimeAndNixBashDetails(t *testing.T) {
 		"- Sandbox runtime: nix-only",
 		"- Base image: registry.example/sandbox:test",
 		"- Shared skills root: /skills (bind-mounted when skills.host_dir is configured)",
-		"- Package management model: nix-only via exec_nix_shell_bash and exec_browser_shell.",
+		"- Package management model: nix-only via exec and exec_browser_shell; exec_nix_shell_bash remains available as a legacy compatibility path.",
 		"- Built-in skills are available read-only under `/skills/@builtin/...` via read_file even when no shared skills mount is configured.",
 		"- Shared skills, when configured, are available under `/skills/<name>/...` and may be edited with the normal file tools.",
 		"- Use read_file for routine UTF-8 text reads from the workspace, memory, or skills roots; paths may be relative to the workspace or absolute under `/workspace/...`, `/memory/...`, `/skills/...`, or `/skills/@builtin/...`.",
@@ -71,19 +81,21 @@ func TestComposeSystemPromptIncludesOSRuntimeAndNixBashDetails(t *testing.T) {
 		"-old value",
 		"+new value",
 		"*** End Patch",
-		"- Use exec_nix_shell_bash for commands, builds, tests, formatting, git, and other CLI workflows, not for routine file reads or edits.",
-		"- Every exec_nix_shell_bash call must include a non-empty `packages` array of nix installables (for example `nixpkgs#git`).",
-		"- Use exec_nix_shell_bash by providing the user command in `command` and the needed nix installables in `packages`; the sandbox runtime provisions those packages and executes the command via nix shell and bash.",
+		"- Prefer exec for commands, builds, tests, formatting, git, and other CLI workflows, not for routine file reads or edits.",
+		"- Every exec call must include a non-empty `packages` array of nix installables (for example `nixpkgs#git`).",
+		"- Use exec by providing the user command in `command` and the needed nix installables in `packages`; the execution service starts a session, streams stdout/stderr internally, and returns when the command exits.",
+		"- exec_nix_shell_bash remains available for legacy compatibility; prefer exec unless you specifically need the older direct sandbox-helper path.",
 		"- Use exec_browser_shell for browser automation, screenshots, scraping, Playwright, Puppeteer, and browser tests.",
 		"- exec_browser_shell provisions the browser-ready nix package set automatically; use `display_mode` `headless` by default and switch to `xvfb` only for headed browser commands that still terminate on their own.",
 		"- exec_browser_shell waits for the command to exit before returning; avoid long-running interactive commands such as `playwright open` or `playwright codegen`.",
 		"- Use the nixpkgs-provided `playwright` and `puppeteer` wrappers in exec_browser_shell, and do not rely on `playwright install` or `playwright install-deps` inside the sandbox.",
-		"- Use web_fetch for known web page URLs: it returns cleaned markdown plus slice metadata and is preferred over using exec_nix_shell_bash with curl for ordinary webpage reads.",
+		"- Use web_fetch for known web page URLs: it returns cleaned markdown plus slice metadata and is preferred over using exec or exec_nix_shell_bash with curl for ordinary webpage reads.",
 		"- Use web_search for discovering current sources, then use web_fetch on a chosen result URL when you need page contents.",
 		"- Nix: /root/.nix-profile/bin/nix (nix (Nix) 2.33.3)",
 		"- Bash: /bin/bash (GNU bash, version 5.2.15(1)-release (x86_64-pc-linux-gnu))",
 		"<tool_advice>",
 		`<tool name="read_file" summary="Read a file">`,
+		`<tool name="exec">`,
 		`<tool name="exec_nix_shell_bash">`,
 		`<tool name="exec_browser_shell">`,
 		"- Use for routine UTF-8 text reads instead of shelling out.",
@@ -166,7 +178,7 @@ func TestFormatBinarySummarySupportsPartialValues(t *testing.T) {
 func TestBuildToolListIncludesFileToolsInStableOrder(t *testing.T) {
 	t.Parallel()
 
-	toolList, err := buildToolList(nil, nil, "")
+	toolList, err := buildToolList(nil, nil, nil, "")
 	if err != nil {
 		t.Fatalf("buildToolList() error = %v", err)
 	}
@@ -185,10 +197,33 @@ func TestBuildToolListIncludesFileToolsInStableOrder(t *testing.T) {
 	}
 }
 
+func TestBuildToolListIncludesExecWhenConfigured(t *testing.T) {
+	t.Parallel()
+
+	toolList, err := buildToolList(nil, &stubExecutionService{}, nil, "")
+	if err != nil {
+		t.Fatalf("buildToolList() error = %v", err)
+	}
+
+	if got, want := toolNames(toolList), []string{
+		"read_file",
+		"write_file",
+		"edit_file",
+		"apply_patch",
+		"validate_skill",
+		"exec",
+		"exec_nix_shell_bash",
+		"exec_browser_shell",
+		"web_fetch",
+	}; !equalStrings(got, want) {
+		t.Fatalf("tool names = %v, want %v", got, want)
+	}
+}
+
 func TestBuildToolListAppendsWebSearchWhenConfigured(t *testing.T) {
 	t.Parallel()
 
-	toolList, err := buildToolList(nil, nil, "brave-key")
+	toolList, err := buildToolList(nil, nil, nil, "brave-key")
 	if err != nil {
 		t.Fatalf("buildToolList() error = %v", err)
 	}
@@ -226,4 +261,63 @@ func equalStrings(got []string, want []string) bool {
 		}
 	}
 	return true
+}
+
+type stubExecutionService struct{}
+
+func (stubExecutionService) Close() error { return nil }
+
+func (stubExecutionService) GetRuntimeInfo(
+	context.Context,
+) (*execpb.GetRuntimeInfoResponse, error) {
+	return &execpb.GetRuntimeInfoResponse{}, nil
+}
+
+func (stubExecutionService) StartSession(
+	context.Context,
+	*execpb.StartSessionRequest,
+) (*execpb.StartSessionResponse, error) {
+	return &execpb.StartSessionResponse{
+		Session: &execpb.Session{SessionId: "sess-1"},
+	}, nil
+}
+
+func (stubExecutionService) GetSession(
+	context.Context,
+	*execpb.GetSessionRequest,
+) (*execpb.GetSessionResponse, error) {
+	return &execpb.GetSessionResponse{
+		Session: &execpb.Session{
+			SessionId:   "sess-1",
+			State:       execpb.SessionState_SESSION_STATE_EXITED,
+			HasExitCode: true,
+		},
+	}, nil
+}
+
+func (stubExecutionService) WatchSession(
+	context.Context,
+	*execpb.WatchSessionRequest,
+) (execution.WatchStream, error) {
+	return &stubWatchStream{}, nil
+}
+
+func (stubExecutionService) WriteSessionStdin(
+	context.Context,
+	*execpb.WriteSessionStdinRequest,
+) (*execpb.WriteSessionStdinResponse, error) {
+	return &execpb.WriteSessionStdinResponse{}, nil
+}
+
+func (stubExecutionService) TerminateSession(
+	context.Context,
+	*execpb.TerminateSessionRequest,
+) (*execpb.TerminateSessionResponse, error) {
+	return &execpb.TerminateSessionResponse{}, nil
+}
+
+type stubWatchStream struct{}
+
+func (stubWatchStream) Recv() (*execpb.WatchSessionResponse, error) {
+	return nil, io.EOF
 }

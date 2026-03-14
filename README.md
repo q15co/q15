@@ -11,6 +11,7 @@ Codex-subscription model providers.
 - A Telegram bot token
 - API key(s) for your configured model provider(s)
 - A working C toolchain for building `q15-sandbox-helper` locally (`make run` builds it with cgo)
+- `q15-exec-service` if you enable `[agent.execution]`
 
 On NixOS, rootless sandbox startup requires the host wrapper helpers:
 
@@ -33,7 +34,8 @@ make run CONFIG=config.toml
 ```
 
 `q15` runs as a normal unprivileged user process. The `q15-sandbox-helper` process enters the
-rootless user namespace for Buildah.
+rootless user namespace for Buildah. If you enable `[agent.execution]`, `q15-exec-service` runs as a
+separate long-lived process and the agent connects to it over gRPC.
 
 Or run the agent module directly:
 
@@ -52,9 +54,10 @@ no running agents. Add your `[[provider]]` / `[[agent]]` blocks and start again.
 
 ## Nix Flake Package
 
-This repo exposes a flake package for Linux (`x86_64-linux`) that installs both binaries:
+This repo exposes a flake package for Linux (`x86_64-linux`) that installs these binaries:
 
 - `q15`
+- `q15-exec-service`
 - `q15-sandbox-helper`
 
 Build locally:
@@ -190,9 +193,22 @@ container_name = "q15-jared"
 workspace_host_dir = "/home/you/q15-workspaces/jared"
 workspace_dir = "/workspace"
 
+[agent.execution]
+service_address = "127.0.0.1:50051"
+
 [agent.telegram]
 token_env = "JARED_TELEGRAM_TOKEN"
 allowed_user_ids = [123456789]
+```
+
+`agent.execution` is optional. When present, q15 dials the configured execution service at startup,
+health-checks it with `GetRuntimeInfo`, and exposes the new `exec` tool in addition to the legacy
+`exec_nix_shell_bash` compatibility path.
+
+For local development, run the service separately:
+
+```bash
+./bin/q15-exec-service serve --listen 127.0.0.1:50051
 ```
 
 ### Sandbox Proxy Auth Env
@@ -248,7 +264,36 @@ Sandbox runtime is hardcoded to a rootless-Buildah-friendly nix-only mode:
 - Sandbox networking is always enabled
 - Nix is auto-bootstrapped during `Prepare` if not already installed
 
+### exec Usage
+
+When `[agent.execution]` is configured, q15 exposes `exec` as the preferred shell tool. `exec`
+starts a session through `q15-exec-service`, watches it until completion, and returns stdout,
+stderr, and exit status.
+
+Required arguments:
+
+- `command` (string)
+- `packages` (array of nix installables, minimum 1)
+
+Example tool payload:
+
+```json
+{
+  "command": "git status --short",
+  "packages": ["nixpkgs#git"]
+}
+```
+
+`q15-exec-service` can be started directly:
+
+```bash
+q15-exec-service serve --listen 127.0.0.1:50051 --workspace-dir /workspace --memory-dir /memory --skills-dir /skills
+```
+
 ### exec_nix_shell_bash Usage
+
+`exec_nix_shell_bash` remains available as a legacy compatibility tool when you still want the
+direct sandbox-helper path.
 
 `exec_nix_shell_bash` runs commands via nix shell and bash, and requires packages per call.
 

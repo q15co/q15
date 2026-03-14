@@ -1,8 +1,6 @@
 q15.toml
 config.toml
 bin/
-q15
-q15-sandbox-helper
 .devenv/
 .devenv*
 .direnv/

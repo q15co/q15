@@ -32,12 +32,27 @@
           src = ./.;
           modRoot = "systems/agent";
           subPackages = ["."];
-          vendorHash = "sha256-ADxDeRyhdHc+4wvdozqcoaVqoSMUoXdSlb5KhbsgeDU=";
+          vendorHash = "sha256-sREq8K6kpaxGtAU5027iy1eDXs0ejY8AoIOqGhvs3Go=";
           env = {
             GOWORK = "off";
           };
           postInstall = ''
             mv "$out/bin/agent" "$out/bin/q15"
+          '';
+        };
+
+        q15ExecService = pkgs.buildGoModule {
+          pname = "q15-exec-service";
+          inherit version;
+          src = ./.;
+          modRoot = "systems/exec-service";
+          subPackages = ["."];
+          vendorHash = "sha256-odU6MpWmB59gC97BMFp8DkqEEGl0pD1Co00fFa2Cvuo=";
+          env = {
+            GOWORK = "off";
+          };
+          postInstall = ''
+            mv "$out/bin/exec-service" "$out/bin/q15-exec-service"
           '';
         };
 
@@ -66,11 +81,13 @@
           name = "q15-${version}";
           paths = [
             q15Agent
+            q15ExecService
             q15SandboxHelper
           ];
         };
       in {
         q15-agent = q15Agent;
+        q15-exec-service = q15ExecService;
         q15-sandbox-helper = q15SandboxHelper;
         q15 = q15Package;
         default = q15Package;
@@ -86,6 +103,10 @@
         q15 = {
           type = "app";
           program = "${self.packages.${system}.q15}/bin/q15";
+        };
+        q15-exec-service = {
+          type = "app";
+          program = "${self.packages.${system}.q15}/bin/q15-exec-service";
         };
       }
     );

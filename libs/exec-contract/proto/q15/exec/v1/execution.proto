@@ -1,0 +1,138 @@
+syntax = "proto3";
+
+package q15.exec.v1;
+
+option go_package = "github.com/q15co/q15/libs/exec-contract/execpb;execpb";
+
+import "google/protobuf/timestamp.proto";
+
+service ExecutionService {
+  rpc GetRuntimeInfo(GetRuntimeInfoRequest) returns (GetRuntimeInfoResponse);
+  rpc StartSession(StartSessionRequest) returns (StartSessionResponse);
+  rpc GetSession(GetSessionRequest) returns (GetSessionResponse);
+  rpc WatchSession(WatchSessionRequest) returns (stream WatchSessionResponse);
+  rpc WriteSessionStdin(WriteSessionStdinRequest) returns (WriteSessionStdinResponse);
+  rpc TerminateSession(TerminateSessionRequest) returns (TerminateSessionResponse);
+}
+
+message GetRuntimeInfoRequest {}
+
+message RuntimeCapability {
+  string name = 1;
+  bool enabled = 2;
+}
+
+message GetRuntimeInfoResponse {
+  string service_version = 1;
+  string executor_type = 2;
+  string workspace_dir = 3;
+  string memory_dir = 4;
+  string skills_dir = 5;
+  repeated RuntimeCapability capabilities = 6;
+}
+
+enum SessionState {
+  SESSION_STATE_UNSPECIFIED = 0;
+  SESSION_STATE_STARTING = 1;
+  SESSION_STATE_RUNNING = 2;
+  SESSION_STATE_EXITED = 3;
+  SESSION_STATE_TERMINATING = 4;
+  SESSION_STATE_TERMINATED = 5;
+  SESSION_STATE_FAILED = 6;
+}
+
+message Session {
+  string session_id = 1;
+  string command = 2;
+  repeated string packages = 3;
+  string working_dir = 4;
+  bool stdin_open = 5;
+  SessionState state = 6;
+  int64 next_event_index = 7;
+  google.protobuf.Timestamp started_at = 8;
+  google.protobuf.Timestamp finished_at = 9;
+  int32 exit_code = 10;
+  bool has_exit_code = 11;
+  string termination_reason = 12;
+}
+
+message StartSessionRequest {
+  string command = 1;
+  repeated string packages = 2;
+  string working_dir = 3;
+  bool keep_stdin_open = 4;
+}
+
+message StartSessionResponse {
+  Session session = 1;
+}
+
+message GetSessionRequest {
+  string session_id = 1;
+}
+
+message GetSessionResponse {
+  Session session = 1;
+}
+
+message WatchSessionRequest {
+  string session_id = 1;
+  int64 after_event_index = 2;
+}
+
+message WatchSessionResponse {
+  SessionEvent event = 1;
+}
+
+message WriteSessionStdinRequest {
+  string session_id = 1;
+  bytes data = 2;
+  bool close_stdin = 3;
+}
+
+message WriteSessionStdinResponse {
+  Session session = 1;
+  int64 bytes_written = 2;
+}
+
+message TerminateSessionRequest {
+  string session_id = 1;
+  bool force = 2;
+}
+
+message TerminateSessionResponse {
+  Session session = 1;
+}
+
+message SessionEvent {
+  int64 event_index = 1;
+  google.protobuf.Timestamp occurred_at = 2;
+
+  oneof event {
+    SessionStarted started = 3;
+    SessionOutput stdout = 4;
+    SessionOutput stderr = 5;
+    SessionStdinClosed stdin_closed = 6;
+    SessionExited exited = 7;
+    SessionTerminated terminated = 8;
+  }
+}
+
+message SessionStarted {
+  string session_id = 1;
+}
+
+message SessionOutput {
+  bytes data = 1;
+}
+
+message SessionStdinClosed {}
+
+message SessionExited {
+  int32 exit_code = 1;
+}
+
+message SessionTerminated {
+  string reason = 1;
+  bool force = 2;
+}

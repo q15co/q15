@@ -1,7 +1,9 @@
 go 1.25.5
 
 use (
+	./libs/exec-contract
 	./libs/sandbox-contract
 	./systems/agent
+	./systems/exec-service
 	./systems/sandbox-helper
 )
