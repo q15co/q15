@@ -32,7 +32,7 @@
           src = ./.;
           modRoot = "systems/agent";
           subPackages = ["."];
-          vendorHash = "sha256-H3wxOBuIb0pNRj2TO9u0KS12pSrfP16RrHcvlx8X60E=";
+          vendorHash = "sha256-sREq8K6kpaxGtAU5027iy1eDXs0ejY8AoIOqGhvs3Go=";
           env = {
             GOWORK = "off";
           };
@@ -47,7 +47,7 @@
           src = ./.;
           modRoot = "systems/exec-service";
           subPackages = ["."];
-          vendorHash = "sha256-jvSQ5saWchueEkJW7JWUYhpOLnraK5qFo836/LCveP4=";
+          vendorHash = "sha256-odU6MpWmB59gC97BMFp8DkqEEGl0pD1Co00fFa2Cvuo=";
           env = {
             GOWORK = "off";
           };
