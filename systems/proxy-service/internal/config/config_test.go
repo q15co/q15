@@ -82,6 +82,7 @@ rules = ["github-api"]
 }
 
 func TestLoadRuntimeRequiresSecretEnv(t *testing.T) {
+	t.Setenv("GH_TOKEN", "")
 	path := filepath.Join(t.TempDir(), "proxy.toml")
 	if err := os.WriteFile(path, []byte(`
 [service]
