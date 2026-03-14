@@ -32,7 +32,7 @@
           src = ./.;
           modRoot = "systems/agent";
           subPackages = ["."];
-          vendorHash = "sha256-sREq8K6kpaxGtAU5027iy1eDXs0ejY8AoIOqGhvs3Go=";
+          vendorHash = "sha256-4grjVEpT9dUESNctj8ndUFlISwoJO3N+6/46+gZclP4=";
           env = {
             GOWORK = "off";
           };
@@ -47,12 +47,27 @@
           src = ./.;
           modRoot = "systems/exec-service";
           subPackages = ["."];
-          vendorHash = "sha256-odU6MpWmB59gC97BMFp8DkqEEGl0pD1Co00fFa2Cvuo=";
+          vendorHash = "sha256-+VZjMRW9gEfhoIf0+z2hlXiZ95iyl9qxCeuc7N9hEN8=";
           env = {
             GOWORK = "off";
           };
           postInstall = ''
             mv "$out/bin/exec-service" "$out/bin/q15-exec-service"
+          '';
+        };
+
+        q15ProxyService = pkgs.buildGoModule {
+          pname = "q15-proxy-service";
+          inherit version;
+          src = ./.;
+          modRoot = "systems/proxy-service";
+          subPackages = ["."];
+          vendorHash = "sha256-qUfHD4a1cD8tmilkfrF1shD+2C77uB8J97oavm7aFsA=";
+          env = {
+            GOWORK = "off";
+          };
+          postInstall = ''
+            mv "$out/bin/proxy-service" "$out/bin/q15-proxy-service"
           '';
         };
 
@@ -82,12 +97,14 @@
           paths = [
             q15Agent
             q15ExecService
+            q15ProxyService
             q15SandboxHelper
           ];
         };
       in {
         q15-agent = q15Agent;
         q15-exec-service = q15ExecService;
+        q15-proxy-service = q15ProxyService;
         q15-sandbox-helper = q15SandboxHelper;
         q15 = q15Package;
         default = q15Package;
@@ -107,6 +124,10 @@
         q15-exec-service = {
           type = "app";
           program = "${self.packages.${system}.q15}/bin/q15-exec-service";
+        };
+        q15-proxy-service = {
+          type = "app";
+          program = "${self.packages.${system}.q15}/bin/q15-proxy-service";
         };
       }
     );

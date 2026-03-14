@@ -1,3 +1,4 @@
 version: v2
 modules:
   - path: libs/exec-contract/proto
+  - path: libs/proxy-contract/proto

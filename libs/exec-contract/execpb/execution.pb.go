@@ -172,15 +172,17 @@ func (x *RuntimeCapability) GetEnabled() bool {
 }
 
 type GetRuntimeInfoResponse struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	ServiceVersion string                 `protobuf:"bytes,1,opt,name=service_version,json=serviceVersion,proto3" json:"service_version,omitempty"`
-	ExecutorType   string                 `protobuf:"bytes,2,opt,name=executor_type,json=executorType,proto3" json:"executor_type,omitempty"`
-	WorkspaceDir   string                 `protobuf:"bytes,3,opt,name=workspace_dir,json=workspaceDir,proto3" json:"workspace_dir,omitempty"`
-	MemoryDir      string                 `protobuf:"bytes,4,opt,name=memory_dir,json=memoryDir,proto3" json:"memory_dir,omitempty"`
-	SkillsDir      string                 `protobuf:"bytes,5,opt,name=skills_dir,json=skillsDir,proto3" json:"skills_dir,omitempty"`
-	Capabilities   []*RuntimeCapability   `protobuf:"bytes,6,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	ServiceVersion      string                 `protobuf:"bytes,1,opt,name=service_version,json=serviceVersion,proto3" json:"service_version,omitempty"`
+	ExecutorType        string                 `protobuf:"bytes,2,opt,name=executor_type,json=executorType,proto3" json:"executor_type,omitempty"`
+	WorkspaceDir        string                 `protobuf:"bytes,3,opt,name=workspace_dir,json=workspaceDir,proto3" json:"workspace_dir,omitempty"`
+	MemoryDir           string                 `protobuf:"bytes,4,opt,name=memory_dir,json=memoryDir,proto3" json:"memory_dir,omitempty"`
+	SkillsDir           string                 `protobuf:"bytes,5,opt,name=skills_dir,json=skillsDir,proto3" json:"skills_dir,omitempty"`
+	Capabilities        []*RuntimeCapability   `protobuf:"bytes,6,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
+	ProxyEnabled        bool                   `protobuf:"varint,7,opt,name=proxy_enabled,json=proxyEnabled,proto3" json:"proxy_enabled,omitempty"`
+	ProxyPolicyRevision string                 `protobuf:"bytes,8,opt,name=proxy_policy_revision,json=proxyPolicyRevision,proto3" json:"proxy_policy_revision,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *GetRuntimeInfoResponse) Reset() {
@@ -253,6 +255,20 @@ func (x *GetRuntimeInfoResponse) GetCapabilities() []*RuntimeCapability {
 		return x.Capabilities
 	}
 	return nil
+}
+
+func (x *GetRuntimeInfoResponse) GetProxyEnabled() bool {
+	if x != nil {
+		return x.ProxyEnabled
+	}
+	return false
+}
+
+func (x *GetRuntimeInfoResponse) GetProxyPolicyRevision() string {
+	if x != nil {
+		return x.ProxyPolicyRevision
+	}
+	return ""
 }
 
 type Session struct {
@@ -1281,7 +1297,7 @@ const file_q15_exec_v1_execution_proto_rawDesc = "" +
 	"\x15GetRuntimeInfoRequest\"A\n" +
 	"\x11RuntimeCapability\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
-	"\aenabled\x18\x02 \x01(\bR\aenabled\"\x8d\x02\n" +
+	"\aenabled\x18\x02 \x01(\bR\aenabled\"\xe6\x02\n" +
 	"\x16GetRuntimeInfoResponse\x12'\n" +
 	"\x0fservice_version\x18\x01 \x01(\tR\x0eserviceVersion\x12#\n" +
 	"\rexecutor_type\x18\x02 \x01(\tR\fexecutorType\x12#\n" +
@@ -1290,7 +1306,9 @@ const file_q15_exec_v1_execution_proto_rawDesc = "" +
 	"memory_dir\x18\x04 \x01(\tR\tmemoryDir\x12\x1d\n" +
 	"\n" +
 	"skills_dir\x18\x05 \x01(\tR\tskillsDir\x12B\n" +
-	"\fcapabilities\x18\x06 \x03(\v2\x1e.q15.exec.v1.RuntimeCapabilityR\fcapabilities\"\xe1\x03\n" +
+	"\fcapabilities\x18\x06 \x03(\v2\x1e.q15.exec.v1.RuntimeCapabilityR\fcapabilities\x12#\n" +
+	"\rproxy_enabled\x18\a \x01(\bR\fproxyEnabled\x122\n" +
+	"\x15proxy_policy_revision\x18\b \x01(\tR\x13proxyPolicyRevision\"\xe1\x03\n" +
 	"\aSession\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x18\n" +

@@ -24,11 +24,13 @@ func TestGRPCServerRunsSessionsEndToEnd(t *testing.T) {
 		t.Fatalf("NewManager() error = %v", err)
 	}
 	api, err := NewGRPCServer(manager, RuntimeInfo{
-		ServiceVersion: "test",
-		ExecutorType:   "local-shell",
-		WorkspaceDir:   "/workspace",
-		MemoryDir:      "/memory",
-		SkillsDir:      "/skills",
+		ServiceVersion:      "test",
+		ExecutorType:        "local-shell",
+		WorkspaceDir:        "/workspace",
+		MemoryDir:           "/memory",
+		SkillsDir:           "/skills",
+		ProxyEnabled:        true,
+		ProxyPolicyRevision: "rev-123",
 	})
 	if err != nil {
 		t.Fatalf("NewGRPCServer() error = %v", err)
@@ -62,6 +64,12 @@ func TestGRPCServerRunsSessionsEndToEnd(t *testing.T) {
 	}
 	if got := info.GetExecutorType(); got != "local-shell" {
 		t.Fatalf("executor type = %q, want local-shell", got)
+	}
+	if !info.GetProxyEnabled() {
+		t.Fatalf("expected proxy_enabled=true")
+	}
+	if got := info.GetProxyPolicyRevision(); got != "rev-123" {
+		t.Fatalf("proxy policy revision = %q, want rev-123", got)
 	}
 
 	started, err := client.StartSession(ctx, &execpb.StartSessionRequest{

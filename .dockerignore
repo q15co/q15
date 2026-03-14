@@ -1,0 +1,7 @@
+.devenv
+.direnv
+.git
+bin
+revive.log
+result
+result-*

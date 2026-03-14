@@ -1,0 +1,105 @@
+services:
+  proxy-service:
+    build:
+      context: .
+      dockerfile: docker/proxy-service.Dockerfile
+    restart: unless-stopped
+    init: true
+    command: ["serve", "--config", "/root/.config/q15/proxy-service.compose.toml"]
+    environment:
+      JARED_GH_TOKEN: ${JARED_GH_TOKEN-}
+    volumes:
+      - type: bind
+        source: ${Q15_COMPOSE_PROXY_CONFIG}
+        target: /root/.config/q15/proxy-service.compose.toml
+        read_only: true
+      - type: volume
+        source: q15_proxy_state
+        target: /var/lib/q15/proxy-service
+
+  exec-service:
+    build:
+      context: .
+      dockerfile: docker/exec-service.Dockerfile
+    restart: unless-stopped
+    init: true
+    depends_on:
+      - proxy-service
+    command:
+      - "serve"
+      - "--listen"
+      - "0.0.0.0:50051"
+      - "--workspace-dir"
+      - "/workspace"
+      - "--memory-dir"
+      - "/memory"
+      - "--skills-dir"
+      - "/skills"
+      - "--proxy-admin-address"
+      - "proxy-service:50052"
+    volumes:
+      - type: bind
+        source: ${Q15_COMPOSE_EXEC_WORKSPACE_HOST_DIR}
+        target: /workspace
+      - type: bind
+        source: ${Q15_COMPOSE_EXEC_MEMORY_HOST_DIR}
+        target: /memory
+      - type: bind
+        source: ${Q15_COMPOSE_SKILLS_HOST_DIR}
+        target: /skills
+      - type: volume
+        source: q15_exec_nix_store
+        target: /nix
+
+  agent:
+    build:
+      context: .
+      dockerfile: docker/agent.Dockerfile
+    restart: unless-stopped
+    init: true
+    depends_on:
+      - exec-service
+    privileged: true
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
+    command: ["start", "--config", "/root/.config/q15/config.compose.toml"]
+    environment:
+      BUILDAH_ISOLATION: chroot
+      GODEBUG: updatemaxprocs=0
+      GOMAXPROCS: "1"
+      HOME: /root
+      MOONSHOT_API_KEY: ${MOONSHOT_API_KEY-}
+      Q15_BRAVE_API_KEY: ${Q15_BRAVE_API_KEY-}
+      Q15_SANDBOX_VERBOSE: ${Q15_SANDBOX_VERBOSE-0}
+      ZAI_API_KEY: ${ZAI_API_KEY-}
+    volumes:
+      - type: bind
+        source: ${Q15_COMPOSE_CONFIG}
+        target: /root/.config/q15/config.compose.toml
+        read_only: true
+      - type: bind
+        source: ${Q15_COMPOSE_AUTH}
+        target: /root/.config/q15/auth.json
+        read_only: true
+      - type: bind
+        source: ${Q15_COMPOSE_WORKSPACES_HOST_DIR}
+        target: ${Q15_COMPOSE_WORKSPACES_CONTAINER_DIR}
+      - type: bind
+        source: ${Q15_COMPOSE_SKILLS_HOST_DIR}
+        target: ${Q15_COMPOSE_SKILLS_CONTAINER_DIR}
+      - type: bind
+        source: /sys/fs/cgroup
+        target: /sys/fs/cgroup
+      - type: volume
+        source: q15_agent_buildah_storage
+        target: /root/.local/share/q15/buildah-storage
+      - type: volume
+        source: q15_agent_nix_store
+        target: /root/.local/share/q15/nix-store
+
+volumes:
+  q15_agent_buildah_storage:
+  q15_agent_nix_store:
+  q15_exec_nix_store:
+  q15_proxy_state:

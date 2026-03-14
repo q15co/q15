@@ -539,11 +539,29 @@ func runInBuilderRaw(
 	}
 	mounts = append(mounts, sharedNixMount)
 	mounts = append(mounts, proxyExtraMounts(cfg)...)
+	isolation, err := resolveBuildahIsolation()
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve Buildah isolation: %w", err)
+	}
+	runtimePath := ""
+	if isolation != buildah.IsolationChroot {
+		runtimePath, err = resolveOCIRuntimeBinary()
+		if err != nil {
+			return nil, nil, fmt.Errorf("resolve OCI runtime: %w", err)
+		}
+	}
+	verbosef(
+		"runInBuilder: isolation=%v runtime=%q BUILDAH_ISOLATION=%q",
+		isolation,
+		runtimePath,
+		os.Getenv("BUILDAH_ISOLATION"),
+	)
 
 	err = builder.Run(
 		[]string{"/bin/sh", "-c", wrapCommandWithProxyCABundle(cfg, command)},
 		buildah.RunOptions{
-			Isolation:        buildah.IsolationOCIRootless,
+			Isolation:        isolation,
+			Runtime:          runtimePath,
 			Stdout:           &stdout,
 			Stderr:           &stderr,
 			Terminal:         buildah.WithoutTerminal,

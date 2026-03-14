@@ -30,7 +30,9 @@
 # workspace_dir = "/workspace"
 #
 # Optional session-backed exec service. Start q15-exec-service separately and
-# point service_address at it to expose the new exec tool.
+# point service_address at it to expose the new exec tool. Proxy-backed auth
+# env injection now lives behind q15-proxy-service and q15-exec-service, not
+# under [agent.sandbox.proxy].
 # [agent.execution]
 # service_address = "127.0.0.1:50051"
 #

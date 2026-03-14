@@ -26,6 +26,7 @@ const (
 	memoryEnvVar      = "Q15_EXEC_SERVICE_MEMORY_DIR"
 	skillsEnvVar      = "Q15_EXEC_SERVICE_SKILLS_DIR"
 	versionEnvVar     = "Q15_EXEC_SERVICE_VERSION"
+	proxyAdminEnvVar  = "Q15_EXEC_SERVICE_PROXY_ADMIN_ADDRESS"
 )
 
 // Run parses CLI args and runs the requested command.
@@ -62,6 +63,11 @@ func runServe(args []string) error {
 		envOrDefault(versionEnvVar, defaultVersion),
 		"service version label",
 	)
+	proxyAdminAddress := fs.String(
+		"proxy-admin-address",
+		envOrDefault(proxyAdminEnvVar, ""),
+		"proxy admin service address",
+	)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -70,23 +76,25 @@ func runServe(args []string) error {
 	defer cancel()
 
 	return Serve(ctx, Settings{
-		ListenAddr:     *listenAddr,
-		WorkspaceDir:   *workspaceDir,
-		MemoryDir:      *memoryDir,
-		SkillsDir:      *skillsDir,
-		ServiceVersion: *serviceVersion,
-		Executor:       service.NixShellExecutor{},
+		ListenAddr:        *listenAddr,
+		WorkspaceDir:      *workspaceDir,
+		MemoryDir:         *memoryDir,
+		SkillsDir:         *skillsDir,
+		ServiceVersion:    *serviceVersion,
+		ProxyAdminAddress: *proxyAdminAddress,
+		Executor:          service.NixShellExecutor{},
 	})
 }
 
 // Settings configures one gRPC server process.
 type Settings struct {
-	ListenAddr     string
-	WorkspaceDir   string
-	MemoryDir      string
-	SkillsDir      string
-	ServiceVersion string
-	Executor       service.Executor
+	ListenAddr        string
+	WorkspaceDir      string
+	MemoryDir         string
+	SkillsDir         string
+	ServiceVersion    string
+	ProxyAdminAddress string
+	Executor          service.Executor
 }
 
 // Serve starts the gRPC service and blocks until the context is canceled.
@@ -102,20 +110,28 @@ func Serve(ctx context.Context, cfg Settings) error {
 	if cfg.Executor == nil {
 		cfg.Executor = service.NixShellExecutor{}
 	}
+	proxyProfile, cleanupProxy, err := bootstrapProxyRuntime(ctx, cfg.ProxyAdminAddress)
+	if err != nil {
+		return err
+	}
+	defer cleanupProxy()
 
 	manager, err := service.NewManager(service.ManagerConfig{
 		DefaultWorkingDir: cfg.WorkspaceDir,
+		DefaultEnv:        proxyProfile.Env,
 		Executor:          cfg.Executor,
 	})
 	if err != nil {
 		return err
 	}
 	api, err := service.NewGRPCServer(manager, service.RuntimeInfo{
-		ServiceVersion: cfg.ServiceVersion,
-		ExecutorType:   cfg.Executor.Type(),
-		WorkspaceDir:   cfg.WorkspaceDir,
-		MemoryDir:      cfg.MemoryDir,
-		SkillsDir:      cfg.SkillsDir,
+		ServiceVersion:      cfg.ServiceVersion,
+		ExecutorType:        cfg.Executor.Type(),
+		WorkspaceDir:        cfg.WorkspaceDir,
+		MemoryDir:           cfg.MemoryDir,
+		SkillsDir:           cfg.SkillsDir,
+		ProxyEnabled:        proxyProfile.Enabled,
+		ProxyPolicyRevision: proxyProfile.PolicyRevision,
 	})
 	if err != nil {
 		return err

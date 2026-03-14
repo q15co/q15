@@ -84,6 +84,7 @@ func TestComposeSystemPromptIncludesOSRuntimeAndNixBashDetails(t *testing.T) {
 		"- Prefer exec for commands, builds, tests, formatting, git, and other CLI workflows, not for routine file reads or edits.",
 		"- Every exec call must include a non-empty `packages` array of nix installables (for example `nixpkgs#git`).",
 		"- Use exec by providing the user command in `command` and the needed nix installables in `packages`; the execution service starts a session, streams stdout/stderr internally, and returns when the command exits.",
+		"- Use exec for proxy-authenticated CLI flows such as `gh`, `git`, or `curl` when q15 is deployed with a separate proxy-service.",
 		"- exec_nix_shell_bash remains available for legacy compatibility; prefer exec unless you specifically need the older direct sandbox-helper path.",
 		"- Use exec_browser_shell for browser automation, screenshots, scraping, Playwright, Puppeteer, and browser tests.",
 		"- exec_browser_shell provisions the browser-ready nix package set automatically; use `display_mode` `headless` by default and switch to `xvfb` only for headed browser commands that still terminate on their own.",

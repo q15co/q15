@@ -20,6 +20,7 @@ var errSessionNotFound = errors.New("session not found")
 // ManagerConfig configures one in-memory session manager.
 type ManagerConfig struct {
 	DefaultWorkingDir string
+	DefaultEnv        []string
 	Executor          Executor
 }
 
@@ -27,6 +28,7 @@ type ManagerConfig struct {
 type Manager struct {
 	executor          Executor
 	defaultWorkingDir string
+	defaultEnv        []string
 
 	mu       sync.RWMutex
 	sessions map[string]*managedSession
@@ -69,6 +71,7 @@ func NewManager(cfg ManagerConfig) (*Manager, error) {
 	return &Manager{
 		executor:          cfg.Executor,
 		defaultWorkingDir: cfg.DefaultWorkingDir,
+		defaultEnv:        append([]string(nil), cfg.DefaultEnv...),
 		sessions:          make(map[string]*managedSession),
 	}, nil
 }
@@ -98,6 +101,7 @@ func (m *Manager) StartSession(
 		Command:    command,
 		Packages:   packages,
 		WorkingDir: workingDir,
+		Env:        append([]string(nil), m.defaultEnv...),
 	})
 	if err != nil {
 		return nil, err

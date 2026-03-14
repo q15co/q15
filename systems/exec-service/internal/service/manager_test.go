@@ -160,6 +160,52 @@ func TestManagerReturnsNotFoundForUnknownSession(t *testing.T) {
 	}
 }
 
+func TestManagerInjectsDefaultEnvIntoSessions(t *testing.T) {
+	t.Parallel()
+
+	manager, err := NewManager(ManagerConfig{
+		DefaultWorkingDir: t.TempDir(),
+		DefaultEnv: []string{
+			"GH_TOKEN=__Q15_PROXY_ENV_test__",
+			"HTTP_PROXY=http://proxy:8080",
+		},
+		Executor: ShellExecutor{},
+	})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+
+	session, err := manager.StartSession(
+		context.Background(),
+		`printf "%s|%s" "$GH_TOKEN" "$HTTP_PROXY"`,
+		[]string{"ignored"},
+		"",
+		false,
+	)
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+
+	var stdout strings.Builder
+	if err := manager.WatchSession(
+		context.Background(),
+		session.GetSessionId(),
+		0,
+		func(event *execpb.SessionEvent) error {
+			if chunk := event.GetStdout(); chunk != nil {
+				stdout.Write(chunk.GetData())
+			}
+			return nil
+		},
+	); err != nil {
+		t.Fatalf("WatchSession() error = %v", err)
+	}
+
+	if got := stdout.String(); got != "__Q15_PROXY_ENV_test__|http://proxy:8080" {
+		t.Fatalf("stdout = %q", got)
+	}
+}
+
 func newTestManager(t *testing.T) *Manager {
 	t.Helper()
 

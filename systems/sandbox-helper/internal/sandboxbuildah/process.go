@@ -24,6 +24,8 @@ var (
 	statFunc          = os.Stat
 )
 
+var ociRuntimeCandidates = []string{"crun", "runc", "runj", "kata", "runsc", "ocijail"}
+
 // InitProcess must be called at the start of the helper main(). If it returns
 // true, the helper main should return immediately because a Buildah reexec
 // handler ran.
@@ -209,6 +211,66 @@ func ensureNixOSUIDMapWrappers() error {
 		return err
 	}
 	return nil
+}
+
+func resolveOCIRuntimeBinary() (string, error) {
+	if runtime := strings.TrimSpace(os.Getenv("BUILDAH_RUNTIME")); runtime != "" {
+		return resolveRuntimeBinary(runtime)
+	}
+	for _, runtime := range ociRuntimeCandidates {
+		path, err := lookPathFunc(runtime)
+		if err == nil {
+			return path, nil
+		}
+		if !errors.Is(err, exec.ErrNotFound) {
+			return "", fmt.Errorf("resolve %s in PATH: %w", runtime, err)
+		}
+	}
+	return "", fmt.Errorf(
+		"no OCI runtime found in PATH (tried %s)",
+		strings.Join(ociRuntimeCandidates, ", "),
+	)
+}
+
+func resolveRuntimeBinary(runtime string) (string, error) {
+	runtime = strings.TrimSpace(runtime)
+	if runtime == "" {
+		return "", errors.New("OCI runtime is empty")
+	}
+	if filepath.IsAbs(runtime) {
+		info, err := statFunc(runtime)
+		if err != nil {
+			return "", fmt.Errorf("stat %s: %w", runtime, err)
+		}
+		if info.IsDir() {
+			return "", fmt.Errorf("%s is a directory, not an OCI runtime binary", runtime)
+		}
+		return runtime, nil
+	}
+	path, err := lookPathFunc(runtime)
+	if err != nil {
+		return "", fmt.Errorf("resolve %s in PATH: %w", runtime, err)
+	}
+	return path, nil
+}
+
+func resolveBuildahIsolation() (buildah.Isolation, error) {
+	raw := strings.ToLower(strings.TrimSpace(os.Getenv("BUILDAH_ISOLATION")))
+	switch raw {
+	case "":
+		if unshare.IsRootless() {
+			return buildah.IsolationOCIRootless, nil
+		}
+		return buildah.IsolationOCI, nil
+	case "oci", "default":
+		return buildah.IsolationOCI, nil
+	case "rootless", "oci-rootless", "rootless-oci":
+		return buildah.IsolationOCIRootless, nil
+	case "chroot":
+		return buildah.IsolationChroot, nil
+	default:
+		return 0, fmt.Errorf("unsupported BUILDAH_ISOLATION %q", raw)
+	}
 }
 
 func requireAnySetIDBit(path string) error {
