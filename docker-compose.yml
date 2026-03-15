@@ -1,82 +1,97 @@
 services:
-  proxy-service:
+  q15-proxy-service:
     build:
       context: .
       dockerfile: docker/proxy-service.Dockerfile
     restart: unless-stopped
     init: true
-    command: ["serve", "--config", "/root/.config/q15/proxy-service.compose.toml"]
     environment:
-      JARED_GH_TOKEN: ${JARED_GH_TOKEN-}
+      JARED_GH_TOKEN_FILE: /run/secrets/jared_gh_token
+    configs:
+      - source: q15_proxy_policy
+        target: /etc/q15/proxy/policy.yaml
     volumes:
-      - type: bind
-        source: ${Q15_COMPOSE_PROXY_CONFIG}
-        target: /root/.config/q15/proxy-service.compose.toml
-        read_only: true
       - type: volume
         source: q15_proxy_state
         target: /var/lib/q15/proxy-service
+    secrets:
+      - jared_gh_token
 
-  exec-service:
+  q15-exec-service:
     build:
       context: .
       dockerfile: docker/exec-service.Dockerfile
     restart: unless-stopped
     init: true
     depends_on:
-      - proxy-service
-    command:
-      - "serve"
-      - "--listen"
-      - "0.0.0.0:50051"
-      - "--proxy-admin-address"
-      - "proxy-service:50052"
+      - q15-proxy-service
     volumes:
       - type: bind
-        source: ${Q15_COMPOSE_EXEC_WORKSPACE_HOST_DIR}
+        source: .
         target: /workspace
-      - type: bind
-        source: ${Q15_COMPOSE_EXEC_MEMORY_HOST_DIR}
+      - type: volume
+        source: q15_memory
         target: /memory
-      - type: bind
-        source: ${Q15_COMPOSE_SKILLS_HOST_DIR}
+      - type: volume
+        source: q15_skills
         target: /skills
       - type: volume
         source: q15_exec_nix_store
         target: /nix
 
-  agent:
+  q15-agent:
     build:
       context: .
       dockerfile: docker/agent.Dockerfile
     restart: unless-stopped
     init: true
     depends_on:
-      - exec-service
-    command: ["start", "--config", "/root/.config/q15/config.compose.toml"]
+      - q15-exec-service
     environment:
+      HOME: /root
       GODEBUG: updatemaxprocs=0
       GOMAXPROCS: "1"
-      HOME: /root
-      MOONSHOT_API_KEY: ${MOONSHOT_API_KEY-}
+      MOONSHOT_API_KEY_FILE: /run/secrets/moonshot_api_key
+      JARED_TELEGRAM_TOKEN_FILE: /run/secrets/jared_telegram_token
       Q15_BRAVE_API_KEY: ${Q15_BRAVE_API_KEY-}
-      ZAI_API_KEY: ${ZAI_API_KEY-}
+    configs:
+      - source: q15_agent_config
+        target: /etc/q15/agent/config.yaml
     volumes:
       - type: bind
-        source: ${Q15_COMPOSE_CONFIG}
-        target: /root/.config/q15/config.compose.toml
+        source: ./deploy/compose/secrets/q15_auth_json
+        target: /etc/q15/auth/auth.json
         read_only: true
       - type: bind
-        source: ${Q15_COMPOSE_AUTH}
-        target: /root/.config/q15/auth.json
-        read_only: true
-      - type: bind
-        source: ${Q15_COMPOSE_EXEC_WORKSPACE_HOST_DIR}
+        source: .
         target: /workspace
-      - type: bind
-        source: ${Q15_COMPOSE_SKILLS_HOST_DIR}
+      - type: volume
+        source: q15_memory
+        target: /workspace/.q15-memory
+      - type: volume
+        source: q15_skills
         target: /skills
+    secrets:
+      - moonshot_api_key
+      - jared_telegram_token
 
 volumes:
   q15_exec_nix_store:
+  q15_memory:
   q15_proxy_state:
+  q15_skills:
+
+configs:
+  q15_agent_config:
+    file: ./deploy/compose/agent-config.yaml
+  q15_proxy_policy:
+    file: ./deploy/compose/proxy-policy.yaml
+
+# Secret file paths below are local ignored files. Seed them from deploy/compose/secrets/*.example.
+secrets:
+  moonshot_api_key:
+    file: ./deploy/compose/secrets/moonshot_api_key
+  jared_telegram_token:
+    file: ./deploy/compose/secrets/jared_telegram_token
+  jared_gh_token:
+    file: ./deploy/compose/secrets/jared_gh_token

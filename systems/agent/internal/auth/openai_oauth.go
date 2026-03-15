@@ -227,7 +227,7 @@ func resolveOpenAICredential(ctx context.Context) (*Credential, error) {
 		return nil, fmt.Errorf("load q15 auth credential: %w", err)
 	}
 	if cred == nil {
-		return nil, fmt.Errorf("no credentials for openai. Run: q15 auth login --provider openai")
+		return nil, fmt.Errorf("no credentials for openai. Generate auth.json with: q15-auth login")
 	}
 	if strings.TrimSpace(cred.AccessToken) == "" {
 		return nil, fmt.Errorf("openai credential has empty access token")

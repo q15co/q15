@@ -1,0 +1,21 @@
+proxy:
+  no_proxy:
+    - localhost
+    - 127.0.0.1
+    - ::1
+    - q15-proxy-service
+    - q15-exec-service
+  set_lowercase_proxy_env: true
+  secrets:
+    - jared_gh_token
+  rules:
+    - name: github-api
+      match_hosts:
+        - api.github.com
+  env:
+    - name: GH_TOKEN
+      secret: jared_gh_token
+      rules:
+        - github-api
+      in:
+        - header

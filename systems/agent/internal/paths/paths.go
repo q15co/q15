@@ -1,3 +1,4 @@
+// Package paths provides filesystem path helpers for q15 agent auth state.
 package paths
 
 import (
@@ -7,10 +8,11 @@ import (
 )
 
 const (
-	ConfigFileName = "config.toml"
-	AuthFileName   = "auth.json"
+	// AuthFileName is the default auth store filename within the config directory.
+	AuthFileName = "auth.json"
 )
 
+// DefaultConfigDir returns the default per-user q15 config directory.
 func DefaultConfigDir() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -19,22 +21,12 @@ func DefaultConfigDir() (string, error) {
 	return filepath.Join(home, ".config", "q15"), nil
 }
 
-func ConfigPath(configDir string) string {
-	return filepath.Join(configDir, ConfigFileName)
-}
-
+// AuthPath returns the auth store path within the given config directory.
 func AuthPath(configDir string) string {
 	return filepath.Join(configDir, AuthFileName)
 }
 
-func DefaultConfigPath() (string, error) {
-	dir, err := DefaultConfigDir()
-	if err != nil {
-		return "", err
-	}
-	return ConfigPath(dir), nil
-}
-
+// DefaultAuthPath returns the default per-user q15 auth store path.
 func DefaultAuthPath() (string, error) {
 	dir, err := DefaultConfigDir()
 	if err != nil {

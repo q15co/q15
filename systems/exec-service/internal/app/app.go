@@ -1,10 +1,9 @@
-// Package app wires the exec-service CLI into the gRPC server runtime.
+// Package app wires the exec-service runtime into the gRPC server.
 package app
 
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"net"
 	"os"
@@ -17,49 +16,17 @@ import (
 )
 
 const (
-	defaultListenAddr   = "127.0.0.1:50051"
-	defaultVersion      = "dev"
-	runtimeWorkspaceDir = "/workspace"
-	runtimeMemoryDir    = "/memory"
-	runtimeSkillsDir    = "/skills"
-	listenEnvVar        = "Q15_EXEC_SERVICE_LISTEN"
-	versionEnvVar       = "Q15_EXEC_SERVICE_VERSION"
-	proxyAdminEnvVar    = "Q15_EXEC_SERVICE_PROXY_ADMIN_ADDRESS"
+	defaultListenAddr     = ":50051"
+	defaultProxyAdminAddr = "q15-proxy-service:50052"
+	defaultVersion        = "dev"
+	runtimeWorkspaceDir   = "/workspace"
+	runtimeMemoryDir      = "/memory"
+	runtimeSkillsDir      = "/skills"
 )
 
-// Run parses CLI args and runs the requested command.
+// Run validates args and starts the exec-service runtime.
 func Run(args []string) error {
-	if len(args) == 0 {
-		return runServe(nil)
-	}
-	switch strings.TrimSpace(args[0]) {
-	case "", "serve":
-		return runServe(args[1:])
-	default:
-		return fmt.Errorf("usage: q15-exec-service [serve] [flags]")
-	}
-}
-
-func runServe(args []string) error {
-	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-
-	listenAddr := fs.String(
-		"listen",
-		envOrDefault(listenEnvVar, defaultListenAddr),
-		"listen address",
-	)
-	serviceVersion := fs.String(
-		"version",
-		envOrDefault(versionEnvVar, defaultVersion),
-		"service version label",
-	)
-	proxyAdminAddress := fs.String(
-		"proxy-admin-address",
-		envOrDefault(proxyAdminEnvVar, ""),
-		"proxy admin service address",
-	)
-	if err := fs.Parse(args); err != nil {
+	if err := validateArgs(args); err != nil {
 		return err
 	}
 
@@ -67,11 +34,18 @@ func runServe(args []string) error {
 	defer cancel()
 
 	return Serve(ctx, Settings{
-		ListenAddr:        *listenAddr,
-		ServiceVersion:    *serviceVersion,
-		ProxyAdminAddress: *proxyAdminAddress,
+		ListenAddr:        defaultListenAddr,
+		ServiceVersion:    defaultVersion,
+		ProxyAdminAddress: defaultProxyAdminAddr,
 		Executor:          service.NixShellExecutor{},
 	})
+}
+
+func validateArgs(args []string) error {
+	if len(args) == 0 {
+		return nil
+	}
+	return errors.New("q15-exec-service accepts no arguments")
 }
 
 // Settings configures one gRPC server process.
@@ -143,13 +117,6 @@ func Serve(ctx context.Context, cfg Settings) error {
 	case err := <-errCh:
 		return err
 	}
-}
-
-func envOrDefault(name string, fallback string) string {
-	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
-		return value
-	}
-	return fallback
 }
 
 func resolveListenTarget(value string) (string, string) {

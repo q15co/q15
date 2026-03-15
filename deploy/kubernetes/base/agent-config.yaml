@@ -1,0 +1,23 @@
+providers:
+  - name: moonshot
+    type: openai-compatible
+    base_url: https://api.moonshot.ai/v1
+    key_env: MOONSHOT_API_KEY
+
+models:
+  - name: kimi-k2.5
+    provider: moonshot
+    capabilities:
+      - text
+      - tool_calling
+      - reasoning
+
+agent:
+  name: Jared
+  models:
+    - kimi-k2.5
+  memory_recent_turns: 6
+  telegram:
+    token_env: JARED_TELEGRAM_TOKEN
+    allowed_user_ids:
+      - 123456789
