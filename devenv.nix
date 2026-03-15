@@ -8,10 +8,6 @@
     ps.mdformat-gfm
     ps.mdformat-frontmatter
   ]);
-  containerHelperBins = pkgs.symlinkJoin {
-    name = "q15-container-helpers";
-    paths = [pkgs.netavark pkgs.aardvark-dns];
-  };
 in {
   cachix.enable = false;
   git-hooks.package = pkgs.prek;
@@ -25,16 +21,6 @@ in {
     [
       gnumake
       git
-
-      podman
-      buildah
-      netavark
-      aardvark-dns
-      fuse-overlayfs
-      # Intentionally exclude `shadow`: Nix-store newuidmap/newgidmap break rootless
-      # Buildah/Podman on NixOS; use host wrappers in /run/wrappers/bin instead.
-      slirp4netns
-      crun
 
       actionlint
       shellcheck
@@ -115,8 +101,6 @@ in {
     GOPROXY = "https://proxy.golang.org,direct";
     GOSUMDB = "sum.golang.org";
     CGO_ENABLED = "0";
-    GOFLAGS = "-tags=containers_image_openpgp,exclude_graphdriver_btrfs";
-    CONTAINERS_HELPER_BINARY_DIR = "${containerHelperBins}/bin";
   };
 
   enterShell = ''

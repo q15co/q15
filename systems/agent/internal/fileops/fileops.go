@@ -1,5 +1,5 @@
-// Package sandboxfiles implements helper-side rooted file operations for sandbox workspaces.
-package sandboxfiles
+// Package fileops provides rooted UTF-8 file tools for workspace, memory, and skills paths.
+package fileops
 
 import (
 	"bytes"
@@ -13,8 +13,6 @@ import (
 	"sort"
 	"strings"
 	"unicode/utf8"
-
-	sandboxcontract "github.com/q15co/q15/libs/sandbox-contract"
 )
 
 const (
@@ -24,21 +22,16 @@ const (
 	diffContextLines      = 3
 )
 
-// Settings describes the rooted host/container directory mapping used by helper file ops.
-type Settings struct {
-	WorkspaceHostDir string
-	WorkspaceDir     string
-	MemoryHostDir    string
-	MemoryDir        string
-	SkillsHostDir    string
-	SkillsDir        string
+type resolvedPath struct {
+	rootLocalDir string
+	rootRuntime  string
+	rel          string
+	runtimePath  string
 }
 
-type resolvedPath struct {
-	rootHostDir   string
-	rootContainer string
-	rel           string
-	containerPath string
+type runtimeRootMapping struct {
+	localDir   string
+	runtimeDir string
 }
 
 type textFile struct {
@@ -62,39 +55,36 @@ type desiredFileState struct {
 }
 
 // ReadFile performs a rooted text file read with optional paging.
-func ReadFile(
-	cfg Settings,
-	req sandboxcontract.ReadFileRequest,
-) (sandboxcontract.ReadFileResult, error) {
-	resolved, err := resolvePath(cfg, req.Path)
+func ReadFile(cfg Settings, rawPath string, offsetLines int, limitLines int) (ReadResult, error) {
+	resolved, err := resolvePath(cfg, rawPath)
 	if err != nil {
-		return sandboxcontract.ReadFileResult{}, err
+		return ReadResult{}, err
 	}
-	root, err := os.OpenRoot(resolved.rootHostDir)
+	root, err := os.OpenRoot(resolved.rootLocalDir)
 	if err != nil {
-		return sandboxcontract.ReadFileResult{}, fmt.Errorf("open root: %w", err)
+		return ReadResult{}, fmt.Errorf("open root: %w", err)
 	}
 	defer root.Close()
 
 	tf, err := readTextFile(root, resolved.rel)
 	if err != nil {
-		return sandboxcontract.ReadFileResult{}, err
+		return ReadResult{}, err
 	}
 
-	offset := req.OffsetLines
+	offset := offsetLines
 	if offset == 0 {
 		offset = 1
 	}
 	if offset < 1 {
-		return sandboxcontract.ReadFileResult{}, fmt.Errorf("offset_lines must be >= 1")
+		return ReadResult{}, fmt.Errorf("offset_lines must be >= 1")
 	}
 
-	limit := req.LimitLines
+	limit := limitLines
 	if limit == 0 {
 		limit = defaultReadLimitLines
 	}
 	if limit < 1 {
-		return sandboxcontract.ReadFileResult{}, fmt.Errorf("limit_lines must be >= 1")
+		return ReadResult{}, fmt.Errorf("limit_lines must be >= 1")
 	}
 	if limit > maxReadLimitLines {
 		limit = maxReadLimitLines
@@ -104,140 +94,118 @@ func ReadFile(
 }
 
 // WriteFile performs an atomic rooted text file write.
-func WriteFile(
-	cfg Settings,
-	req sandboxcontract.WriteFileRequest,
-) (sandboxcontract.WriteFileResult, error) {
-	resolved, err := resolvePath(cfg, req.Path)
+func WriteFile(cfg Settings, rawPath string, content string) (WriteResult, error) {
+	resolved, err := resolvePath(cfg, rawPath)
 	if err != nil {
-		return sandboxcontract.WriteFileResult{}, err
+		return WriteResult{}, err
 	}
-	if !utf8.ValidString(req.Content) {
-		return sandboxcontract.WriteFileResult{}, fmt.Errorf("content must be valid UTF-8")
+	if !utf8.ValidString(content) {
+		return WriteResult{}, fmt.Errorf("content must be valid UTF-8")
 	}
 
-	root, err := os.OpenRoot(resolved.rootHostDir)
+	root, err := os.OpenRoot(resolved.rootLocalDir)
 	if err != nil {
-		return sandboxcontract.WriteFileResult{}, fmt.Errorf("open root: %w", err)
+		return WriteResult{}, fmt.Errorf("open root: %w", err)
 	}
 	defer root.Close()
 
-	if err := writeAtomic(root, resolved.rel, []byte(req.Content)); err != nil {
-		return sandboxcontract.WriteFileResult{}, err
+	if err := writeAtomic(root, resolved.rel, []byte(content)); err != nil {
+		return WriteResult{}, err
 	}
-	return sandboxcontract.WriteFileResult{
-		Path:         resolved.containerPath,
-		BytesWritten: len(req.Content),
+	return WriteResult{
+		Path:         resolved.runtimePath,
+		BytesWritten: len(content),
 	}, nil
 }
 
 // EditFile performs one exact text replacement with line-ending preservation.
-func EditFile(
-	cfg Settings,
-	req sandboxcontract.EditFileRequest,
-) (sandboxcontract.EditFileResult, error) {
-	resolved, err := resolvePath(cfg, req.Path)
+func EditFile(cfg Settings, rawPath string, oldText string, newText string) (EditResult, error) {
+	resolved, err := resolvePath(cfg, rawPath)
 	if err != nil {
-		return sandboxcontract.EditFileResult{}, err
+		return EditResult{}, err
 	}
-	if req.OldText == "" {
-		return sandboxcontract.EditFileResult{}, fmt.Errorf("old_text is required")
+	if oldText == "" {
+		return EditResult{}, fmt.Errorf("old_text is required")
 	}
 
-	root, err := os.OpenRoot(resolved.rootHostDir)
+	root, err := os.OpenRoot(resolved.rootLocalDir)
 	if err != nil {
-		return sandboxcontract.EditFileResult{}, fmt.Errorf("open root: %w", err)
+		return EditResult{}, fmt.Errorf("open root: %w", err)
 	}
 	defer root.Close()
 
 	tf, err := readTextFile(root, resolved.rel)
 	if err != nil {
-		return sandboxcontract.EditFileResult{}, err
+		return EditResult{}, err
 	}
 
-	normalizedOld := normalizeLineEndings(req.OldText)
-	normalizedNew := normalizeLineEndings(req.NewText)
+	normalizedOld := normalizeLineEndings(oldText)
+	normalizedNew := normalizeLineEndings(newText)
 	normalizedContent := normalizeLineEndings(tf.text)
 
 	occurrences := strings.Count(normalizedContent, normalizedOld)
 	switch {
 	case occurrences == 0:
-		return sandboxcontract.EditFileResult{}, fmt.Errorf("old_text not found in file")
+		return EditResult{}, fmt.Errorf("old_text not found in file")
 	case occurrences > 1:
-		return sandboxcontract.EditFileResult{}, fmt.Errorf(
-			"old_text appears %d times",
-			occurrences,
-		)
+		return EditResult{}, fmt.Errorf("old_text appears %d times", occurrences)
 	}
 
 	updatedNormalized := strings.Replace(normalizedContent, normalizedOld, normalizedNew, 1)
 	if updatedNormalized == normalizedContent {
-		return sandboxcontract.EditFileResult{}, fmt.Errorf("replacement produced no change")
+		return EditResult{}, fmt.Errorf("replacement produced no change")
 	}
 
 	finalText := restoreLineEndings(updatedNormalized, tf.lineEnding)
 	finalRaw := append(append([]byte(nil), tf.bom...), []byte(finalText)...)
 
 	if err := writeAtomic(root, resolved.rel, finalRaw); err != nil {
-		return sandboxcontract.EditFileResult{}, err
+		return EditResult{}, err
 	}
 
 	diff, firstChangedLine := compactDiff(normalizedContent, updatedNormalized)
-	return sandboxcontract.EditFileResult{
-		Path:             resolved.containerPath,
+	return EditResult{
+		Path:             resolved.runtimePath,
 		Diff:             diff,
 		FirstChangedLine: firstChangedLine,
 	}, nil
 }
 
 // ApplyPatch performs a rooted multi-file Codex-style patch application.
-func ApplyPatch(
-	cfg Settings,
-	req sandboxcontract.ApplyPatchRequest,
-) (sandboxcontract.ApplyPatchResult, error) {
-	parsed, err := parsePatch(req.Patch)
+func ApplyPatch(cfg Settings, patch string) (ApplyPatchResult, error) {
+	parsed, err := parsePatch(patch)
 	if err != nil {
-		return sandboxcontract.ApplyPatchResult{}, err
+		return ApplyPatchResult{}, err
 	}
 	desired, snapshots, diff, changed, summary, err := buildPatchPlan(cfg, parsed)
 	if err != nil {
-		return sandboxcontract.ApplyPatchResult{}, err
+		return ApplyPatchResult{}, err
 	}
 	if err := commitDesiredStates(desired, snapshots); err != nil {
-		return sandboxcontract.ApplyPatchResult{}, err
+		return ApplyPatchResult{}, err
 	}
-	return sandboxcontract.ApplyPatchResult{
+	return ApplyPatchResult{
 		ChangedFiles: changed,
 		Diff:         diff,
 		Summary:      summary,
 	}, nil
 }
 
-func paginateText(
-	text string,
-	offsetLines int,
-	limitLines int,
-) (sandboxcontract.ReadFileResult, error) {
+func paginateText(text string, offsetLines int, limitLines int) (ReadResult, error) {
 	lines := splitLogicalLines(normalizeLineEndings(text))
 	totalLines := len(lines)
 	if totalLines == 0 {
 		if offsetLines != 1 {
-			return sandboxcontract.ReadFileResult{}, fmt.Errorf(
-				"offset_lines %d is beyond end of file",
-				offsetLines,
-			)
+			return ReadResult{}, fmt.Errorf("offset_lines %d is beyond end of file", offsetLines)
 		}
-		return sandboxcontract.ReadFileResult{
+		return ReadResult{
 			Content:    "",
 			TotalLines: 0,
 		}, nil
 	}
 	start := offsetLines - 1
 	if start >= totalLines {
-		return sandboxcontract.ReadFileResult{}, fmt.Errorf(
-			"offset_lines %d is beyond end of file",
-			offsetLines,
-		)
+		return ReadResult{}, fmt.Errorf("offset_lines %d is beyond end of file", offsetLines)
 	}
 
 	var out []string
@@ -253,7 +221,7 @@ func paginateText(
 		}
 		if bytesUsed+lineBytes > maxReadBytes {
 			if len(out) == 0 {
-				return sandboxcontract.ReadFileResult{}, fmt.Errorf(
+				return ReadResult{}, fmt.Errorf(
 					"requested line exceeds %d byte output limit",
 					maxReadBytes,
 				)
@@ -271,7 +239,7 @@ func paginateText(
 		nextOffset = start + len(out) + 1
 	}
 
-	result := sandboxcontract.ReadFileResult{
+	result := ReadResult{
 		Content:    strings.Join(out, "\n"),
 		Truncated:  truncated,
 		TotalLines: totalLines,
@@ -288,71 +256,24 @@ func resolvePath(cfg Settings, raw string) (resolvedPath, error) {
 		return resolvedPath{}, fmt.Errorf("path is required")
 	}
 
-	workspaceDir := normalizeContainerRoot(cfg.WorkspaceDir)
-	memoryDir := normalizeContainerRoot(cfg.MemoryDir)
-	skillsDir := normalizeContainerRoot(cfg.SkillsDir)
-
 	if path.IsAbs(raw) {
-		cleaned := path.Clean(raw)
-		switch {
-		case cleaned == workspaceDir || cleaned == memoryDir || cleaned == skillsDir:
-			return resolvedPath{}, fmt.Errorf("path must reference a file, not a root")
-		case strings.HasPrefix(cleaned, workspaceDir+"/"):
-			rel := strings.TrimPrefix(cleaned, workspaceDir+"/")
-			if err := validateRelativePath(rel); err != nil {
-				return resolvedPath{}, err
-			}
-			return resolvedPath{
-				rootHostDir:   strings.TrimSpace(cfg.WorkspaceHostDir),
-				rootContainer: workspaceDir,
-				rel:           filepath.FromSlash(rel),
-				containerPath: cleaned,
-			}, nil
-		case strings.HasPrefix(cleaned, memoryDir+"/"):
-			rel := strings.TrimPrefix(cleaned, memoryDir+"/")
-			if err := validateRelativePath(rel); err != nil {
-				return resolvedPath{}, err
-			}
-			return resolvedPath{
-				rootHostDir:   strings.TrimSpace(cfg.MemoryHostDir),
-				rootContainer: memoryDir,
-				rel:           filepath.FromSlash(rel),
-				containerPath: cleaned,
-			}, nil
-		case skillsDir != "" && strings.HasPrefix(cleaned, skillsDir+"/"):
-			rel := strings.TrimPrefix(cleaned, skillsDir+"/")
-			if err := validateRelativePath(rel); err != nil {
-				return resolvedPath{}, err
-			}
-			return resolvedPath{
-				rootHostDir:   strings.TrimSpace(cfg.SkillsHostDir),
-				rootContainer: skillsDir,
-				rel:           filepath.FromSlash(rel),
-				containerPath: cleaned,
-			}, nil
-		default:
-			return resolvedPath{}, fmt.Errorf(
-				"absolute paths must be under %s, %s, or %s",
-				workspaceDir,
-				memoryDir,
-				skillsDir,
-			)
-		}
+		return resolveAbsolutePath(cfg, path.Clean(raw))
 	}
 
+	workspaceRuntimeDir := normalizeRuntimeRoot(cfg.WorkspaceRuntimeDir)
 	cleaned := path.Clean(raw)
 	if err := validateRelativePath(cleaned); err != nil {
 		return resolvedPath{}, err
 	}
 	return resolvedPath{
-		rootHostDir:   strings.TrimSpace(cfg.WorkspaceHostDir),
-		rootContainer: workspaceDir,
-		rel:           filepath.FromSlash(cleaned),
-		containerPath: path.Join(workspaceDir, cleaned),
+		rootLocalDir: strings.TrimSpace(cfg.WorkspaceLocalDir),
+		rootRuntime:  workspaceRuntimeDir,
+		rel:          filepath.FromSlash(cleaned),
+		runtimePath:  path.Join(workspaceRuntimeDir, cleaned),
 	}, nil
 }
 
-func normalizeContainerRoot(root string) string {
+func normalizeRuntimeRoot(root string) string {
 	root = strings.TrimSpace(root)
 	if root == "" {
 		return ""
@@ -362,6 +283,71 @@ func normalizeContainerRoot(root string) string {
 		return ""
 	}
 	return cleaned
+}
+
+func resolveAbsolutePath(cfg Settings, cleaned string) (resolvedPath, error) {
+	roots := configuredAbsoluteRoots(cfg)
+	for _, root := range roots {
+		if cleaned == root.runtimeDir {
+			return resolvedPath{}, fmt.Errorf("path must reference a file, not a root")
+		}
+	}
+	for _, root := range roots {
+		if strings.HasPrefix(cleaned, root.runtimeDir+"/") {
+			rel := strings.TrimPrefix(cleaned, root.runtimeDir+"/")
+			if err := validateRelativePath(rel); err != nil {
+				return resolvedPath{}, err
+			}
+			return resolvedPath{
+				rootLocalDir: root.localDir,
+				rootRuntime:  root.runtimeDir,
+				rel:          filepath.FromSlash(rel),
+				runtimePath:  cleaned,
+			}, nil
+		}
+	}
+
+	rootNames := make([]string, 0, len(roots))
+	for _, root := range roots {
+		rootNames = append(rootNames, root.runtimeDir)
+	}
+	return resolvedPath{}, fmt.Errorf(
+		"absolute paths must be under %s",
+		strings.Join(rootNames, ", "),
+	)
+}
+
+func configuredAbsoluteRoots(cfg Settings) []runtimeRootMapping {
+	roots := []runtimeRootMapping{
+		{
+			localDir:   strings.TrimSpace(cfg.WorkspaceLocalDir),
+			runtimeDir: normalizeRuntimeRoot(cfg.WorkspaceRuntimeDir),
+		},
+		{
+			localDir:   strings.TrimSpace(cfg.MemoryLocalDir),
+			runtimeDir: normalizeRuntimeRoot(cfg.MemoryRuntimeDir),
+		},
+		{
+			localDir:   strings.TrimSpace(cfg.SkillsLocalDir),
+			runtimeDir: normalizeRuntimeRoot(cfg.SkillsRuntimeDir),
+		},
+	}
+
+	filtered := make([]runtimeRootMapping, 0, len(roots))
+	for _, root := range roots {
+		if root.runtimeDir == "" {
+			continue
+		}
+		filtered = append(filtered, root)
+	}
+
+	sort.SliceStable(filtered, func(i, j int) bool {
+		if len(filtered[i].runtimeDir) == len(filtered[j].runtimeDir) {
+			return filtered[i].runtimeDir < filtered[j].runtimeDir
+		}
+		return len(filtered[i].runtimeDir) > len(filtered[j].runtimeDir)
+	})
+	return filtered
 }
 
 func validateRelativePath(rel string) error {
@@ -585,7 +571,7 @@ func commitDesiredStates(
 	applied := make([]string, 0, len(keys))
 	for _, key := range keys {
 		state := desired[key]
-		root, err := os.OpenRoot(state.resolved.rootHostDir)
+		root, err := os.OpenRoot(state.resolved.rootLocalDir)
 		if err != nil {
 			return fmt.Errorf("open root: %w", err)
 		}
@@ -615,7 +601,7 @@ func rollbackDesiredStates(
 		state := desired[key]
 		snapshot := snapshots[key]
 
-		root, err := os.OpenRoot(state.resolved.rootHostDir)
+		root, err := os.OpenRoot(state.resolved.rootLocalDir)
 		if err != nil {
 			continue
 		}

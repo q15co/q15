@@ -1,3 +1,4 @@
+// Package tools provides model-callable runtime tools for the agent.
 package tools
 
 import (
@@ -31,7 +32,6 @@ func (e *Exec) Definition() agent.ToolDefinition {
 		Name:        "exec",
 		Description: "Execute a command through the configured execution service using session-backed command execution",
 		PromptGuidance: []string{
-			"Prefer this over exec_nix_shell_bash when the exec tool is available.",
 			"Use for commands, builds, tests, formatting, git, and other CLI workflows.",
 			"Every call must include a non-empty packages array of required nix installables.",
 			"The exec service starts a command session and waits for it to complete before returning stdout, stderr, and exit status.",
@@ -171,4 +171,19 @@ func formatExecSessionResult(
 	lines = append(lines, "--- STDERR ---")
 	lines = append(lines, stderr)
 	return strings.Join(lines, "\n")
+}
+
+func normalizePackages(packages []string) ([]string, error) {
+	if len(packages) == 0 {
+		return nil, fmt.Errorf("missing required argument: packages")
+	}
+	out := make([]string, 0, len(packages))
+	for i, pkg := range packages {
+		pkg = strings.TrimSpace(pkg)
+		if pkg == "" {
+			return nil, fmt.Errorf("packages[%d] must not be empty", i)
+		}
+		out = append(out, pkg)
+	}
+	return out, nil
 }

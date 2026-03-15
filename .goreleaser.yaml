@@ -15,15 +15,25 @@ builds:
     flags:
       - -trimpath
 
-  - id: q15-sandbox-helper
-    dir: systems/sandbox-helper
+  - id: q15-exec-service
+    dir: systems/exec-service
     main: .
-    binary: q15-sandbox-helper
+    binary: q15-exec-service
     env:
-      - CGO_ENABLED=1
-    tags:
-      - containers_image_openpgp
-      - exclude_graphdriver_btrfs
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+    flags:
+      - -trimpath
+
+  - id: q15-proxy-service
+    dir: systems/proxy-service
+    main: .
+    binary: q15-proxy-service
+    env:
+      - CGO_ENABLED=0
     goos:
       - linux
     goarch:
@@ -35,7 +45,8 @@ archives:
   - id: q15-linux
     ids:
       - q15
-      - q15-sandbox-helper
+      - q15-exec-service
+      - q15-proxy-service
     formats:
       - tar.gz
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"

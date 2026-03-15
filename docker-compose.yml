@@ -29,12 +29,6 @@ services:
       - "serve"
       - "--listen"
       - "0.0.0.0:50051"
-      - "--workspace-dir"
-      - "/workspace"
-      - "--memory-dir"
-      - "/memory"
-      - "--skills-dir"
-      - "/skills"
       - "--proxy-admin-address"
       - "proxy-service:50052"
     volumes:
@@ -59,19 +53,13 @@ services:
     init: true
     depends_on:
       - exec-service
-    privileged: true
-    security_opt:
-      - seccomp=unconfined
-      - apparmor=unconfined
     command: ["start", "--config", "/root/.config/q15/config.compose.toml"]
     environment:
-      BUILDAH_ISOLATION: chroot
       GODEBUG: updatemaxprocs=0
       GOMAXPROCS: "1"
       HOME: /root
       MOONSHOT_API_KEY: ${MOONSHOT_API_KEY-}
       Q15_BRAVE_API_KEY: ${Q15_BRAVE_API_KEY-}
-      Q15_SANDBOX_VERBOSE: ${Q15_SANDBOX_VERBOSE-0}
       ZAI_API_KEY: ${ZAI_API_KEY-}
     volumes:
       - type: bind
@@ -83,23 +71,12 @@ services:
         target: /root/.config/q15/auth.json
         read_only: true
       - type: bind
-        source: ${Q15_COMPOSE_WORKSPACES_HOST_DIR}
-        target: ${Q15_COMPOSE_WORKSPACES_CONTAINER_DIR}
+        source: ${Q15_COMPOSE_EXEC_WORKSPACE_HOST_DIR}
+        target: /workspace
       - type: bind
         source: ${Q15_COMPOSE_SKILLS_HOST_DIR}
-        target: ${Q15_COMPOSE_SKILLS_CONTAINER_DIR}
-      - type: bind
-        source: /sys/fs/cgroup
-        target: /sys/fs/cgroup
-      - type: volume
-        source: q15_agent_buildah_storage
-        target: /root/.local/share/q15/buildah-storage
-      - type: volume
-        source: q15_agent_nix_store
-        target: /root/.local/share/q15/nix-store
+        target: /skills
 
 volumes:
-  q15_agent_buildah_storage:
-  q15_agent_nix_store:
   q15_exec_nix_store:
   q15_proxy_state:

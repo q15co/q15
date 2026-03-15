@@ -7,30 +7,30 @@ import (
 	"fmt"
 	"strings"
 
-	sandboxcontract "github.com/q15co/q15/libs/sandbox-contract"
 	"github.com/q15co/q15/systems/agent/internal/agent"
+	"github.com/q15co/q15/systems/agent/internal/fileops"
 )
 
-// FileToolExecutor performs helper-backed file operations inside the sandbox roots.
+// FileToolExecutor performs rooted file operations inside the runtime-visible roots.
 type FileToolExecutor interface {
 	ReadFile(
 		ctx context.Context,
 		path string,
 		offsetLines int,
 		limitLines int,
-	) (sandboxcontract.ReadFileResult, error)
+	) (fileops.ReadResult, error)
 	WriteFile(
 		ctx context.Context,
 		path string,
 		content string,
-	) (sandboxcontract.WriteFileResult, error)
+	) (fileops.WriteResult, error)
 	EditFile(
 		ctx context.Context,
 		path string,
 		oldText string,
 		newText string,
-	) (sandboxcontract.EditFileResult, error)
-	ApplyPatch(ctx context.Context, patch string) (sandboxcontract.ApplyPatchResult, error)
+	) (fileops.EditResult, error)
+	ApplyPatch(ctx context.Context, patch string) (fileops.ApplyPatchResult, error)
 }
 
 // ReadFile reads a UTF-8 text file from /workspace, /memory, or /skills.

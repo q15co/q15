@@ -32,7 +32,7 @@
           src = ./.;
           modRoot = "systems/agent";
           subPackages = ["."];
-          vendorHash = "sha256-4grjVEpT9dUESNctj8ndUFlISwoJO3N+6/46+gZclP4=";
+          vendorHash = "sha256-m0dFIsRsenClg2dkk07G28fyrhpeLQcNmxzEj0NiLP8=";
           env = {
             GOWORK = "off";
           };
@@ -47,7 +47,7 @@
           src = ./.;
           modRoot = "systems/exec-service";
           subPackages = ["."];
-          vendorHash = "sha256-+VZjMRW9gEfhoIf0+z2hlXiZ95iyl9qxCeuc7N9hEN8=";
+          vendorHash = "sha256-haplAug8zOkavCfCUq6aJ/fKGfx5ZIoNXOWRoIjk87Q=";
           env = {
             GOWORK = "off";
           };
@@ -62,34 +62,12 @@
           src = ./.;
           modRoot = "systems/proxy-service";
           subPackages = ["."];
-          vendorHash = "sha256-qUfHD4a1cD8tmilkfrF1shD+2C77uB8J97oavm7aFsA=";
+          vendorHash = "sha256-xsDafC/FEZA6fM7MHM/RUQl9LGRrUdS/bmQTRpd2Qn0=";
           env = {
             GOWORK = "off";
           };
           postInstall = ''
             mv "$out/bin/proxy-service" "$out/bin/q15-proxy-service"
-          '';
-        };
-
-        q15SandboxHelper = pkgs.buildGoModule {
-          pname = "q15-sandbox-helper";
-          inherit version;
-          src = ./.;
-          modRoot = "systems/sandbox-helper";
-          subPackages = ["."];
-          vendorHash = "sha256-n/NuOY9KC9/4XD25OmMaxlK8Ys8zdXsxcSkjoskG7ho=";
-          tags = [
-            "containers_image_openpgp"
-            "exclude_graphdriver_btrfs"
-          ];
-          env = {
-            GOWORK = "off";
-          };
-          preBuild = ''
-            export CGO_ENABLED=1
-          '';
-          postInstall = ''
-            mv "$out/bin/sandbox-helper" "$out/bin/q15-sandbox-helper"
           '';
         };
         q15Package = pkgs.symlinkJoin {
@@ -98,14 +76,12 @@
             q15Agent
             q15ExecService
             q15ProxyService
-            q15SandboxHelper
           ];
         };
       in {
         q15-agent = q15Agent;
         q15-exec-service = q15ExecService;
         q15-proxy-service = q15ProxyService;
-        q15-sandbox-helper = q15SandboxHelper;
         q15 = q15Package;
         default = q15Package;
       }

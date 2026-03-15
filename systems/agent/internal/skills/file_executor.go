@@ -7,10 +7,10 @@ import (
 	"path"
 	"strings"
 
-	sandboxcontract "github.com/q15co/q15/libs/sandbox-contract"
+	"github.com/q15co/q15/systems/agent/internal/fileops"
 )
 
-// FileToolDelegate is the helper-backed file executor used for shared,
+// FileToolDelegate is the rooted file executor used for shared,
 // workspace, and memory paths.
 type FileToolDelegate interface {
 	ReadFile(
@@ -18,23 +18,23 @@ type FileToolDelegate interface {
 		path string,
 		offsetLines int,
 		limitLines int,
-	) (sandboxcontract.ReadFileResult, error)
+	) (fileops.ReadResult, error)
 	WriteFile(
 		ctx context.Context,
 		path string,
 		content string,
-	) (sandboxcontract.WriteFileResult, error)
+	) (fileops.WriteResult, error)
 	EditFile(
 		ctx context.Context,
 		path string,
 		oldText string,
 		newText string,
-	) (sandboxcontract.EditFileResult, error)
-	ApplyPatch(ctx context.Context, patch string) (sandboxcontract.ApplyPatchResult, error)
+	) (fileops.EditResult, error)
+	ApplyPatch(ctx context.Context, patch string) (fileops.ApplyPatchResult, error)
 }
 
 // FileExecutor adds builtin skill reads and shared-skills configuration checks
-// on top of the helper-backed file executor.
+// on top of the rooted file executor.
 type FileExecutor struct {
 	delegate FileToolDelegate
 	manager  *Manager
@@ -54,17 +54,17 @@ func (e *FileExecutor) ReadFile(
 	rawPath string,
 	offsetLines int,
 	limitLines int,
-) (sandboxcontract.ReadFileResult, error) {
+) (fileops.ReadResult, error) {
 	if e.manager != nil {
 		if result, handled, err := e.manager.ReadBuiltinFile(rawPath, offsetLines, limitLines); handled {
 			return result, err
 		}
 		if err := e.validateSharedFilesystemAccess(rawPath); err != nil {
-			return sandboxcontract.ReadFileResult{}, err
+			return fileops.ReadResult{}, err
 		}
 	}
 	if e.delegate == nil {
-		return sandboxcontract.ReadFileResult{}, fmt.Errorf("no file executor configured")
+		return fileops.ReadResult{}, fmt.Errorf("no file executor configured")
 	}
 	return e.delegate.ReadFile(ctx, rawPath, offsetLines, limitLines)
 }
@@ -74,12 +74,12 @@ func (e *FileExecutor) WriteFile(
 	ctx context.Context,
 	rawPath string,
 	content string,
-) (sandboxcontract.WriteFileResult, error) {
+) (fileops.WriteResult, error) {
 	if err := e.ensureWritablePath(rawPath); err != nil {
-		return sandboxcontract.WriteFileResult{}, err
+		return fileops.WriteResult{}, err
 	}
 	if e.delegate == nil {
-		return sandboxcontract.WriteFileResult{}, fmt.Errorf("no file executor configured")
+		return fileops.WriteResult{}, fmt.Errorf("no file executor configured")
 	}
 	return e.delegate.WriteFile(ctx, rawPath, content)
 }
@@ -90,12 +90,12 @@ func (e *FileExecutor) EditFile(
 	rawPath string,
 	oldText string,
 	newText string,
-) (sandboxcontract.EditFileResult, error) {
+) (fileops.EditResult, error) {
 	if err := e.ensureWritablePath(rawPath); err != nil {
-		return sandboxcontract.EditFileResult{}, err
+		return fileops.EditResult{}, err
 	}
 	if e.delegate == nil {
-		return sandboxcontract.EditFileResult{}, fmt.Errorf("no file executor configured")
+		return fileops.EditResult{}, fmt.Errorf("no file executor configured")
 	}
 	return e.delegate.EditFile(ctx, rawPath, oldText, newText)
 }
@@ -104,23 +104,23 @@ func (e *FileExecutor) EditFile(
 func (e *FileExecutor) ApplyPatch(
 	ctx context.Context,
 	patch string,
-) (sandboxcontract.ApplyPatchResult, error) {
+) (fileops.ApplyPatchResult, error) {
 	if e.manager != nil {
 		root := path.Join(e.manager.SkillsDir(), BuiltinNamespace)
 		if strings.Contains(patch, root) {
-			return sandboxcontract.ApplyPatchResult{}, fmt.Errorf(
+			return fileops.ApplyPatchResult{}, fmt.Errorf(
 				"builtin skills under %s are read-only",
 				root,
 			)
 		}
 		if strings.Contains(patch, e.manager.SkillsDir()+"/") && !e.manager.SharedSkillsEnabled() {
-			return sandboxcontract.ApplyPatchResult{}, fmt.Errorf(
+			return fileops.ApplyPatchResult{}, fmt.Errorf(
 				"shared skills root is not configured",
 			)
 		}
 	}
 	if e.delegate == nil {
-		return sandboxcontract.ApplyPatchResult{}, fmt.Errorf("no file executor configured")
+		return fileops.ApplyPatchResult{}, fmt.Errorf("no file executor configured")
 	}
 	return e.delegate.ApplyPatch(ctx, patch)
 }

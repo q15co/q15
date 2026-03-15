@@ -1,209 +1,58 @@
 # q15
 
-Telegram-based shell agent with sandboxed command execution and OpenAI-compatible or OpenAI
-Codex-subscription model providers.
+`q15` is a Telegram-based coding agent split across three long-lived services:
 
-## Requirements
+- `q15`: the agent process
+- `q15-exec-service`: command execution and session lifecycle
+- `q15-proxy-service`: proxy policy and auth-env mediation
 
-- Linux (sandbox runtime is rootless Buildah)
-- Go (for local builds/runs)
-- Buildah (sandbox runtime)
-- A Telegram bot token
-- API key(s) for your configured model provider(s)
-- A working C toolchain for building `q15-sandbox-helper` locally (`make run` builds it with cgo)
-- `q15-exec-service` if you enable `[agent.execution]`
-- `q15-proxy-service` if you enable proxy-backed auth env injection for exec sessions
+The Buildah sandbox path has been removed. File operations now run directly in the agent against its
+mounted workspace and skills volumes, while command execution goes through `q15-exec-service`.
 
-On NixOS, rootless sandbox startup requires the host wrapper helpers:
+## Architecture
 
-- `/run/wrappers/bin/newuidmap`
-- `/run/wrappers/bin/newgidmap`
+- The agent owns prompt assembly, tool wiring, Telegram I/O, memory management, and rooted file
+  operations.
+- `exec-service` owns command execution and reports the authoritative model-visible runtime
+  directories: `/workspace`, `/memory`, and `/skills`.
+- `proxy-service` owns policy, egress, and auth-env injection for exec sessions.
 
-## Run
+This layout is intended to map directly onto the target deployment model: one agent per Kubernetes
+namespace, with separate `agent`, `exec-service`, and `proxy-service` pods.
 
-Place your config at `~/.config/q15/config.toml` (or override `CONFIG=...`) and start the agent
-runtime:
+## Prerequisites
 
-```bash
-make run
-```
+- Go 1.25.x for local builds
+- Docker Compose for the local three-container stack
+- `git` available in the agent runtime for memory commits
 
-To run with the repo-local config file instead:
+## Build And Test
 
 ```bash
-make run CONFIG=config.toml
+make build
+make test
 ```
 
-`q15` runs as a normal unprivileged user process. The `q15-sandbox-helper` process enters the
-rootless user namespace for Buildah. If you enable `[agent.execution]`, `q15-exec-service` runs as a
-separate long-lived process and the agent connects to it over gRPC. Proxy-backed auth env injection
-for exec sessions is handled by a separate `q15-proxy-service` process.
-
-Or run the agent module directly:
-
-```bash
-go run ./systems/agent start
-```
-
-### Docker Compose
-
-For local testing of the 3-service boundary, this repo now includes Dockerfiles and a
-`docker-compose.yml` stack for one agent namespace:
-
-- `agent`
-- `exec-service`
-- `proxy-service`
-
-The local compose flow uses separate config files under `~/.config/q15`:
-
-- `config.compose.toml`
-- `proxy-service.compose.toml`
-
-Start the stack:
-
-```bash
-export JARED_GH_TOKEN=github_pat_real_token_here
-make compose-up
-```
-
-Inspect it:
-
-```bash
-make compose-ps
-make compose-logs SERVICE=agent
-```
-
-Stop it:
-
-```bash
-make compose-down
-```
-
-Notes:
-
-- `compose-up` currently targets the Jared local stack and expects `~/.config/q15/auth.json`.
-- The compose stack keeps service-to-service traffic on the internal Docker network, so it does not
-  publish host ports by default.
-- The agent container runs privileged to keep the current Buildah-backed sandbox working inside
-  Docker.
-
-Default config path is `~/.config/q15/config.toml` and can be overridden with `--config` or
-`Q15_CONFIG`.
-
-Use `--config-dir` or `Q15_CONFIG_DIR` to change the default base directory used by both config and
-auth paths.
-
-If the config file is missing, `q15 start` now creates a minimal starter file and exits cleanly with
-no running agents. Add your `[[provider]]` / `[[agent]]` blocks and start again.
-
-## Nix Flake Package
-
-This repo exposes a flake package for Linux (`x86_64-linux`) that installs these binaries:
+Artifacts are written to `./bin`:
 
 - `q15`
 - `q15-exec-service`
 - `q15-proxy-service`
-- `q15-sandbox-helper`
 
-Build locally:
+## Agent Config
 
-```bash
-nix build .#q15
-```
+The agent config uses service-owned runtime boundaries:
 
-Run directly from the flake output:
-
-```bash
-./result/bin/q15 start --help
-```
-
-Use from another flake (for example your `dots` repo):
-
-```nix
-inputs.q15.url = "github:q15co/q15";
-```
-
-Then consume:
-
-```nix
-inputs.q15.packages.${pkgs.system}.q15
-```
-
-### Updating Flake Vendor Hashes
-
-When Go dependencies change, refresh flake `vendorHash` values automatically:
-
-```bash
-make nix-update-vendor-hashes
-```
-
-This updates all Go module hashes in `flake.nix` and validates with `nix build .#q15`.
-
-## CI/CD and Releases
-
-GitHub Actions now uses GitHub-hosted `ubuntu-latest` runners for CI and release jobs.
-
-- CI runs on:
-  - pull requests targeting `main`
-  - pushes to `main`
-- CI sets up Nix via `cachix/install-nix-action` and `cachix/cachix-action`.
-- Release runs only after a successful CI run on `main` (not from PRs).
-
-Releases are auto-tagged with a semver-compatible date+SHA format:
-
-- `vYYYY.M.D-<sha7>`
-- Example: `v2026.3.4-a1b2c3d`
-- Date is derived from the commit date in UTC and paired with the commit short SHA
-
-Because GoReleaser expects semver tags, this format keeps calendar-based versions while remaining
-compatible with release automation.
-
-### Main Branch Protection (GitHub Settings)
-
-Configure branch protection (or a ruleset) for `main` with these minimum controls:
-
-- Require a pull request before merging
-- Require status checks to pass before merging
-  - Required check: `CI` job from workflow `CI`
-- Restrict direct pushes to `main` (except trusted admins if you prefer)
-- Disallow force pushes and branch deletions
-
-## Config
-
-`config.toml` defines providers, models, and agents. By default q15 reads it from
-`~/.config/q15/config.toml`.
-
-An empty starter config is valid and runs zero agents until you add entries.
-
-`agent.models` is an ordered fallback list of configured model names.
-
-- The agent tries models in order.
-- It falls back only when a model call fails.
-- Fallbacks can span providers (for example `codex-primary` -> `moonshot-fast` -> `zai-backup`).
-- If you want one model, use a list of one item.
-- Each `[[model]]` entry points at a provider and can override the upstream provider model string
-  via `provider_model`.
-- If `capabilities` is omitted, q15 currently assumes `["text"]` only.
-- Opt into `tool_calling`, `image_input`, and `reasoning` explicitly per model instead of relying on
-  provider-family assumptions.
-- Today capability metadata is mostly foundation for future routing and multimodal work. In the
-  current runtime, the direct behavioral effect is limited to suppressing tool definitions when
-  `tool_calling` is absent.
+- `[agent.workspace]` defines the agent-local workspace mount
+- `[skills].local_dir` defines the optional shared skills mount
+- `[agent.execution]` is required
+- model-visible runtime roots are fixed at `/workspace`, `/memory`, and `/skills`
 
 Example:
 
 ```toml
-[[provider]]
-name = "moonshot"
-type = "openai-compatible"
-base_url = "https://api.moonshot.ai/v1"
-key_env = "MOONSHOT_API_KEY"
-
-[[provider]]
-name = "zai"
-type = "openai-compatible"
-base_url = "https://api.z.ai/api/coding/paas/v4"
-key_env = "ZAI_API_KEY"
+[skills]
+local_dir = "/skills"
 
 [[provider]]
 name = "openai-sub"
@@ -215,232 +64,88 @@ provider = "openai-sub"
 provider_model = "gpt-5-codex"
 capabilities = ["text", "tool_calling", "reasoning"]
 
-[[model]]
-name = "moonshot-fast"
-provider = "moonshot"
-provider_model = "kimi-k2.5"
-capabilities = ["text", "tool_calling"]
-
-[[model]]
-name = "zai-vision"
-provider = "zai"
-provider_model = "glm-5"
-capabilities = ["text", "image_input", "tool_calling"]
-
 [[agent]]
-# Authoritative agent identity used for prompt identity and core-memory rendering.
 name = "Jared"
-models = ["codex-primary", "moonshot-fast", "zai-vision"]
+models = ["codex-primary"]
 memory_recent_turns = 6
 
-[agent.sandbox]
-container_name = "q15-jared"
-workspace_host_dir = "/home/you/q15-workspaces/jared"
-workspace_dir = "/workspace"
+[agent.workspace]
+local_dir = "/workspace"
 
 [agent.execution]
-service_address = "127.0.0.1:50051"
+service_address = "exec-service:50051"
 
 [agent.telegram]
 token_env = "JARED_TELEGRAM_TOKEN"
 allowed_user_ids = [123456789]
 ```
 
-`agent.execution` is optional. When present, q15 dials the configured execution service at startup,
-health-checks it with `GetRuntimeInfo`, and exposes the new `exec` tool in addition to the legacy
-`exec_nix_shell_bash` compatibility path.
+Notes:
 
-For local development, run the service separately:
+- Agent memory lives under `<agent.workspace.local_dir>/.q15-memory`.
+- `skills.local_dir` is optional, but when present it should point at the shared skills volume.
 
-```bash
-./bin/q15-exec-service serve --listen 127.0.0.1:50051
-```
+## Local Docker Compose Stack
 
-### Proxy Service
+The local stack starts three containers:
 
-Proxy policy now lives in `q15-proxy-service` config, not in `[agent.sandbox.proxy]`. Proxy-backed
-auth env injection is supported for `exec` sessions owned by `q15-exec-service`.
+- `proxy-service`
+- `exec-service`
+- `agent`
 
-Example `proxy-service.toml`:
+`exec-service` mounts:
 
-```toml
-[service]
-admin_listen = "127.0.0.1:50052"
-proxy_listen = "127.0.0.1:18080"
-advertise_proxy_url = "http://127.0.0.1:18080"
-state_dir = "/tmp/q15-proxy-service"
+- `/workspace`
+- `/memory`
+- `/skills`
 
-[proxy]
-no_proxy = ["localhost", "127.0.0.1"]
-set_lowercase_proxy_env = true
-secrets = ["jared_gh_token"]
+The agent mounts:
 
-[[proxy.rule]]
-name = "github-api"
-match_hosts = ["api.github.com"]
+- `/workspace`
+- `/skills`
 
-[[proxy.env]]
-name = "GH_TOKEN"
-secret = "jared_gh_token"
-rules = ["github-api"]
-```
-
-Proxy-service environment:
+Bring the stack up with:
 
 ```bash
-export JARED_GH_TOKEN=github_pat_real_token_here
+make compose-up
 ```
 
-Run both services locally:
+Before running it, provide:
+
+- `~/.config/q15/config.compose.toml`
+- `~/.config/q15/proxy-service.compose.toml`
+- `~/.config/q15/auth.json`
+- any required secret env vars such as `JARED_GH_TOKEN`, `MOONSHOT_API_KEY`, or `ZAI_API_KEY`
+
+Useful commands:
 
 ```bash
-./bin/q15-proxy-service serve --config ./proxy-service.toml
-./bin/q15-exec-service serve --listen 127.0.0.1:50051 --proxy-admin-address 127.0.0.1:50052
+make compose-down
+make compose-logs SERVICE=agent
+make compose-ps
 ```
 
-Runtime behavior:
+## Tool Surface
 
-- `q15-exec-service` fetches derived proxy runtime info from `q15-proxy-service` at startup.
-- `exec` sessions receive placeholder env vars such as `GH_TOKEN`, proxy env vars, and CA env vars.
-- tools such as `gh`, `git`, and `curl` send the placeholder value through the HTTP proxy.
-- `q15-proxy-service` rewrites the placeholder to the real secret only for matched proxy rules.
+The active tool set is now:
 
-`[agent.sandbox.proxy]` is no longer supported. Move proxy policy into the proxy-service config and
-route proxy-authenticated CLI flows through `exec`.
+- `read_file`
+- `write_file`
+- `edit_file`
+- `apply_patch`
+- `validate_skill`
+- `exec`
+- `web_fetch`
+- `web_search` when configured
 
-### Sandbox Runtime (Nix-Only)
+Browser-specific shell wrappers were removed. Use `exec` directly with explicit packages when
+browser automation is needed.
 
-Sandbox runtime is hardcoded to a rootless-Buildah-friendly nix-only mode:
+## Nix Flake Outputs
 
-- Base image is fixed: `docker.io/library/debian:bookworm-slim`
-- Sandbox networking is always enabled
-- Nix is auto-bootstrapped during `Prepare` if not already installed
+The flake builds:
 
-### exec Usage
-
-When `[agent.execution]` is configured, q15 exposes `exec` as the preferred shell tool. `exec`
-starts a session through `q15-exec-service`, watches it until completion, and returns stdout,
-stderr, and exit status.
-
-Required arguments:
-
-- `command` (string)
-- `packages` (array of nix installables, minimum 1)
-
-Example tool payload:
-
-```json
-{
-  "command": "git status --short",
-  "packages": ["nixpkgs#git"]
-}
-```
-
-`q15-exec-service` can be started directly:
-
-```bash
-q15-exec-service serve --listen 127.0.0.1:50051 --workspace-dir /workspace --memory-dir /memory --skills-dir /skills
-```
-
-If proxy-backed auth env injection is enabled, also pass the proxy admin address:
-
-```bash
-q15-exec-service serve --listen 127.0.0.1:50051 --proxy-admin-address 127.0.0.1:50052
-```
-
-### exec_nix_shell_bash Usage
-
-`exec_nix_shell_bash` remains available as a legacy compatibility tool when you still want the
-direct sandbox-helper path. It does not receive proxy-service-managed auth env injection.
-
-`exec_nix_shell_bash` runs commands via nix shell and bash, and requires packages per call.
-
-Required arguments:
-
-- `command` (string)
-- `packages` (array of nix installables, minimum 1)
-
-Example tool payload:
-
-```json
-{
-  "command": "git --version && jq --version",
-  "packages": ["nixpkgs#git", "nixpkgs#jq"]
-}
-```
-
-Runtime behavior:
-
-- Pass the user shell snippet in `command`.
-- Pass the required Nix installables in `packages`.
-- The sandbox runtime provisions those packages and executes the command.
-- The exact Nix invocation is sandbox-owned and may change without changing the tool schema.
-
-First run may require network access to bootstrap nix and fetch packages.
-
-### OpenAI Codex Subscription Login
-
-For `provider.type = "openai-codex"`, q15 reads OAuth credentials from:
-
-- `~/.config/q15/auth.json` (provider key: `openai`)
-
-Path overrides:
-
-- `Q15_CONFIG_DIR` sets the base directory used by both defaults (`config.toml` and `auth.json`).
-- `Q15_AUTH_PATH` sets an explicit auth file path.
-- CLI equivalents: `--config-dir` and `--auth-path`.
-
-Login and inspect credentials:
-
-```bash
-q15 auth login --provider openai
-q15 auth status
-q15 auth logout --provider openai
-```
-
-## Notes
-
-- `memory_recent_turns` controls how many persisted turns are replayed into the model context on
-  each reply. `0` uses default `6`.
-- Tool-call loop safety limits are internal runtime guards (hard-coded in the agent binary) and are
-  not user-configurable in `config.toml`.
-  - These guards are separate from `memory_recent_turns`.
-  - If a run is interrupted by loop safety, the partial turn is still persisted so follow-up replies
-    can continue with context.
-- Sandbox runtime is nix-only with fixed Debian base image and always-on networking.
-- `agent.name` is the authoritative runtime identity for the assistant.
-  - The default system prompt is rendered from `agent.name`.
-  - Seeded core memory templates use `{{agent_name}}` and are rendered at load time.
-  - Keep identity lines in core memory templated with `{{agent_name}}` rather than hardcoding a
-    name.
-  - No legacy identity migration is performed for pre-template core files.
-- Agent memory is persisted per configured agent runtime in:
-  - host: `<agent.sandbox.workspace_host_dir>/.q15-memory`
-  - sandbox: `/memory` The memory directory is git-backed and auto-committed after successful turns.
-- Core memory is stored in:
-  - `/memory/core/*.md` (seeded templates like `AGENT.md`, `USER.md`, `SOUL.md`) These files are
-    injected into the system prompt on each reply.
-- External memory stays out-of-context by default:
-  - `/memory/history/turns/...` (canonical transcript turns)
-  - `/memory/notes/...` (agent-managed notes)
-- `telegram.allowed_user_ids` is required.
-- Set `telegram.token` or `telegram.token_env`.
-- `openai-codex` providers do not use `provider.base_url` or `provider.key_env`.
-- `openai-compatible` providers still require both `provider.base_url` and `provider.key_env`.
-- Optional Brave web search tool: set `Q15_BRAVE_API_KEY` to enable the `web_search` tool for the
-  model.
-- `web_search` runs in the host agent process (not inside the sandbox shell).
-- On NixOS dev shells, do not add `shadow` to the shell packages: the Nix-store
-  `newuidmap`/`newgidmap` binaries are not usable for rootless user-namespace setup.
-
-## Troubleshooting
-
-If sandbox prepare fails with an error mentioning a Nix store `shadow` path such as
-`/nix/store/...-shadow-.../bin/newuidmap`, the helper resolved the wrong uidmap binary. Use the host
-wrappers in `/run/wrappers/bin` and remove `shadow` from the devshell.
-
-If an `openai-codex` model call fails with a credential error, run:
-
-```bash
-q15 auth login --provider openai
-```
+- `q15-agent`
+- `q15-exec-service`
+- `q15-proxy-service`
+- `q15` as the combined package output

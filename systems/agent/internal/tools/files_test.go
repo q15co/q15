@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	sandboxcontract "github.com/q15co/q15/libs/sandbox-contract"
+	"github.com/q15co/q15/systems/agent/internal/fileops"
 )
 
 type stubFileExecutor struct {
@@ -25,11 +25,11 @@ func (s *stubFileExecutor) ReadFile(
 	path string,
 	offsetLines int,
 	limitLines int,
-) (sandboxcontract.ReadFileResult, error) {
+) (fileops.ReadResult, error) {
 	s.readPath = path
 	s.readOffsetLines = offsetLines
 	s.readLimitLines = limitLines
-	return sandboxcontract.ReadFileResult{
+	return fileops.ReadResult{
 		Content:         "alpha\nbeta",
 		Truncated:       true,
 		NextOffsetLines: 3,
@@ -41,10 +41,10 @@ func (s *stubFileExecutor) WriteFile(
 	_ context.Context,
 	path string,
 	content string,
-) (sandboxcontract.WriteFileResult, error) {
+) (fileops.WriteResult, error) {
 	s.writePath = path
 	s.writeContent = content
-	return sandboxcontract.WriteFileResult{
+	return fileops.WriteResult{
 		Path:         "/workspace/notes/today.md",
 		BytesWritten: len(content),
 	}, nil
@@ -55,11 +55,11 @@ func (s *stubFileExecutor) EditFile(
 	path string,
 	oldText string,
 	newText string,
-) (sandboxcontract.EditFileResult, error) {
+) (fileops.EditResult, error) {
 	s.editPath = path
 	s.editOldText = oldText
 	s.editNewText = newText
-	return sandboxcontract.EditFileResult{
+	return fileops.EditResult{
 		Path:             "/workspace/main.go",
 		Diff:             "-old\n+new",
 		FirstChangedLine: 12,
@@ -69,9 +69,9 @@ func (s *stubFileExecutor) EditFile(
 func (s *stubFileExecutor) ApplyPatch(
 	_ context.Context,
 	patch string,
-) (sandboxcontract.ApplyPatchResult, error) {
+) (fileops.ApplyPatchResult, error) {
 	s.patch = patch
-	return sandboxcontract.ApplyPatchResult{
+	return fileops.ApplyPatchResult{
 		ChangedFiles: []string{"/workspace/a.txt", "/workspace/b.txt"},
 		Diff:         "=== /workspace/a.txt ===",
 		Summary:      "applied patch to 2 file(s)",

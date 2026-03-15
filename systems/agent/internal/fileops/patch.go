@@ -1,4 +1,4 @@
-package sandboxfiles
+package fileops
 
 import (
 	"fmt"
@@ -236,7 +236,7 @@ func buildPatchPlan(
 		if prior, ok := reserved[sourceKey]; ok {
 			return nil, nil, "", nil, "", fmt.Errorf(
 				"path %s is referenced by both %s and %s",
-				source.containerPath,
+				source.runtimePath,
 				prior,
 				op.kind,
 			)
@@ -252,7 +252,7 @@ func buildPatchPlan(
 			if existing.exists {
 				return nil, nil, "", nil, "", fmt.Errorf(
 					"cannot add existing file %s",
-					source.containerPath,
+					source.runtimePath,
 				)
 			}
 			snapshots[sourceKey] = existing
@@ -262,9 +262,9 @@ func buildPatchPlan(
 				shouldExist: true,
 				raw:         []byte(newText),
 			}
-			changedFiles = append(changedFiles, source.containerPath)
+			changedFiles = append(changedFiles, source.runtimePath)
 			diff, _ := compactDiff("", normalizeLineEndings(newText))
-			diffSections = append(diffSections, diffHeader(source.containerPath, "")+"\n"+diff)
+			diffSections = append(diffSections, diffHeader(source.runtimePath, "")+"\n"+diff)
 		case "delete":
 			snapshot, err := snapshotTextPath(source)
 			if err != nil {
@@ -273,7 +273,7 @@ func buildPatchPlan(
 			if !snapshot.snapshot.exists {
 				return nil, nil, "", nil, "", fmt.Errorf(
 					"cannot delete missing file %s",
-					source.containerPath,
+					source.runtimePath,
 				)
 			}
 			snapshots[sourceKey] = snapshot.snapshot
@@ -281,9 +281,9 @@ func buildPatchPlan(
 				resolved:    source,
 				shouldExist: false,
 			}
-			changedFiles = append(changedFiles, source.containerPath)
+			changedFiles = append(changedFiles, source.runtimePath)
 			diff, _ := compactDiff(normalizeLineEndings(snapshot.text.text), "")
-			diffSections = append(diffSections, diffHeader(source.containerPath, "")+"\n"+diff)
+			diffSections = append(diffSections, diffHeader(source.runtimePath, "")+"\n"+diff)
 		case "update":
 			snapshot, err := snapshotTextPath(source)
 			if err != nil {
@@ -292,7 +292,7 @@ func buildPatchPlan(
 			if !snapshot.snapshot.exists {
 				return nil, nil, "", nil, "", fmt.Errorf(
 					"cannot update missing file %s",
-					source.containerPath,
+					source.runtimePath,
 				)
 			}
 
@@ -303,7 +303,7 @@ func buildPatchPlan(
 				if err != nil {
 					return nil, nil, "", nil, "", err
 				}
-				if dest.rootContainer != source.rootContainer {
+				if dest.rootRuntime != source.rootRuntime {
 					return nil, nil, "", nil, "", fmt.Errorf(
 						"move destination must stay within the same root",
 					)
@@ -313,7 +313,7 @@ func buildPatchPlan(
 					if prior, ok := reserved[destKey]; ok {
 						return nil, nil, "", nil, "", fmt.Errorf(
 							"move destination %s conflicts with %s",
-							dest.containerPath,
+							dest.runtimePath,
 							prior,
 						)
 					}
@@ -325,21 +325,21 @@ func buildPatchPlan(
 					if destSnapshot.exists {
 						return nil, nil, "", nil, "", fmt.Errorf(
 							"move destination already exists: %s",
-							dest.containerPath,
+							dest.runtimePath,
 						)
 					}
 					snapshots[destKey] = destSnapshot
 					moveSummary = fmt.Sprintf(
 						"rename %s -> %s",
-						source.containerPath,
-						dest.containerPath,
+						source.runtimePath,
+						dest.runtimePath,
 					)
 				}
 			}
 
 			updatedNormalized, err := applyHunks(normalizeLineEndings(snapshot.text.text), op.hunks)
 			if err != nil {
-				return nil, nil, "", nil, "", fmt.Errorf("%s: %w", source.containerPath, err)
+				return nil, nil, "", nil, "", fmt.Errorf("%s: %w", source.runtimePath, err)
 			}
 			finalText := restoreLineEndings(updatedNormalized, snapshot.text.lineEnding)
 			finalRaw := append(append([]byte(nil), snapshot.text.bom...), []byte(finalText)...)
@@ -351,18 +351,18 @@ func buildPatchPlan(
 					shouldExist: true,
 					raw:         finalRaw,
 				}
-				changedFiles = append(changedFiles, source.containerPath)
+				changedFiles = append(changedFiles, source.runtimePath)
 				diff, _ := compactDiff(normalizeLineEndings(snapshot.text.text), updatedNormalized)
 				if moveSummary != "" {
 					diffSections = append(
 						diffSections,
 						diffHeader(
-							dest.containerPath,
-							source.containerPath,
+							dest.runtimePath,
+							source.runtimePath,
 						)+"\n"+moveSummary+"\n"+diff,
 					)
 				} else {
-					diffSections = append(diffSections, diffHeader(source.containerPath, "")+"\n"+diff)
+					diffSections = append(diffSections, diffHeader(source.runtimePath, "")+"\n"+diff)
 				}
 			} else {
 				destKey := stateKey(dest)
@@ -375,9 +375,9 @@ func buildPatchPlan(
 					shouldExist: true,
 					raw:         finalRaw,
 				}
-				changedFiles = append(changedFiles, source.containerPath, dest.containerPath)
+				changedFiles = append(changedFiles, source.runtimePath, dest.runtimePath)
 				diff, _ := compactDiff(normalizeLineEndings(snapshot.text.text), updatedNormalized)
-				diffSections = append(diffSections, diffHeader(dest.containerPath, source.containerPath)+"\n"+moveSummary+"\n"+diff)
+				diffSections = append(diffSections, diffHeader(dest.runtimePath, source.runtimePath)+"\n"+moveSummary+"\n"+diff)
 			}
 		default:
 			return nil, nil, "", nil, "", fmt.Errorf("unsupported patch op %q", op.kind)
@@ -395,7 +395,7 @@ type textSnapshot struct {
 }
 
 func snapshotPath(resolved resolvedPath) (fileSnapshot, error) {
-	root, err := os.OpenRoot(resolved.rootHostDir)
+	root, err := os.OpenRoot(resolved.rootLocalDir)
 	if err != nil {
 		return fileSnapshot{}, fmt.Errorf("open root: %w", err)
 	}
@@ -407,7 +407,7 @@ func snapshotPath(resolved resolvedPath) (fileSnapshot, error) {
 		if !info.Mode().IsRegular() {
 			return fileSnapshot{}, fmt.Errorf(
 				"path is not a regular file: %s",
-				resolved.containerPath,
+				resolved.runtimePath,
 			)
 		}
 		raw, err := root.ReadFile(resolved.rel)
@@ -432,7 +432,7 @@ func snapshotTextPath(resolved resolvedPath) (textSnapshot, error) {
 	}
 	tf, err := decodeTextFile(snapshot.raw)
 	if err != nil {
-		return textSnapshot{}, fmt.Errorf("%s: %w", resolved.containerPath, err)
+		return textSnapshot{}, fmt.Errorf("%s: %w", resolved.runtimePath, err)
 	}
 	return textSnapshot{snapshot: snapshot, text: tf}, nil
 }
@@ -536,7 +536,7 @@ func replaceChunk(lines []string, start, end int, replacement []string) []string
 }
 
 func stateKey(resolved resolvedPath) string {
-	return resolved.rootHostDir + "\x00" + resolved.rel
+	return resolved.rootLocalDir + "\x00" + resolved.rel
 }
 
 func diffHeader(path string, from string) string {

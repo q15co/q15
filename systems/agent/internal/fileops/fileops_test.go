@@ -1,4 +1,4 @@
-package sandboxfiles
+package fileops
 
 import (
 	"bytes"
@@ -6,21 +6,15 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	sandboxcontract "github.com/q15co/q15/libs/sandbox-contract"
 )
 
 func TestReadFileSupportsPaginationAndByteTruncation(t *testing.T) {
 	t.Parallel()
 
 	cfg := newTestSettings(t)
-	writeHostFile(t, cfg.WorkspaceHostDir, "notes.txt", "one\ntwo\nthree\n")
+	writeHostFile(t, cfg.WorkspaceLocalDir, "notes.txt", "one\ntwo\nthree\n")
 
-	got, err := ReadFile(cfg, sandboxcontract.ReadFileRequest{
-		Path:        "notes.txt",
-		OffsetLines: 2,
-		LimitLines:  2,
-	})
+	got, err := ReadFile(cfg, "notes.txt", 2, 2)
 	if err != nil {
 		t.Fatalf("ReadFile() error = %v", err)
 	}
@@ -35,9 +29,9 @@ func TestReadFileSupportsPaginationAndByteTruncation(t *testing.T) {
 	}
 
 	longLine := strings.Repeat("a", 9000)
-	writeHostFile(t, cfg.WorkspaceHostDir, "wide.txt", longLine+"\n"+longLine+"\n")
+	writeHostFile(t, cfg.WorkspaceLocalDir, "wide.txt", longLine+"\n"+longLine+"\n")
 
-	truncated, err := ReadFile(cfg, sandboxcontract.ReadFileRequest{Path: "wide.txt"})
+	truncated, err := ReadFile(cfg, "wide.txt", 0, 0)
 	if err != nil {
 		t.Fatalf("ReadFile() on wide file error = %v", err)
 	}
@@ -59,31 +53,26 @@ func TestReadFileRejectsInvalidOffsetsAndNonText(t *testing.T) {
 	t.Parallel()
 
 	cfg := newTestSettings(t)
-	writeHostFile(t, cfg.WorkspaceHostDir, "notes.txt", "one\n")
+	writeHostFile(t, cfg.WorkspaceLocalDir, "notes.txt", "one\n")
 
-	if _, err := ReadFile(cfg, sandboxcontract.ReadFileRequest{
-		Path:        "notes.txt",
-		OffsetLines: 0,
-		LimitLines:  -1,
-	}); err == nil || !strings.Contains(err.Error(), "limit_lines must be >= 1") {
+	if _, err := ReadFile(cfg, "notes.txt", 0, -1); err == nil ||
+		!strings.Contains(err.Error(), "limit_lines must be >= 1") {
 		t.Fatalf("ReadFile() error = %v, want limit validation error", err)
 	}
 
-	if _, err := ReadFile(cfg, sandboxcontract.ReadFileRequest{
-		Path:        "notes.txt",
-		OffsetLines: 3,
-	}); err == nil || !strings.Contains(err.Error(), "beyond end of file") {
+	if _, err := ReadFile(cfg, "notes.txt", 3, 0); err == nil ||
+		!strings.Contains(err.Error(), "beyond end of file") {
 		t.Fatalf("ReadFile() error = %v, want offset error", err)
 	}
 
-	writeHostFileBytes(t, cfg.WorkspaceHostDir, "nul.bin", []byte("a\x00b"))
-	if _, err := ReadFile(cfg, sandboxcontract.ReadFileRequest{Path: "nul.bin"}); err == nil ||
+	writeHostFileBytes(t, cfg.WorkspaceLocalDir, "nul.bin", []byte("a\x00b"))
+	if _, err := ReadFile(cfg, "nul.bin", 0, 0); err == nil ||
 		!strings.Contains(err.Error(), "NUL bytes") {
 		t.Fatalf("ReadFile() error = %v, want NUL rejection", err)
 	}
 
-	writeHostFileBytes(t, cfg.WorkspaceHostDir, "invalid.bin", []byte{0xff, 0xfe})
-	if _, err := ReadFile(cfg, sandboxcontract.ReadFileRequest{Path: "invalid.bin"}); err == nil ||
+	writeHostFileBytes(t, cfg.WorkspaceLocalDir, "invalid.bin", []byte{0xff, 0xfe})
+	if _, err := ReadFile(cfg, "invalid.bin", 0, 0); err == nil ||
 		!strings.Contains(err.Error(), "valid UTF-8") {
 		t.Fatalf("ReadFile() error = %v, want UTF-8 rejection", err)
 	}
@@ -98,17 +87,17 @@ func TestReadFileRejectsTraversalAndSymlinkEscape(t *testing.T) {
 	if err := os.WriteFile(outsidePath, []byte("secret"), 0o600); err != nil {
 		t.Fatalf("WriteFile(outside) error = %v", err)
 	}
-	linkPath := filepath.Join(cfg.WorkspaceHostDir, "link.txt")
+	linkPath := filepath.Join(cfg.WorkspaceLocalDir, "link.txt")
 	if err := os.Symlink(outsidePath, linkPath); err != nil {
 		t.Fatalf("Symlink() error = %v", err)
 	}
 
-	if _, err := ReadFile(cfg, sandboxcontract.ReadFileRequest{Path: "../secret.txt"}); err == nil ||
+	if _, err := ReadFile(cfg, "../secret.txt", 0, 0); err == nil ||
 		(!strings.Contains(err.Error(), "escapes root") && !strings.Contains(err.Error(), "is invalid")) {
 		t.Fatalf("ReadFile() error = %v, want traversal rejection", err)
 	}
 
-	if _, err := ReadFile(cfg, sandboxcontract.ReadFileRequest{Path: "link.txt"}); err == nil {
+	if _, err := ReadFile(cfg, "link.txt", 0, 0); err == nil {
 		t.Fatal("ReadFile() unexpectedly succeeded through escaping symlink")
 	}
 }
@@ -118,10 +107,7 @@ func TestWriteFileCreatesParentsAndSupportsMemoryRoot(t *testing.T) {
 
 	cfg := newTestSettings(t)
 
-	got, err := WriteFile(cfg, sandboxcontract.WriteFileRequest{
-		Path:    "/memory/notes/today.md",
-		Content: "hello\nworld\n",
-	})
+	got, err := WriteFile(cfg, "/memory/notes/today.md", "hello\nworld\n")
 	if err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
@@ -132,7 +118,7 @@ func TestWriteFileCreatesParentsAndSupportsMemoryRoot(t *testing.T) {
 		t.Fatalf("BytesWritten = %d", got.BytesWritten)
 	}
 
-	raw, err := os.ReadFile(filepath.Join(cfg.MemoryHostDir, "notes", "today.md"))
+	raw, err := os.ReadFile(filepath.Join(cfg.MemoryLocalDir, "notes", "today.md"))
 	if err != nil {
 		t.Fatalf("ReadFile(memory host) error = %v", err)
 	}
@@ -145,11 +131,9 @@ func TestSkillsRootSupportsReadWriteAndEdit(t *testing.T) {
 	t.Parallel()
 
 	cfg := newTestSettings(t)
-	writeHostFile(t, cfg.SkillsHostDir, "shared/SKILL.md", "one\ntwo\n")
+	writeHostFile(t, cfg.SkillsLocalDir, "shared/SKILL.md", "one\ntwo\n")
 
-	readResult, err := ReadFile(cfg, sandboxcontract.ReadFileRequest{
-		Path: "/skills/shared/SKILL.md",
-	})
+	readResult, err := ReadFile(cfg, "/skills/shared/SKILL.md", 0, 0)
 	if err != nil {
 		t.Fatalf("ReadFile(skills) error = %v", err)
 	}
@@ -157,10 +141,7 @@ func TestSkillsRootSupportsReadWriteAndEdit(t *testing.T) {
 		t.Fatalf("ReadFile(skills).Content = %q", readResult.Content)
 	}
 
-	writeResult, err := WriteFile(cfg, sandboxcontract.WriteFileRequest{
-		Path:    "/skills/shared/references/info.md",
-		Content: "hello\n",
-	})
+	writeResult, err := WriteFile(cfg, "/skills/shared/references/info.md", "hello\n")
 	if err != nil {
 		t.Fatalf("WriteFile(skills) error = %v", err)
 	}
@@ -168,19 +149,15 @@ func TestSkillsRootSupportsReadWriteAndEdit(t *testing.T) {
 		t.Fatalf("WriteFile(skills).Path = %q", writeResult.Path)
 	}
 
-	editResult, err := EditFile(cfg, sandboxcontract.EditFileRequest{
-		Path:    "/skills/shared/SKILL.md",
-		OldText: "two\n",
-		NewText: "three\n",
-	})
+	editResult, err := EditFile(cfg, "/skills/shared/SKILL.md", "two\n", "three\n")
 	if err != nil {
 		t.Fatalf("EditFile(skills) error = %v", err)
 	}
 	if editResult.Path != "/skills/shared/SKILL.md" {
 		t.Fatalf("EditFile(skills).Path = %q", editResult.Path)
 	}
-	assertHostFileContentFileOps(t, cfg.SkillsHostDir, "shared/SKILL.md", "one\nthree\n")
-	assertHostFileContentFileOps(t, cfg.SkillsHostDir, "shared/references/info.md", "hello\n")
+	assertHostFileContentFileOps(t, cfg.SkillsLocalDir, "shared/SKILL.md", "one\nthree\n")
+	assertHostFileContentFileOps(t, cfg.SkillsLocalDir, "shared/references/info.md", "hello\n")
 }
 
 func TestEditFilePreservesBOMAndLineEndings(t *testing.T) {
@@ -188,13 +165,9 @@ func TestEditFilePreservesBOMAndLineEndings(t *testing.T) {
 
 	cfg := newTestSettings(t)
 	original := append([]byte{0xEF, 0xBB, 0xBF}, []byte("alpha\r\nbeta\r\n")...)
-	writeHostFileBytes(t, cfg.WorkspaceHostDir, "doc.txt", original)
+	writeHostFileBytes(t, cfg.WorkspaceLocalDir, "doc.txt", original)
 
-	got, err := EditFile(cfg, sandboxcontract.EditFileRequest{
-		Path:    "doc.txt",
-		OldText: "beta\n",
-		NewText: "gamma\n",
-	})
+	got, err := EditFile(cfg, "doc.txt", "beta\n", "gamma\n")
 	if err != nil {
 		t.Fatalf("EditFile() error = %v", err)
 	}
@@ -208,7 +181,7 @@ func TestEditFilePreservesBOMAndLineEndings(t *testing.T) {
 		t.Fatalf("Diff = %q, want replacement excerpt", got.Diff)
 	}
 
-	raw, err := os.ReadFile(filepath.Join(cfg.WorkspaceHostDir, "doc.txt"))
+	raw, err := os.ReadFile(filepath.Join(cfg.WorkspaceLocalDir, "doc.txt"))
 	if err != nil {
 		t.Fatalf("ReadFile(host) error = %v", err)
 	}
@@ -222,21 +195,15 @@ func TestEditFileRejectsZeroAndMultipleMatches(t *testing.T) {
 	t.Parallel()
 
 	cfg := newTestSettings(t)
-	writeHostFile(t, cfg.WorkspaceHostDir, "dup.txt", "x\nx\n")
+	writeHostFile(t, cfg.WorkspaceLocalDir, "dup.txt", "x\nx\n")
 
-	if _, err := EditFile(cfg, sandboxcontract.EditFileRequest{
-		Path:    "dup.txt",
-		OldText: "x",
-		NewText: "y",
-	}); err == nil || !strings.Contains(err.Error(), "appears 2 times") {
+	if _, err := EditFile(cfg, "dup.txt", "x", "y"); err == nil ||
+		!strings.Contains(err.Error(), "appears 2 times") {
 		t.Fatalf("EditFile() error = %v, want duplicate match error", err)
 	}
 
-	if _, err := EditFile(cfg, sandboxcontract.EditFileRequest{
-		Path:    "dup.txt",
-		OldText: "z",
-		NewText: "y",
-	}); err == nil || !strings.Contains(err.Error(), "not found") {
+	if _, err := EditFile(cfg, "dup.txt", "z", "y"); err == nil ||
+		!strings.Contains(err.Error(), "not found") {
 		t.Fatalf("EditFile() error = %v, want not found error", err)
 	}
 }
@@ -245,8 +212,8 @@ func TestCommitDesiredStatesRollsBackOnFailure(t *testing.T) {
 	t.Parallel()
 
 	cfg := newTestSettings(t)
-	writeHostFile(t, cfg.WorkspaceHostDir, "a.txt", "old\n")
-	if err := os.Mkdir(filepath.Join(cfg.WorkspaceHostDir, "zdir"), 0o755); err != nil {
+	writeHostFile(t, cfg.WorkspaceLocalDir, "a.txt", "old\n")
+	if err := os.Mkdir(filepath.Join(cfg.WorkspaceLocalDir, "zdir"), 0o755); err != nil {
 		t.Fatalf("Mkdir() error = %v", err)
 	}
 
@@ -294,7 +261,7 @@ func TestCommitDesiredStatesRollsBackOnFailure(t *testing.T) {
 		t.Fatal("commitDesiredStates() unexpectedly succeeded")
 	}
 
-	raw, readErr := os.ReadFile(filepath.Join(cfg.WorkspaceHostDir, "a.txt"))
+	raw, readErr := os.ReadFile(filepath.Join(cfg.WorkspaceLocalDir, "a.txt"))
 	if readErr != nil {
 		t.Fatalf("ReadFile(a.txt) error = %v", readErr)
 	}
@@ -307,22 +274,22 @@ func newTestSettings(t *testing.T) Settings {
 	t.Helper()
 
 	root := t.TempDir()
-	workspaceHostDir := filepath.Join(root, "workspace")
-	memoryHostDir := filepath.Join(root, "memory")
-	if err := os.MkdirAll(workspaceHostDir, 0o755); err != nil {
+	workspaceLocalDir := filepath.Join(root, "workspace")
+	memoryLocalDir := filepath.Join(root, "memory")
+	if err := os.MkdirAll(workspaceLocalDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(workspace) error = %v", err)
 	}
-	if err := os.MkdirAll(memoryHostDir, 0o755); err != nil {
+	if err := os.MkdirAll(memoryLocalDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(memory) error = %v", err)
 	}
 
 	return Settings{
-		WorkspaceHostDir: workspaceHostDir,
-		WorkspaceDir:     "/workspace",
-		MemoryHostDir:    memoryHostDir,
-		MemoryDir:        "/memory",
-		SkillsHostDir:    filepath.Join(root, "skills"),
-		SkillsDir:        "/skills",
+		WorkspaceLocalDir:   workspaceLocalDir,
+		WorkspaceRuntimeDir: "/workspace",
+		MemoryLocalDir:      memoryLocalDir,
+		MemoryRuntimeDir:    "/memory",
+		SkillsLocalDir:      filepath.Join(root, "skills"),
+		SkillsRuntimeDir:    "/skills",
 	}
 }
 
