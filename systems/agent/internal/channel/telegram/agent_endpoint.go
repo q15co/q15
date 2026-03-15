@@ -558,20 +558,13 @@ func summarizeToolCall(call agent.ToolCall, mode progressMode) string {
 		}
 	case "apply_patch":
 		return "🩹 Applying patch"
-	case "exec_nix_shell_bash":
+	case "exec":
 		if mode == progressModeVerbose {
 			if command := extractStringArg(call.Arguments, "command"); command != "" {
 				return formatStatusMessage("💻", "Running", truncateSingleLine(command, 96))
 			}
 		}
 		return "💻 Running command"
-	case "exec_browser_shell":
-		if mode == progressModeVerbose {
-			if command := extractStringArg(call.Arguments, "command"); command != "" {
-				return formatStatusMessage("🌐", "Running", truncateSingleLine(command, 96))
-			}
-		}
-		return "🌐 Running browser command"
 	case "web_fetch":
 		if mode == progressModeVerbose {
 			if rawURL := extractStringArg(call.Arguments, "url"); rawURL != "" {

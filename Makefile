@@ -9,9 +9,7 @@ COMPOSE_CONFIG ?= $(HOME)/.config/q15/config.compose.toml
 COMPOSE_PROXY_CONFIG ?= $(HOME)/.config/q15/proxy-service.compose.toml
 COMPOSE_AUTH ?= $(HOME)/.config/q15/auth.json
 COMPOSE_WORKSPACES_HOST_DIR ?= $(HOME)/q15-workspaces
-COMPOSE_WORKSPACES_CONTAINER_DIR ?= $(HOME)/q15-workspaces
 COMPOSE_SKILLS_HOST_DIR ?= $(HOME)/.q15-skills
-COMPOSE_SKILLS_CONTAINER_DIR ?= $(HOME)/.q15-skills
 COMPOSE_EXEC_WORKSPACE_HOST_DIR ?= $(COMPOSE_WORKSPACES_HOST_DIR)/jared
 COMPOSE_EXEC_MEMORY_HOST_DIR ?= $(COMPOSE_EXEC_WORKSPACE_HOST_DIR)/.q15-memory
 EXEC_SERVICE_LISTEN ?= 127.0.0.1:50051
@@ -19,23 +17,19 @@ PROXY_ADMIN_ADDRESS ?= 127.0.0.1:50052
 AGENT_MOD_DIR ?= systems/agent
 EXEC_SERVICE_MOD_DIR ?= systems/exec-service
 PROXY_SERVICE_MOD_DIR ?= systems/proxy-service
-HELPER_MOD_DIR ?= systems/sandbox-helper
 EXEC_CONTRACT_MOD_DIR ?= libs/exec-contract
 PROXY_CONTRACT_MOD_DIR ?= libs/proxy-contract
-CONTRACT_MOD_DIR ?= libs/sandbox-contract
 
-HELPER_TAGS := containers_image_openpgp exclude_graphdriver_btrfs
-RUN_ENV := BUILDAH_ISOLATION=chroot GOMAXPROCS=1 GODEBUG=updatemaxprocs=0
-SANDBOX_VERBOSE ?= 0
-COMPOSE_ENV := COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT_NAME) Q15_COMPOSE_CONFIG=$(COMPOSE_CONFIG) Q15_COMPOSE_PROXY_CONFIG=$(COMPOSE_PROXY_CONFIG) Q15_COMPOSE_AUTH=$(COMPOSE_AUTH) Q15_COMPOSE_WORKSPACES_HOST_DIR=$(COMPOSE_WORKSPACES_HOST_DIR) Q15_COMPOSE_WORKSPACES_CONTAINER_DIR=$(COMPOSE_WORKSPACES_CONTAINER_DIR) Q15_COMPOSE_SKILLS_HOST_DIR=$(COMPOSE_SKILLS_HOST_DIR) Q15_COMPOSE_SKILLS_CONTAINER_DIR=$(COMPOSE_SKILLS_CONTAINER_DIR) Q15_COMPOSE_EXEC_WORKSPACE_HOST_DIR=$(COMPOSE_EXEC_WORKSPACE_HOST_DIR) Q15_COMPOSE_EXEC_MEMORY_HOST_DIR=$(COMPOSE_EXEC_MEMORY_HOST_DIR)
+RUN_ENV := GOMAXPROCS=1 GODEBUG=updatemaxprocs=0
+COMPOSE_ENV := COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT_NAME) Q15_COMPOSE_CONFIG=$(COMPOSE_CONFIG) Q15_COMPOSE_PROXY_CONFIG=$(COMPOSE_PROXY_CONFIG) Q15_COMPOSE_AUTH=$(COMPOSE_AUTH) Q15_COMPOSE_WORKSPACES_HOST_DIR=$(COMPOSE_WORKSPACES_HOST_DIR) Q15_COMPOSE_SKILLS_HOST_DIR=$(COMPOSE_SKILLS_HOST_DIR) Q15_COMPOSE_EXEC_WORKSPACE_HOST_DIR=$(COMPOSE_EXEC_WORKSPACE_HOST_DIR) Q15_COMPOSE_EXEC_MEMORY_HOST_DIR=$(COMPOSE_EXEC_MEMORY_HOST_DIR)
 
 .DEFAULT_GOAL := build
 
-.PHONY: all build build-main build-exec-service build-proxy-service build-helper test run run-verbose run-local-stack run-local-stack-verbose compose-up compose-down compose-logs compose-ps clean fmt nix-update-vendor-hashes help
+.PHONY: all build build-main build-exec-service build-proxy-service test run run-local-stack compose-up compose-down compose-logs compose-ps clean fmt nix-update-vendor-hashes help
 
 all: build
 
-build: build-main build-exec-service build-proxy-service build-helper
+build: build-main build-exec-service build-proxy-service
 
 build-main:
 	@mkdir -p $(BIN_DIR)
@@ -49,26 +43,16 @@ build-proxy-service:
 	@mkdir -p $(BIN_DIR)
 	cd $(PROXY_SERVICE_MOD_DIR) && $(GO) build -o ../../$(BIN_DIR)/q15-proxy-service .
 
-build-helper:
-	@mkdir -p $(BIN_DIR)
-	cd $(HELPER_MOD_DIR) && CGO_ENABLED=1 $(GO) build -tags='$(HELPER_TAGS)' -o ../../$(BIN_DIR)/q15-sandbox-helper .
-
 test:
 	cd $(EXEC_CONTRACT_MOD_DIR) && $(GO) test ./...
 	cd $(PROXY_CONTRACT_MOD_DIR) && $(GO) test ./...
-	cd $(CONTRACT_MOD_DIR) && $(GO) test ./...
-	cd $(AGENT_MOD_DIR) && CGO_ENABLED=0 $(GO) test -tags='$(HELPER_TAGS)' ./...
+	cd $(AGENT_MOD_DIR) && CGO_ENABLED=0 $(GO) test ./...
 	cd $(EXEC_SERVICE_MOD_DIR) && CGO_ENABLED=0 $(GO) test ./...
 	cd $(PROXY_SERVICE_MOD_DIR) && CGO_ENABLED=0 $(GO) test ./...
-	cd $(HELPER_MOD_DIR) && CGO_ENABLED=0 $(GO) test -tags='$(HELPER_TAGS)' ./...
 
 run: build
 	@if [ ! -f "$(CONFIG)" ]; then echo "missing config: $(CONFIG)"; exit 1; fi
 	$(RUN_ENV) ./$(BIN_DIR)/q15 start --config $(CONFIG)
-
-run-verbose: build
-	@if [ ! -f "$(CONFIG)" ]; then echo "missing config: $(CONFIG)"; exit 1; fi
-	Q15_SANDBOX_VERBOSE=1 $(RUN_ENV) ./$(BIN_DIR)/q15 start --config $(CONFIG)
 
 run-local-stack: build
 	@if [ ! -f "$(CONFIG)" ]; then echo "missing config: $(CONFIG)"; exit 1; fi
@@ -106,12 +90,9 @@ run-local-stack: build
 		fi; \
 		echo "started proxy-service ($$proxy_pid) and exec-service ($$exec_pid)"; \
 		echo "starting q15 with config $(CONFIG)"; \
-		Q15_SANDBOX_VERBOSE=$(SANDBOX_VERBOSE) $(RUN_ENV) ./$(BIN_DIR)/q15 start --config "$(CONFIG)" & \
+		$(RUN_ENV) ./$(BIN_DIR)/q15 start --config "$(CONFIG)" & \
 		agent_pid=$$!; \
 		wait "$$agent_pid"
-
-run-local-stack-verbose: SANDBOX_VERBOSE=1
-run-local-stack-verbose: run-local-stack
 
 compose-up:
 	@if [ ! -f "$(COMPOSE_CONFIG)" ]; then echo "missing compose config: $(COMPOSE_CONFIG)"; exit 1; fi
@@ -142,16 +123,13 @@ clean:
 
 help:
 	@echo "Available targets:"
-	@echo "  build         Build agent app, exec service, proxy service, and sandbox helper into ./bin"
+	@echo "  build         Build q15, q15-exec-service, and q15-proxy-service into ./bin"
 	@echo "  build-main    Build ./bin/q15 from $(AGENT_MOD_DIR)"
 	@echo "  build-exec-service  Build ./bin/q15-exec-service from $(EXEC_SERVICE_MOD_DIR)"
 	@echo "  build-proxy-service  Build ./bin/q15-proxy-service from $(PROXY_SERVICE_MOD_DIR)"
-	@echo "  build-helper  Build ./bin/q15-sandbox-helper (helper-safe tags)"
-	@echo "  test          Run Go tests for exec/proxy/sandbox contracts + agent + exec service + proxy service + helper modules"
+	@echo "  test          Run Go tests for exec/proxy contracts + agent + exec service + proxy service"
 	@echo "  run           Build and start q15 with dev runtime defaults"
-	@echo "  run-verbose   Same as run, with Q15_SANDBOX_VERBOSE=1"
 	@echo "  run-local-stack  Build and start q15-proxy-service + q15-exec-service + q15 with local config files"
-	@echo "  run-local-stack-verbose  Same as run-local-stack, with Q15_SANDBOX_VERBOSE=1"
 	@echo "  compose-up    Build and start the local Docker Compose stack (agent + exec-service + proxy-service)"
 	@echo "  compose-down  Stop and remove the local Docker Compose stack"
 	@echo "  compose-logs  Follow Docker Compose logs (optionally set SERVICE=agent|exec-service|proxy-service)"

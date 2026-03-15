@@ -20,4 +20,4 @@ COPY --from=build /out/q15-exec-service /usr/local/bin/q15-exec-service
 WORKDIR /root
 
 ENTRYPOINT ["/usr/local/bin/q15-exec-service"]
-CMD ["serve", "--listen", "0.0.0.0:50051", "--workspace-dir", "/workspace", "--memory-dir", "/memory", "--skills-dir", "/skills"]
+CMD ["serve", "--listen", "0.0.0.0:50051"]

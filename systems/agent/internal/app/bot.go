@@ -8,18 +8,28 @@ import (
 	"os"
 	"strings"
 
+	"github.com/q15co/q15/libs/exec-contract/execpb"
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/bus"
 	"github.com/q15co/q15/systems/agent/internal/channel/telegram"
 	"github.com/q15co/q15/systems/agent/internal/config"
 	"github.com/q15co/q15/systems/agent/internal/execution"
+	"github.com/q15co/q15/systems/agent/internal/fileops"
 	"github.com/q15co/q15/systems/agent/internal/memory"
 	"github.com/q15co/q15/systems/agent/internal/provider/openaicodex"
 	"github.com/q15co/q15/systems/agent/internal/provider/openaicompatible"
-	"github.com/q15co/q15/systems/agent/internal/sandbox"
 	q15skills "github.com/q15co/q15/systems/agent/internal/skills"
 	"github.com/q15co/q15/systems/agent/internal/tools"
 )
+
+type runtimeEnvironmentInfo struct {
+	WorkspaceDir        string
+	MemoryDir           string
+	SkillsDir           string
+	ExecutorType        string
+	ProxyEnabled        bool
+	ProxyPolicyRevision string
+}
 
 func runBot(ctx context.Context, rt config.AgentRuntime) error {
 	token := strings.TrimSpace(rt.TelegramToken)
@@ -37,71 +47,35 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 		return err
 	}
 
-	sandboxSettings := buildSandboxSettings(rt)
-	executionClient, executionInfo, err := connectExecutionService(ctx, rt.Execution)
+	executionClient, executionInfo, err := connectExecutionService(ctx, &rt.Execution)
 	if err != nil {
 		return fmt.Errorf("connect execution service for agent %q: %w", rt.Name, err)
 	}
-	if executionClient != nil {
-		defer executionClient.Close()
-	}
+	defer executionClient.Close()
 
-	agentSandbox := sandbox.New(sandboxSettings)
-	if sandbox.VerboseEnabled() {
-		fmt.Printf(
-			"[app] preparing sandbox for agent=%q container=%q workspace_host_dir=%q workspace_dir=%q sandbox_runtime=%q\n",
-			rt.Name,
-			rt.SandboxContainerName,
-			rt.WorkspaceHostDir,
-			rt.WorkspaceDir,
-			"nix-only",
-		)
-	}
-	if err := agentSandbox.Prepare(ctx); err != nil {
-		return fmt.Errorf("prepare sandbox for agent %q: %w", rt.Name, err)
-	}
-	if sandbox.VerboseEnabled() {
-		fmt.Printf(
-			"[app] sandbox ready for agent=%q container=%q\n",
-			rt.Name,
-			rt.SandboxContainerName,
-		)
+	runtimeInfo, err := resolveRuntimeEnvironment(executionInfo)
+	if err != nil {
+		return fmt.Errorf("resolve runtime environment for agent %q: %w", rt.Name, err)
 	}
 
 	skillManager := q15skills.NewManager(q15skills.Settings{
-		WorkspaceHostDir: rt.WorkspaceHostDir,
-		WorkspaceDir:     rt.WorkspaceDir,
-		SkillsHostDir:    rt.SkillsHostDir,
-		SkillsDir:        rt.SkillsDir,
+		WorkspaceLocalDir:   rt.WorkspaceLocalDir,
+		WorkspaceRuntimeDir: runtimeInfo.WorkspaceDir,
+		SkillsLocalDir:      rt.SkillsLocalDir,
+		SkillsRuntimeDir:    runtimeInfo.SkillsDir,
 	})
+	fileExec := q15skills.NewFileExecutor(fileops.NewExecutor(fileops.Settings{
+		WorkspaceLocalDir:   rt.WorkspaceLocalDir,
+		WorkspaceRuntimeDir: runtimeInfo.WorkspaceDir,
+		MemoryLocalDir:      rt.MemoryLocalDir,
+		MemoryRuntimeDir:    runtimeInfo.MemoryDir,
+		SkillsLocalDir:      rt.SkillsLocalDir,
+		SkillsRuntimeDir:    runtimeInfo.SkillsDir,
+	}), skillManager)
 	braveAPIKey := strings.TrimSpace(os.Getenv("Q15_BRAVE_API_KEY"))
-	toolList, err := buildToolList(agentSandbox, executionClient, skillManager, braveAPIKey)
+	toolList, err := buildToolList(executionClient, fileExec, skillManager, braveAPIKey)
 	if err != nil {
 		return fmt.Errorf("configure tools for agent %q: %w", rt.Name, err)
-	}
-	if sandbox.VerboseEnabled() {
-		fmt.Printf(
-			"[app] enabled tools read_file, write_file, edit_file, apply_patch for agent=%q\n",
-			rt.Name,
-		)
-	}
-	if sandbox.VerboseEnabled() {
-		fmt.Printf("[app] enabled tool web_fetch for agent=%q\n", rt.Name)
-	}
-	if executionInfo != nil && sandbox.VerboseEnabled() {
-		fmt.Printf(
-			"[app] enabled tool exec for agent=%q via execution service=%q executor=%q\n",
-			rt.Name,
-			rt.Execution.ServiceAddress,
-			executionInfo.GetExecutorType(),
-		)
-	}
-	if braveAPIKey != "" {
-		if sandbox.VerboseEnabled() {
-			fmt.Printf("[app] enabled tool web_search (Brave) for agent=%q\n", rt.Name)
-		}
-	} else if sandbox.VerboseEnabled() {
-		fmt.Printf("[app] web_search disabled for agent=%q (Q15_BRAVE_API_KEY not set)\n", rt.Name)
 	}
 
 	toolRegistry, err := agent.NewToolRegistry(toolList...)
@@ -110,21 +84,14 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 	}
 
 	systemPrompt := agent.DefaultSystemPromptForName(rt.Name)
-	info, err := agentSandbox.Describe(ctx)
-	if err != nil {
-		if sandbox.VerboseEnabled() {
-			fmt.Fprintf(os.Stderr, "[app] sandbox describe failed for agent=%q: %v\n", rt.Name, err)
-		}
-	}
 	systemPrompt = composeSystemPrompt(
 		systemPrompt,
 		rt.Name,
-		info,
-		rt.MemoryDir,
+		runtimeInfo,
 		toolRegistry.Definitions(),
 	)
 
-	memoryStore := memory.NewStore(rt.MemoryHostDir, rt.Name, nil)
+	memoryStore := memory.NewStore(rt.MemoryLocalDir, rt.Name, nil)
 	if err := memoryStore.Init(ctx); err != nil {
 		return fmt.Errorf("initialize memory store for agent %q: %w", rt.Name, err)
 	}
@@ -180,28 +147,20 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 }
 
 func buildToolList(
-	agentSandbox *sandbox.Sandbox,
 	execClient execution.Service,
+	fileExec tools.FileToolExecutor,
 	skillManager *q15skills.Manager,
 	braveAPIKey string,
 ) ([]agent.Tool, error) {
-	fileExec := q15skills.NewFileExecutor(agentSandbox, skillManager)
 	toolList := []agent.Tool{
 		tools.NewReadFile(fileExec),
 		tools.NewWriteFile(fileExec),
 		tools.NewEditFile(fileExec),
 		tools.NewApplyPatch(fileExec),
 		tools.NewValidateSkill(skillManager),
-	}
-	if execClient != nil {
-		toolList = append(toolList, tools.NewExec(execClient))
-	}
-	toolList = append(
-		toolList,
-		tools.NewNixShellBash(agentSandbox),
-		tools.NewBrowserShell(agentSandbox),
+		tools.NewExec(execClient),
 		tools.NewWebFetch(),
-	)
+	}
 
 	braveAPIKey = strings.TrimSpace(braveAPIKey)
 	if braveAPIKey == "" {
@@ -218,8 +177,7 @@ func buildToolList(
 func composeSystemPrompt(
 	base string,
 	agentName string,
-	info sandbox.Info,
-	memoryDir string,
+	info runtimeEnvironmentInfo,
 	toolDefs []agent.ToolDefinition,
 ) string {
 	base = strings.TrimSpace(base)
@@ -228,8 +186,8 @@ func composeSystemPrompt(
 	}
 
 	parts := []string{base}
-	if sandboxSection := renderSandboxEnvironmentPrompt(agentName, info, memoryDir, toolDefs); sandboxSection != "" {
-		parts = append(parts, sandboxSection)
+	if runtimeSection := renderRuntimeEnvironmentPrompt(agentName, info); runtimeSection != "" {
+		parts = append(parts, runtimeSection)
 	}
 	if toolAdviceSection := renderToolAdvicePrompt(toolDefs); toolAdviceSection != "" {
 		parts = append(parts, toolAdviceSection)
@@ -237,11 +195,9 @@ func composeSystemPrompt(
 	return strings.Join(parts, "\n\n")
 }
 
-func renderSandboxEnvironmentPrompt(
+func renderRuntimeEnvironmentPrompt(
 	agentName string,
-	info sandbox.Info,
-	memoryDir string,
-	toolDefs []agent.ToolDefinition,
+	info runtimeEnvironmentInfo,
 ) string {
 	var lines []string
 	agentName = strings.TrimSpace(agentName)
@@ -252,28 +208,11 @@ func renderSandboxEnvironmentPrompt(
 			"- If memory files mention a different agent name, treat that as stale and update those files.",
 		)
 	}
-	if info.OSPrettyName != "" {
-		lines = append(lines, fmt.Sprintf("- OS: %s", info.OSPrettyName))
-	} else if info.OSID != "" || info.OSVersionID != "" {
-		lines = append(lines, fmt.Sprintf("- OS: %s %s", strings.TrimSpace(info.OSID), strings.TrimSpace(info.OSVersionID)))
-	}
-	if info.Runtime != "" {
-		lines = append(lines, fmt.Sprintf("- Sandbox runtime: %s", info.Runtime))
-	}
-	if info.BaseImage != "" {
-		lines = append(lines, fmt.Sprintf("- Base image: %s", info.BaseImage))
-	}
-	if info.ContainerName != "" {
-		lines = append(
-			lines,
-			fmt.Sprintf("- Sandbox container: %s (persistent Buildah builder)", info.ContainerName),
-		)
-	}
 	if info.WorkspaceDir != "" {
 		lines = append(
 			lines,
 			fmt.Sprintf(
-				"- Workspace: %s (bind-mounted persistent host directory)",
+				"- Workspace: %s",
 				info.WorkspaceDir,
 			),
 		)
@@ -282,39 +221,46 @@ func renderSandboxEnvironmentPrompt(
 		lines = append(
 			lines,
 			fmt.Sprintf(
-				"- Shared skills root: %s (bind-mounted when skills.host_dir is configured)",
+				"- Shared skills root: %s",
 				info.SkillsDir,
 			),
 		)
 	}
-	memoryDir = strings.TrimSpace(memoryDir)
-	if memoryDir != "" {
+	if info.MemoryDir != "" {
 		lines = append(
 			lines,
 			fmt.Sprintf(
 				"- Persistent memory repo: %s",
-				memoryDir,
+				info.MemoryDir,
 			),
 			fmt.Sprintf(
 				"- Core memory files (auto-injected into prompt each turn): %s/core/*.md (seeded with AGENT.md, USER.md, SOUL.md)",
-				memoryDir,
+				info.MemoryDir,
 			),
 			fmt.Sprintf(
 				"- External memory files (query/maintain via tools): %s/history and %s/notes",
-				memoryDir,
-				memoryDir,
+				info.MemoryDir,
+				info.MemoryDir,
 			),
 		)
 	}
-	if hasToolNamed(toolDefs, "exec") {
+	if info.ExecutorType != "" {
 		lines = append(
 			lines,
-			"- Package management model: nix-only via exec and exec_browser_shell; exec_nix_shell_bash remains available as a legacy compatibility path.",
+			fmt.Sprintf("- Command runtime: exec-service sessions via %s", info.ExecutorType),
 		)
-	} else {
+	}
+	if info.ProxyEnabled {
+		revision := strings.TrimSpace(info.ProxyPolicyRevision)
+		if revision == "" {
+			revision = "present"
+		}
 		lines = append(
 			lines,
-			"- Package management model: nix-only via exec_nix_shell_bash and exec_browser_shell.",
+			fmt.Sprintf(
+				"- Proxy-mediated exec env injection is enabled (policy revision: %s).",
+				revision,
+			),
 		)
 	}
 	lines = append(
@@ -333,61 +279,23 @@ func renderSandboxEnvironmentPrompt(
 		"- In `*** Update File`, each hunk must start with `@@`, then use a leading space for context lines, `-` for removed lines, and `+` for added lines.",
 		"- Minimal apply_patch example:",
 		"```text\n*** Begin Patch\n*** Update File: /memory/notes/todo.md\n@@\n unchanged line\n-old value\n+new value\n unchanged tail\n*** End Patch\n```",
-	)
-	if hasToolNamed(toolDefs, "exec") {
-		lines = append(
-			lines,
-			"- Prefer exec for commands, builds, tests, formatting, git, and other CLI workflows, not for routine file reads or edits.",
-			"- Every exec call must include a non-empty `packages` array of nix installables (for example `nixpkgs#git`).",
-			"- Use exec by providing the user command in `command` and the needed nix installables in `packages`; the execution service starts a session, streams stdout/stderr internally, and returns when the command exits.",
-			"- Use exec for proxy-authenticated CLI flows such as `gh`, `git`, or `curl` when q15 is deployed with a separate proxy-service.",
-			"- exec_nix_shell_bash remains available for legacy compatibility; prefer exec unless you specifically need the older direct sandbox-helper path.",
-		)
-	} else {
-		lines = append(
-			lines,
-			"- Use exec_nix_shell_bash for commands, builds, tests, formatting, git, and other CLI workflows, not for routine file reads or edits.",
-			"- Every exec_nix_shell_bash call must include a non-empty `packages` array of nix installables (for example `nixpkgs#git`).",
-			"- Use exec_nix_shell_bash by providing the user command in `command` and the needed nix installables in `packages`; the sandbox runtime provisions those packages and executes the command via nix shell and bash.",
-		)
-	}
-	lines = append(
-		lines,
+		"- Prefer exec for commands, builds, tests, formatting, git, and other CLI workflows, not for routine file reads or edits.",
+		"- Every exec call must include a non-empty `packages` array of nix installables (for example `nixpkgs#git`).",
+		"- Use exec by providing the user command in `command` and the needed nix installables in `packages`; the execution service starts a session, streams stdout/stderr internally, and returns when the command exits.",
+		"- Use exec for proxy-authenticated CLI flows such as `gh`, `git`, or `curl` when q15 is deployed with a separate proxy-service.",
 		"- First run may bootstrap nix and fetch package indexes, so network access is required.",
+		"- Browser-specific command presets are not built in; use exec directly with explicit browser packages when needed.",
 	)
 	lines = append(
 		lines,
-		"- Use exec_browser_shell for browser automation, screenshots, scraping, Playwright, Puppeteer, and browser tests.",
-		"- exec_browser_shell provisions the browser-ready nix package set automatically; use `display_mode` `headless` by default and switch to `xvfb` only for headed browser commands that still terminate on their own.",
-		"- exec_browser_shell waits for the command to exit before returning; avoid long-running interactive commands such as `playwright open` or `playwright codegen`.",
-		"- Use the nixpkgs-provided `playwright` and `puppeteer` wrappers in exec_browser_shell, and do not rely on `playwright install` or `playwright install-deps` inside the sandbox.",
-	)
-	lines = append(
-		lines,
-		"- Use web_fetch for known web page URLs: it returns cleaned markdown plus slice metadata and is preferred over using exec or exec_nix_shell_bash with curl for ordinary webpage reads.",
+		"- Use web_fetch for known web page URLs: it returns cleaned markdown plus slice metadata and is preferred over using exec with curl for ordinary webpage reads.",
 		"- Use web_search for discovering current sources, then use web_fetch on a chosen result URL when you need page contents.",
 	)
-	if nixSummary := formatBinarySummary(info.NixPath, info.NixVersion); nixSummary != "" {
-		lines = append(lines, fmt.Sprintf("- Nix: %s", nixSummary))
-	}
-	if bashSummary := formatBinarySummary(info.BashPath, info.BashVersion); bashSummary != "" {
-		lines = append(lines, fmt.Sprintf("- Bash: %s", bashSummary))
-	}
 	if len(lines) == 0 {
 		return ""
 	}
 
-	return agent.RenderPromptElement("sandbox_environment", nil, strings.Join(lines, "\n"))
-}
-
-func hasToolNamed(toolDefs []agent.ToolDefinition, name string) bool {
-	name = strings.TrimSpace(name)
-	for _, tool := range toolDefs {
-		if strings.TrimSpace(tool.Name) == name {
-			return true
-		}
-	}
-	return false
+	return agent.RenderPromptElement("runtime_environment", nil, strings.Join(lines, "\n"))
 }
 
 func renderToolAdvicePrompt(toolDefs []agent.ToolDefinition) string {
@@ -436,17 +344,44 @@ func renderToolAdvicePrompt(toolDefs []agent.ToolDefinition) string {
 	return agent.RenderPromptElement("tool_advice", nil, strings.Join(renderedTools, "\n\n"))
 }
 
-func formatBinarySummary(path, version string) string {
-	path = strings.TrimSpace(path)
-	version = strings.TrimSpace(version)
-	switch {
-	case path != "" && version != "":
-		return fmt.Sprintf("%s (%s)", path, version)
-	case path != "":
-		return path
-	default:
-		return version
+func resolveRuntimeEnvironment(
+	info *execpb.GetRuntimeInfoResponse,
+) (runtimeEnvironmentInfo, error) {
+	if info == nil {
+		return runtimeEnvironmentInfo{}, errors.New("exec service returned empty runtime info")
 	}
+	workspaceDir := strings.TrimSpace(info.GetWorkspaceDir())
+	if workspaceDir == "" {
+		return runtimeEnvironmentInfo{}, errors.New(
+			"exec service runtime info is missing workspace_dir",
+		)
+	}
+	memoryDir := strings.TrimSpace(info.GetMemoryDir())
+	if memoryDir == "" {
+		return runtimeEnvironmentInfo{}, errors.New(
+			"exec service runtime info is missing memory_dir",
+		)
+	}
+	skillsDir := strings.TrimSpace(info.GetSkillsDir())
+	if skillsDir == "" {
+		return runtimeEnvironmentInfo{}, errors.New(
+			"exec service runtime info is missing skills_dir",
+		)
+	}
+	executorType := strings.TrimSpace(info.GetExecutorType())
+	if executorType == "" {
+		return runtimeEnvironmentInfo{}, errors.New(
+			"exec service runtime info is missing executor_type",
+		)
+	}
+	return runtimeEnvironmentInfo{
+		WorkspaceDir:        workspaceDir,
+		MemoryDir:           memoryDir,
+		SkillsDir:           skillsDir,
+		ExecutorType:        executorType,
+		ProxyEnabled:        info.GetProxyEnabled(),
+		ProxyPolicyRevision: strings.TrimSpace(info.GetProxyPolicyRevision()),
+	}, nil
 }
 
 type routedModelAdapter struct {

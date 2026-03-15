@@ -40,66 +40,24 @@ type Agent struct {
 	Name              string     `mapstructure:"name"`
 	Models            []string   `mapstructure:"models"` // ordered fallback list of configured model names
 	MemoryRecentTurns int        `mapstructure:"memory_recent_turns"`
-	Sandbox           Sandbox    `mapstructure:"sandbox"`
+	Workspace         Workspace  `mapstructure:"workspace"`
 	Execution         *Execution `mapstructure:"execution"`
 	Telegram          Telegram   `mapstructure:"telegram"`
 }
 
-// Sandbox defines container and workspace settings for agent execution.
-type Sandbox struct {
-	ContainerName    string        `mapstructure:"container_name"`
-	WorkspaceHostDir string        `mapstructure:"workspace_host_dir"`
-	WorkspaceDir     string        `mapstructure:"workspace_dir"`
-	Proxy            *SandboxProxy `mapstructure:"proxy"`
+// Workspace defines the agent-local workspace mount.
+type Workspace struct {
+	LocalDir string `mapstructure:"local_dir"`
 }
 
-// Execution defines optional execution-service settings for session-backed commands.
+// Execution defines execution-service settings for session-backed commands.
 type Execution struct {
 	ServiceAddress string `mapstructure:"service_address"`
 }
 
-// Skills defines the optional shared host directory for agent-authored skills.
+// Skills defines the optional shared local directory for agent-authored skills.
 type Skills struct {
-	HostDir string `mapstructure:"host_dir"`
-}
-
-// SandboxProxy defines optional egress-proxy settings for sandbox traffic.
-type SandboxProxy struct {
-	ContainerProxyHost string             `mapstructure:"container_proxy_host"` // optional override
-	Secrets            []string           `mapstructure:"secrets"`              // alias list, env name derived (e.g. gh_token -> GH_TOKEN)
-	Env                []SandboxProxyEnv  `mapstructure:"env"`
-	Rules              []SandboxProxyRule `mapstructure:"rule"`
-}
-
-// SandboxProxyEnv defines one sandbox env var backed by a proxy-managed secret.
-type SandboxProxyEnv struct {
-	Name   string   `mapstructure:"name"`
-	Secret string   `mapstructure:"secret"`
-	Rules  []string `mapstructure:"rules"`
-	In     []string `mapstructure:"in"` // allowed v1: header, query, path
-}
-
-// SandboxProxyRule defines host/path matches and request mutations.
-type SandboxProxyRule struct {
-	Name               string                               `mapstructure:"name"`
-	MatchHosts         []string                             `mapstructure:"match_hosts"`
-	MatchPathPrefixes  []string                             `mapstructure:"match_path_prefixes"`
-	SetHeader          map[string]string                    `mapstructure:"set_header"`
-	SetBasicAuth       *SandboxProxyBasicAuth               `mapstructure:"set_basic_auth"`
-	ReplacePlaceholder []SandboxProxyPlaceholderReplacement `mapstructure:"replace_placeholder"`
-}
-
-// SandboxProxyBasicAuth injects an Authorization Basic header from a managed secret.
-type SandboxProxyBasicAuth struct {
-	Username string `mapstructure:"username"`
-	Secret   string `mapstructure:"secret"`
-}
-
-// SandboxProxyPlaceholderReplacement replaces placeholders with secret values.
-type SandboxProxyPlaceholderReplacement struct {
-	Placeholder string   `mapstructure:"placeholder"`
-	Secret      string   `mapstructure:"secret"`
-	In          []string `mapstructure:"in"` // allowed v1: header, query, path
+	LocalDir string `mapstructure:"local_dir"`
 }
 
 // Telegram defines Telegram integration settings for an agent.
@@ -136,8 +94,6 @@ type ExecutionRuntime struct {
 }
 
 const (
-	defaultMemoryDir         = "/memory"
-	defaultSkillsDir         = "/skills"
 	defaultMemoryRecentTurns = 6
 )
 
@@ -151,15 +107,11 @@ var defaultModelCapabilities = ModelCapabilities{
 type AgentRuntime struct {
 	Name                   string
 	Models                 []AgentModelRuntime
-	SandboxContainerName   string
-	WorkspaceHostDir       string
-	WorkspaceDir           string
-	MemoryHostDir          string
-	MemoryDir              string
-	SkillsHostDir          string
-	SkillsDir              string
+	WorkspaceLocalDir      string
+	MemoryLocalDir         string
+	SkillsLocalDir         string
 	MemoryRecentTurns      int
-	Execution              *ExecutionRuntime
+	Execution              ExecutionRuntime
 	TelegramToken          string
 	TelegramAllowedUserIDs []int64
 }
@@ -178,7 +130,7 @@ func Load(path string) (Config, error) {
 	}
 
 	var cfg Config
-	if err := v.Unmarshal(&cfg); err != nil {
+	if err := v.UnmarshalExact(&cfg); err != nil {
 		return Config{}, fmt.Errorf("decode config %q: %w", path, err)
 	}
 	if err := cfg.Validate(); err != nil {
@@ -198,7 +150,7 @@ func LoadAgentRuntimes(path string) ([]AgentRuntime, error) {
 	if err != nil {
 		return nil, err
 	}
-	return cfg.resolveAgentRuntimes("")
+	return cfg.resolveAgentRuntimes()
 }
 
 // FindAgent returns the configured agent by name.
@@ -260,10 +212,10 @@ func (a Agent) TelegramToken() (string, error) {
 
 // ResolveAgentRuntimes resolves all configured agents into runtime values.
 func (c Config) ResolveAgentRuntimes() ([]AgentRuntime, error) {
-	return c.resolveAgentRuntimes("")
+	return c.resolveAgentRuntimes()
 }
 
-func (c Config) resolveAgentRuntimes(_ string) ([]AgentRuntime, error) {
+func (c Config) resolveAgentRuntimes() ([]AgentRuntime, error) {
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
@@ -368,21 +320,17 @@ func (c Config) resolveAgentRuntimes(_ string) ([]AgentRuntime, error) {
 		if memoryRecentTurns == 0 {
 			memoryRecentTurns = defaultMemoryRecentTurns
 		}
-		workspaceHostDir := strings.TrimSpace(agentCfg.Sandbox.WorkspaceHostDir)
-		skillsHostDir := strings.TrimSpace(c.Skills.HostDir)
+		workspaceLocalDir := strings.TrimSpace(agentCfg.Workspace.LocalDir)
+		skillsLocalDir := strings.TrimSpace(c.Skills.LocalDir)
 
 		runtimes = append(runtimes, AgentRuntime{
 			Name:                   strings.TrimSpace(agentCfg.Name),
 			Models:                 resolvedModels,
-			SandboxContainerName:   strings.TrimSpace(agentCfg.Sandbox.ContainerName),
-			WorkspaceHostDir:       workspaceHostDir,
-			WorkspaceDir:           strings.TrimSpace(agentCfg.Sandbox.WorkspaceDir),
-			MemoryHostDir:          filepath.Join(workspaceHostDir, ".q15-memory"),
-			MemoryDir:              defaultMemoryDir,
-			SkillsHostDir:          skillsHostDir,
-			SkillsDir:              defaultSkillsDir,
+			WorkspaceLocalDir:      workspaceLocalDir,
+			MemoryLocalDir:         filepath.Join(workspaceLocalDir, ".q15-memory"),
+			SkillsLocalDir:         skillsLocalDir,
 			MemoryRecentTurns:      memoryRecentTurns,
-			Execution:              executionRuntime,
+			Execution:              *executionRuntime,
 			TelegramToken:          token,
 			TelegramAllowedUserIDs: allowedUserIDs,
 		})
@@ -485,20 +433,11 @@ func (c Config) validate() error {
 				)
 			}
 		}
-		if strings.TrimSpace(agent.Sandbox.ContainerName) == "" {
-			return fmt.Errorf("agent[%d].sandbox.container_name is required", i)
+		if strings.TrimSpace(agent.Workspace.LocalDir) == "" {
+			return fmt.Errorf("agent[%d].workspace.local_dir is required", i)
 		}
-		if strings.TrimSpace(agent.Sandbox.WorkspaceHostDir) == "" {
-			return fmt.Errorf("agent[%d].sandbox.workspace_host_dir is required", i)
-		}
-		if strings.TrimSpace(agent.Sandbox.WorkspaceDir) == "" {
-			return fmt.Errorf("agent[%d].sandbox.workspace_dir is required", i)
-		}
-		if agent.Sandbox.Proxy != nil {
-			return fmt.Errorf(
-				"agent[%d].sandbox.proxy has moved to q15-proxy-service config; route proxy-backed auth through q15-exec-service instead",
-				i,
-			)
+		if !filepath.IsAbs(strings.TrimSpace(agent.Workspace.LocalDir)) {
+			return fmt.Errorf("agent[%d].workspace.local_dir must be an absolute path", i)
 		}
 		if err := validateExecution(agent.Execution); err != nil {
 			return fmt.Errorf("agent[%d].execution: %w", i, err)
@@ -516,12 +455,12 @@ func (c Config) validate() error {
 }
 
 func validateSkills(skills Skills) error {
-	hostDir := strings.TrimSpace(skills.HostDir)
-	if hostDir == "" {
+	localDir := strings.TrimSpace(skills.LocalDir)
+	if localDir == "" {
 		return nil
 	}
-	if !filepath.IsAbs(hostDir) {
-		return errors.New("host_dir must be an absolute path")
+	if !filepath.IsAbs(localDir) {
+		return errors.New("local_dir must be an absolute path")
 	}
 	return nil
 }
@@ -539,7 +478,7 @@ func (a Agent) modelRefs() ([]string, error) {
 		}
 		if strings.Contains(modelRef, "/") {
 			return nil, fmt.Errorf(
-				"[%d] uses legacy %q format; define [[model]] and reference its name",
+				"[%d] uses unsupported %q format; define [[model]] and reference its name",
 				i,
 				"provider/model",
 			)
@@ -615,7 +554,7 @@ func normalizeAllowedUserIDs(ids []int64) ([]int64, error) {
 
 func validateExecution(execution *Execution) error {
 	if execution == nil {
-		return nil
+		return errors.New("is required")
 	}
 	if strings.TrimSpace(execution.ServiceAddress) == "" {
 		return errors.New("service_address is required")
@@ -624,9 +563,6 @@ func validateExecution(execution *Execution) error {
 }
 
 func resolveExecutionRuntime(execution *Execution) (*ExecutionRuntime, error) {
-	if execution == nil {
-		return nil, nil
-	}
 	if err := validateExecution(execution); err != nil {
 		return nil, err
 	}

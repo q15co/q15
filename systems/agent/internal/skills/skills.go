@@ -1,3 +1,4 @@
+// Package skills manages builtin and shared skills for the agent.
 package skills
 
 import (
@@ -13,7 +14,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	sandboxcontract "github.com/q15co/q15/libs/sandbox-contract"
+	"github.com/q15co/q15/systems/agent/internal/fileops"
 	"github.com/yuin/goldmark"
 	meta "github.com/yuin/goldmark-meta"
 	"github.com/yuin/goldmark/parser"
@@ -43,10 +44,10 @@ var frontmatterParser = goldmark.New(
 
 // Settings configures agent-visible skills roots.
 type Settings struct {
-	WorkspaceHostDir string
-	WorkspaceDir     string
-	SkillsHostDir    string
-	SkillsDir        string
+	WorkspaceLocalDir   string
+	WorkspaceRuntimeDir string
+	SkillsLocalDir      string
+	SkillsRuntimeDir    string
 }
 
 // Source identifies the source of a skill entry.
@@ -99,12 +100,12 @@ type Manager struct {
 
 // NewManager normalizes and returns a skills manager.
 func NewManager(cfg Settings) *Manager {
-	cfg.WorkspaceHostDir = cleanOptionalHostPath(cfg.WorkspaceHostDir)
-	cfg.WorkspaceDir = normalizeContainerRoot(cfg.WorkspaceDir)
-	cfg.SkillsHostDir = cleanOptionalHostPath(cfg.SkillsHostDir)
-	cfg.SkillsDir = normalizeContainerRoot(cfg.SkillsDir)
-	if cfg.SkillsDir == "" {
-		cfg.SkillsDir = DefaultContainerDir
+	cfg.WorkspaceLocalDir = cleanOptionalLocalPath(cfg.WorkspaceLocalDir)
+	cfg.WorkspaceRuntimeDir = normalizeContainerRoot(cfg.WorkspaceRuntimeDir)
+	cfg.SkillsLocalDir = cleanOptionalLocalPath(cfg.SkillsLocalDir)
+	cfg.SkillsRuntimeDir = normalizeContainerRoot(cfg.SkillsRuntimeDir)
+	if cfg.SkillsRuntimeDir == "" {
+		cfg.SkillsRuntimeDir = DefaultContainerDir
 	}
 	return &Manager{settings: cfg}
 }
@@ -114,15 +115,15 @@ func (m *Manager) SkillsDir() string {
 	if m == nil {
 		return DefaultContainerDir
 	}
-	if m.settings.SkillsDir == "" {
+	if m.settings.SkillsRuntimeDir == "" {
 		return DefaultContainerDir
 	}
-	return m.settings.SkillsDir
+	return m.settings.SkillsRuntimeDir
 }
 
 // SharedSkillsEnabled reports whether a shared filesystem root is configured.
 func (m *Manager) SharedSkillsEnabled() bool {
-	return m != nil && strings.TrimSpace(m.settings.SkillsHostDir) != ""
+	return m != nil && strings.TrimSpace(m.settings.SkillsLocalDir) != ""
 }
 
 // LoadCatalog returns the current visible skills catalog.
@@ -131,7 +132,7 @@ func (m *Manager) LoadCatalog() Catalog {
 		Entries:  builtinEntries(m.SkillsDir()),
 		Warnings: nil,
 	}
-	if m == nil || strings.TrimSpace(m.settings.SkillsHostDir) == "" {
+	if m == nil || strings.TrimSpace(m.settings.SkillsLocalDir) == "" {
 		return catalog
 	}
 
@@ -192,39 +193,39 @@ func (m *Manager) ReadBuiltinFile(
 	rawPath string,
 	offsetLines int,
 	limitLines int,
-) (sandboxcontract.ReadFileResult, bool, error) {
+) (fileops.ReadResult, bool, error) {
 	if !m.isBuiltinPath(rawPath) {
-		return sandboxcontract.ReadFileResult{}, false, nil
+		return fileops.ReadResult{}, false, nil
 	}
 
 	rel, err := m.resolveBuiltinRelative(rawPath)
 	if err != nil {
-		return sandboxcontract.ReadFileResult{}, true, err
+		return fileops.ReadResult{}, true, err
 	}
 	raw, err := builtinSkillFS.ReadFile(rel)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return sandboxcontract.ReadFileResult{}, true, fmt.Errorf("file not found")
+			return fileops.ReadResult{}, true, fmt.Errorf("file not found")
 		}
-		return sandboxcontract.ReadFileResult{}, true, fmt.Errorf("read builtin file: %w", err)
+		return fileops.ReadResult{}, true, fmt.Errorf("read builtin file: %w", err)
 	}
 	if strings.HasSuffix(rel, "/") {
-		return sandboxcontract.ReadFileResult{}, true, fmt.Errorf("path is not a regular file")
+		return fileops.ReadResult{}, true, fmt.Errorf("path is not a regular file")
 	}
 	if bytesIndexByte(raw, 0) >= 0 {
-		return sandboxcontract.ReadFileResult{}, true, fmt.Errorf(
+		return fileops.ReadResult{}, true, fmt.Errorf(
 			"file contains NUL bytes and is not supported as text",
 		)
 	}
 	if !utf8.Valid(raw) {
-		return sandboxcontract.ReadFileResult{}, true, fmt.Errorf("file is not valid UTF-8")
+		return fileops.ReadResult{}, true, fmt.Errorf("file is not valid UTF-8")
 	}
 	result, err := paginateText(string(raw), offsetLines, limitLines)
 	return result, true, err
 }
 
 func (m *Manager) loadSharedEntries() ([]Entry, []string) {
-	entries, err := os.ReadDir(m.settings.SkillsHostDir)
+	entries, err := os.ReadDir(m.settings.SkillsLocalDir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -269,7 +270,7 @@ func (m *Manager) validateSharedDir(dirName string) ValidationResult {
 		Source:    SourceShared,
 		SkillPath: path.Join(m.SkillsDir(), dirName),
 	}
-	hostDir := filepath.Join(m.settings.SkillsHostDir, dirName)
+	hostDir := filepath.Join(m.settings.SkillsLocalDir, dirName)
 	return m.validateDir(hostDir, result)
 }
 
@@ -377,7 +378,7 @@ func (m *Manager) resolveFilesystemPath(rawPath string) (resolvedFilesystemPath,
 		cleaned := path.Clean(rawPath)
 		switch {
 		case strings.HasPrefix(cleaned, m.SkillsDir()+"/"):
-			if strings.TrimSpace(m.settings.SkillsHostDir) == "" {
+			if strings.TrimSpace(m.settings.SkillsLocalDir) == "" {
 				return resolvedFilesystemPath{}, fmt.Errorf("shared skills root is not configured")
 			}
 			rel := strings.TrimPrefix(cleaned, m.SkillsDir()+"/")
@@ -394,15 +395,15 @@ func (m *Manager) resolveFilesystemPath(rawPath string) (resolvedFilesystemPath,
 				return resolvedFilesystemPath{}, err
 			}
 			return resolvedFilesystemPath{
-				hostDir:      filepath.Join(m.settings.SkillsHostDir, filepath.FromSlash(first)),
+				hostDir:      filepath.Join(m.settings.SkillsLocalDir, filepath.FromSlash(first)),
 				containerDir: path.Join(m.SkillsDir(), first),
 				source:       SourceShared,
 			}, nil
-		case m.settings.WorkspaceDir != "" && strings.HasPrefix(cleaned, m.settings.WorkspaceDir+"/"):
-			rel := strings.TrimPrefix(cleaned, m.settings.WorkspaceDir+"/")
+		case m.settings.WorkspaceRuntimeDir != "" && strings.HasPrefix(cleaned, m.settings.WorkspaceRuntimeDir+"/"):
+			rel := strings.TrimPrefix(cleaned, m.settings.WorkspaceRuntimeDir+"/")
 			return resolveWorkspaceSkillDir(
-				m.settings.WorkspaceHostDir,
-				m.settings.WorkspaceDir,
+				m.settings.WorkspaceLocalDir,
+				m.settings.WorkspaceRuntimeDir,
 				rel,
 			)
 		default:
@@ -414,23 +415,27 @@ func (m *Manager) resolveFilesystemPath(rawPath string) (resolvedFilesystemPath,
 		}
 	}
 
-	return resolveWorkspaceSkillDir(m.settings.WorkspaceHostDir, m.settings.WorkspaceDir, rawPath)
+	return resolveWorkspaceSkillDir(
+		m.settings.WorkspaceLocalDir,
+		m.settings.WorkspaceRuntimeDir,
+		rawPath,
+	)
 }
 
 func resolveWorkspaceSkillDir(
-	workspaceHostDir string,
-	workspaceDir string,
+	workspaceLocalDir string,
+	workspaceRuntimeDir string,
 	rel string,
 ) (resolvedFilesystemPath, error) {
-	if strings.TrimSpace(workspaceHostDir) == "" || strings.TrimSpace(workspaceDir) == "" {
+	if strings.TrimSpace(workspaceLocalDir) == "" || strings.TrimSpace(workspaceRuntimeDir) == "" {
 		return resolvedFilesystemPath{}, fmt.Errorf("workspace root is not configured")
 	}
 	cleaned := path.Clean(strings.TrimSpace(rel))
 	if err := validateRelativePath(cleaned); err != nil {
 		return resolvedFilesystemPath{}, err
 	}
-	hostDir := filepath.Join(workspaceHostDir, filepath.FromSlash(cleaned))
-	containerDir := path.Join(workspaceDir, cleaned)
+	hostDir := filepath.Join(workspaceLocalDir, filepath.FromSlash(cleaned))
+	containerDir := path.Join(workspaceRuntimeDir, cleaned)
 	if strings.EqualFold(path.Base(containerDir), skillFileName) {
 		hostDir = filepath.Dir(hostDir)
 		containerDir = path.Dir(containerDir)
@@ -656,7 +661,7 @@ func normalizeContainerRoot(root string) string {
 	return cleaned
 }
 
-func cleanOptionalHostPath(raw string) string {
+func cleanOptionalLocalPath(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return ""
@@ -684,11 +689,11 @@ func paginateText(
 	text string,
 	offsetLines int,
 	limitLines int,
-) (sandboxcontract.ReadFileResult, error) {
+) (fileops.ReadResult, error) {
 	lines := splitLines(normalizeText(text))
 	totalLines := len(lines)
 	if totalLines == 0 {
-		return sandboxcontract.ReadFileResult{}, fmt.Errorf("file is empty")
+		return fileops.ReadResult{}, fmt.Errorf("file is empty")
 	}
 
 	offset := offsetLines
@@ -696,10 +701,10 @@ func paginateText(
 		offset = 1
 	}
 	if offset < 1 {
-		return sandboxcontract.ReadFileResult{}, fmt.Errorf("offset_lines must be >= 1")
+		return fileops.ReadResult{}, fmt.Errorf("offset_lines must be >= 1")
 	}
 	if offset > totalLines {
-		return sandboxcontract.ReadFileResult{}, fmt.Errorf("offset_lines is beyond end of file")
+		return fileops.ReadResult{}, fmt.Errorf("offset_lines is beyond end of file")
 	}
 
 	limit := limitLines
@@ -707,7 +712,7 @@ func paginateText(
 		limit = defaultReadLimitLines
 	}
 	if limit < 1 {
-		return sandboxcontract.ReadFileResult{}, fmt.Errorf("limit_lines must be >= 1")
+		return fileops.ReadResult{}, fmt.Errorf("limit_lines must be >= 1")
 	}
 	if limit > maxReadLimitLines {
 		limit = maxReadLimitLines
@@ -739,7 +744,7 @@ func paginateText(
 		nextOffset = start + len(out) + 1
 	}
 
-	result := sandboxcontract.ReadFileResult{
+	result := fileops.ReadResult{
 		Content:    strings.Join(out, "\n"),
 		Truncated:  truncated,
 		TotalLines: totalLines,

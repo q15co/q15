@@ -1,7 +1,9 @@
+// Package app wires the q15 agent runtime and startup flow.
 package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -17,7 +19,7 @@ func connectExecutionService(
 	runtime *config.ExecutionRuntime,
 ) (*execution.Client, *execpb.GetRuntimeInfoResponse, error) {
 	if runtime == nil {
-		return nil, nil, nil
+		return nil, nil, errors.New("execution config is required")
 	}
 
 	connectCtx, cancel := context.WithTimeout(ctx, executionServiceConnectTimeout)

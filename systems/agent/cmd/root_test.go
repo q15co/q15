@@ -38,7 +38,7 @@ func TestResolveConfigPath(t *testing.T) {
 			want: filepath.Join(dir, "config.toml"),
 		},
 		{
-			name: "legacy fallback when no dir",
+			name: "local fallback when no dir",
 			path: "",
 			dir:  "",
 			want: "config.toml",
@@ -77,7 +77,7 @@ func TestResolveAuthPath(t *testing.T) {
 			want: filepath.Join(dir, "auth.json"),
 		},
 		{
-			name: "legacy fallback when no dir",
+			name: "local fallback when no dir",
 			path: "",
 			dir:  "",
 			want: "auth.json",

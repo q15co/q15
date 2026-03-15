@@ -1,21 +1,19 @@
-package sandboxfiles
+package fileops
 
 import (
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-
-	sandboxcontract "github.com/q15co/q15/libs/sandbox-contract"
 )
 
 func TestApplyPatchSupportsAddUpdateDeleteAndMove(t *testing.T) {
 	t.Parallel()
 
 	cfg := newTestSettings(t)
-	writeHostFile(t, cfg.WorkspaceHostDir, "update.txt", "one\ntwo\n")
-	writeHostFile(t, cfg.WorkspaceHostDir, "delete.txt", "bye\n")
-	writeHostFile(t, cfg.WorkspaceHostDir, "move.txt", "move me\n")
+	writeHostFile(t, cfg.WorkspaceLocalDir, "update.txt", "one\ntwo\n")
+	writeHostFile(t, cfg.WorkspaceLocalDir, "delete.txt", "bye\n")
+	writeHostFile(t, cfg.WorkspaceLocalDir, "move.txt", "move me\n")
 
 	patch := strings.Join([]string{
 		"*** Begin Patch",
@@ -33,7 +31,7 @@ func TestApplyPatchSupportsAddUpdateDeleteAndMove(t *testing.T) {
 		"*** End Patch",
 	}, "\n")
 
-	got, err := ApplyPatch(cfg, sandboxcontract.ApplyPatchRequest{Patch: patch})
+	got, err := ApplyPatch(cfg, patch)
 	if err != nil {
 		t.Fatalf("ApplyPatch() error = %v", err)
 	}
@@ -58,18 +56,18 @@ func TestApplyPatchSupportsAddUpdateDeleteAndMove(t *testing.T) {
 		}
 	}
 
-	assertHostFileContent(t, cfg.WorkspaceHostDir, "added.txt", "hello\nworld")
-	assertHostFileContent(t, cfg.WorkspaceHostDir, "update.txt", "one\nthree\n")
-	assertHostFileMissing(t, cfg.WorkspaceHostDir, "delete.txt")
-	assertHostFileMissing(t, cfg.WorkspaceHostDir, "move.txt")
-	assertHostFileContent(t, cfg.WorkspaceHostDir, "moved.txt", "move me\n")
+	assertHostFileContent(t, cfg.WorkspaceLocalDir, "added.txt", "hello\nworld")
+	assertHostFileContent(t, cfg.WorkspaceLocalDir, "update.txt", "one\nthree\n")
+	assertHostFileMissing(t, cfg.WorkspaceLocalDir, "delete.txt")
+	assertHostFileMissing(t, cfg.WorkspaceLocalDir, "move.txt")
+	assertHostFileContent(t, cfg.WorkspaceLocalDir, "moved.txt", "move me\n")
 }
 
 func TestApplyPatchRejectsMalformedPatch(t *testing.T) {
 	t.Parallel()
 
 	cfg := newTestSettings(t)
-	_, err := ApplyPatch(cfg, sandboxcontract.ApplyPatchRequest{Patch: "*** Update File: bad.txt"})
+	_, err := ApplyPatch(cfg, "*** Update File: bad.txt")
 	if err == nil || !strings.Contains(err.Error(), "must begin") {
 		t.Fatalf("ApplyPatch() error = %v, want malformed patch rejection", err)
 	}
@@ -79,7 +77,7 @@ func TestApplyPatchRejectsAmbiguousHunks(t *testing.T) {
 	t.Parallel()
 
 	cfg := newTestSettings(t)
-	writeHostFile(t, cfg.WorkspaceHostDir, "dup.txt", "a\nx\nb\na\nx\nb\n")
+	writeHostFile(t, cfg.WorkspaceLocalDir, "dup.txt", "a\nx\nb\na\nx\nb\n")
 
 	patch := strings.Join([]string{
 		"*** Begin Patch",
@@ -92,7 +90,7 @@ func TestApplyPatchRejectsAmbiguousHunks(t *testing.T) {
 		"*** End Patch",
 	}, "\n")
 
-	_, err := ApplyPatch(cfg, sandboxcontract.ApplyPatchRequest{Patch: patch})
+	_, err := ApplyPatch(cfg, patch)
 	if err == nil || !strings.Contains(err.Error(), "matched multiple locations") {
 		t.Fatalf("ApplyPatch() error = %v, want ambiguous hunk rejection", err)
 	}
@@ -109,7 +107,7 @@ func TestApplyPatchRejectsInvalidPaths(t *testing.T) {
 		"*** End Patch",
 	}, "\n")
 
-	_, err := ApplyPatch(cfg, sandboxcontract.ApplyPatchRequest{Patch: patch})
+	_, err := ApplyPatch(cfg, patch)
 	if err == nil || !strings.Contains(err.Error(), "absolute paths must be under") {
 		t.Fatalf("ApplyPatch() error = %v, want invalid path rejection", err)
 	}
@@ -127,12 +125,12 @@ func TestApplyPatchValidatesEntirePatchBeforeMutation(t *testing.T) {
 		"*** End Patch",
 	}, "\n")
 
-	_, err := ApplyPatch(cfg, sandboxcontract.ApplyPatchRequest{Patch: patch})
+	_, err := ApplyPatch(cfg, patch)
 	if err == nil || !strings.Contains(err.Error(), "cannot delete missing file") {
 		t.Fatalf("ApplyPatch() error = %v, want missing file rejection", err)
 	}
 
-	assertHostFileMissing(t, cfg.WorkspaceHostDir, "good.txt")
+	assertHostFileMissing(t, cfg.WorkspaceLocalDir, "good.txt")
 }
 
 func containsString(values []string, want string) bool {

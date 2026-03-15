@@ -7,32 +7,32 @@ import (
 	"strings"
 	"testing"
 
-	sandboxcontract "github.com/q15co/q15/libs/sandbox-contract"
+	"github.com/q15co/q15/systems/agent/internal/fileops"
 )
 
 func TestLoadCatalogIncludesBuiltinAndValidSharedSkills(t *testing.T) {
 	t.Parallel()
 
 	cfg := newTestSettings(t)
-	writeSkillFile(t, filepath.Join(cfg.SkillsHostDir, "my-skill", skillFileName), `---
+	writeSkillFile(t, filepath.Join(cfg.SkillsLocalDir, "my-skill", skillFileName), `---
 name: my-skill
 description: Shared skill description.
 ---
 
 # My Skill
 `)
-	if err := os.MkdirAll(filepath.Join(cfg.SkillsHostDir, "broken"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(cfg.SkillsLocalDir, "broken"), 0o755); err != nil {
 		t.Fatalf("MkdirAll(broken) error = %v", err)
 	}
 
 	manager := NewManager(cfg)
 	catalog := manager.LoadCatalog()
 
-	if len(catalog.Entries) != 4 {
-		t.Fatalf("catalog entries = %#v, want 3 builtins + shared", catalog.Entries)
+	if len(catalog.Entries) != 3 {
+		t.Fatalf("catalog entries = %#v, want 2 builtins + shared", catalog.Entries)
 	}
 	names := entryNames(catalog.Entries)
-	for _, want := range []string{"browser-use", "skill-creator", "skill-discovery", "my-skill"} {
+	for _, want := range []string{"skill-creator", "skill-discovery", "my-skill"} {
 		if !contains(names, want) {
 			t.Fatalf("catalog names = %v, want %q present", names, want)
 		}
@@ -87,48 +87,18 @@ func TestBuiltinSkillDiscoveryGuidesExternalDiscoveryAndAdaptation(t *testing.T)
 	}
 }
 
-func TestBuiltinBrowserUseCoversHeadlessAndXvfbFlows(t *testing.T) {
-	t.Parallel()
-
-	raw, err := builtinSkillFS.ReadFile("builtins/browser-use/SKILL.md")
-	if err != nil {
-		t.Fatalf("ReadFile(browser-use) error = %v", err)
-	}
-	text := string(raw)
-	for _, want := range []string{
-		"exec_browser_shell",
-		"display_mode: \"headless\"",
-		"display_mode: \"xvfb\"",
-		"Prefer the simplest built-in CLI command before writing custom scripts.",
-		"Do not use long-running interactive commands such as `playwright open` or",
-		"Do not assume `python` or `node` are directly available unless you verify them first.",
-		"playwright --help",
-		"playwright test",
-		"playwright screenshot --full-page",
-		"playwright pdf",
-		"playwright open https://example.com",
-		"playwright screenshot -b chromium",
-		"puppeteer screenshot",
-		"Do not run `playwright install` or `playwright install-deps`",
-	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("builtin browser-use missing %q:\n%s", want, text)
-		}
-	}
-}
-
 func TestValidateSkillSupportsBuiltinSharedAndWorkspaceDrafts(t *testing.T) {
 	t.Parallel()
 
 	cfg := newTestSettings(t)
-	writeSkillFile(t, filepath.Join(cfg.SkillsHostDir, "my-skill", skillFileName), `---
+	writeSkillFile(t, filepath.Join(cfg.SkillsLocalDir, "my-skill", skillFileName), `---
 name: my-skill
 description: Shared skill description.
 ---
 `)
 	writeSkillFile(
 		t,
-		filepath.Join(cfg.WorkspaceHostDir, "drafts", "draft-skill", skillFileName),
+		filepath.Join(cfg.WorkspaceLocalDir, "drafts", "draft-skill", skillFileName),
 		`---
 name: draft-skill
 description: Draft description.
@@ -202,9 +172,9 @@ func TestFileExecutorRejectsBuiltinWritesAndDelegatesSharedPaths(t *testing.T) {
 	}
 
 	disabledManager := NewManager(Settings{
-		WorkspaceHostDir: cfg.WorkspaceHostDir,
-		WorkspaceDir:     cfg.WorkspaceDir,
-		SkillsDir:        cfg.SkillsDir,
+		WorkspaceLocalDir:   cfg.WorkspaceLocalDir,
+		WorkspaceRuntimeDir: cfg.WorkspaceRuntimeDir,
+		SkillsRuntimeDir:    cfg.SkillsRuntimeDir,
 	})
 	exec = NewFileExecutor(delegate, disabledManager)
 	if _, err := exec.ReadFile(context.Background(), "/skills/shared/SKILL.md", 0, 0); err == nil ||
@@ -231,17 +201,17 @@ func (s *stubFileDelegate) ReadFile(
 	path string,
 	_ int,
 	_ int,
-) (sandboxcontract.ReadFileResult, error) {
+) (fileops.ReadResult, error) {
 	s.readPath = path
-	return sandboxcontract.ReadFileResult{Content: "ok", TotalLines: 1}, nil
+	return fileops.ReadResult{Content: "ok", TotalLines: 1}, nil
 }
 
 func (s *stubFileDelegate) WriteFile(
 	_ context.Context,
 	path string,
 	content string,
-) (sandboxcontract.WriteFileResult, error) {
-	return sandboxcontract.WriteFileResult{Path: path, BytesWritten: len(content)}, nil
+) (fileops.WriteResult, error) {
+	return fileops.WriteResult{Path: path, BytesWritten: len(content)}, nil
 }
 
 func (s *stubFileDelegate) EditFile(
@@ -249,31 +219,31 @@ func (s *stubFileDelegate) EditFile(
 	path string,
 	_ string,
 	_ string,
-) (sandboxcontract.EditFileResult, error) {
-	return sandboxcontract.EditFileResult{Path: path}, nil
+) (fileops.EditResult, error) {
+	return fileops.EditResult{Path: path}, nil
 }
 
 func (s *stubFileDelegate) ApplyPatch(
 	_ context.Context,
 	_ string,
-) (sandboxcontract.ApplyPatchResult, error) {
-	return sandboxcontract.ApplyPatchResult{Summary: "ok"}, nil
+) (fileops.ApplyPatchResult, error) {
+	return fileops.ApplyPatchResult{Summary: "ok"}, nil
 }
 
 func newTestSettings(t *testing.T) Settings {
 	t.Helper()
 
 	root := t.TempDir()
-	workspaceHostDir := filepath.Join(root, "workspace")
-	skillsHostDir := filepath.Join(root, "skills")
-	if err := os.MkdirAll(workspaceHostDir, 0o755); err != nil {
+	workspaceLocalDir := filepath.Join(root, "workspace")
+	skillsLocalDir := filepath.Join(root, "skills")
+	if err := os.MkdirAll(workspaceLocalDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(workspace) error = %v", err)
 	}
 	return Settings{
-		WorkspaceHostDir: workspaceHostDir,
-		WorkspaceDir:     "/workspace",
-		SkillsHostDir:    skillsHostDir,
-		SkillsDir:        "/skills",
+		WorkspaceLocalDir:   workspaceLocalDir,
+		WorkspaceRuntimeDir: "/workspace",
+		SkillsLocalDir:      skillsLocalDir,
+		SkillsRuntimeDir:    "/skills",
 	}
 }
 

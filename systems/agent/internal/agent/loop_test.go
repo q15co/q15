@@ -284,7 +284,7 @@ func TestLoopReply_DoesNotAppendGenericToolSteeringPromptWhenToolsEnabled(t *tes
 				msg.Content,
 				"call the relevant tool(s) immediately instead of narrating intent",
 			) {
-			t.Fatalf("model input should not include legacy steering prompt, found at index %d", i)
+			t.Fatalf("model input should not include removed steering prompt, found at index %d", i)
 		}
 	}
 }

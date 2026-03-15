@@ -229,7 +229,7 @@ func TestAgentEndpoint_OpenSession_UsesStoredProgressMode(t *testing.T) {
 			session.OnRunEvent(ctx, agent.RunEvent{
 				Type: agent.RunEventToolStarted,
 				ToolCall: agent.ToolCall{
-					Name:      "exec_nix_shell_bash",
+					Name:      "exec",
 					Arguments: `{"command":"git status --short"}`,
 				},
 			})
@@ -376,7 +376,7 @@ func TestAgentRunSession_DebouncesStatusEdits(t *testing.T) {
 			session.OnRunEvent(ctx, agent.RunEvent{
 				Type: agent.RunEventToolStarted,
 				ToolCall: agent.ToolCall{
-					Name:      "exec_nix_shell_bash",
+					Name:      "exec",
 					Arguments: `{"command":"echo hello"}`,
 				},
 			})
@@ -518,7 +518,7 @@ func TestSummarizeToolCall_ProgressAndVerboseModes(t *testing.T) {
 	}
 
 	progressSummary := summarizeToolCall(agent.ToolCall{
-		Name:      "exec_nix_shell_bash",
+		Name:      "exec",
 		Arguments: `{"command":"git status --short"}`,
 	}, progressModeProgress)
 	if progressSummary != "💻 Running command" {
@@ -533,11 +533,8 @@ func TestSummarizeToolCall_ProgressAndVerboseModes(t *testing.T) {
 		t.Fatalf("verbose summary = %q, want %q", verboseSummary, "🌐 Fetching `example.com`")
 	}
 
-	browserSummary := summarizeToolCall(agent.ToolCall{
-		Name:      "exec_browser_shell",
-		Arguments: `{"command":"playwright screenshot https://example.com out.png"}`,
-	}, progressModeProgress)
-	if browserSummary != "🌐 Running browser command" {
-		t.Fatalf("browser summary = %q, want %q", browserSummary, "🌐 Running browser command")
+	fallbackSummary := summarizeToolCall(agent.ToolCall{Name: "custom_tool"}, progressModeProgress)
+	if fallbackSummary != "⚙️ custom tool" {
+		t.Fatalf("fallback summary = %q, want %q", fallbackSummary, "⚙️ custom tool")
 	}
 }

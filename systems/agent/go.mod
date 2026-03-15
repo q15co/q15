@@ -8,7 +8,6 @@ require (
 	github.com/mymmrac/telego v1.6.0
 	github.com/openai/openai-go/v3 v3.22.0
 	github.com/q15co/q15/libs/exec-contract v0.0.0
-	github.com/q15co/q15/libs/sandbox-contract v0.0.0
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0
 	github.com/yuin/goldmark v1.7.16
@@ -66,7 +65,5 @@ require (
 	golang.org/x/text v0.32.0 // indirect
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 )
-
-replace github.com/q15co/q15/libs/sandbox-contract => ../../libs/sandbox-contract
 
 replace github.com/q15co/q15/libs/exec-contract => ../../libs/exec-contract
