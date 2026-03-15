@@ -46,6 +46,7 @@ The agent config uses service-owned runtime boundaries:
 - `[agent.workspace]` defines the agent-local workspace mount
 - `[skills].local_dir` defines the optional shared skills mount
 - `[agent.execution]` is required
+- q15 supports at most one configured `[agent]` per runtime process
 - model-visible runtime roots are fixed at `/workspace`, `/memory`, and `/skills`
 
 Example:
@@ -64,7 +65,8 @@ provider = "openai-sub"
 provider_model = "gpt-5-codex"
 capabilities = ["text", "tool_calling", "reasoning"]
 
-[[agent]]
+[agent]
+# Authoritative agent identity used for prompt identity and core-memory rendering.
 name = "Jared"
 models = ["codex-primary"]
 memory_recent_turns = 6
@@ -84,6 +86,7 @@ Notes:
 
 - Agent memory lives under `<agent.workspace.local_dir>/.q15-memory`.
 - `skills.local_dir` is optional, but when present it should point at the shared skills volume.
+- An empty starter config is valid and starts no agent until you add `[agent]`.
 
 ## Local Docker Compose Stack
 

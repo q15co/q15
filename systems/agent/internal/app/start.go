@@ -16,7 +16,7 @@ import (
 //go:embed starter_config.toml
 var starterConfigTemplate string
 
-// Start loads configured agent runtimes from disk and starts them together.
+// Start loads the configured agent runtime from disk and starts it.
 func Start(ctx context.Context, configPath string) error {
 	configPath = strings.TrimSpace(configPath)
 	if configPath == "" {
@@ -28,57 +28,19 @@ func Start(ctx context.Context, configPath string) error {
 		return err
 	}
 
-	runtimes, err := config.LoadAgentRuntimes(configPath)
+	runtime, err := config.LoadAgentRuntime(configPath)
 	if err != nil {
 		return err
 	}
-	if len(runtimes) == 0 {
+	if runtime == nil {
 		if seeded {
 			fmt.Printf("[app] wrote starter config: %s\n", configPath)
 		}
-		fmt.Printf("[app] no agents configured in %s\n", configPath)
+		fmt.Printf("[app] no agent configured in %s\n", configPath)
 		return nil
 	}
 
-	return runAll(ctx, runtimes)
-}
-
-func runAll(ctx context.Context, runtimes []config.AgentRuntime) error {
-	if len(runtimes) == 0 {
-		return nil
-	}
-
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	errCh := make(chan error, len(runtimes))
-	for _, rt := range runtimes {
-		rt := rt
-		go func() {
-			if err := runBot(ctx, rt); err != nil {
-				errCh <- fmt.Errorf("agent %q: %w", rt.Name, err)
-				return
-			}
-			errCh <- nil
-		}()
-	}
-
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case err := <-errCh:
-			if err == nil {
-				if ctx.Err() != nil {
-					return nil
-				}
-				cancel()
-				return errors.New("an agent runner stopped unexpectedly")
-			}
-			cancel()
-			return err
-		}
-	}
+	return runBot(ctx, *runtime)
 }
 
 func ensureStarterConfig(configPath string) (bool, error) {
