@@ -15,7 +15,7 @@ import (
 type Config struct {
 	Providers []Provider `mapstructure:"provider"`
 	Models    []Model    `mapstructure:"model"`
-	Agents    []Agent    `mapstructure:"agent"`
+	Agent     *Agent     `mapstructure:"agent"`
 	Skills    Skills     `mapstructure:"skills"`
 }
 
@@ -103,7 +103,7 @@ var defaultModelCapabilities = ModelCapabilities{
 	Text: true,
 }
 
-// AgentRuntime is the resolved runtime config for one configured agent.
+// AgentRuntime is the resolved runtime config for the configured agent.
 type AgentRuntime struct {
 	Name                   string
 	Models                 []AgentModelRuntime
@@ -139,8 +139,8 @@ func Load(path string) (Config, error) {
 	return cfg, nil
 }
 
-// LoadAgentRuntimes reads and resolves agent runtime settings from path.
-func LoadAgentRuntimes(path string) ([]AgentRuntime, error) {
+// LoadAgentRuntime reads and resolves the configured agent runtime from path.
+func LoadAgentRuntime(path string) (*AgentRuntime, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return nil, errors.New("config path is required")
@@ -150,17 +150,7 @@ func LoadAgentRuntimes(path string) ([]AgentRuntime, error) {
 	if err != nil {
 		return nil, err
 	}
-	return cfg.resolveAgentRuntimes()
-}
-
-// FindAgent returns the configured agent by name.
-func (c Config) FindAgent(name string) (Agent, bool) {
-	for _, agent := range c.Agents {
-		if agent.Name == name {
-			return agent, true
-		}
-	}
-	return Agent{}, false
+	return cfg.ResolveAgentRuntime()
 }
 
 // FindProvider returns the configured provider by name.
@@ -210,140 +200,136 @@ func (a Agent) TelegramToken() (string, error) {
 	return envValue, nil
 }
 
-// ResolveAgentRuntimes resolves all configured agents into runtime values.
-func (c Config) ResolveAgentRuntimes() ([]AgentRuntime, error) {
-	return c.resolveAgentRuntimes()
-}
-
-func (c Config) resolveAgentRuntimes() ([]AgentRuntime, error) {
+// ResolveAgentRuntime resolves the configured agent into a runtime value.
+func (c Config) ResolveAgentRuntime() (*AgentRuntime, error) {
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
 
-	runtimes := make([]AgentRuntime, 0, len(c.Agents))
-	for i, agentCfg := range c.Agents {
-		modelRefs, err := agentCfg.modelRefs()
-		if err != nil {
-			return nil, fmt.Errorf("agents[%d].models: %w", i, err)
-		}
+	if c.Agent == nil {
+		return nil, nil
+	}
 
-		resolvedModels := make([]AgentModelRuntime, 0, len(modelRefs))
-		for j, modelRef := range modelRefs {
-			fieldPath := fmt.Sprintf("agents[%d].models[%d]", i, j)
-			modelCfg, ok := c.FindModel(modelRef)
-			if !ok {
-				return nil, fmt.Errorf(
-					"%s model %q is not defined in models",
-					fieldPath,
-					modelRef,
-				)
-			}
+	agentCfg := c.Agent
+	modelRefs, err := agentCfg.modelRefs()
+	if err != nil {
+		return nil, fmt.Errorf("agent.models: %w", err)
+	}
 
-			providerName := strings.TrimSpace(modelCfg.Provider)
-			provider, ok := c.FindProvider(providerName)
-			if !ok {
-				return nil, fmt.Errorf(
-					"%s model %q references undefined provider %q",
-					fieldPath,
-					modelRef,
-					providerName,
-				)
-			}
-
-			providerType := normalizeProviderType(provider.Type)
-			if providerType == "" {
-				return nil, fmt.Errorf(
-					"%s provider %q has unsupported type %q",
-					fieldPath,
-					provider.Name,
-					provider.Type,
-				)
-			}
-
-			var apiKey string
-			switch providerType {
-			case "openai-compatible":
-				apiKey = strings.TrimSpace(os.Getenv(strings.TrimSpace(provider.KeyEnv)))
-				if apiKey == "" {
-					return nil, fmt.Errorf(
-						"provider %q requires env var %q",
-						provider.Name,
-						provider.KeyEnv,
-					)
-				}
-			case "openai-codex":
-				// Credentials come from q15 auth store for OpenAI subscription login.
-				apiKey = ""
-			default:
-				return nil, fmt.Errorf(
-					"%s provider %q has unsupported type %q",
-					fieldPath,
-					provider.Name,
-					provider.Type,
-				)
-			}
-
-			capabilities, err := normalizeModelCapabilities(modelCfg.Capabilities)
-			if err != nil {
-				return nil, fmt.Errorf("%s capabilities: %w", fieldPath, err)
-			}
-
-			providerModel := modelCfg.resolvedProviderModel()
-			resolvedModels = append(resolvedModels, AgentModelRuntime{
-				Ref:             modelRef,
-				ProviderName:    provider.Name,
-				ProviderType:    providerType,
-				ProviderBaseURL: strings.TrimSpace(provider.BaseURL),
-				ProviderAPIKey:  apiKey,
-				ProviderModel:   providerModel,
-				Capabilities:    capabilities,
-			})
-		}
-
-		token, err := agentCfg.TelegramToken()
-		if err != nil {
-			return nil, fmt.Errorf("resolve telegram token for agent %q: %w", agentCfg.Name, err)
-		}
-		allowedUserIDs, err := normalizeAllowedUserIDs(agentCfg.Telegram.AllowedUserIDs)
-		if err != nil {
+	resolvedModels := make([]AgentModelRuntime, 0, len(modelRefs))
+	for j, modelRef := range modelRefs {
+		fieldPath := fmt.Sprintf("agent.models[%d]", j)
+		modelCfg, ok := c.FindModel(modelRef)
+		if !ok {
 			return nil, fmt.Errorf(
-				"resolve telegram allowed users for agent %q: %w",
-				agentCfg.Name,
-				err,
+				"%s model %q is not defined in models",
+				fieldPath,
+				modelRef,
 			)
 		}
-		executionRuntime, err := resolveExecutionRuntime(agentCfg.Execution)
-		if err != nil {
-			return nil, fmt.Errorf("resolve execution config for agent %q: %w", agentCfg.Name, err)
-		}
-		memoryRecentTurns := agentCfg.MemoryRecentTurns
-		if memoryRecentTurns == 0 {
-			memoryRecentTurns = defaultMemoryRecentTurns
-		}
-		workspaceLocalDir := strings.TrimSpace(agentCfg.Workspace.LocalDir)
-		skillsLocalDir := strings.TrimSpace(c.Skills.LocalDir)
 
-		runtimes = append(runtimes, AgentRuntime{
-			Name:                   strings.TrimSpace(agentCfg.Name),
-			Models:                 resolvedModels,
-			WorkspaceLocalDir:      workspaceLocalDir,
-			MemoryLocalDir:         filepath.Join(workspaceLocalDir, ".q15-memory"),
-			SkillsLocalDir:         skillsLocalDir,
-			MemoryRecentTurns:      memoryRecentTurns,
-			Execution:              *executionRuntime,
-			TelegramToken:          token,
-			TelegramAllowedUserIDs: allowedUserIDs,
+		providerName := strings.TrimSpace(modelCfg.Provider)
+		provider, ok := c.FindProvider(providerName)
+		if !ok {
+			return nil, fmt.Errorf(
+				"%s model %q references undefined provider %q",
+				fieldPath,
+				modelRef,
+				providerName,
+			)
+		}
+
+		providerType := normalizeProviderType(provider.Type)
+		if providerType == "" {
+			return nil, fmt.Errorf(
+				"%s provider %q has unsupported type %q",
+				fieldPath,
+				provider.Name,
+				provider.Type,
+			)
+		}
+
+		var apiKey string
+		switch providerType {
+		case "openai-compatible":
+			apiKey = strings.TrimSpace(os.Getenv(strings.TrimSpace(provider.KeyEnv)))
+			if apiKey == "" {
+				return nil, fmt.Errorf(
+					"provider %q requires env var %q",
+					provider.Name,
+					provider.KeyEnv,
+				)
+			}
+		case "openai-codex":
+			// Credentials come from q15 auth store for OpenAI subscription login.
+			apiKey = ""
+		default:
+			return nil, fmt.Errorf(
+				"%s provider %q has unsupported type %q",
+				fieldPath,
+				provider.Name,
+				provider.Type,
+			)
+		}
+
+		capabilities, err := normalizeModelCapabilities(modelCfg.Capabilities)
+		if err != nil {
+			return nil, fmt.Errorf("%s capabilities: %w", fieldPath, err)
+		}
+
+		providerModel := modelCfg.resolvedProviderModel()
+		resolvedModels = append(resolvedModels, AgentModelRuntime{
+			Ref:             modelRef,
+			ProviderName:    provider.Name,
+			ProviderType:    providerType,
+			ProviderBaseURL: strings.TrimSpace(provider.BaseURL),
+			ProviderAPIKey:  apiKey,
+			ProviderModel:   providerModel,
+			Capabilities:    capabilities,
 		})
 	}
 
-	return runtimes, nil
+	token, err := agentCfg.TelegramToken()
+	if err != nil {
+		return nil, fmt.Errorf("resolve telegram token for agent %q: %w", agentCfg.Name, err)
+	}
+	allowedUserIDs, err := normalizeAllowedUserIDs(agentCfg.Telegram.AllowedUserIDs)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"resolve telegram allowed users for agent %q: %w",
+			agentCfg.Name,
+			err,
+		)
+	}
+	executionRuntime, err := resolveExecutionRuntime(agentCfg.Execution)
+	if err != nil {
+		return nil, fmt.Errorf("resolve execution config for agent %q: %w", agentCfg.Name, err)
+	}
+	memoryRecentTurns := agentCfg.MemoryRecentTurns
+	if memoryRecentTurns == 0 {
+		memoryRecentTurns = defaultMemoryRecentTurns
+	}
+	workspaceLocalDir := strings.TrimSpace(agentCfg.Workspace.LocalDir)
+	skillsLocalDir := strings.TrimSpace(c.Skills.LocalDir)
+
+	return &AgentRuntime{
+		Name:                   strings.TrimSpace(agentCfg.Name),
+		Models:                 resolvedModels,
+		WorkspaceLocalDir:      workspaceLocalDir,
+		MemoryLocalDir:         filepath.Join(workspaceLocalDir, ".q15-memory"),
+		SkillsLocalDir:         skillsLocalDir,
+		MemoryRecentTurns:      memoryRecentTurns,
+		Execution:              *executionRuntime,
+		TelegramToken:          token,
+		TelegramAllowedUserIDs: allowedUserIDs,
+	}, nil
 }
 
 func (c Config) validate() error {
 	if err := validateSkills(c.Skills); err != nil {
 		return fmt.Errorf("skills: %w", err)
 	}
-	if len(c.Agents) > 0 && len(c.Providers) == 0 {
+	if c.Agent != nil && len(c.Providers) == 0 {
 		return errors.New("provider cannot be empty when agent is configured")
 	}
 
@@ -405,50 +391,46 @@ func (c Config) validate() error {
 		}
 	}
 
-	agents := make(map[string]struct{}, len(c.Agents))
-	for i, agent := range c.Agents {
-		name := strings.TrimSpace(agent.Name)
-		if name == "" {
-			return fmt.Errorf("agent[%d].name is required", i)
-		}
-		if _, ok := agents[name]; ok {
-			return fmt.Errorf("duplicate agent name %q", name)
-		}
-		agents[name] = struct{}{}
+	if c.Agent == nil {
+		return nil
+	}
 
-		modelRefs, err := agent.modelRefs()
-		if err != nil {
-			return fmt.Errorf("agent[%d].models: %w", i, err)
+	name := strings.TrimSpace(c.Agent.Name)
+	if name == "" {
+		return errors.New("agent.name is required")
+	}
+
+	modelRefs, err := c.Agent.modelRefs()
+	if err != nil {
+		return fmt.Errorf("agent.models: %w", err)
+	}
+	if len(c.Models) == 0 {
+		return errors.New("model cannot be empty when agent is configured")
+	}
+	for j, modelRef := range modelRefs {
+		if _, ok := models[modelRef]; !ok {
+			return fmt.Errorf(
+				"agent.models[%d] model %q is not defined in models",
+				j,
+				modelRef,
+			)
 		}
-		if len(c.Models) == 0 {
-			return errors.New("model cannot be empty when agent is configured")
-		}
-		for j, modelRef := range modelRefs {
-			if _, ok := models[modelRef]; !ok {
-				return fmt.Errorf(
-					"agent[%d].models[%d] model %q is not defined in models",
-					i,
-					j,
-					modelRef,
-				)
-			}
-		}
-		if strings.TrimSpace(agent.Workspace.LocalDir) == "" {
-			return fmt.Errorf("agent[%d].workspace.local_dir is required", i)
-		}
-		if !filepath.IsAbs(strings.TrimSpace(agent.Workspace.LocalDir)) {
-			return fmt.Errorf("agent[%d].workspace.local_dir must be an absolute path", i)
-		}
-		if err := validateExecution(agent.Execution); err != nil {
-			return fmt.Errorf("agent[%d].execution: %w", i, err)
-		}
-		if strings.TrimSpace(agent.Telegram.Token) == "" &&
-			strings.TrimSpace(agent.Telegram.TokenEnv) == "" {
-			return fmt.Errorf("agent[%d].telegram requires token or token_env", i)
-		}
-		if _, err := normalizeAllowedUserIDs(agent.Telegram.AllowedUserIDs); err != nil {
-			return fmt.Errorf("agent[%d].telegram.allowed_user_ids: %w", i, err)
-		}
+	}
+	if strings.TrimSpace(c.Agent.Workspace.LocalDir) == "" {
+		return errors.New("agent.workspace.local_dir is required")
+	}
+	if !filepath.IsAbs(strings.TrimSpace(c.Agent.Workspace.LocalDir)) {
+		return errors.New("agent.workspace.local_dir must be an absolute path")
+	}
+	if err := validateExecution(c.Agent.Execution); err != nil {
+		return fmt.Errorf("agent.execution: %w", err)
+	}
+	if strings.TrimSpace(c.Agent.Telegram.Token) == "" &&
+		strings.TrimSpace(c.Agent.Telegram.TokenEnv) == "" {
+		return errors.New("agent.telegram requires token or token_env")
+	}
+	if _, err := normalizeAllowedUserIDs(c.Agent.Telegram.AllowedUserIDs); err != nil {
+		return fmt.Errorf("agent.telegram.allowed_user_ids: %w", err)
 	}
 
 	return nil

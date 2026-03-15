@@ -1,5 +1,5 @@
 # q15 starter config
-# Uncomment and edit the blocks below to configure one or more agents.
+# Uncomment and edit the blocks below to configure a single agent.
 #
 # For env-backed secrets, set provider.key_env / agent.telegram.token_env to
 # variable names available in your runtime environment (for example q15.env).
@@ -19,7 +19,7 @@
 # If omitted, q15 currently assumes ["text"] only. Add tool_calling,
 # image_input, and reasoning explicitly per model as supported.
 #
-# [[agent]]
+# [agent]
 # name = "Jared"
 # models = ["codex-primary"]
 # memory_recent_turns = 6

@@ -33,7 +33,7 @@ func TestEnsureStarterConfigCreatesMissingConfig(t *testing.T) {
 	if !strings.Contains(got, "# [[model]]") {
 		t.Fatalf("starter config missing commented model block: %q", got)
 	}
-	if !strings.Contains(got, "# [[agent]]") {
+	if !strings.Contains(got, "# [agent]") {
 		t.Fatalf("starter config missing commented agent block: %q", got)
 	}
 	if got != starterConfigTemplate {
@@ -65,7 +65,7 @@ func TestEnsureStarterConfigKeepsExistingConfig(t *testing.T) {
 	}
 }
 
-func TestStartSeedsMissingConfigAndReturnsNilWithNoAgents(t *testing.T) {
+func TestStartSeedsMissingConfigAndReturnsNilWithNoAgent(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "nested", "config.toml")
 
 	if err := Start(context.Background(), configPath); err != nil {

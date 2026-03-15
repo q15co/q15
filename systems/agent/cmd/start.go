@@ -10,7 +10,7 @@ import (
 
 var startCmd = &cobra.Command{
 	Use:   "start",
-	Short: "Start all configured agents",
+	Short: "Start configured agent",
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		return app.Start(cmd.Context(), strings.TrimSpace(viper.GetString("config")))
 	},
