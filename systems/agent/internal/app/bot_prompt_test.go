@@ -43,7 +43,7 @@ func TestComposeSystemPromptIncludesRuntimeAndExecGuidance(t *testing.T) {
 		"- Workspace: /workspace",
 		"- Persistent memory repo: /memory",
 		"- Shared skills root: /skills",
-		"- Command runtime: exec-service sessions via local-nix-shell",
+		"- Command runtime: q15-exec sessions via local-nix-shell",
 		"- Proxy-mediated exec env injection is enabled (policy revision: rev-1).",
 		"- Prefer exec for commands, builds, tests, formatting, git, and other CLI workflows, not for routine file reads or edits.",
 		"- Browser-specific command presets are not built in; use exec directly with explicit browser packages when needed.",

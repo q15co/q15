@@ -10,19 +10,17 @@ COPY systems ./systems
 
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    cd /src/systems/agent && \
-    go build -o /out/q15-agent .
+    cd /src/systems/proxy && \
+    CGO_ENABLED=0 go build -o /out/q15-proxy .
 
 FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
-    git \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=build /out/q15-agent /usr/local/bin/q15-agent
+COPY --from=build /out/q15-proxy /usr/local/bin/q15-proxy
 
-ENV HOME=/root
 WORKDIR /root
 
-ENTRYPOINT ["/usr/local/bin/q15-agent"]
+ENTRYPOINT ["/usr/local/bin/q15-proxy"]

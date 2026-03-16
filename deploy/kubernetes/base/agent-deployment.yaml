@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
         - name: agent
-          image: q15-agent:latest
+          image: ghcr.io/q15co/q15-agent:main
           env:
             - name: HOME
               value: /root

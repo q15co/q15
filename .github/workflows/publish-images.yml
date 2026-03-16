@@ -1,0 +1,177 @@
+name: Publish Images
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-images-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build ${{ matrix.service }} (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: q15-agent
+            image: ghcr.io/q15co/q15-agent
+            dockerfile: docker/agent.Dockerfile
+            platform: linux/amd64
+            platform_id: amd64
+            runner: ubuntu-24.04
+          - service: q15-agent
+            image: ghcr.io/q15co/q15-agent
+            dockerfile: docker/agent.Dockerfile
+            platform: linux/arm64
+            platform_id: arm64
+            runner: ubuntu-24.04-arm
+          - service: q15-exec
+            image: ghcr.io/q15co/q15-exec
+            dockerfile: docker/exec.Dockerfile
+            platform: linux/amd64
+            platform_id: amd64
+            runner: ubuntu-24.04
+          - service: q15-exec
+            image: ghcr.io/q15co/q15-exec
+            dockerfile: docker/exec.Dockerfile
+            platform: linux/arm64
+            platform_id: arm64
+            runner: ubuntu-24.04-arm
+          - service: q15-proxy
+            image: ghcr.io/q15co/q15-proxy
+            dockerfile: docker/proxy.Dockerfile
+            platform: linux/amd64
+            platform_id: amd64
+            runner: ubuntu-24.04
+          - service: q15-proxy
+            image: ghcr.io/q15co/q15-proxy
+            dockerfile: docker/proxy.Dockerfile
+            platform: linux/arm64
+            platform_id: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prepare image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ matrix.image }}
+
+      - name: Build and push image by digest
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
+          provenance: false
+          sbom: false
+          cache-from: type=gha,scope=${{ matrix.service }}-${{ matrix.platform_id }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}-${{ matrix.platform_id }}
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v7
+        with:
+          name: digests-${{ matrix.service }}-${{ matrix.platform_id }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    name: Publish ${{ matrix.service }} manifest
+    runs-on: ubuntu-24.04
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: q15-agent
+            image: ghcr.io/q15co/q15-agent
+          - service: q15-exec
+            image: ghcr.io/q15co/q15-exec
+          - service: q15-proxy
+            image: ghcr.io/q15co/q15-proxy
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download digests
+        uses: actions/download-artifact@v8
+        with:
+          pattern: digests-${{ matrix.service }}-*
+          path: /tmp/digests
+          merge-multiple: true
+
+      - name: Prepare manifest metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ matrix.image }}
+          flavor: |
+            latest=false
+          tags: |
+            type=raw,value=main
+            type=sha,format=short,prefix=sha-
+
+      - name: Create multi-arch manifest
+        env:
+          IMAGE: ${{ matrix.image }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+          tags_input=${TAGS:-}
+
+          refs=()
+          for file in /tmp/digests/*; do
+            refs+=("${IMAGE}@sha256:$(basename "$file")")
+          done
+
+          if [ "${#refs[@]}" -eq 0 ]; then
+            echo "no digests found for ${IMAGE}" >&2
+            exit 1
+          fi
+
+          tags=()
+          while IFS= read -r tag; do
+            [ -n "$tag" ] || continue
+            tags+=("-t" "$tag")
+          done <<< "$tags_input"
+
+          docker buildx imagetools create "${tags[@]}" "${refs[@]}"
+
+      - name: Inspect published manifest
+        run: docker buildx imagetools inspect "${{ matrix.image }}:main"

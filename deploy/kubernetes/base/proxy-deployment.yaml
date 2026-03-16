@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: q15-proxy
+  labels:
+    app.kubernetes.io/name: q15-proxy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: q15-proxy
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: q15-proxy
+    spec:
+      containers:
+        - name: proxy
+          image: ghcr.io/q15co/q15-proxy:main
+          envFrom:
+            - secretRef:
+                name: q15-proxy-env
+          ports:
+            - name: proxy
+              containerPort: 18080
+            - name: admin
+              containerPort: 50052
+          volumeMounts:
+            - name: proxy-policy
+              mountPath: /etc/q15/proxy
+              readOnly: true
+            - name: proxy-state
+              mountPath: /var/lib/q15/proxy
+      volumes:
+        - name: proxy-policy
+          configMap:
+            name: q15-proxy-policy
+            items:
+              - key: policy.yaml
+                path: policy.yaml
+        - name: proxy-state
+          persistentVolumeClaim:
+            claimName: q15-proxy-state

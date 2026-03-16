@@ -98,11 +98,11 @@ agent:
 	if runtime.SkillsLocalDir != "/skills" {
 		t.Fatalf("SkillsLocalDir = %q, want %q", runtime.SkillsLocalDir, "/skills")
 	}
-	if runtime.Execution.ServiceAddress != "q15-exec-service:50051" {
+	if runtime.Execution.ServiceAddress != "q15-exec:50051" {
 		t.Fatalf(
 			"Execution.ServiceAddress = %q, want %q",
 			runtime.Execution.ServiceAddress,
-			"q15-exec-service:50051",
+			"q15-exec:50051",
 		)
 	}
 	if runtime.TelegramToken != "tg-123" {

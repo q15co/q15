@@ -247,7 +247,7 @@ func renderRuntimeEnvironmentPrompt(
 	if info.ExecutorType != "" {
 		lines = append(
 			lines,
-			fmt.Sprintf("- Command runtime: exec-service sessions via %s", info.ExecutorType),
+			fmt.Sprintf("- Command runtime: q15-exec sessions via %s", info.ExecutorType),
 		)
 	}
 	if info.ProxyEnabled {
@@ -282,7 +282,7 @@ func renderRuntimeEnvironmentPrompt(
 		"- Prefer exec for commands, builds, tests, formatting, git, and other CLI workflows, not for routine file reads or edits.",
 		"- Every exec call must include a non-empty `packages` array of nix installables (for example `nixpkgs#git`).",
 		"- Use exec by providing the user command in `command` and the needed nix installables in `packages`; the execution service starts a session, streams stdout/stderr internally, and returns when the command exits.",
-		"- Use exec for proxy-authenticated CLI flows such as `gh`, `git`, or `curl` when q15 is deployed with a separate proxy-service.",
+		"- Use exec for proxy-authenticated CLI flows such as `gh`, `git`, or `curl` when q15 is deployed with a separate q15-proxy instance.",
 		"- First run may bootstrap nix and fetch package indexes, so network access is required.",
 		"- Browser-specific command presets are not built in; use exec directly with explicit browser packages when needed.",
 	)

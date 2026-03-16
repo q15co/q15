@@ -3,8 +3,8 @@ proxy:
     - localhost
     - 127.0.0.1
     - ::1
-    - q15-proxy-service
-    - q15-exec-service
+    - q15-proxy
+    - q15-exec
   set_lowercase_proxy_env: true
   secrets:
     - jared_gh_token
