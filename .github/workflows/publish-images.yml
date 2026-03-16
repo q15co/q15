@@ -154,6 +154,8 @@ jobs:
         run: |
           set -euo pipefail
           tags_input=${TAGS:-}
+          max_attempts=3
+          attempt=1
 
           refs=()
           for file in /tmp/digests/*; do
@@ -171,7 +173,25 @@ jobs:
             tags+=("-t" "$tag")
           done <<< "$tags_input"
 
-          docker buildx imagetools create "${tags[@]}" "${refs[@]}"
+          printf 'source manifests:\n'
+          printf '  %s\n' "${refs[@]}"
+
+          while [ "$attempt" -le "$max_attempts" ]; do
+            echo "creating manifest for ${IMAGE} (attempt ${attempt}/${max_attempts})"
+            if timeout --foreground 2m docker buildx imagetools create "${tags[@]}" "${refs[@]}"; then
+              exit 0
+            fi
+
+            status=$?
+            if [ "$attempt" -eq "$max_attempts" ]; then
+              echo "failed to create manifest for ${IMAGE} after ${max_attempts} attempts" >&2
+              exit "$status"
+            fi
+
+            echo "manifest create failed with status ${status}; retrying in 10s" >&2
+            sleep 10
+            attempt=$((attempt + 1))
+          done
 
       - name: Inspect published manifest
         run: docker buildx imagetools inspect "${{ matrix.image }}:main"
