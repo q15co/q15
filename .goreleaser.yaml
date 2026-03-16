@@ -1,52 +1,26 @@
 version: 2
-project_name: q15
+project_name: q15-auth
 
 builds:
-  - id: q15
+  - id: q15-auth
     dir: systems/agent
-    main: .
-    binary: q15
+    main: ./cmd/q15-auth
+    binary: q15-auth
     env:
       - CGO_ENABLED=0
     goos:
       - linux
+      - darwin
     goarch:
       - amd64
-    flags:
-      - -trimpath
-
-  - id: q15-exec-service
-    dir: systems/exec-service
-    main: .
-    binary: q15-exec-service
-    env:
-      - CGO_ENABLED=0
-    goos:
-      - linux
-    goarch:
-      - amd64
-    flags:
-      - -trimpath
-
-  - id: q15-proxy-service
-    dir: systems/proxy-service
-    main: .
-    binary: q15-proxy-service
-    env:
-      - CGO_ENABLED=0
-    goos:
-      - linux
-    goarch:
-      - amd64
+      - arm64
     flags:
       - -trimpath
 
 archives:
-  - id: q15-linux
+  - id: q15-auth
     ids:
-      - q15
-      - q15-exec-service
-      - q15-proxy-service
+      - q15-auth
     formats:
       - tar.gz
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
@@ -57,9 +31,6 @@ checksum:
   name_template: checksums.txt
   algorithm: sha256
 
-sboms:
-  - artifacts: archive
-
 changelog:
   use: github-native
   sort: asc
@@ -67,6 +38,3 @@ changelog:
 release:
   draft: false
   replace_existing_draft: true
-
-snapshot:
-  version_template: "{{ incpatch .Version }}-next"

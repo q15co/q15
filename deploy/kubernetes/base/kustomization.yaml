@@ -14,6 +14,6 @@ configMapGenerator:
 
 resources:
   - agent-deployment.yaml
-  - exec-service-deployment.yaml
-  - proxy-service-deployment.yaml
+  - exec-deployment.yaml
+  - proxy-deployment.yaml
   - services.yaml

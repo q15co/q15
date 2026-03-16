@@ -4,6 +4,6 @@ use (
 	./libs/exec-contract
 	./libs/proxy-contract
 	./systems/agent
-	./systems/exec-service
-	./systems/proxy-service
+	./systems/exec
+	./systems/proxy
 )

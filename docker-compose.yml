@@ -1,8 +1,9 @@
 services:
-  q15-proxy-service:
+  q15-proxy:
+    image: ghcr.io/q15co/q15-proxy:main
     build:
       context: .
-      dockerfile: docker/proxy-service.Dockerfile
+      dockerfile: docker/proxy.Dockerfile
     restart: unless-stopped
     init: true
     environment:
@@ -13,18 +14,19 @@ services:
     volumes:
       - type: volume
         source: q15_proxy_state
-        target: /var/lib/q15/proxy-service
+        target: /var/lib/q15/proxy
     secrets:
       - jared_gh_token
 
-  q15-exec-service:
+  q15-exec:
+    image: ghcr.io/q15co/q15-exec:main
     build:
       context: .
-      dockerfile: docker/exec-service.Dockerfile
+      dockerfile: docker/exec.Dockerfile
     restart: unless-stopped
     init: true
     depends_on:
-      - q15-proxy-service
+      - q15-proxy
     volumes:
       - type: bind
         source: .
@@ -40,13 +42,14 @@ services:
         target: /nix
 
   q15-agent:
+    image: ghcr.io/q15co/q15-agent:main
     build:
       context: .
       dockerfile: docker/agent.Dockerfile
     restart: unless-stopped
     init: true
     depends_on:
-      - q15-exec-service
+      - q15-exec
     environment:
       HOME: /root
       GODEBUG: updatemaxprocs=0

@@ -17,7 +17,7 @@ const (
 	defaultMemoryRecentTurns    = 6
 	runtimeWorkspaceLocalDir    = "/workspace"
 	runtimeSkillsLocalDir       = "/skills"
-	runtimeExecutionServiceAddr = "q15-exec-service:50051"
+	runtimeExecutionServiceAddr = "q15-exec:50051"
 )
 
 // Config is the top-level structure loaded from config.yaml.
@@ -77,7 +77,7 @@ type AgentModelRuntime struct {
 	Capabilities    ModelCapabilities
 }
 
-// ExecutionRuntime is the resolved execution-service runtime contract.
+// ExecutionRuntime is the resolved q15-exec runtime contract.
 type ExecutionRuntime struct {
 	ServiceAddress string
 }

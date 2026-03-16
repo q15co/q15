@@ -4,14 +4,13 @@ This base is intended to be consumed by a separate deployment repository.
 
 It owns:
 
-- Deployments and Services for `q15-agent`, `q15-exec-service`, and `q15-proxy-service`
+- Deployments and Services for `q15-agent`, `q15-exec`, and `q15-proxy`
 - ConfigMap-backed example files for structured agent config and proxy policy
-- Stable resource names that overlays can patch with `images`, labels, namespaces, and
-  environment-specific config
+- Stable resource names that overlays can patch with labels, namespaces, and environment-specific
+  config
 
 It does not own:
 
-- Image pinning or rollout policy
 - Cluster-specific overlays
 - PersistentVolumeClaim definitions
 - Secret material
@@ -28,8 +27,14 @@ The runtime contract is fixed in the binaries. Overlays only need to provide:
   - Example: `JARED_GH_TOKEN`
 - PVCs named `q15-workspace`, `q15-memory`, `q15-skills`, `q15-exec-nix`, and `q15-proxy-state`
 
+The base defaults to the moving GHCR `:main` tags:
+
+- `ghcr.io/q15co/q15-agent:main`
+- `ghcr.io/q15co/q15-exec:main`
+- `ghcr.io/q15co/q15-proxy:main`
+
 Typical overlay responsibilities:
 
-- Patch image names and tags with `images`
+- Pin image names and tags with `images`
 - Replace the generated config files or patch them with environment-specific values
 - Attach StorageClasses and access modes to the required PVCs

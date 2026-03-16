@@ -1,10 +1,10 @@
 # q15
 
-`q15` is a Telegram-based coding agent split across three long-lived services:
+`q15` is a Telegram-based coding agent platform split across three long-lived runtime services:
 
-- `q15`: the agent runtime
-- `q15-exec-service`: command execution and session lifecycle
-- `q15-proxy-service`: proxy policy and auth-env mediation
+- `q15-agent`: the agent runtime
+- `q15-exec`: command execution and session lifecycle
+- `q15-proxy`: proxy policy and auth-env mediation
 
 Interactive auth bootstrap is handled separately by `q15-auth`.
 
@@ -12,13 +12,13 @@ Interactive auth bootstrap is handled separately by `q15-auth`.
 
 - The agent owns prompt assembly, tool wiring, Telegram I/O, memory management, and rooted file
   operations.
-- `exec-service` owns command execution and reports the authoritative model-visible runtime
-  directories: `/workspace`, `/memory`, and `/skills`.
-- `proxy-service` owns policy, egress, and auth-env injection for exec sessions.
+- `q15-exec` owns command execution and reports the authoritative model-visible runtime directories:
+  `/workspace`, `/memory`, and `/skills`.
+- `q15-proxy` owns policy, egress, and auth-env injection for exec sessions.
 - `q15-auth` is an operator tool that produces `auth.json` outside the runtime containers.
 
-This maps directly onto the intended deployment model: one agent runtime, one exec-service runtime,
-and one proxy-service runtime running together in Compose or Kubernetes.
+This maps directly onto the intended deployment model: one `q15-agent`, one `q15-exec`, and one
+`q15-proxy` running together in Compose or Kubernetes.
 
 ## Build And Test
 
@@ -29,14 +29,36 @@ make test
 
 Artifacts are written to `./bin`:
 
-- `q15`
+- `q15-agent`
 - `q15-auth`
-- `q15-exec-service`
-- `q15-proxy-service`
+- `q15-exec`
+- `q15-proxy`
+
+## Release Artifacts
+
+Runtime services are published as OCI images to GHCR on every `push` to `main`:
+
+- `ghcr.io/q15co/q15-agent`
+- `ghcr.io/q15co/q15-exec`
+- `ghcr.io/q15co/q15-proxy`
+
+Published runtime tags:
+
+- `main`
+- `sha-<short-sha>`
+
+`q15-auth` is published separately as GitHub Release archives on pushed tags that match `v*`. The
+release assets are:
+
+- `q15-auth_<version>_linux_amd64.tar.gz`
+- `q15-auth_<version>_linux_arm64.tar.gz`
+- `q15-auth_<version>_darwin_amd64.tar.gz`
+- `q15-auth_<version>_darwin_arm64.tar.gz`
+- `checksums.txt`
 
 ## Config Strategy
 
-q15 now uses a narrow container-first contract:
+q15 uses a narrow container-first runtime contract:
 
 - agent config is a mounted YAML file at `/etc/q15/agent/config.yaml`
 - proxy policy is a mounted YAML file at `/etc/q15/proxy/policy.yaml`
@@ -46,20 +68,20 @@ q15 now uses a narrow container-first contract:
 
 The fixed runtime contract is:
 
-- `q15`
+- `q15-agent`
   - reads `/etc/q15/agent/config.yaml`
   - reads `/etc/q15/auth/auth.json`
   - uses `/workspace` and `/skills`
-  - connects to `q15-exec-service:50051`
-- `q15-exec-service`
+  - connects to `q15-exec:50051`
+- `q15-exec`
   - listens on `:50051`
-  - talks to `q15-proxy-service:50052`
+  - talks to `q15-proxy:50052`
   - uses `/workspace`, `/memory`, and `/skills`
-- `q15-proxy-service`
+- `q15-proxy`
   - reads `/etc/q15/proxy/policy.yaml`
   - listens on `:50052` and `:18080`
-  - advertises `http://q15-proxy-service:18080`
-  - uses `/var/lib/q15/proxy-service`
+  - advertises `http://q15-proxy:18080`
+  - uses `/var/lib/q15/proxy`
 
 This repo no longer treats runtime wiring as a user-facing config surface.
 
@@ -113,8 +135,8 @@ proxy:
     - localhost
     - 127.0.0.1
     - ::1
-    - q15-proxy-service
-    - q15-exec-service
+    - q15-proxy
+    - q15-exec
   set_lowercase_proxy_env: true
   secrets:
     - jared_gh_token
@@ -146,7 +168,7 @@ q15-auth status --auth-path ./auth.json
 q15-auth logout --auth-path ./auth.json
 ```
 
-The resulting `auth.json` should be mounted into the `q15` container or stored as a Kubernetes
+The resulting `auth.json` should be mounted into the `q15-agent` container or stored as a Kubernetes
 Secret.
 
 ## Local Docker Compose Stack
@@ -164,6 +186,13 @@ Its interface is organized as:
 - ignored local Docker secret files under
   [deploy/compose/secrets](/home/avanderbergh/repos/github.com/q15co/q15/deploy/compose/secrets),
   seeded from tracked `*.example` templates in that same directory
+
+The Compose file keeps local source builds enabled while tagging them with the canonical GHCR image
+names:
+
+- `ghcr.io/q15co/q15-agent:main`
+- `ghcr.io/q15co/q15-exec:main`
+- `ghcr.io/q15co/q15-proxy:main`
 
 Bring it up with:
 
@@ -208,13 +237,19 @@ A reusable Kustomize base lives under
 
 It includes:
 
-- Deployments for `q15-agent`, `q15-exec-service`, and `q15-proxy-service`
-- Services for `q15-exec-service` and `q15-proxy-service`
+- Deployments for `q15-agent`, `q15-exec`, and `q15-proxy`
+- Services for `q15-exec` and `q15-proxy`
 - ConfigMap generators for agent config and proxy policy examples
+
+The checked-in manifests default to the moving GHCR `:main` tags:
+
+- `ghcr.io/q15co/q15-agent:main`
+- `ghcr.io/q15co/q15-exec:main`
+- `ghcr.io/q15co/q15-proxy:main`
 
 It expects a separate deployment repo or overlay to provide:
 
-- image names and tags
+- image pinning and rollout policy
 - environment-specific namespaces and labels
 - Secrets
 - PVCs
@@ -227,15 +262,6 @@ kubectl kustomize deploy/kubernetes/base
 
 The intended workflow is:
 
-1. This repo builds and publishes images.
+1. This repo publishes `q15-agent`, `q15-exec`, and `q15-proxy` images to GHCR.
 1. A separate deployment repo pins those images and owns environment-specific overlays.
 1. The deployment repo rolls out the updated pod set.
-
-## Nix Flake Outputs
-
-The flake builds:
-
-- `q15-agent`
-- `q15-exec-service`
-- `q15-proxy-service`
-- `q15` as the combined package output

@@ -1,4 +1,4 @@
-// Package main starts the q15 agent runtime.
+// Package main starts the q15-agent runtime.
 package main
 
 import (

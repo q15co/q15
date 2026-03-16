@@ -46,5 +46,5 @@ func validateArgs(args []string) error {
 	if len(args) == 0 {
 		return nil
 	}
-	return errors.New("q15 accepts no arguments")
+	return errors.New("q15-agent accepts no arguments")
 }
