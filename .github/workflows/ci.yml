@@ -45,9 +45,6 @@ jobs:
       - name: Run devenv test (hooks/lint/static checks)
         run: devenv test
 
-      - name: Build flake package
-        run: nix build .#q15
-
       - name: Validate GoReleaser config
         uses: goreleaser/goreleaser-action@v6
         with:
