@@ -2,74 +2,63 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/spf13/viper"
+	"go.yaml.in/yaml/v3"
 )
 
-// Config is the top-level structure loaded from config.toml.
+const (
+	defaultMemoryRecentTurns    = 6
+	runtimeWorkspaceLocalDir    = "/workspace"
+	runtimeSkillsLocalDir       = "/skills"
+	runtimeExecutionServiceAddr = "q15-exec-service:50051"
+)
+
+// Config is the top-level structure loaded from config.yaml.
 type Config struct {
-	Providers []Provider `mapstructure:"provider"`
-	Models    []Model    `mapstructure:"model"`
-	Agent     *Agent     `mapstructure:"agent"`
-	Skills    Skills     `mapstructure:"skills"`
+	Providers []Provider `yaml:"providers"`
+	Models    []Model    `yaml:"models"`
+	Agent     *Agent     `yaml:"agent"`
 }
 
-// Provider defines a named model provider entry in config.toml.
+// Provider defines a named model provider entry in config.yaml.
 type Provider struct {
-	Name    string `mapstructure:"name"`
-	Type    string `mapstructure:"type"`
-	BaseURL string `mapstructure:"base_url"`
-	KeyEnv  string `mapstructure:"key_env"`
+	Name    string `yaml:"name"`
+	Type    string `yaml:"type"`
+	BaseURL string `yaml:"base_url"`
+	KeyEnv  string `yaml:"key_env"`
 }
 
-// Model defines a named model entry in config.toml.
+// Model defines a named model entry in config.yaml.
 type Model struct {
-	Name          string   `mapstructure:"name"`
-	Provider      string   `mapstructure:"provider"`
-	ProviderModel string   `mapstructure:"provider_model"`
-	Capabilities  []string `mapstructure:"capabilities"`
+	Name          string   `yaml:"name"`
+	Provider      string   `yaml:"provider"`
+	ProviderModel string   `yaml:"provider_model"`
+	Capabilities  []string `yaml:"capabilities"`
 }
 
 // Agent defines one configured q15 agent instance.
 type Agent struct {
-	Name              string     `mapstructure:"name"`
-	Models            []string   `mapstructure:"models"` // ordered fallback list of configured model names
-	MemoryRecentTurns int        `mapstructure:"memory_recent_turns"`
-	Workspace         Workspace  `mapstructure:"workspace"`
-	Execution         *Execution `mapstructure:"execution"`
-	Telegram          Telegram   `mapstructure:"telegram"`
-}
-
-// Workspace defines the agent-local workspace mount.
-type Workspace struct {
-	LocalDir string `mapstructure:"local_dir"`
-}
-
-// Execution defines execution-service settings for session-backed commands.
-type Execution struct {
-	ServiceAddress string `mapstructure:"service_address"`
-}
-
-// Skills defines the optional shared local directory for agent-authored skills.
-type Skills struct {
-	LocalDir string `mapstructure:"local_dir"`
+	Name              string   `yaml:"name"`
+	Models            []string `yaml:"models"`
+	MemoryRecentTurns int      `yaml:"memory_recent_turns"`
+	Telegram          Telegram `yaml:"telegram"`
 }
 
 // Telegram defines Telegram integration settings for an agent.
 type Telegram struct {
-	Token          string  `mapstructure:"token"`
-	TokenEnv       string  `mapstructure:"token_env"`
-	AllowedUserIDs []int64 `mapstructure:"allowed_user_ids"`
+	Token          string  `yaml:"token"`
+	TokenEnv       string  `yaml:"token_env"`
+	AllowedUserIDs []int64 `yaml:"allowed_user_ids"`
 }
 
 // ModelCapabilities is the normalized capability set for one configured model.
-// In v1, ToolCalling is applied directly by routing code; the other fields are
-// carried as validated runtime metadata for later fallback and multimodal work.
 type ModelCapabilities struct {
 	Text        bool
 	ImageInput  bool
@@ -88,19 +77,9 @@ type AgentModelRuntime struct {
 	Capabilities    ModelCapabilities
 }
 
-// ExecutionRuntime is the resolved runtime form of Execution.
+// ExecutionRuntime is the resolved execution-service runtime contract.
 type ExecutionRuntime struct {
 	ServiceAddress string
-}
-
-const (
-	defaultMemoryRecentTurns = 6
-)
-
-// Default to text-only so custom providers do not implicitly opt into tools or
-// richer request handling they may not support.
-var defaultModelCapabilities = ModelCapabilities{
-	Text: true,
 }
 
 // AgentRuntime is the resolved runtime config for the configured agent.
@@ -116,27 +95,49 @@ type AgentRuntime struct {
 	TelegramAllowedUserIDs []int64
 }
 
-// Load reads config.toml from path and validates it.
+var defaultModelCapabilities = ModelCapabilities{
+	Text: true,
+}
+
+// Load reads config.yaml from path and validates it.
 func Load(path string) (Config, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return Config{}, errors.New("config path is required")
 	}
 
-	v := viper.New()
-	v.SetConfigFile(path)
-	if err := v.ReadInConfig(); err != nil {
+	data, err := os.ReadFile(path)
+	if err != nil {
 		return Config{}, fmt.Errorf("read config %q: %w", path, err)
 	}
 
 	var cfg Config
-	if err := v.UnmarshalExact(&cfg); err != nil {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(&cfg); err != nil {
+		if errors.Is(err, io.EOF) {
+			return Config{}, nil
+		}
+		return Config{}, fmt.Errorf("decode config %q: %w", path, err)
+	}
+	if err := ensureSingleDocument(dec); err != nil {
 		return Config{}, fmt.Errorf("decode config %q: %w", path, err)
 	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, fmt.Errorf("invalid config %q: %w", path, err)
 	}
 	return cfg, nil
+}
+
+func ensureSingleDocument(dec *yaml.Decoder) error {
+	var extra any
+	if err := dec.Decode(&extra); err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		return err
+	}
+	return errors.New("multiple YAML documents are not supported")
 }
 
 // LoadAgentRuntime reads and resolves the configured agent runtime from path.
@@ -192,12 +193,7 @@ func (a Agent) TelegramToken() (string, error) {
 		)
 	}
 
-	envValue := strings.TrimSpace(os.Getenv(envName))
-	if envValue == "" {
-		return "", fmt.Errorf("telegram token env var %q is empty", envName)
-	}
-
-	return envValue, nil
+	return resolveSecretEnvValue(envName)
 }
 
 // ResolveAgentRuntime resolves the configured agent into a runtime value.
@@ -205,7 +201,6 @@ func (c Config) ResolveAgentRuntime() (*AgentRuntime, error) {
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
-
 	if c.Agent == nil {
 		return nil, nil
 	}
@@ -221,11 +216,7 @@ func (c Config) ResolveAgentRuntime() (*AgentRuntime, error) {
 		fieldPath := fmt.Sprintf("agent.models[%d]", j)
 		modelCfg, ok := c.FindModel(modelRef)
 		if !ok {
-			return nil, fmt.Errorf(
-				"%s model %q is not defined in models",
-				fieldPath,
-				modelRef,
-			)
+			return nil, fmt.Errorf("%s model %q is not defined in models", fieldPath, modelRef)
 		}
 
 		providerName := strings.TrimSpace(modelCfg.Provider)
@@ -252,16 +243,11 @@ func (c Config) ResolveAgentRuntime() (*AgentRuntime, error) {
 		var apiKey string
 		switch providerType {
 		case "openai-compatible":
-			apiKey = strings.TrimSpace(os.Getenv(strings.TrimSpace(provider.KeyEnv)))
-			if apiKey == "" {
-				return nil, fmt.Errorf(
-					"provider %q requires env var %q",
-					provider.Name,
-					provider.KeyEnv,
-				)
+			apiKey, err = resolveSecretEnvValue(provider.KeyEnv)
+			if err != nil {
+				return nil, fmt.Errorf("provider %q requires %w", provider.Name, err)
 			}
 		case "openai-codex":
-			// Credentials come from q15 auth store for OpenAI subscription login.
 			apiKey = ""
 		default:
 			return nil, fmt.Errorf(
@@ -277,14 +263,13 @@ func (c Config) ResolveAgentRuntime() (*AgentRuntime, error) {
 			return nil, fmt.Errorf("%s capabilities: %w", fieldPath, err)
 		}
 
-		providerModel := modelCfg.resolvedProviderModel()
 		resolvedModels = append(resolvedModels, AgentModelRuntime{
 			Ref:             modelRef,
 			ProviderName:    provider.Name,
 			ProviderType:    providerType,
 			ProviderBaseURL: strings.TrimSpace(provider.BaseURL),
 			ProviderAPIKey:  apiKey,
-			ProviderModel:   providerModel,
+			ProviderModel:   modelCfg.resolvedProviderModel(),
 			Capabilities:    capabilities,
 		})
 	}
@@ -301,43 +286,35 @@ func (c Config) ResolveAgentRuntime() (*AgentRuntime, error) {
 			err,
 		)
 	}
-	executionRuntime, err := resolveExecutionRuntime(agentCfg.Execution)
-	if err != nil {
-		return nil, fmt.Errorf("resolve execution config for agent %q: %w", agentCfg.Name, err)
-	}
+
 	memoryRecentTurns := agentCfg.MemoryRecentTurns
 	if memoryRecentTurns == 0 {
 		memoryRecentTurns = defaultMemoryRecentTurns
 	}
-	workspaceLocalDir := strings.TrimSpace(agentCfg.Workspace.LocalDir)
-	skillsLocalDir := strings.TrimSpace(c.Skills.LocalDir)
 
 	return &AgentRuntime{
 		Name:                   strings.TrimSpace(agentCfg.Name),
 		Models:                 resolvedModels,
-		WorkspaceLocalDir:      workspaceLocalDir,
-		MemoryLocalDir:         filepath.Join(workspaceLocalDir, ".q15-memory"),
-		SkillsLocalDir:         skillsLocalDir,
+		WorkspaceLocalDir:      runtimeWorkspaceLocalDir,
+		MemoryLocalDir:         filepath.Join(runtimeWorkspaceLocalDir, ".q15-memory"),
+		SkillsLocalDir:         runtimeSkillsLocalDir,
 		MemoryRecentTurns:      memoryRecentTurns,
-		Execution:              *executionRuntime,
+		Execution:              ExecutionRuntime{ServiceAddress: runtimeExecutionServiceAddr},
 		TelegramToken:          token,
 		TelegramAllowedUserIDs: allowedUserIDs,
 	}, nil
 }
 
 func (c Config) validate() error {
-	if err := validateSkills(c.Skills); err != nil {
-		return fmt.Errorf("skills: %w", err)
-	}
 	if c.Agent != nil && len(c.Providers) == 0 {
-		return errors.New("provider cannot be empty when agent is configured")
+		return errors.New("providers cannot be empty when agent is configured")
 	}
 
 	providers := make(map[string]struct{}, len(c.Providers))
 	for i, provider := range c.Providers {
 		name := strings.TrimSpace(provider.Name)
 		if name == "" {
-			return fmt.Errorf("provider[%d].name is required", i)
+			return fmt.Errorf("providers[%d].name is required", i)
 		}
 		if _, ok := providers[name]; ok {
 			return fmt.Errorf("duplicate provider name %q", name)
@@ -345,19 +322,20 @@ func (c Config) validate() error {
 		providers[name] = struct{}{}
 
 		if strings.TrimSpace(provider.Type) == "" {
-			return fmt.Errorf("provider[%d].type is required", i)
+			return fmt.Errorf("providers[%d].type is required", i)
 		}
 		normalizedType := normalizeProviderType(provider.Type)
-		if normalizedType == "openai-compatible" &&
-			strings.TrimSpace(provider.BaseURL) == "" {
+		if normalizedType == "" {
+			return fmt.Errorf("providers[%d].type %q is not supported", i, provider.Type)
+		}
+		if normalizedType == "openai-compatible" && strings.TrimSpace(provider.BaseURL) == "" {
 			return fmt.Errorf(
-				"provider[%d].base_url is required for openai-compatible providers",
+				"providers[%d].base_url is required for openai-compatible providers",
 				i,
 			)
 		}
-		if normalizedType == "openai-compatible" &&
-			strings.TrimSpace(provider.KeyEnv) == "" {
-			return fmt.Errorf("provider[%d].key_env is required", i)
+		if normalizedType == "openai-compatible" && strings.TrimSpace(provider.KeyEnv) == "" {
+			return fmt.Errorf("providers[%d].key_env is required", i)
 		}
 	}
 
@@ -365,10 +343,10 @@ func (c Config) validate() error {
 	for i, model := range c.Models {
 		name := strings.TrimSpace(model.Name)
 		if name == "" {
-			return fmt.Errorf("model[%d].name is required", i)
+			return fmt.Errorf("models[%d].name is required", i)
 		}
 		if strings.Contains(name, "/") {
-			return fmt.Errorf("model[%d].name must not contain /", i)
+			return fmt.Errorf("models[%d].name must not contain /", i)
 		}
 		if _, ok := models[name]; ok {
 			return fmt.Errorf("duplicate model name %q", name)
@@ -377,17 +355,13 @@ func (c Config) validate() error {
 
 		providerName := strings.TrimSpace(model.Provider)
 		if providerName == "" {
-			return fmt.Errorf("model[%d].provider is required", i)
+			return fmt.Errorf("models[%d].provider is required", i)
 		}
 		if _, ok := providers[providerName]; !ok {
-			return fmt.Errorf(
-				"model[%d].provider %q is not defined in providers",
-				i,
-				providerName,
-			)
+			return fmt.Errorf("models[%d].provider %q is not defined in providers", i, providerName)
 		}
 		if _, err := normalizeModelCapabilities(model.Capabilities); err != nil {
-			return fmt.Errorf("model[%d].capabilities: %w", i, err)
+			return fmt.Errorf("models[%d].capabilities: %w", i, err)
 		}
 	}
 
@@ -405,25 +379,12 @@ func (c Config) validate() error {
 		return fmt.Errorf("agent.models: %w", err)
 	}
 	if len(c.Models) == 0 {
-		return errors.New("model cannot be empty when agent is configured")
+		return errors.New("models cannot be empty when agent is configured")
 	}
 	for j, modelRef := range modelRefs {
 		if _, ok := models[modelRef]; !ok {
-			return fmt.Errorf(
-				"agent.models[%d] model %q is not defined in models",
-				j,
-				modelRef,
-			)
+			return fmt.Errorf("agent.models[%d] model %q is not defined in models", j, modelRef)
 		}
-	}
-	if strings.TrimSpace(c.Agent.Workspace.LocalDir) == "" {
-		return errors.New("agent.workspace.local_dir is required")
-	}
-	if !filepath.IsAbs(strings.TrimSpace(c.Agent.Workspace.LocalDir)) {
-		return errors.New("agent.workspace.local_dir must be an absolute path")
-	}
-	if err := validateExecution(c.Agent.Execution); err != nil {
-		return fmt.Errorf("agent.execution: %w", err)
 	}
 	if strings.TrimSpace(c.Agent.Telegram.Token) == "" &&
 		strings.TrimSpace(c.Agent.Telegram.TokenEnv) == "" {
@@ -433,17 +394,6 @@ func (c Config) validate() error {
 		return fmt.Errorf("agent.telegram.allowed_user_ids: %w", err)
 	}
 
-	return nil
-}
-
-func validateSkills(skills Skills) error {
-	localDir := strings.TrimSpace(skills.LocalDir)
-	if localDir == "" {
-		return nil
-	}
-	if !filepath.IsAbs(localDir) {
-		return errors.New("local_dir must be an absolute path")
-	}
 	return nil
 }
 
@@ -460,7 +410,7 @@ func (a Agent) modelRefs() ([]string, error) {
 		}
 		if strings.Contains(modelRef, "/") {
 			return nil, fmt.Errorf(
-				"[%d] uses unsupported %q format; define [[model]] and reference its name",
+				"[%d] uses unsupported %q format; define models and reference their name",
 				i,
 				"provider/model",
 			)
@@ -532,23 +482,4 @@ func normalizeAllowedUserIDs(ids []int64) ([]int64, error) {
 	}
 
 	return out, nil
-}
-
-func validateExecution(execution *Execution) error {
-	if execution == nil {
-		return errors.New("is required")
-	}
-	if strings.TrimSpace(execution.ServiceAddress) == "" {
-		return errors.New("service_address is required")
-	}
-	return nil
-}
-
-func resolveExecutionRuntime(execution *Execution) (*ExecutionRuntime, error) {
-	if err := validateExecution(execution); err != nil {
-		return nil, err
-	}
-	return &ExecutionRuntime{
-		ServiceAddress: strings.TrimSpace(execution.ServiceAddress),
-	}, nil
 }

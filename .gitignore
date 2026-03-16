@@ -8,3 +8,6 @@ bin/
 .pre-commit-config.yaml
 
 *.log
+deploy/compose/secrets/*
+!deploy/compose/secrets/*.example
+!deploy/compose/secrets/README.md

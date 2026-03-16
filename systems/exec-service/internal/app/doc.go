@@ -1,2 +1,2 @@
-// Package app wires CLI flags and process lifecycle into the exec-service gRPC server.
+// Package app wires process lifecycle into the exec-service gRPC server.
 package app

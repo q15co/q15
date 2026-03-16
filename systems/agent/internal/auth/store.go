@@ -64,6 +64,11 @@ func defaultAuthStorePath() (string, error) {
 	return q15paths.DefaultAuthPath()
 }
 
+// DefaultStorePath resolves the default auth.json location for q15-auth.
+func DefaultStorePath() (string, error) {
+	return defaultAuthStorePath()
+}
+
 // LoadStore reads credentials from disk and returns an empty store when missing.
 func LoadStore() (*Store, error) {
 	path, err := authStorePath()

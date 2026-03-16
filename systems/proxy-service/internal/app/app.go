@@ -1,9 +1,9 @@
+// Package app wires process lifecycle into the proxy-service servers.
 package app
 
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"net"
 	"os"
@@ -17,41 +17,31 @@ import (
 	"google.golang.org/grpc"
 )
 
-const configEnvVar = "Q15_PROXY_SERVICE_CONFIG"
+const (
+	policyConfigPath = "/etc/q15/proxy/policy.yaml"
+)
 
-// Run parses CLI args and runs the requested command.
+// Run validates args and starts the proxy-service runtime.
 func Run(args []string) error {
-	if len(args) == 0 {
-		return runServe(nil)
-	}
-	switch strings.TrimSpace(args[0]) {
-	case "", "serve":
-		return runServe(args[1:])
-	default:
-		return fmt.Errorf("usage: q15-proxy-service [serve] --config <path>")
-	}
-}
-
-func runServe(args []string) error {
-	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-
-	configPath := fs.String("config", envOrDefault(configEnvVar, ""), "proxy service config path")
-	if err := fs.Parse(args); err != nil {
+	if err := validateArgs(args); err != nil {
 		return err
-	}
-	if strings.TrimSpace(*configPath) == "" {
-		return errors.New("config path is required")
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	runtime, err := config.LoadRuntime(*configPath)
+	runtime, err := config.LoadRuntime(policyConfigPath)
 	if err != nil {
 		return err
 	}
 	return Serve(ctx, runtime)
+}
+
+func validateArgs(args []string) error {
+	if len(args) == 0 {
+		return nil
+	}
+	return errors.New("q15-proxy-service accepts no arguments")
 }
 
 // Serve starts the proxy data plane and admin control plane.
@@ -119,13 +109,6 @@ func Serve(ctx context.Context, runtime config.Runtime) error {
 		_ = dataPlane.Stop(shutdownCtx)
 		return err
 	}
-}
-
-func envOrDefault(name string, fallback string) string {
-	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
-		return value
-	}
-	return fallback
 }
 
 func resolveListenTarget(value string) (string, string) {

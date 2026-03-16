@@ -1,0 +1,30 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: q15-exec-service
+  labels:
+    app.kubernetes.io/name: q15-exec-service
+spec:
+  selector:
+    app.kubernetes.io/name: q15-exec-service
+  ports:
+    - name: grpc
+      port: 50051
+      targetPort: grpc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: q15-proxy-service
+  labels:
+    app.kubernetes.io/name: q15-proxy-service
+spec:
+  selector:
+    app.kubernetes.io/name: q15-proxy-service
+  ports:
+    - name: proxy
+      port: 18080
+      targetPort: proxy
+    - name: admin
+      port: 50052
+      targetPort: admin

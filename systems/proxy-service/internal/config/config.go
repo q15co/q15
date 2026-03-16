@@ -2,73 +2,64 @@
 package config
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/textproto"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 
-	"github.com/spf13/viper"
+	"go.yaml.in/yaml/v3"
 )
 
-// Config is the top-level structure loaded from the proxy service config file.
+// Config is the top-level structure loaded from the proxy policy file.
 type Config struct {
-	Service Service `mapstructure:"service"`
-	Proxy   Proxy   `mapstructure:"proxy"`
-}
-
-// Service defines process-owned listen and state settings.
-type Service struct {
-	AdminListen       string `mapstructure:"admin_listen"`
-	ProxyListen       string `mapstructure:"proxy_listen"`
-	AdvertiseProxyURL string `mapstructure:"advertise_proxy_url"`
-	StateDir          string `mapstructure:"state_dir"`
-	Version           string `mapstructure:"version"`
+	Proxy Proxy `yaml:"proxy"`
 }
 
 // Proxy defines policy-owned runtime and request mutation settings.
 type Proxy struct {
-	NoProxy              []string    `mapstructure:"no_proxy"`
-	SetLowercaseProxyEnv bool        `mapstructure:"set_lowercase_proxy_env"`
-	Secrets              []string    `mapstructure:"secrets"`
-	Env                  []ProxyEnv  `mapstructure:"env"`
-	Rules                []ProxyRule `mapstructure:"rule"`
+	NoProxy              []string    `yaml:"no_proxy"`
+	SetLowercaseProxyEnv bool        `yaml:"set_lowercase_proxy_env"`
+	Secrets              []string    `yaml:"secrets"`
+	Env                  []ProxyEnv  `yaml:"env"`
+	Rules                []ProxyRule `yaml:"rules"`
 }
 
 // ProxyEnv defines one command env var backed by a proxy-managed secret.
 type ProxyEnv struct {
-	Name   string   `mapstructure:"name"`
-	Secret string   `mapstructure:"secret"`
-	Rules  []string `mapstructure:"rules"`
-	In     []string `mapstructure:"in"`
+	Name   string   `yaml:"name"`
+	Secret string   `yaml:"secret"`
+	Rules  []string `yaml:"rules"`
+	In     []string `yaml:"in"`
 }
 
 // ProxyRule defines host/path matches and request mutations.
 type ProxyRule struct {
-	Name               string                        `mapstructure:"name"`
-	MatchHosts         []string                      `mapstructure:"match_hosts"`
-	MatchPathPrefixes  []string                      `mapstructure:"match_path_prefixes"`
-	SetHeader          map[string]string             `mapstructure:"set_header"`
-	SetBasicAuth       *ProxyBasicAuth               `mapstructure:"set_basic_auth"`
-	ReplacePlaceholder []ProxyPlaceholderReplacement `mapstructure:"replace_placeholder"`
+	Name               string                        `yaml:"name"`
+	MatchHosts         []string                      `yaml:"match_hosts"`
+	MatchPathPrefixes  []string                      `yaml:"match_path_prefixes"`
+	SetHeader          map[string]string             `yaml:"set_header"`
+	SetBasicAuth       *ProxyBasicAuth               `yaml:"set_basic_auth"`
+	ReplacePlaceholder []ProxyPlaceholderReplacement `yaml:"replace_placeholder"`
 }
 
 // ProxyBasicAuth injects an Authorization Basic header from a managed secret.
 type ProxyBasicAuth struct {
-	Username string `mapstructure:"username"`
-	Secret   string `mapstructure:"secret"`
+	Username string `yaml:"username"`
+	Secret   string `yaml:"secret"`
 }
 
 // ProxyPlaceholderReplacement replaces placeholders with secret values.
 type ProxyPlaceholderReplacement struct {
-	Placeholder string   `mapstructure:"placeholder"`
-	Secret      string   `mapstructure:"secret"`
-	In          []string `mapstructure:"in"`
+	Placeholder string   `yaml:"placeholder"`
+	Secret      string   `yaml:"secret"`
+	In          []string `yaml:"in"`
 }
 
 // Runtime is the resolved proxy-service runtime configuration.
@@ -87,7 +78,11 @@ type Runtime struct {
 }
 
 const (
-	defaultServiceVersion = "dev"
+	defaultServiceVersion    = "dev"
+	runtimeAdminListen       = ":50052"
+	runtimeProxyListen       = ":18080"
+	runtimeAdvertiseProxyURL = "http://q15-proxy-service:18080"
+	runtimeStateDir          = "/var/lib/q15/proxy-service"
 )
 
 var (
@@ -97,21 +92,28 @@ var (
 	stablePlaceholderPrefix = "__Q15_PROXY_ENV_"
 )
 
-// Load reads and validates the config file at path.
+// Load reads and validates the proxy policy file at path.
 func Load(path string) (Config, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return Config{}, errors.New("config path is required")
 	}
 
-	v := viper.New()
-	v.SetConfigFile(path)
-	if err := v.ReadInConfig(); err != nil {
+	data, err := os.ReadFile(path)
+	if err != nil {
 		return Config{}, fmt.Errorf("read config %q: %w", path, err)
 	}
 
 	var cfg Config
-	if err := v.Unmarshal(&cfg); err != nil {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(&cfg); err != nil {
+		if errors.Is(err, io.EOF) {
+			return Config{}, nil
+		}
+		return Config{}, fmt.Errorf("decode config %q: %w", path, err)
+	}
+	if err := ensureSingleDocument(dec); err != nil {
 		return Config{}, fmt.Errorf("decode config %q: %w", path, err)
 	}
 	if err := cfg.Validate(); err != nil {
@@ -120,7 +122,18 @@ func Load(path string) (Config, error) {
 	return cfg, nil
 }
 
-// LoadRuntime resolves config at path into service-owned runtime values.
+func ensureSingleDocument(dec *yaml.Decoder) error {
+	var extra any
+	if err := dec.Decode(&extra); err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		return err
+	}
+	return errors.New("multiple YAML documents are not supported")
+}
+
+// LoadRuntime resolves config at path into runtime values.
 func LoadRuntime(path string) (Runtime, error) {
 	cfg, err := Load(path)
 	if err != nil {
@@ -131,9 +144,6 @@ func LoadRuntime(path string) (Runtime, error) {
 
 // Validate checks that the config is internally consistent.
 func (c Config) Validate() error {
-	if err := validateService(c.Service); err != nil {
-		return fmt.Errorf("service: %w", err)
-	}
 	if err := validateProxy(c.Proxy); err != nil {
 		return fmt.Errorf("proxy: %w", err)
 	}
@@ -153,9 +163,9 @@ func (c Config) ResolveRuntime() (Runtime, error) {
 	secretValues := make(map[string]string, len(secretAliases))
 	for _, alias := range secretAliases {
 		envName := proxySecretEnvName(alias)
-		value := strings.TrimSpace(os.Getenv(envName))
-		if value == "" {
-			return Runtime{}, fmt.Errorf(`proxy secret %q requires env var %q`, alias, envName)
+		value, err := resolveSecretEnvValue(envName)
+		if err != nil {
+			return Runtime{}, fmt.Errorf(`proxy secret %q requires %w`, alias, err)
 		}
 		secretValues[alias] = value
 	}
@@ -167,11 +177,6 @@ func (c Config) ResolveRuntime() (Runtime, error) {
 		return Runtime{}, err
 	}
 
-	serviceVersion := strings.TrimSpace(c.Service.Version)
-	if serviceVersion == "" {
-		serviceVersion = defaultServiceVersion
-	}
-	stateDir := filepath.Clean(strings.TrimSpace(c.Service.StateDir))
 	revision, err := calculatePolicyRevision(policyRevisionInput{
 		NoProxy:              normalizeStringList(c.Proxy.NoProxy, false),
 		SetLowercaseProxyEnv: c.Proxy.SetLowercaseProxyEnv,
@@ -185,11 +190,11 @@ func (c Config) ResolveRuntime() (Runtime, error) {
 	}
 
 	return Runtime{
-		ServiceVersion:       serviceVersion,
-		AdminListen:          strings.TrimSpace(c.Service.AdminListen),
-		ProxyListen:          strings.TrimSpace(c.Service.ProxyListen),
-		AdvertiseProxyURL:    strings.TrimSpace(c.Service.AdvertiseProxyURL),
-		StateDir:             stateDir,
+		ServiceVersion:       defaultServiceVersion,
+		AdminListen:          runtimeAdminListen,
+		ProxyListen:          runtimeProxyListen,
+		AdvertiseProxyURL:    runtimeAdvertiseProxyURL,
+		StateDir:             runtimeStateDir,
 		NoProxy:              strings.Join(resolveNoProxy(c.Proxy.NoProxy), ","),
 		SetLowercaseProxyEnv: c.Proxy.SetLowercaseProxyEnv,
 		SecretValues:         secretValues,
@@ -197,22 +202,6 @@ func (c Config) ResolveRuntime() (Runtime, error) {
 		Rules:                rules,
 		PolicyRevision:       revision,
 	}, nil
-}
-
-func validateService(cfg Service) error {
-	if strings.TrimSpace(cfg.AdminListen) == "" {
-		return errors.New("admin_listen is required")
-	}
-	if strings.TrimSpace(cfg.ProxyListen) == "" {
-		return errors.New("proxy_listen is required")
-	}
-	if strings.TrimSpace(cfg.AdvertiseProxyURL) == "" {
-		return errors.New("advertise_proxy_url is required")
-	}
-	if strings.TrimSpace(cfg.StateDir) == "" {
-		return errors.New("state_dir is required")
-	}
-	return nil
 }
 
 func validateProxy(proxy Proxy) error {
@@ -230,20 +219,20 @@ func validateProxy(proxy Proxy) error {
 
 	for i, rule := range proxy.Rules {
 		if len(rule.MatchHosts) == 0 {
-			return fmt.Errorf("rule[%d].match_hosts must contain at least one host", i)
+			return fmt.Errorf("rules[%d].match_hosts must contain at least one host", i)
 		}
 		for j, host := range rule.MatchHosts {
 			if strings.TrimSpace(host) == "" {
-				return fmt.Errorf("rule[%d].match_hosts[%d] must not be empty", i, j)
+				return fmt.Errorf("rules[%d].match_hosts[%d] must not be empty", i, j)
 			}
 		}
 		for j, pfx := range rule.MatchPathPrefixes {
 			pfx = strings.TrimSpace(pfx)
 			if pfx == "" {
-				return fmt.Errorf("rule[%d].match_path_prefixes[%d] must not be empty", i, j)
+				return fmt.Errorf("rules[%d].match_path_prefixes[%d] must not be empty", i, j)
 			}
 			if !strings.HasPrefix(pfx, "/") {
-				return fmt.Errorf("rule[%d].match_path_prefixes[%d] must start with /", i, j)
+				return fmt.Errorf("rules[%d].match_path_prefixes[%d] must start with /", i, j)
 			}
 		}
 
@@ -251,7 +240,7 @@ func validateProxy(proxy Proxy) error {
 		for headerName := range rule.SetHeader {
 			trimmedName := strings.TrimSpace(headerName)
 			if trimmedName == "" {
-				return fmt.Errorf("rule[%d].set_header contains an empty header name", i)
+				return fmt.Errorf("rules[%d].set_header contains an empty header name", i)
 			}
 			if textproto.CanonicalMIMEHeaderKey(trimmedName) == "Authorization" {
 				hasAuthorizationHeader = true
@@ -259,22 +248,22 @@ func validateProxy(proxy Proxy) error {
 		}
 		if rule.SetBasicAuth != nil {
 			if strings.TrimSpace(rule.SetBasicAuth.Username) == "" {
-				return fmt.Errorf("rule[%d].set_basic_auth.username is required", i)
+				return fmt.Errorf("rules[%d].set_basic_auth.username is required", i)
 			}
 			secretAlias, err := normalizeProxySecretAlias(rule.SetBasicAuth.Secret)
 			if err != nil {
-				return fmt.Errorf("rule[%d].set_basic_auth.secret: %w", i, err)
+				return fmt.Errorf("rules[%d].set_basic_auth.secret: %w", i, err)
 			}
 			if _, ok := secretEnvByAlias[secretAlias]; !ok {
 				return fmt.Errorf(
-					"rule[%d].set_basic_auth.secret %q is not defined in proxy.secrets",
+					"rules[%d].set_basic_auth.secret %q is not defined in proxy.secrets",
 					i,
 					secretAlias,
 				)
 			}
 			if hasAuthorizationHeader {
 				return fmt.Errorf(
-					"rule[%d] cannot set both set_basic_auth and set_header.Authorization",
+					"rules[%d] cannot set both set_basic_auth and set_header.Authorization",
 					i,
 				)
 			}
@@ -282,22 +271,22 @@ func validateProxy(proxy Proxy) error {
 
 		for j, repl := range rule.ReplacePlaceholder {
 			if strings.TrimSpace(repl.Placeholder) == "" {
-				return fmt.Errorf("rule[%d].replace_placeholder[%d].placeholder is required", i, j)
+				return fmt.Errorf("rules[%d].replace_placeholder[%d].placeholder is required", i, j)
 			}
 			secretAlias, err := normalizeProxySecretAlias(repl.Secret)
 			if err != nil {
-				return fmt.Errorf("rule[%d].replace_placeholder[%d].secret: %w", i, j, err)
+				return fmt.Errorf("rules[%d].replace_placeholder[%d].secret: %w", i, j, err)
 			}
 			if _, ok := secretEnvByAlias[secretAlias]; !ok {
 				return fmt.Errorf(
-					"rule[%d].replace_placeholder[%d].secret %q is not defined in proxy.secrets",
+					"rules[%d].replace_placeholder[%d].secret %q is not defined in proxy.secrets",
 					i,
 					j,
 					secretAlias,
 				)
 			}
 			if len(repl.In) == 0 {
-				return fmt.Errorf("rule[%d].replace_placeholder[%d].in must not be empty", i, j)
+				return fmt.Errorf("rules[%d].replace_placeholder[%d].in must not be empty", i, j)
 			}
 			for k, where := range repl.In {
 				where = strings.ToLower(strings.TrimSpace(where))
@@ -305,14 +294,14 @@ func validateProxy(proxy Proxy) error {
 				case "header", "query", "path":
 				case "body":
 					return fmt.Errorf(
-						"rule[%d].replace_placeholder[%d].in[%d]=body is not supported in v1",
+						"rules[%d].replace_placeholder[%d].in[%d]=body is not supported in v1",
 						i,
 						j,
 						k,
 					)
 				default:
 					return fmt.Errorf(
-						"rule[%d].replace_placeholder[%d].in[%d] must be header, query, or path",
+						"rules[%d].replace_placeholder[%d].in[%d] must be header, query, or path",
 						i,
 						j,
 						k,

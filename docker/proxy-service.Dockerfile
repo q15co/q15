@@ -24,4 +24,3 @@ COPY --from=build /out/q15-proxy-service /usr/local/bin/q15-proxy-service
 WORKDIR /root
 
 ENTRYPOINT ["/usr/local/bin/q15-proxy-service"]
-CMD ["serve", "--config", "/root/.config/q15/proxy-service.compose.toml"]

@@ -26,4 +26,3 @@ ENV HOME=/root
 WORKDIR /root
 
 ENTRYPOINT ["/usr/local/bin/q15"]
-CMD ["start", "--config", "/root/.config/q15/config.compose.toml"]
