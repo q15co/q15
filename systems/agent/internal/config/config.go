@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"go.yaml.in/yaml/v3"
@@ -296,7 +295,7 @@ func (c Config) ResolveAgentRuntime() (*AgentRuntime, error) {
 		Name:                   strings.TrimSpace(agentCfg.Name),
 		Models:                 resolvedModels,
 		WorkspaceLocalDir:      runtimeWorkspaceLocalDir,
-		MemoryLocalDir:         filepath.Join(runtimeWorkspaceLocalDir, ".q15-memory"),
+		MemoryLocalDir:         "/memory",
 		SkillsLocalDir:         runtimeSkillsLocalDir,
 		MemoryRecentTurns:      memoryRecentTurns,
 		Execution:              ExecutionRuntime{ServiceAddress: runtimeExecutionServiceAddr},

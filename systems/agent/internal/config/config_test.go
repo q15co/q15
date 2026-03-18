@@ -92,8 +92,8 @@ agent:
 	if runtime.WorkspaceLocalDir != "/workspace" {
 		t.Fatalf("WorkspaceLocalDir = %q, want %q", runtime.WorkspaceLocalDir, "/workspace")
 	}
-	if runtime.MemoryLocalDir != "/workspace/.q15-memory" {
-		t.Fatalf("MemoryLocalDir = %q, want %q", runtime.MemoryLocalDir, "/workspace/.q15-memory")
+	if runtime.MemoryLocalDir != "/memory" {
+		t.Fatalf("MemoryLocalDir = %q, want %q", runtime.MemoryLocalDir, "/memory")
 	}
 	if runtime.SkillsLocalDir != "/skills" {
 		t.Fatalf("SkillsLocalDir = %q, want %q", runtime.SkillsLocalDir, "/skills")

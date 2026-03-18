@@ -120,7 +120,7 @@ agent:
 Notes:
 
 - provider keys and Telegram tokens can come from `NAME` or `NAME_FILE`
-- agent memory lives under `/workspace/.q15-memory`
+- agent memory lives under `/memory`
 - `Q15_BRAVE_API_KEY` remains optional for Brave web search
 
 ### Proxy Policy
@@ -207,7 +207,7 @@ The Compose example uses:
 - Compose `configs` for non-secret YAML files
 - a read-only bind mount for `auth.json` at `/etc/q15/auth/auth.json`
 - a bind mount of this repo as `/workspace`
-- a named volume shared as agent memory and exec `/memory`
+- a named volume shared as `/memory`
 - a named volume for `/skills`
 - Docker secret files under
   [deploy/compose/secrets](/home/avanderbergh/repos/github.com/q15co/q15/deploy/compose/secrets)
