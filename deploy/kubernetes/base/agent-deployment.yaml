@@ -37,7 +37,7 @@ spec:
             - name: workspace
               mountPath: /workspace
             - name: memory
-              mountPath: /workspace/.q15-memory
+              mountPath: /memory
             - name: skills
               mountPath: /skills
       volumes:
