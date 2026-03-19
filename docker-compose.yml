@@ -70,7 +70,7 @@ services:
         target: /workspace
       - type: volume
         source: q15_memory
-        target: /workspace/.q15-memory
+        target: /memory
       - type: volume
         source: q15_skills
         target: /skills
