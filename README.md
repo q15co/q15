@@ -20,6 +20,12 @@ Interactive auth bootstrap is handled separately by `q15-auth`.
 This maps directly onto the intended deployment model: one `q15-agent`, one `q15-exec`, and one
 `q15-proxy` running together in Compose or Kubernetes.
 
+In Kubernetes, the supported topology is one namespace per q15 stack. Each stack contains one
+`q15-agent`, one `q15-exec`, one `q15-proxy`, stack-local ConfigMaps and Secrets, and stack-owned
+persistent volumes for `/workspace`, `/memory`, `/skills`, `/nix`, and `/var/lib/q15/proxy`. The
+namespace is the isolation boundary for that stack. Downstream multi-stack deployments should repeat
+this stack in separate namespaces.
+
 ## Build And Test
 
 ```bash
@@ -71,7 +77,7 @@ The fixed runtime contract is:
 - `q15-agent`
   - reads `/etc/q15/agent/config.yaml`
   - reads `/etc/q15/auth/auth.json`
-  - uses `/workspace` and `/skills`
+  - uses `/workspace`, `/memory`, and `/skills`
   - connects to `q15-exec:50051`
 - `q15-exec`
   - listens on `:50051`
@@ -253,6 +259,22 @@ It expects a separate deployment repo or overlay to provide:
 - environment-specific namespaces and labels
 - Secrets
 - PVCs
+
+The supported Kubernetes model is one namespace per long-running q15 stack. One stack contains:
+
+- one `q15-agent`
+- one `q15-exec`
+- one `q15-proxy`
+- stack-local ConfigMaps and Secrets for agent config, proxy policy, `auth.json`, provider or API
+  keys, and runtime tokens
+- stack-owned persistent volumes for `/workspace`, `/memory`, `/skills`, `/nix`, and
+  `/var/lib/q15/proxy`
+
+The checked-in base already reflects that shape with `replicas: 1` for each deployment and
+namespace-scoped Services named `q15-exec` and `q15-proxy`. This matches the current exec session
+model: `q15-exec` supports multiple concurrent sessions within one pod, but session state is
+currently held in memory inside that pod. Keeping one exec pod per stack avoids cross-pod session
+routing complexity and keeps storage ownership local to the stack.
 
 Validate the base with:
 
