@@ -26,6 +26,12 @@ persistent volumes for `/workspace`, `/memory`, `/skills`, `/nix`, and `/var/lib
 namespace is the isolation boundary for that stack. Downstream multi-stack deployments should repeat
 this stack in separate namespaces.
 
+`/workspace` is not ephemeral scratch space. For each stack it is stack-owned, persistent, and
+long-lived state that carries the durable project tree and working files over time. A newly created
+stack may attach an empty persistent volume or empty host directory at `/workspace`; that empty
+initial state is valid, and operators may populate it later through normal agent work or manual
+setup.
+
 ## Build And Test
 
 ```bash
@@ -90,6 +96,10 @@ The fixed runtime contract is:
   - uses `/var/lib/q15/proxy`
 
 This repo no longer treats runtime wiring as a user-facing config surface.
+
+`/workspace` is the durable working state for a q15 stack. It is expected to preserve project files
+and in-progress work across restarts and redeployments, and a new deployment may start with an empty
+`/workspace`. Pre-populating `/workspace` before first startup is optional, not required.
 
 ### Agent Config
 
@@ -218,6 +228,12 @@ The Compose example uses:
 - Docker secret files under
   [deploy/compose/secrets](/home/avanderbergh/repos/github.com/q15co/q15/deploy/compose/secrets)
 
+`[docker-compose.yml](/home/avanderbergh/repos/github.com/q15co/q15/docker-compose.yml)` is a local
+development example, so it bind-mounts this repo into `/workspace`. For long-running Compose
+deployments, mount stack-owned persistent storage at `/workspace` instead and keep that same storage
+attached across restarts. That storage may start as an empty persistent volume or empty host
+directory; q15 does not require `/workspace` to be pre-populated before first startup.
+
 Before using the stack for real, replace the placeholder values in:
 
 - [deploy/compose/secrets/moonshot_api_key.example](/home/avanderbergh/repos/github.com/q15co/q15/deploy/compose/secrets/moonshot_api_key.example)
@@ -269,6 +285,11 @@ The supported Kubernetes model is one namespace per long-running q15 stack. One 
   keys, and runtime tokens
 - stack-owned persistent volumes for `/workspace`, `/memory`, `/skills`, `/nix`, and
   `/var/lib/q15/proxy`
+
+`q15-workspace` is the durable project and working-state volume for that stack. A newly created
+stack may bind an empty `q15-workspace` PVC on first deployment, and that empty initial state still
+satisfies the runtime contract. Restarts and redeployments are expected to preserve that PVC so
+`/workspace` survives over time.
 
 The checked-in base already reflects that shape with `replicas: 1` for each deployment and
 namespace-scoped Services named `q15-exec` and `q15-proxy`. This matches the current exec session
