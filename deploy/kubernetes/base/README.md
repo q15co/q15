@@ -28,6 +28,12 @@ The runtime contract is fixed in the binaries. Overlays only need to provide:
   - Example: `JARED_GH_TOKEN`
 - PVCs named `q15-workspace`, `q15-memory`, `q15-skills`, `q15-exec-nix`, and `q15-proxy-state`
 
+`q15-workspace` is the stack's long-term project and working-state PVC. A fresh
+`PersistentVolumeClaim/q15-workspace` may be empty on first deployment; pre-seeding it is optional
+and the empty initial state still satisfies the runtime contract. Operators should preserve that PVC
+across restarts and redeployments and treat it as durable stack state for retention and backup
+planning.
+
 The supported Kubernetes topology is one namespace per q15 stack. Within that namespace, one stack
 contains:
 
@@ -36,7 +42,8 @@ contains:
 - one `q15-proxy`
 - stack-local config and secret inputs for agent config, proxy policy, `auth.json`, provider or API
   keys, and runtime tokens
-- stack-owned PVCs for `/workspace`, `/memory`, `/skills`, `/nix`, and `/var/lib/q15/proxy`
+- stack-owned PVCs for `/workspace`, `/memory`, `/skills`, `/nix`, and `/var/lib/q15/proxy`, with
+  `/workspace` carrying the stack's durable project and working state
 
 The namespace is the isolation boundary. The checked-in base already encodes one pod for each
 runtime service with `replicas: 1`, and it uses namespace-scoped Service names `q15-exec` and
@@ -59,4 +66,5 @@ Typical overlay responsibilities:
 - Pin image names and tags with `images`
 - Replace the generated config files or patch them with environment-specific values
 - Provide Secret material for that stack
-- Define the required PVCs, including StorageClasses and access modes
+- Define the required PVCs, including StorageClasses, access modes, and retention policy suitable
+  for durable `q15-workspace` state
