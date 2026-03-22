@@ -190,17 +190,17 @@ Secret.
 ## Local Docker Compose Stack
 
 The checked-in Compose stack lives at
-[docker-compose.yml](/home/avanderbergh/repos/github.com/q15co/q15/docker-compose.yml) and uses the
-examples under [deploy/compose](/home/avanderbergh/repos/github.com/q15co/q15/deploy/compose).
+[docker-compose.yml](/docker-compose.yml) and uses the
+examples under [deploy/compose](/deploy/compose).
 
 Its interface is organized as:
 
-- [deploy/compose/agent-config.yaml](/home/avanderbergh/repos/github.com/q15co/q15/deploy/compose/agent-config.yaml)
+- [deploy/compose/agent-config.yaml](/deploy/compose/agent-config.yaml)
   for structured agent config
-- [deploy/compose/proxy-policy.yaml](/home/avanderbergh/repos/github.com/q15co/q15/deploy/compose/proxy-policy.yaml)
+- [deploy/compose/proxy-policy.yaml](/deploy/compose/proxy-policy.yaml)
   for structured proxy policy
 - ignored local Docker secret files under
-  [deploy/compose/secrets](/home/avanderbergh/repos/github.com/q15co/q15/deploy/compose/secrets),
+  [deploy/compose/secrets](/deploy/compose/secrets),
   seeded from tracked `*.example` templates in that same directory
 
 The Compose file keeps local source builds enabled while tagging them with the canonical GHCR image
@@ -226,9 +226,9 @@ The Compose example uses:
 - a named volume shared as `/memory`
 - a named volume for `/skills`
 - Docker secret files under
-  [deploy/compose/secrets](/home/avanderbergh/repos/github.com/q15co/q15/deploy/compose/secrets)
+  [deploy/compose/secrets](/deploy/compose/secrets)
 
-`[docker-compose.yml](/home/avanderbergh/repos/github.com/q15co/q15/docker-compose.yml)` is a local
+`[docker-compose.yml](/docker-compose.yml)` is a local
 development example, so it bind-mounts this repo into `/workspace`. For long-running Compose
 deployments, mount stack-owned persistent storage at `/workspace` instead and keep that same storage
 attached across restarts. That storage may start as an empty persistent volume or empty host
@@ -236,10 +236,10 @@ directory; q15 does not require `/workspace` to be pre-populated before first st
 
 Before using the stack for real, replace the placeholder values in:
 
-- [deploy/compose/secrets/moonshot_api_key.example](/home/avanderbergh/repos/github.com/q15co/q15/deploy/compose/secrets/moonshot_api_key.example)
-- [deploy/compose/secrets/jared_telegram_token.example](/home/avanderbergh/repos/github.com/q15co/q15/deploy/compose/secrets/jared_telegram_token.example)
-- [deploy/compose/secrets/jared_gh_token.example](/home/avanderbergh/repos/github.com/q15co/q15/deploy/compose/secrets/jared_gh_token.example)
-- [deploy/compose/secrets/q15_auth_json.example](/home/avanderbergh/repos/github.com/q15co/q15/deploy/compose/secrets/q15_auth_json.example)
+- [deploy/compose/secrets/moonshot_api_key.example](/deploy/compose/secrets/moonshot_api_key.example)
+- [deploy/compose/secrets/jared_telegram_token.example](/deploy/compose/secrets/jared_telegram_token.example)
+- [deploy/compose/secrets/jared_gh_token.example](/deploy/compose/secrets/jared_gh_token.example)
+- [deploy/compose/secrets/q15_auth_json.example](/deploy/compose/secrets/q15_auth_json.example)
 
 `make compose-secrets-init` copies those templates to ignored local files without the `.example`
 suffix. Edit the local copies, not the templates.
@@ -255,7 +255,7 @@ make compose-ps
 ## Kubernetes Base
 
 A reusable Kustomize base lives under
-[deploy/kubernetes/base](/home/avanderbergh/repos/github.com/q15co/q15/deploy/kubernetes/base).
+[deploy/kubernetes/base](/deploy/kubernetes/base).
 
 It includes:
 
