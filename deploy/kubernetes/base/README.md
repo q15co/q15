@@ -3,6 +3,10 @@
 This base is intended to be consumed by a separate deployment repository as a single q15 stack base
 that gets instantiated once per namespace.
 
+For the canonical runtime storage/config/secret contract (including requiredness by Kubernetes vs
+Compose and local-dev exceptions), see the top-level
+[Storage Contract (Canonical)](../../../README.md#storage-contract-canonical).
+
 It owns:
 
 - Deployments and Services for `q15-agent`, `q15-exec`, and `q15-proxy`
