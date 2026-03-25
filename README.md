@@ -119,6 +119,15 @@ ephemeral, and what must be provided as config/secret input.
 | `/etc/q15/auth/auth.json` | Secret | **Kubernetes:** required via `Secret/q15-agent-auth` (`auth.json` key). **Compose:** required file mount/secret. **Local-dev exception:** may be omitted only when auth-dependent flows are intentionally not used. | `q15-agent` | Auth bootstrap output from `q15-auth`; consumed at runtime by the agent. |
 | Provider/API key secrets (env or `_FILE`) | Secret | **Kubernetes:** required secret keys in `q15-agent-env` and/or `q15-proxy-env` based on configured providers/policy aliases. **Compose:** required Docker secrets/env files for enabled integrations. **Local-dev exception:** optional only for integrations you are not using. | shared (`q15-agent`, `q15-proxy`) | Includes provider keys, Telegram token, Brave key (optional), and proxy secret aliases resolved from env or `_FILE`. |
 
+### Ephemeral/Scratch Paths
+
+There are currently no required explicit ephemeral mounts in the runtime contract.
+
+Operator note: transient data naturally lives on each container's writable filesystem layer by
+default. Do not downgrade any contract-required persistent paths (`/workspace`, `/memory`,
+`/skills`, `/nix`, `/var/lib/q15/proxy`) to ephemeral mounts (`emptyDir`, anonymous volumes, or
+temporary bind locations) in long-running deployments.
+
 ### Agent Config
 
 Keep the agent file focused on identity, models, providers, and Telegram policy.
