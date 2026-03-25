@@ -39,7 +39,10 @@ in {
     check-merge-conflicts.enable = true;
     check-json.enable = true;
     check-yaml.enable = true;
-    end-of-file-fixer.enable = true;
+    end-of-file-fixer = {
+      enable = true;
+      excludes = ["^devenv\\.lock$"];
+    };
     trim-trailing-whitespace.enable = true;
 
     markdownlint = {
