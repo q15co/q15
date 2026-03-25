@@ -8,12 +8,13 @@
     ps.mdformat-gfm
     ps.mdformat-frontmatter
   ]);
+  goToolchain = pkgs.go_1_25;
 in {
   cachix.enable = false;
   git-hooks.package = pkgs.prek;
 
   languages.go.enable = true;
-  languages.go.package = pkgs.go_1_25;
+  languages.go.package = goToolchain;
 
   devcontainer.enable = true;
 
@@ -38,7 +39,10 @@ in {
     check-merge-conflicts.enable = true;
     check-json.enable = true;
     check-yaml.enable = true;
-    end-of-file-fixer.enable = true;
+    end-of-file-fixer = {
+      enable = true;
+      excludes = ["^devenv\\.lock$"];
+    };
     trim-trailing-whitespace.enable = true;
 
     markdownlint = {
@@ -74,10 +78,16 @@ in {
     shfmt.enable = true;
     actionlint.enable = true;
 
-    gofmt.enable = true;
+    gofmt = {
+      enable = true;
+      package = goToolchain;
+    };
     golines.enable = true;
 
-    govet.enable = true;
+    govet = {
+      enable = true;
+      package = goToolchain;
+    };
     staticcheck.enable = true;
     revive.enable = true;
     golangci-lint = {
