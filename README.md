@@ -225,6 +225,7 @@ The Compose example uses:
 - a bind mount of this repo as `/workspace`
 - a named volume shared as `/memory`
 - a named volume for `/skills`
+- a named volume `q15_exec_nix_store` mounted at `/nix` for persistent executor package/store reuse across sessions
 - Docker secret files under
   [deploy/compose/secrets](/deploy/compose/secrets)
 
@@ -233,6 +234,7 @@ development example, so it bind-mounts this repo into `/workspace`. For long-run
 deployments, mount stack-owned persistent storage at `/workspace` instead and keep that same storage
 attached across restarts. That storage may start as an empty persistent volume or empty host
 directory; q15 does not require `/workspace` to be pre-populated before first startup.
+The `/nix` mount is intentionally persistent in long-running deployments and should not be treated as scratch space.
 
 Before using the stack for real, replace the placeholder values in:
 
