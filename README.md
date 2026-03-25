@@ -107,17 +107,17 @@ This table is the canonical runtime storage/config/secret contract across Kubern
 local development. Use this as the source of truth when deciding what must persist, what can be
 ephemeral, and what must be provided as config/secret input.
 
-| Runtime path or config/secret location | Classification | Deployment expectations | Owning service | Notes/purpose |
-| --- | --- | --- | --- | --- |
-| `/workspace` | Persistent | **Kubernetes:** required PVC (`q15-workspace`). **Compose:** required mount (bind or named volume). **Local development:** may start empty and be populated later. | shared (`q15-agent`, `q15-exec`) | Durable project tree and working files; long-lived stack state. Empty initial state is valid. |
-| `/memory` | Persistent | **Kubernetes:** required PVC (`q15-memory`). **Compose:** required named volume or equivalent mount. **Local development:** persistence is recommended for continuity, but disposable runs are possible. | shared (`q15-agent`, `q15-exec`) | Canonical agent/session memory path across services. |
-| `/skills` | Persistent | **Kubernetes:** required PVC (`q15-skills`). **Compose:** required named volume or equivalent mount. **Local development:** may be reset, but persistence avoids repeated skill bootstrap. | shared (`q15-agent`, `q15-exec`) | Installed skill artifacts and related runtime data. |
-| `/nix` | Persistent | **Kubernetes:** required PVC (`q15-exec-nix`). **Compose:** required named volume or equivalent mount for long-running stacks. **Local development:** disposable runs may use ephemeral state, but persistent reuse is the normal expectation. | `q15-exec` | Intentionally persistent executor package/store state; not scratch space. |
-| `/var/lib/q15/proxy` | Persistent | **Kubernetes:** required PVC (`q15-proxy-state`). **Compose:** required named volume or equivalent mount for durable proxy state. **Local development:** may be ephemeral only when proxy state durability is intentionally not needed. | `q15-proxy` | Proxy-owned durable state directory. |
-| `/etc/q15/agent/config.yaml` | Config | **Kubernetes:** required via `ConfigMap/q15-agent-config`. **Compose:** required via compose `configs` or bind mount. **Local development:** required when running `q15-agent`. | `q15-agent` | Structured agent config (providers, models, Telegram policy). |
-| `/etc/q15/proxy/policy.yaml` | Config | **Kubernetes:** required via `ConfigMap/q15-proxy-policy`. **Compose:** required via compose `configs` or bind mount. **Local development:** required when running `q15-proxy`. | `q15-proxy` | Structured proxy policy (rules, allowed secret aliases, request env mapping). |
-| `/etc/q15/auth/auth.json` | Secret | **Kubernetes:** required via `Secret/q15-agent-auth` (`auth.json` key). **Compose:** required file mount or secret. **Local development:** may be omitted only when auth-dependent flows are intentionally not used. | `q15-agent` | Auth bootstrap output from `q15-auth`; consumed at runtime by the agent. |
-| Provider/API key secrets (env or `_FILE`) | Secret | **Kubernetes:** required secret keys in `q15-agent-env` and/or `q15-proxy-env` based on configured providers and policy aliases. **Compose:** required Docker secrets or env files for enabled integrations. **Local development:** optional only for integrations you are not using. | shared (`q15-agent`, `q15-proxy`) | Includes provider keys, Telegram token, Brave key (optional), and proxy secret aliases resolved from env or `_FILE`. |
+| Runtime path or config/secret location    | Classification | Deployment expectations                                                                                                                                                                                                                                                               | Owning service                    | Notes/purpose                                                                                                        |
+| ----------------------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `/workspace`                              | Persistent     | **Kubernetes:** required PVC (`q15-workspace`). **Compose:** required mount (bind or named volume). **Local development:** may start empty and be populated later.                                                                                                                    | shared (`q15-agent`, `q15-exec`)  | Durable project tree and working files; long-lived stack state. Empty initial state is valid.                        |
+| `/memory`                                 | Persistent     | **Kubernetes:** required PVC (`q15-memory`). **Compose:** required named volume or equivalent mount. **Local development:** persistence is recommended for continuity, but disposable runs are possible.                                                                              | shared (`q15-agent`, `q15-exec`)  | Canonical agent/session memory path across services.                                                                 |
+| `/skills`                                 | Persistent     | **Kubernetes:** required PVC (`q15-skills`). **Compose:** required named volume or equivalent mount. **Local development:** may be reset, but persistence avoids repeated skill bootstrap.                                                                                            | shared (`q15-agent`, `q15-exec`)  | Installed skill artifacts and related runtime data.                                                                  |
+| `/nix`                                    | Persistent     | **Kubernetes:** required PVC (`q15-exec-nix`). **Compose:** required named volume or equivalent mount for long-running stacks. **Local development:** disposable runs may use ephemeral state, but persistent reuse is the normal expectation.                                        | `q15-exec`                        | Intentionally persistent executor package/store state; not scratch space.                                            |
+| `/var/lib/q15/proxy`                      | Persistent     | **Kubernetes:** required PVC (`q15-proxy-state`). **Compose:** required named volume or equivalent mount for durable proxy state. **Local development:** may be ephemeral only when proxy state durability is intentionally not needed.                                               | `q15-proxy`                       | Proxy-owned durable state directory.                                                                                 |
+| `/etc/q15/agent/config.yaml`              | Config         | **Kubernetes:** required via `ConfigMap/q15-agent-config`. **Compose:** required via compose `configs` or bind mount. **Local development:** required when running `q15-agent`.                                                                                                       | `q15-agent`                       | Structured agent config (providers, models, Telegram policy).                                                        |
+| `/etc/q15/proxy/policy.yaml`              | Config         | **Kubernetes:** required via `ConfigMap/q15-proxy-policy`. **Compose:** required via compose `configs` or bind mount. **Local development:** required when running `q15-proxy`.                                                                                                       | `q15-proxy`                       | Structured proxy policy (rules, allowed secret aliases, request env mapping).                                        |
+| `/etc/q15/auth/auth.json`                 | Secret         | **Kubernetes:** required via `Secret/q15-agent-auth` (`auth.json` key). **Compose:** required file mount or secret. **Local development:** may be omitted only when auth-dependent flows are intentionally not used.                                                                  | `q15-agent`                       | Auth bootstrap output from `q15-auth`; consumed at runtime by the agent.                                             |
+| Provider/API key secrets (env or `_FILE`) | Secret         | **Kubernetes:** required secret keys in `q15-agent-env` and/or `q15-proxy-env` based on configured providers and policy aliases. **Compose:** required Docker secrets or env files for enabled integrations. **Local development:** optional only for integrations you are not using. | shared (`q15-agent`, `q15-proxy`) | Includes provider keys, Telegram token, Brave key (optional), and proxy secret aliases resolved from env or `_FILE`. |
 
 ### Ephemeral/Scratch Paths
 
@@ -216,19 +216,15 @@ Secret.
 
 ## Local Docker Compose Stack
 
-The checked-in Compose stack lives at
-[docker-compose.yml](/docker-compose.yml) and uses the
+The checked-in Compose stack lives at [docker-compose.yml](/docker-compose.yml) and uses the
 examples under [deploy/compose](/deploy/compose).
 
 Its interface is organized as:
 
-- [deploy/compose/agent-config.yaml](/deploy/compose/agent-config.yaml)
-  for structured agent config
-- [deploy/compose/proxy-policy.yaml](/deploy/compose/proxy-policy.yaml)
-  for structured proxy policy
-- ignored local Docker secret files under
-  [deploy/compose/secrets](/deploy/compose/secrets),
-  seeded from tracked `*.example` templates in that same directory
+- [deploy/compose/agent-config.yaml](/deploy/compose/agent-config.yaml) for structured agent config
+- [deploy/compose/proxy-policy.yaml](/deploy/compose/proxy-policy.yaml) for structured proxy policy
+- ignored local Docker secret files under [deploy/compose/secrets](/deploy/compose/secrets), seeded
+  from tracked `*.example` templates in that same directory
 
 The Compose file keeps local source builds enabled while tagging them with the canonical GHCR image
 names:
@@ -252,18 +248,16 @@ The Compose example uses:
 - a bind mount of this repo as `/workspace`
 - a named volume shared as `/memory`
 - a named volume for `/skills`
-- a named volume `q15_exec_nix_store` mounted at `/nix` for persistent executor
-  package/store reuse across sessions
-- Docker secret files under
-  [deploy/compose/secrets](/deploy/compose/secrets)
+- a named volume `q15_exec_nix_store` mounted at `/nix` for persistent executor package/store reuse
+  across sessions
+- Docker secret files under [deploy/compose/secrets](/deploy/compose/secrets)
 
-`[docker-compose.yml](/docker-compose.yml)` is a local
-development example, so it bind-mounts this repo into `/workspace`. For long-running Compose
-deployments, mount stack-owned persistent storage at `/workspace` instead and keep that same storage
-attached across restarts. That storage may start as an empty persistent volume or empty host
-directory; q15 does not require `/workspace` to be pre-populated before first startup.
-The `/nix` mount is intentionally persistent in long-running deployments and
-should not be treated as scratch space.
+`[docker-compose.yml](/docker-compose.yml)` is a local development example, so it bind-mounts this
+repo into `/workspace`. For long-running Compose deployments, mount stack-owned persistent storage
+at `/workspace` instead and keep that same storage attached across restarts. That storage may start
+as an empty persistent volume or empty host directory; q15 does not require `/workspace` to be
+pre-populated before first startup. The `/nix` mount is intentionally persistent in long-running
+deployments and should not be treated as scratch space.
 
 Before using the stack for real, replace the placeholder values in:
 
@@ -285,8 +279,7 @@ make compose-ps
 
 ## Kubernetes Base
 
-A reusable Kustomize base lives under
-[deploy/kubernetes/base](/deploy/kubernetes/base).
+A reusable Kustomize base lives under [deploy/kubernetes/base](/deploy/kubernetes/base).
 
 It includes:
 
