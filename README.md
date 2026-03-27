@@ -59,6 +59,19 @@ Published runtime tags:
 - `main`
 - `sha-<short-sha>`
 
+Tag guidance for downstream consumers:
+
+- Use one pinned `sha-<short-sha>` tag across `q15-agent`, `q15-exec`, and `q15-proxy` for
+  long-running deployments.
+- Treat `main` as a moving integration tag for fast-moving or development consumption, not the
+  default for long-lived stacks.
+- If release tags are added later, treat them the same way: pin one immutable tag across the whole
+  stack.
+
+GHCR runtime images are intended to be publicly pullable without registry auth for ordinary
+self-hosted consumption. Maintain the GitHub package visibility for `q15-agent`, `q15-exec`, and
+`q15-proxy` as public outside this repo.
+
 `q15-auth` is published separately as GitHub Release archives on pushed tags that match `v*`. The
 release assets are:
 
@@ -150,12 +163,12 @@ models:
       - reasoning
 
 agent:
-  name: Jared
+  name: Q15
   models:
     - kimi-k2.5
   memory_recent_turns: 6
   telegram:
-    token_env: JARED_TELEGRAM_TOKEN
+    token_env: Q15_TELEGRAM_TOKEN
     allowed_user_ids:
       - 123456789
 ```
@@ -182,14 +195,14 @@ proxy:
     - q15-exec
   set_lowercase_proxy_env: true
   secrets:
-    - jared_gh_token
+    - github_token
   rules:
     - name: github-api
       match_hosts:
         - api.github.com
   env:
     - name: GH_TOKEN
-      secret: jared_gh_token
+      secret: github_token
       rules:
         - github-api
       in:
@@ -214,10 +227,24 @@ q15-auth logout --auth-path ./auth.json
 The resulting `auth.json` should be mounted into the `q15-agent` container or stored as a Kubernetes
 Secret.
 
-## Local Docker Compose Stack
+## First Startup Inputs
 
-The checked-in Compose stack lives at [docker-compose.yml](/docker-compose.yml) and uses the
-examples under [deploy/compose](/deploy/compose).
+Before first startup, every long-running q15 stack must provide:
+
+- agent config at `/etc/q15/agent/config.yaml`
+- proxy policy at `/etc/q15/proxy/policy.yaml`
+- `auth.json` at `/etc/q15/auth/auth.json`
+- provider or API secrets required by the chosen agent config
+- proxy secret aliases required by the chosen proxy policy
+- persistent storage for `/workspace`, `/memory`, `/skills`, `/nix`, and `/var/lib/q15/proxy`
+
+`/workspace` may begin empty, but it is expected to remain attached to the same stack over time.
+
+## Local Docker Compose Stack (Development Only)
+
+The checked-in local-development stack lives at [docker-compose.yml](/docker-compose.yml) and uses
+the templates under [deploy/compose](/deploy/compose). It is not the canonical downstream
+deployment-consumer example.
 
 Its interface is organized as:
 
@@ -226,12 +253,12 @@ Its interface is organized as:
 - ignored local Docker secret files under [deploy/compose/secrets](/deploy/compose/secrets), seeded
   from tracked `*.example` templates in that same directory
 
-The Compose file keeps local source builds enabled while tagging them with the canonical GHCR image
-names:
+The local-development stack intentionally:
 
-- `ghcr.io/q15co/q15-agent:main`
-- `ghcr.io/q15co/q15-exec:main`
-- `ghcr.io/q15co/q15-proxy:main`
+- keeps local source builds enabled with `build:`
+- tags those local builds with the canonical GHCR image names on `:main`
+- bind-mounts this repo into `/workspace`
+- uses the root `make compose-*` targets for local iteration
 
 Bring it up with:
 
@@ -240,7 +267,7 @@ make compose-secrets-init
 make compose-up
 ```
 
-The Compose example uses:
+The local-development stack uses:
 
 - default container entrypoints with no runtime flags
 - Compose `configs` for non-secret YAML files
@@ -252,18 +279,11 @@ The Compose example uses:
   across sessions
 - Docker secret files under [deploy/compose/secrets](/deploy/compose/secrets)
 
-`[docker-compose.yml](/docker-compose.yml)` is a local development example, so it bind-mounts this
-repo into `/workspace`. For long-running Compose deployments, mount stack-owned persistent storage
-at `/workspace` instead and keep that same storage attached across restarts. That storage may start
-as an empty persistent volume or empty host directory; q15 does not require `/workspace` to be
-pre-populated before first startup. The `/nix` mount is intentionally persistent in long-running
-deployments and should not be treated as scratch space.
-
-Before using the stack for real, replace the placeholder values in:
+Before using the local-development stack, replace the placeholder values in:
 
 - [deploy/compose/secrets/moonshot_api_key.example](/deploy/compose/secrets/moonshot_api_key.example)
-- [deploy/compose/secrets/jared_telegram_token.example](/deploy/compose/secrets/jared_telegram_token.example)
-- [deploy/compose/secrets/jared_gh_token.example](/deploy/compose/secrets/jared_gh_token.example)
+- [deploy/compose/secrets/q15_telegram_token.example](/deploy/compose/secrets/q15_telegram_token.example)
+- [deploy/compose/secrets/github_token.example](/deploy/compose/secrets/github_token.example)
 - [deploy/compose/secrets/q15_auth_json.example](/deploy/compose/secrets/q15_auth_json.example)
 
 `make compose-secrets-init` copies those templates to ignored local files without the `.example`
@@ -277,6 +297,33 @@ make compose-logs SERVICE=q15-agent
 make compose-ps
 ```
 
+## Image-First Compose Deployment Example
+
+The canonical downstream image-first Compose example is
+[deploy/compose/docker-compose.image-first.yml](/deploy/compose/docker-compose.image-first.yml).
+Supporting notes live in [deploy/compose/README.md](/deploy/compose/README.md).
+
+This deployment-oriented example:
+
+- uses `image:` only, with no `build:`
+- requires `Q15_IMAGE_TAG` and applies the same tag to `q15-agent`, `q15-exec`, and `q15-proxy`
+- mounts persistent named volumes for `/workspace`, `/memory`, `/skills`, `/nix`, and
+  `/var/lib/q15/proxy`
+- mounts `agent-config.yaml`, `proxy-policy.yaml`, and `auth.json` at the exact runtime paths the
+  binaries expect
+- mounts provider and proxy secret files and resolves them via the `*_FILE` environment pattern
+
+Bring it up with:
+
+```bash
+make compose-secrets-init
+Q15_IMAGE_TAG=sha-<short-sha> docker compose -f deploy/compose/docker-compose.image-first.yml up -d
+```
+
+`/workspace` may start empty in this example, but it is expected to persist long-term for one stack.
+For long-running deployments, keep that same storage attached across restarts and redeployments. The
+`/nix` mount is intentionally persistent and should not be treated as scratch space.
+
 ## Kubernetes Base
 
 A reusable Kustomize base lives under [deploy/kubernetes/base](/deploy/kubernetes/base).
@@ -287,7 +334,13 @@ It includes:
 - Services for `q15-exec` and `q15-proxy`
 - ConfigMap generators for agent config and proxy policy examples
 
-The checked-in manifests default to the moving GHCR `:main` tags:
+The canonical runtime images are:
+
+- `ghcr.io/q15co/q15-agent`
+- `ghcr.io/q15co/q15-exec`
+- `ghcr.io/q15co/q15-proxy`
+
+The checked-in manifests keep the moving GHCR `:main` tags as placeholders:
 
 - `ghcr.io/q15co/q15-agent:main`
 - `ghcr.io/q15co/q15-exec:main`
@@ -299,6 +352,9 @@ It expects a separate deployment repo or overlay to provide:
 - environment-specific namespaces and labels
 - Secrets
 - PVCs
+
+For long-running deployments, replace those placeholder tags with one pinned `sha-<short-sha>` tag
+across all three services. Treat `main` as a moving integration tag only.
 
 The supported Kubernetes model is one namespace per long-running q15 stack. One stack contains:
 
@@ -332,3 +388,15 @@ The intended workflow is:
 1. This repo publishes `q15-agent`, `q15-exec`, and `q15-proxy` images to GHCR.
 1. A separate deployment repo pins those images and owns environment-specific overlays.
 1. The deployment repo rolls out the updated pod set.
+
+## Self-Hosted Updates And Rollbacks
+
+For Compose and Kubernetes alike:
+
+- Update by changing the pinned image tag in the deployment repo or `Q15_IMAGE_TAG` and rolling the
+  stack.
+- Roll back by restoring the previous pinned `sha-<short-sha>` tag across all three services.
+- Preserve the existing persistent storage for `/workspace`, `/memory`, `/skills`, `/nix`, and
+  `/var/lib/q15/proxy` during normal upgrades and downgrades.
+- If release tags are added later, treat them the same way as `sha-*`: pin one immutable tag across
+  the full stack and keep rollback history in the deployment repo.

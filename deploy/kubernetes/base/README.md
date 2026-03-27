@@ -25,11 +25,11 @@ The runtime contract is fixed in the binaries. Overlays only need to provide:
 - `ConfigMap/q15-agent-config` data matching `agent-config.yaml`
 - `ConfigMap/q15-proxy-policy` data matching `proxy-policy.yaml`
 - `Secret/q15-agent-env` with keys referenced by the agent config
-  - Example: `MOONSHOT_API_KEY`, `JARED_TELEGRAM_TOKEN`
+  - Example: `MOONSHOT_API_KEY`, `Q15_TELEGRAM_TOKEN`
 - `Secret/q15-agent-auth` with key `auth.json`
 - `Secret/q15-proxy-env` with keys matching the uppercased proxy secret aliases in
   `proxy-policy.yaml`
-  - Example: `JARED_GH_TOKEN`
+  - Example: `GITHUB_TOKEN`
 - PVCs named `q15-workspace`, `q15-memory`, `q15-skills`, `q15-exec-nix`, and `q15-proxy-state`
 
 `q15-workspace` is the stack's long-term project and working-state PVC. A fresh
@@ -58,11 +58,27 @@ inside one pod, but session state is currently in-memory and pod-local. Keeping 
 stack avoids cross-pod session routing or sticky-session requirements, and stack-local volumes keep
 storage ownership straightforward.
 
-The base defaults to the moving GHCR `:main` tags:
+Canonical runtime images:
+
+- `ghcr.io/q15co/q15-agent`
+- `ghcr.io/q15co/q15-exec`
+- `ghcr.io/q15co/q15-proxy`
+
+Published runtime tags today:
+
+- `main`
+- `sha-<short-sha>`
+
+The checked-in base keeps the moving `:main` tags as placeholders:
 
 - `ghcr.io/q15co/q15-agent:main`
 - `ghcr.io/q15co/q15-exec:main`
 - `ghcr.io/q15co/q15-proxy:main`
+
+Downstream overlays should replace those placeholders with one pinned `sha-<short-sha>` tag across
+all three services before long-running deployment rollout. Treat `main` as a fast-moving integration
+tag only. If release tags are added later, they should be consumed with the same immutable-pin
+discipline.
 
 Typical overlay responsibilities:
 
@@ -72,3 +88,13 @@ Typical overlay responsibilities:
 - Provide Secret material for that stack
 - Define the required PVCs, including StorageClasses, access modes, and retention policy suitable
   for durable `q15-workspace` state
+
+Update and rollback guidance:
+
+- Update by changing the pinned image tag in the deployment repo or overlay and rolling the stack.
+- Roll back by restoring the previous pinned tag while preserving the existing PVCs.
+- Do not rotate or drop the contract-required PVCs during normal upgrades or downgrades.
+
+GHCR runtime images are intended to be publicly pullable without registry auth for ordinary
+self-hosted consumption. Maintain the package visibility for these GHCR packages as public in
+GitHub's package settings outside this repo.

@@ -44,7 +44,7 @@ func testAgent(name string, modelRefs ...string) *Agent {
 
 func TestLoadAgentRuntimeYAML(t *testing.T) {
 	t.Setenv("MOONSHOT_API_KEY", "api-123")
-	t.Setenv("JARED_TELEGRAM_TOKEN", "tg-123")
+	t.Setenv("Q15_TELEGRAM_TOKEN", "tg-123")
 
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(`
@@ -61,12 +61,12 @@ models:
     provider: moonshot
 
 agent:
-  name: Jared
+  name: Q15
   models:
     - kimi-k2.5
     - kimi-k2
   telegram:
-    token_env: JARED_TELEGRAM_TOKEN
+    token_env: Q15_TELEGRAM_TOKEN
     allowed_user_ids:
       - 123456789
 `), 0o644); err != nil {
@@ -80,8 +80,8 @@ agent:
 	if runtime == nil {
 		t.Fatal("LoadAgentRuntime() returned nil runtime")
 	}
-	if runtime.Name != "Jared" {
-		t.Fatalf("Name = %q, want %q", runtime.Name, "Jared")
+	if runtime.Name != "Q15" {
+		t.Fatalf("Name = %q, want %q", runtime.Name, "Q15")
 	}
 	if len(runtime.Models) != 2 {
 		t.Fatalf("Models len = %d, want 2", len(runtime.Models))
@@ -129,7 +129,7 @@ func TestLoadRejectsUnknownField(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(`
 agent:
-  name: Jared
+  name: Q15
   unknown_runtime: true
 `), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)

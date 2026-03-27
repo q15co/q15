@@ -7,14 +7,14 @@ proxy:
     - q15-exec
   set_lowercase_proxy_env: true
   secrets:
-    - jared_gh_token
+    - github_token
   rules:
     - name: github-api
       match_hosts:
         - api.github.com
   env:
     - name: GH_TOKEN
-      secret: jared_gh_token
+      secret: github_token
       rules:
         - github-api
       in:
