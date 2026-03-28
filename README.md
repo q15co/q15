@@ -385,9 +385,11 @@ currently held in memory inside that pod. Keeping one exec pod per stack avoids 
 routing complexity and keeps storage ownership local to the stack.
 
 The checked-in exec deployment also seeds a fresh `/nix` PVC from the image in an init container
-when the mounted volume is missing the bootstrap runtime markers. That one-time bootstrap keeps
-Kubernetes PVC-backed `/nix` storage persistent without losing the image's built-in shell, profile,
-cert bundle, or `nix` binary on first mount.
+when the mounted volume is missing the bootstrap runtime markers. In addition, the `q15-exec`
+process keeps an image-local bootstrap copy outside `/nix` and repairs an empty persisted `/nix` at
+startup before serving exec requests. Together those safeguards keep Kubernetes PVC-backed `/nix`
+storage persistent without losing the image's built-in shell, profile, cert bundle, or `nix` binary
+on first mount.
 
 Validate the base with:
 

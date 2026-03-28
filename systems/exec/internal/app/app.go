@@ -65,6 +65,11 @@ func Serve(ctx context.Context, cfg Settings) error {
 	if cfg.Executor == nil {
 		cfg.Executor = service.NixShellExecutor{}
 	}
+	if cfg.Executor.Type() == "local-nix-shell" {
+		if err := bootstrapNixRuntime(); err != nil {
+			return err
+		}
+	}
 	proxyProfile, cleanupProxy, err := bootstrapProxyRuntime(ctx, cfg.ProxyAdminAddress)
 	if err != nil {
 		return err

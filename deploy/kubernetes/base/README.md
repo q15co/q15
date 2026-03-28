@@ -96,7 +96,9 @@ Update and rollback guidance:
 - Do not rotate or drop the contract-required PVCs during normal upgrades or downgrades.
 - The checked-in `q15-exec` Deployment bootstraps a fresh `q15-exec-nix` PVC in an init container
   when the mounted volume is missing the image-provided Nix runtime markers. That preserves a
-  persistent `/nix` cache without requiring operators to pre-seed the PVC manually.
+  persistent `/nix` cache without requiring operators to pre-seed the PVC manually. The `q15-exec`
+  image also carries an image-local bootstrap copy outside `/nix`, and the process repairs an empty
+  `/nix` at startup before it begins serving exec requests.
 
 GHCR runtime images are intended to be publicly pullable without registry auth for ordinary
 self-hosted consumption. Maintain the package visibility for these GHCR packages as public in

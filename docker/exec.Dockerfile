@@ -15,6 +15,9 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 FROM nixos/nix:latest
 
+RUN mkdir -p /var/lib/q15/bootstrap-nix && \
+    cp -al /nix/. /var/lib/q15/bootstrap-nix/
+
 COPY --from=build /out/q15-exec /usr/local/bin/q15-exec
 
 WORKDIR /root
