@@ -206,6 +206,41 @@ func TestManagerInjectsDefaultEnvIntoSessions(t *testing.T) {
 	}
 }
 
+func TestManagerRunsShellSessionsViaBash(t *testing.T) {
+	t.Parallel()
+
+	manager := newTestManager(t)
+	session, err := manager.StartSession(
+		context.Background(),
+		`parts=(alpha beta); if [[ "${parts[1]}" == "beta" ]]; then printf "%s" "${parts[0]}-${parts[1]}"; fi`,
+		[]string{"ignored"},
+		"",
+		false,
+	)
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+
+	var stdout strings.Builder
+	if err := manager.WatchSession(
+		context.Background(),
+		session.GetSessionId(),
+		0,
+		func(event *execpb.SessionEvent) error {
+			if chunk := event.GetStdout(); chunk != nil {
+				stdout.Write(chunk.GetData())
+			}
+			return nil
+		},
+	); err != nil {
+		t.Fatalf("WatchSession() error = %v", err)
+	}
+
+	if got := stdout.String(); got != "alpha-beta" {
+		t.Fatalf("stdout = %q, want %q", got, "alpha-beta")
+	}
+}
+
 func newTestManager(t *testing.T) *Manager {
 	t.Helper()
 

@@ -94,6 +94,9 @@ Update and rollback guidance:
 - Update by changing the pinned image tag in the deployment repo or overlay and rolling the stack.
 - Roll back by restoring the previous pinned tag while preserving the existing PVCs.
 - Do not rotate or drop the contract-required PVCs during normal upgrades or downgrades.
+- The checked-in `q15-exec` Deployment bootstraps a fresh `q15-exec-nix` PVC in an init container
+  when the mounted volume is missing the image-provided Nix runtime markers. That preserves a
+  persistent `/nix` cache without requiring operators to pre-seed the PVC manually.
 
 GHCR runtime images are intended to be publicly pullable without registry auth for ordinary
 self-hosted consumption. Maintain the package visibility for these GHCR packages as public in

@@ -14,6 +14,29 @@ spec:
       labels:
         app.kubernetes.io/name: q15-exec
     spec:
+      initContainers:
+        - name: bootstrap-nix
+          image: ghcr.io/q15co/q15-exec:main
+          command:
+            - /nix/var/nix/profiles/default/bin/bash
+            - -lc
+            - |
+              set -euo pipefail
+              target=/var/lib/q15/bootstrap-nix
+              if [[ -x "$target/var/nix/profiles/default/bin/nix" ]] && [[ -x "$target/var/nix/profiles/default/bin/bash" ]] && [[ -d "$target/store" ]]; then
+                echo "q15-exec: existing /nix volume already has a usable bootstrap runtime"
+                exit 0
+              fi
+              echo "q15-exec: bootstrapping /nix volume from image contents"
+              mkdir -p "$target"
+              cp -a /nix/. "$target"/
+              if [[ ! -x "$target/var/nix/profiles/default/bin/nix" ]] || [[ ! -x "$target/var/nix/profiles/default/bin/bash" ]] || [[ ! -d "$target/store" ]]; then
+                echo "q15-exec: bootstrapped /nix volume is still missing required runtime markers" >&2
+                exit 1
+              fi
+          volumeMounts:
+            - name: nix
+              mountPath: /var/lib/q15/bootstrap-nix
       containers:
         - name: exec
           image: ghcr.io/q15co/q15-exec:main
