@@ -1,0 +1,88 @@
+# Canonical image-first deployment example. Pin Q15_IMAGE_TAG to one published
+# immutable runtime tag, typically sha-<short-sha>, across all three services.
+services:
+  q15-proxy:
+    image: ghcr.io/q15co/q15-proxy:${Q15_IMAGE_TAG:?set Q15_IMAGE_TAG to a published sha-<short-sha> tag}
+    restart: unless-stopped
+    init: true
+    environment:
+      GITHUB_TOKEN_FILE: /run/q15-secrets/github_token
+    volumes:
+      - type: bind
+        source: ./proxy-policy.yaml
+        target: /etc/q15/proxy/policy.yaml
+        read_only: true
+      - type: bind
+        source: ./secrets/github_token
+        target: /run/q15-secrets/github_token
+        read_only: true
+      - type: volume
+        source: q15_proxy_state
+        target: /var/lib/q15/proxy
+
+  q15-exec:
+    image: ghcr.io/q15co/q15-exec:${Q15_IMAGE_TAG:?set Q15_IMAGE_TAG to a published sha-<short-sha> tag}
+    restart: unless-stopped
+    init: true
+    depends_on:
+      - q15-proxy
+    volumes:
+      - type: volume
+        source: q15_workspace
+        target: /workspace
+      - type: volume
+        source: q15_memory
+        target: /memory
+      - type: volume
+        source: q15_skills
+        target: /skills
+      - type: volume
+        source: q15_exec_nix_store
+        target: /nix
+
+  q15-agent:
+    image: ghcr.io/q15co/q15-agent:${Q15_IMAGE_TAG:?set Q15_IMAGE_TAG to a published sha-<short-sha> tag}
+    restart: unless-stopped
+    init: true
+    depends_on:
+      - q15-exec
+    environment:
+      HOME: /root
+      GODEBUG: updatemaxprocs=0
+      GOMAXPROCS: "1"
+      MOONSHOT_API_KEY_FILE: /run/q15-secrets/moonshot_api_key
+      Q15_TELEGRAM_TOKEN_FILE: /run/q15-secrets/q15_telegram_token
+      Q15_BRAVE_API_KEY: ${Q15_BRAVE_API_KEY-}
+    volumes:
+      - type: bind
+        source: ./agent-config.yaml
+        target: /etc/q15/agent/config.yaml
+        read_only: true
+      - type: bind
+        source: ./secrets/q15_auth_json
+        target: /etc/q15/auth/auth.json
+        read_only: true
+      - type: bind
+        source: ./secrets/moonshot_api_key
+        target: /run/q15-secrets/moonshot_api_key
+        read_only: true
+      - type: bind
+        source: ./secrets/q15_telegram_token
+        target: /run/q15-secrets/q15_telegram_token
+        read_only: true
+      - type: volume
+        source: q15_workspace
+        target: /workspace
+      - type: volume
+        source: q15_memory
+        target: /memory
+      - type: volume
+        source: q15_skills
+        target: /skills
+
+volumes:
+  q15_exec_nix_store:
+  q15_memory:
+  q15_proxy_state:
+  q15_skills:
+  q15_workspace:

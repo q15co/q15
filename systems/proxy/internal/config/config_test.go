@@ -8,7 +8,7 @@ import (
 )
 
 func TestLoadRuntimeResolvesProxyEnvAndPolicyRevision(t *testing.T) {
-	t.Setenv("JARED_GH_TOKEN", "ghp_test_123")
+	t.Setenv("GITHUB_TOKEN", "ghp_test_123")
 
 	path := filepath.Join(t.TempDir(), "proxy.yaml")
 	if err := os.WriteFile(path, []byte(`
@@ -18,14 +18,14 @@ proxy:
     - 127.0.0.1
   set_lowercase_proxy_env: true
   secrets:
-    - jared_gh_token
+    - github_token
   rules:
     - name: github-api
       match_hosts:
         - api.github.com
   env:
     - name: GH_TOKEN
-      secret: jared_gh_token
+      secret: github_token
       rules:
         - github-api
 `), 0o644); err != nil {
@@ -58,8 +58,8 @@ proxy:
 	if runtime.NoProxy != "localhost,127.0.0.1" {
 		t.Fatalf("NoProxy = %q, want %q", runtime.NoProxy, "localhost,127.0.0.1")
 	}
-	if got := runtime.SecretValues["jared_gh_token"]; got != "ghp_test_123" {
-		t.Fatalf("SecretValues[jared_gh_token] = %q, want %q", got, "ghp_test_123")
+	if got := runtime.SecretValues["github_token"]; got != "ghp_test_123" {
+		t.Fatalf("SecretValues[github_token] = %q, want %q", got, "ghp_test_123")
 	}
 	placeholder := runtime.EnvValues["GH_TOKEN"]
 	if !strings.HasPrefix(placeholder, "__Q15_PROXY_ENV_") {
@@ -102,14 +102,14 @@ func TestLoadRuntimeReadsSecretFromFileEnv(t *testing.T) {
 	if err := os.WriteFile(secretPath, []byte("ghp_file_123\n"), 0o600); err != nil {
 		t.Fatalf("write secret file: %v", err)
 	}
-	t.Setenv("JARED_GH_TOKEN", "")
-	t.Setenv("JARED_GH_TOKEN_FILE", secretPath)
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GITHUB_TOKEN_FILE", secretPath)
 
 	path := filepath.Join(t.TempDir(), "proxy.yaml")
 	if err := os.WriteFile(path, []byte(`
 proxy:
   secrets:
-    - jared_gh_token
+    - github_token
   rules:
     - name: github-api
       match_hosts:
@@ -122,10 +122,10 @@ proxy:
 	if err != nil {
 		t.Fatalf("LoadRuntime() error = %v", err)
 	}
-	if runtime.SecretValues["jared_gh_token"] != "ghp_file_123" {
+	if runtime.SecretValues["github_token"] != "ghp_file_123" {
 		t.Fatalf(
-			"SecretValues[jared_gh_token] = %q, want %q",
-			runtime.SecretValues["jared_gh_token"],
+			"SecretValues[github_token] = %q, want %q",
+			runtime.SecretValues["github_token"],
 			"ghp_file_123",
 		)
 	}

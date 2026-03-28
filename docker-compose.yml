@@ -1,3 +1,5 @@
+# Local-development stack. For image-only deployment consumption, see
+# deploy/compose/docker-compose.image-first.yml.
 services:
   q15-proxy:
     image: ghcr.io/q15co/q15-proxy:main
@@ -7,7 +9,7 @@ services:
     restart: unless-stopped
     init: true
     environment:
-      JARED_GH_TOKEN_FILE: /run/secrets/jared_gh_token
+      GITHUB_TOKEN_FILE: /run/secrets/github_token
     configs:
       - source: q15_proxy_policy
         target: /etc/q15/proxy/policy.yaml
@@ -16,7 +18,7 @@ services:
         source: q15_proxy_state
         target: /var/lib/q15/proxy
     secrets:
-      - jared_gh_token
+      - github_token
 
   q15-exec:
     image: ghcr.io/q15co/q15-exec:main
@@ -55,7 +57,7 @@ services:
       GODEBUG: updatemaxprocs=0
       GOMAXPROCS: "1"
       MOONSHOT_API_KEY_FILE: /run/secrets/moonshot_api_key
-      JARED_TELEGRAM_TOKEN_FILE: /run/secrets/jared_telegram_token
+      Q15_TELEGRAM_TOKEN_FILE: /run/secrets/q15_telegram_token
       Q15_BRAVE_API_KEY: ${Q15_BRAVE_API_KEY-}
     configs:
       - source: q15_agent_config
@@ -76,7 +78,7 @@ services:
         target: /skills
     secrets:
       - moonshot_api_key
-      - jared_telegram_token
+      - q15_telegram_token
 
 volumes:
   q15_exec_nix_store:
@@ -94,7 +96,7 @@ configs:
 secrets:
   moonshot_api_key:
     file: ./deploy/compose/secrets/moonshot_api_key
-  jared_telegram_token:
-    file: ./deploy/compose/secrets/jared_telegram_token
-  jared_gh_token:
-    file: ./deploy/compose/secrets/jared_gh_token
+  q15_telegram_token:
+    file: ./deploy/compose/secrets/q15_telegram_token
+  github_token:
+    file: ./deploy/compose/secrets/github_token

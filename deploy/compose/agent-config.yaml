@@ -13,11 +13,11 @@ models:
       - reasoning
 
 agent:
-  name: Jared
+  name: Q15
   models:
     - kimi-k2.5
   memory_recent_turns: 6
   telegram:
-    token_env: JARED_TELEGRAM_TOKEN
+    token_env: Q15_TELEGRAM_TOKEN
     allowed_user_ids:
       - 123456789
