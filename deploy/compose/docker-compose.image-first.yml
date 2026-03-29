@@ -52,6 +52,7 @@ services:
       GOMAXPROCS: "1"
       MOONSHOT_API_KEY_FILE: /run/q15-secrets/moonshot_api_key
       Q15_TELEGRAM_TOKEN_FILE: /run/q15-secrets/q15_telegram_token
+      Q15_TELEGRAM_ALLOWED_USER_IDS_FILE: /run/q15-secrets/q15_telegram_allowed_user_ids
       Q15_BRAVE_API_KEY: ${Q15_BRAVE_API_KEY-}
     volumes:
       - type: bind
@@ -69,6 +70,10 @@ services:
       - type: bind
         source: ./secrets/q15_telegram_token
         target: /run/q15-secrets/q15_telegram_token
+        read_only: true
+      - type: bind
+        source: ./secrets/q15_telegram_allowed_user_ids
+        target: /run/q15-secrets/q15_telegram_allowed_user_ids
         read_only: true
       - type: volume
         source: q15_workspace

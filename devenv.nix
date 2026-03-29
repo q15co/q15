@@ -3,7 +3,7 @@
   lib,
   ...
 }: let
-  mdformatPkg = pkgs.python3.withPackages (ps: [
+  mdformatPkg = pkgs.python312.withPackages (ps: [
     ps.mdformat
     ps.mdformat-gfm
     ps.mdformat-frontmatter
@@ -11,7 +11,85 @@
   goToolchain = pkgs.go_1_25;
 in {
   cachix.enable = false;
-  git-hooks.package = pkgs.prek;
+  git-hooks = {
+    package = pkgs.prek;
+    # git-hooks.nix currently resolves its bundled pre-commit-hooks package
+    # from python3Packages. Pin this one tool to Python 3.12 to avoid a broken
+    # python3.13 ruamel-yaml-clib path on fresh CI evaluation.
+    tools."pre-commit-hooks" = lib.mkForce pkgs.python312Packages."pre-commit-hooks";
+
+    hooks = {
+      check-added-large-files.enable = true;
+      check-merge-conflicts.enable = true;
+      check-json.enable = true;
+      check-yaml.enable = true;
+      end-of-file-fixer = {
+        enable = true;
+        excludes = ["^devenv\\.lock$"];
+      };
+      trim-trailing-whitespace.enable = true;
+
+      markdownlint = {
+        enable = true;
+        args = ["--fix"];
+        settings.configuration = {
+          MD013 = {
+            line_length = 100;
+            code_blocks = false;
+            headings = false;
+            tables = false;
+          };
+        };
+      };
+      mdformat = {
+        enable = true;
+        package = mdformatPkg;
+        args = [
+          "--extensions"
+          "gfm"
+          "--extensions"
+          "frontmatter"
+          "--wrap"
+          "100"
+        ];
+      };
+
+      alejandra.enable = true;
+      deadnix.enable = true;
+      statix.enable = true;
+
+      shellcheck.enable = true;
+      shfmt.enable = true;
+      actionlint.enable = true;
+
+      gofmt = {
+        enable = true;
+        package = goToolchain;
+      };
+      golines.enable = true;
+
+      govet = {
+        enable = true;
+        package = goToolchain;
+      };
+      staticcheck.enable = true;
+      revive.enable = true;
+      golangci-lint = {
+        enable = true;
+        pass_filenames = false;
+      };
+
+      gotest.enable = false;
+      q15-go-test = {
+        enable = true;
+        name = "q15-go-test";
+        entry = "make test";
+        language = "system";
+        pass_filenames = false;
+        always_run = true;
+      };
+    };
+  };
 
   languages.go.enable = true;
   languages.go.package = goToolchain;
@@ -33,78 +111,6 @@ in {
       mdformatPkg
     ]
     ++ lib.optionals (pkgs ? passt) [pkgs.passt];
-
-  git-hooks.hooks = {
-    check-added-large-files.enable = true;
-    check-merge-conflicts.enable = true;
-    check-json.enable = true;
-    check-yaml.enable = true;
-    end-of-file-fixer = {
-      enable = true;
-      excludes = ["^devenv\\.lock$"];
-    };
-    trim-trailing-whitespace.enable = true;
-
-    markdownlint = {
-      enable = true;
-      args = ["--fix"];
-      settings.configuration = {
-        MD013 = {
-          line_length = 100;
-          code_blocks = false;
-          headings = false;
-          tables = false;
-        };
-      };
-    };
-    mdformat = {
-      enable = true;
-      package = mdformatPkg;
-      args = [
-        "--extensions"
-        "gfm"
-        "--extensions"
-        "frontmatter"
-        "--wrap"
-        "100"
-      ];
-    };
-
-    alejandra.enable = true;
-    deadnix.enable = true;
-    statix.enable = true;
-
-    shellcheck.enable = true;
-    shfmt.enable = true;
-    actionlint.enable = true;
-
-    gofmt = {
-      enable = true;
-      package = goToolchain;
-    };
-    golines.enable = true;
-
-    govet = {
-      enable = true;
-      package = goToolchain;
-    };
-    staticcheck.enable = true;
-    revive.enable = true;
-    golangci-lint = {
-      enable = true;
-      pass_filenames = false;
-    };
-
-    gotest.enable = false;
-    q15-go-test = {
-      enable = true;
-      name = "q15-go-test";
-      entry = "make test";
-      language = "system";
-      pass_filenames = false;
-      always_run = true;
-    };
-  };
 
   env = {
     GO111MODULE = "on";

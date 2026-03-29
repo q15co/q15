@@ -3,6 +3,8 @@ package agent
 import (
 	"fmt"
 	"strings"
+
+	"github.com/q15co/q15/systems/agent/internal/conversation"
 )
 
 func injectCoreMemory(systemText string, core CoreMemory) string {
@@ -92,20 +94,6 @@ func injectSkillCatalog(systemText string, catalog SkillCatalog) string {
 	))
 }
 
-func copyMessages(in []Message) []Message {
-	if len(in) == 0 {
-		return nil
-	}
-
-	out := make([]Message, len(in))
-	for i, msg := range in {
-		out[i] = msg
-		if len(msg.ToolCalls) > 0 {
-			out[i].ToolCalls = append([]ToolCall(nil), msg.ToolCalls...)
-		}
-		if len(msg.ProviderRaw) > 0 {
-			out[i].ProviderRaw = append([]byte(nil), msg.ProviderRaw...)
-		}
-	}
-	return out
+func copyMessages(in []conversation.Message) []conversation.Message {
+	return conversation.CloneMessages(in)
 }

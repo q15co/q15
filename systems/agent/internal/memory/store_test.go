@@ -2,12 +2,15 @@ package memory
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
+	"github.com/q15co/q15/systems/agent/internal/conversation"
 )
 
 type fakeCommitter struct {
@@ -123,15 +126,15 @@ func TestStoreAppendAndLoadRecentMessages(t *testing.T) {
 		t.Fatalf("Init() error = %v", err)
 	}
 
-	if err := store.AppendTurn(context.Background(), []agent.Message{
-		{Role: agent.UserRole, Content: "one"},
-		{Role: agent.AssistantRole, Content: "first"},
+	if err := store.AppendTurn(context.Background(), []conversation.Message{
+		conversation.UserMessage("one"),
+		conversation.AssistantMessage(conversation.Text("first", "")),
 	}); err != nil {
 		t.Fatalf("AppendTurn(one) error = %v", err)
 	}
-	if err := store.AppendTurn(context.Background(), []agent.Message{
-		{Role: agent.UserRole, Content: "two"},
-		{Role: agent.AssistantRole, Content: "second"},
+	if err := store.AppendTurn(context.Background(), []conversation.Message{
+		conversation.UserMessage("two"),
+		conversation.AssistantMessage(conversation.Text("second", "")),
 	}); err != nil {
 		t.Fatalf("AppendTurn(two) error = %v", err)
 	}
@@ -143,7 +146,7 @@ func TestStoreAppendAndLoadRecentMessages(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("LoadRecentMessages len = %d, want 2", len(got))
 	}
-	if got[0].Content != "two" || got[1].Content != "second" {
+	if conversation.TextValue(got[0]) != "two" || conversation.TextValue(got[1]) != "second" {
 		t.Fatalf("LoadRecentMessages contents = %#v, want latest turn only", got)
 	}
 }
@@ -155,20 +158,19 @@ func TestStoreInterruptedTurnPersistsAndReplays(t *testing.T) {
 		t.Fatalf("Init() error = %v", err)
 	}
 
-	interrupted := []agent.Message{
-		{Role: agent.UserRole, Content: "do a long task"},
-		{
-			Role:  agent.AssistantRole,
-			Phase: "commentary",
-			ToolCalls: []agent.ToolCall{
-				{ID: "call-1", Name: "echo", Arguments: `{"value":"x"}`},
-			},
-		},
-		{Role: agent.ToolRole, ToolCallID: "call-1", Content: "tool-output"},
-		{
-			Role:    agent.AssistantRole,
-			Content: "Run stopped by internal safety guard: reached maximum tool-call turns (96). Progress up to this point has been saved.",
-		},
+	interrupted := []conversation.Message{
+		conversation.UserMessage("do a long task"),
+		conversation.AssistantMessage(
+			conversation.Text("working", conversation.TextDispositionCommentary),
+			conversation.ToolCall("call-1", "echo", `{"value":"x"}`),
+		),
+		conversation.ToolResultMessage("call-1", "tool-output", false),
+		conversation.AssistantMessage(
+			conversation.Text(
+				"Run stopped by internal safety guard: reached maximum tool-call turns (96). Progress up to this point has been saved.",
+				"",
+			),
+		),
 	}
 	if err := store.AppendTurn(context.Background(), interrupted); err != nil {
 		t.Fatalf("AppendTurn() error = %v", err)
@@ -181,14 +183,449 @@ func TestStoreInterruptedTurnPersistsAndReplays(t *testing.T) {
 	if len(got) != len(interrupted) {
 		t.Fatalf("LoadRecentMessages len = %d, want %d", len(got), len(interrupted))
 	}
-	if got[len(got)-1].Role != agent.AssistantRole {
+	if got[len(got)-1].Role != conversation.AssistantRole {
 		t.Fatalf("last replayed role = %q, want assistant", got[len(got)-1].Role)
 	}
-	if got[1].Phase != "commentary" {
-		t.Fatalf("replayed assistant phase = %q, want %q", got[1].Phase, "commentary")
+	if got[1].Parts[0].Disposition != conversation.TextDispositionCommentary {
+		t.Fatalf(
+			"replayed assistant disposition = %q, want %q",
+			got[1].Parts[0].Disposition,
+			conversation.TextDispositionCommentary,
+		)
 	}
-	if !strings.Contains(got[len(got)-1].Content, "internal safety guard") {
-		t.Fatalf("last replayed message = %q", got[len(got)-1].Content)
+	if calls := conversation.ToolCalls([]conversation.Message{got[1]}); len(calls) != 1 ||
+		calls[0].ID != "call-1" {
+		t.Fatalf("replayed assistant tool calls = %#v", calls)
+	}
+	if !strings.Contains(conversation.TextValue(got[len(got)-1]), "internal safety guard") {
+		t.Fatalf("last replayed message = %q", conversation.TextValue(got[len(got)-1]))
+	}
+}
+
+func TestStoreInitMigratesLegacyTurnsToV2AndSynchronizesHead(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "memory")
+	legacyPath := filepath.Join(
+		root,
+		"history",
+		"turns",
+		"2026",
+		"03",
+		"29",
+		"00000000000000000007.json",
+	)
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	record := legacyTurnRecord{
+		ID:        "turn-00000000000000000007",
+		Seq:       7,
+		CreatedAt: time.Date(2026, time.March, 29, 12, 0, 0, 0, time.UTC),
+		Messages: []legacyMessage{
+			{Role: "user", Content: "hello"},
+			{
+				Role:    "assistant",
+				Content: "thinking",
+				Phase:   "commentary",
+				ToolCalls: []agent.ToolCall{
+					{ID: "call-1", Name: "echo", Arguments: `{"value":"x"}`},
+				},
+			},
+			{Role: "tool", ToolCallID: "call-1", Content: "tool-output"},
+			{Role: "assistant", Content: "done"},
+		},
+	}
+	if err := writeJSONFileAtomic(legacyPath, record); err != nil {
+		t.Fatalf("writeJSONFileAtomic() error = %v", err)
+	}
+
+	committer := &fakeCommitter{}
+	store := NewStore(root, "Jared", committer)
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	if committer.lastMessage != "memory: upgrade transcript history to v2" {
+		t.Fatalf(
+			"commit message = %q, want %q",
+			committer.lastMessage,
+			"memory: upgrade transcript history to v2",
+		)
+	}
+
+	turn, err := store.readTurn(legacyPath)
+	if err != nil {
+		t.Fatalf("readTurn() error = %v", err)
+	}
+	if turn.SchemaVersion != conversation.SchemaVersion {
+		t.Fatalf("schema_version = %d, want %d", turn.SchemaVersion, conversation.SchemaVersion)
+	}
+	if turn.Seq != 7 {
+		t.Fatalf("seq = %d, want 7", turn.Seq)
+	}
+	if got := turn.Messages[1].Parts[0].Disposition; got != conversation.TextDispositionCommentary {
+		t.Fatalf("migrated disposition = %q, want %q", got, conversation.TextDispositionCommentary)
+	}
+	if calls := conversation.ToolCalls([]conversation.Message{turn.Messages[1]}); len(calls) != 1 ||
+		calls[0].Name != "echo" {
+		t.Fatalf("migrated tool calls = %#v", calls)
+	}
+	if part := turn.Messages[2].Parts[0]; part.Type != conversation.ToolResultPartType ||
+		part.IsError {
+		t.Fatalf("migrated tool result = %#v", part)
+	}
+
+	head, err := store.readHeadState()
+	if err != nil {
+		t.Fatalf("readHeadState() error = %v", err)
+	}
+	if head.LastSeq != 7 {
+		t.Fatalf("head.LastSeq = %d, want 7", head.LastSeq)
+	}
+
+	if err := store.AppendTurn(context.Background(), []conversation.Message{
+		conversation.UserMessage("next"),
+		conversation.AssistantMessage(conversation.Text("ok", "")),
+	}); err != nil {
+		t.Fatalf("AppendTurn() error = %v", err)
+	}
+
+	head, err = store.readHeadState()
+	if err != nil {
+		t.Fatalf("readHeadState() after append error = %v", err)
+	}
+	if head.LastSeq != 8 {
+		t.Fatalf("head.LastSeq after append = %d, want 8", head.LastSeq)
+	}
+
+	paths, err := store.listTurnPaths()
+	if err != nil {
+		t.Fatalf("listTurnPaths() error = %v", err)
+	}
+	if len(paths) != 2 {
+		t.Fatalf("turn paths len = %d, want 2", len(paths))
+	}
+	if got := filepath.Base(paths[len(paths)-1]); got != "00000000000000000008.json" {
+		t.Fatalf("latest turn file = %q, want %q", got, "00000000000000000008.json")
+	}
+}
+
+func TestStoreInitMigratesLegacyTitleCaseMessagesAndReasoning(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "memory")
+	legacyPath := filepath.Join(
+		root,
+		"history",
+		"turns",
+		"2026",
+		"03",
+		"15",
+		"00000000000000000003.json",
+	)
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	raw := `{
+  "id": "turn-00000000000000000003",
+  "seq": 3,
+  "created_at": "2026-03-15T22:20:26.752331219Z",
+  "messages": [
+    {
+      "Role": "user",
+      "Content": "can you test if all your tools work as expected?"
+    },
+    {
+      "Role": "assistant",
+      "Content": "",
+      "ToolCalls": [
+        {
+          "ID": "write_file:17",
+          "Name": "write_file",
+          "Arguments": "{\"path\":\"/workspace/test-tools.md\",\"content\":\"hello\"}"
+        }
+      ],
+      "ProviderRaw": {
+        "role": "assistant",
+        "content": "",
+        "reasoning_content": "Let me test the tools.",
+        "tool_calls": [
+          {
+            "id": "write_file:17",
+            "type": "function",
+            "function": {
+              "name": "write_file",
+              "arguments": "{\"path\":\"/workspace/test-tools.md\",\"content\":\"hello\"}"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "Role": "tool",
+      "Content": "Path: /workspace/test-tools.md\nBytes-Written: 5",
+      "ToolCallID": "write_file:17"
+    }
+  ]
+}`
+	if err := os.WriteFile(legacyPath, []byte(raw), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	store := NewStore(root, "Jared", &fakeCommitter{})
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	turn, err := store.readTurn(legacyPath)
+	if err != nil {
+		t.Fatalf("readTurn() error = %v", err)
+	}
+	if len(turn.Messages) != 3 {
+		t.Fatalf("messages len = %d, want 3", len(turn.Messages))
+	}
+	if turn.Messages[1].Role != conversation.AssistantRole {
+		t.Fatalf("assistant role = %q, want assistant", turn.Messages[1].Role)
+	}
+	if len(turn.Messages[1].Parts) != 2 {
+		t.Fatalf("assistant parts len = %d, want 2", len(turn.Messages[1].Parts))
+	}
+	if turn.Messages[1].Parts[0].Type != conversation.ReasoningPartType ||
+		turn.Messages[1].Parts[0].Text != "Let me test the tools." {
+		t.Fatalf("assistant reasoning part = %#v", turn.Messages[1].Parts[0])
+	}
+	calls := conversation.ToolCalls([]conversation.Message{turn.Messages[1]})
+	if len(calls) != 1 || calls[0].ID != "write_file:17" || calls[0].Name != "write_file" {
+		t.Fatalf("assistant tool calls = %#v", calls)
+	}
+	if part := turn.Messages[2].Parts[0]; part.Type != conversation.ToolResultPartType ||
+		part.ToolCallID != "write_file:17" {
+		t.Fatalf("tool result part = %#v", part)
+	}
+}
+
+func TestStoreInitQuarantinesUnreadableLegacyTurns(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "memory")
+	legacyPath := filepath.Join(root, "history", "turns", "2026", "03", "29", "broken.json")
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(legacyPath, []byte("{not-json"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	committer := &fakeCommitter{}
+	store := NewStore(root, "Jared", committer)
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	if committer.lastMessage != "memory: upgrade transcript history to v2" {
+		t.Fatalf(
+			"commit message = %q, want %q",
+			committer.lastMessage,
+			"memory: upgrade transcript history to v2",
+		)
+	}
+	if _, err := os.Stat(legacyPath); !os.IsNotExist(err) {
+		t.Fatalf("legacy path should be removed, stat error = %v", err)
+	}
+
+	quarantinePath := filepath.Join(
+		root,
+		"history",
+		"quarantine",
+		"2026",
+		"03",
+		"29",
+		"broken.json",
+	)
+	if _, err := os.Stat(quarantinePath); err != nil {
+		t.Fatalf("expected quarantined file %q: %v", quarantinePath, err)
+	}
+
+	got, err := store.LoadRecentMessages(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("LoadRecentMessages() error = %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("LoadRecentMessages len = %d, want 0", len(got))
+	}
+}
+
+func TestStoreInitSanitizesExistingV2Turns(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "memory")
+	turnPath := filepath.Join(
+		root,
+		"history",
+		"turns",
+		"2026",
+		"03",
+		"29",
+		"00000000000000000003.json",
+	)
+	if err := os.MkdirAll(filepath.Dir(turnPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	record := turnRecord{
+		SchemaVersion: conversation.SchemaVersion,
+		ID:            "turn-00000000000000000003",
+		Seq:           3,
+		CreatedAt:     time.Date(2026, time.March, 15, 22, 20, 26, 0, time.UTC),
+		Messages: []conversation.Message{
+			conversation.UserMessage("can you test if all your tools work as expected?"),
+			{Role: conversation.AssistantRole},
+			{Role: conversation.ToolRole},
+			conversation.AssistantMessage(conversation.Text("All tools operational.", "")),
+		},
+	}
+	if err := writeJSONFileAtomic(turnPath, record); err != nil {
+		t.Fatalf("writeJSONFileAtomic() error = %v", err)
+	}
+
+	committer := &fakeCommitter{}
+	store := NewStore(root, "Jared", committer)
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	if committer.lastMessage != "memory: upgrade transcript history to v2" {
+		t.Fatalf(
+			"commit message = %q, want %q",
+			committer.lastMessage,
+			"memory: upgrade transcript history to v2",
+		)
+	}
+
+	turn, err := store.readTurn(turnPath)
+	if err != nil {
+		t.Fatalf("readTurn() error = %v", err)
+	}
+	if len(turn.Messages) != 2 {
+		t.Fatalf("messages len = %d, want 2", len(turn.Messages))
+	}
+	if turn.Messages[0].Role != conversation.UserRole ||
+		turn.Messages[1].Role != conversation.AssistantRole {
+		t.Fatalf("sanitized roles = %#v", turn.Messages)
+	}
+}
+
+func TestStoreInitBackfillsReplayOnlyReasoningForExistingToolReplay(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "memory")
+	turnPath := filepath.Join(
+		root,
+		"history",
+		"turns",
+		"2026",
+		"03",
+		"29",
+		"00000000000000000004.json",
+	)
+	if err := os.MkdirAll(filepath.Dir(turnPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	record := turnRecord{
+		SchemaVersion: conversation.SchemaVersion,
+		ID:            "turn-00000000000000000004",
+		Seq:           4,
+		CreatedAt:     time.Date(2026, time.March, 29, 12, 0, 0, 0, time.UTC),
+		Messages: []conversation.Message{
+			conversation.UserMessage("inspect memory"),
+			conversation.AssistantMessage(conversation.Reasoning("", map[string]json.RawMessage{
+				"openai_responses": json.RawMessage(
+					`{"id":"rs_123","type":"reasoning","encrypted_content":"abc","summary":[]}`,
+				),
+			})),
+			conversation.AssistantMessage(
+				conversation.ToolCall("call-1", "exec", `{"command":"pwd"}`),
+			),
+			conversation.ToolResultMessage("call-1", "ok", false),
+			conversation.AssistantMessage(conversation.Text("done", "")),
+		},
+	}
+	if err := writeJSONFileAtomic(turnPath, record); err != nil {
+		t.Fatalf("writeJSONFileAtomic() error = %v", err)
+	}
+
+	committer := &fakeCommitter{}
+	store := NewStore(root, "Jared", committer)
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	if committer.lastMessage != "memory: upgrade transcript history to v2" {
+		t.Fatalf(
+			"commit message = %q, want %q",
+			committer.lastMessage,
+			"memory: upgrade transcript history to v2",
+		)
+	}
+
+	turn, err := store.readTurn(turnPath)
+	if err != nil {
+		t.Fatalf("readTurn() error = %v", err)
+	}
+	if got := turn.Messages[1].Parts[0].Text; got != conversation.PortableReasoningUnavailableText {
+		t.Fatalf(
+			"backfilled reasoning text = %q, want %q",
+			got,
+			conversation.PortableReasoningUnavailableText,
+		)
+	}
+}
+
+func TestStoreAppendTurnBackfillsReplayOnlyReasoningForToolReplay(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "memory")
+	store := NewStore(root, "Jared", &fakeCommitter{})
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	if err := store.AppendTurn(context.Background(), []conversation.Message{
+		conversation.UserMessage("inspect memory"),
+		conversation.AssistantMessage(conversation.Reasoning("", map[string]json.RawMessage{
+			"openai_responses": json.RawMessage(`{"id":"rs_123","type":"reasoning","encrypted_content":"abc","summary":[]}`),
+		})),
+		conversation.AssistantMessage(conversation.ToolCall("call-1", "exec", `{"command":"pwd"}`)),
+		conversation.ToolResultMessage("call-1", "ok", false),
+		conversation.AssistantMessage(conversation.Text("done", "")),
+	}); err != nil {
+		t.Fatalf("AppendTurn() error = %v", err)
+	}
+
+	got, err := store.LoadRecentMessages(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("LoadRecentMessages() error = %v", err)
+	}
+	if got[1].Parts[0].Text != conversation.PortableReasoningUnavailableText {
+		t.Fatalf(
+			"backfilled reasoning text = %q, want %q",
+			got[1].Parts[0].Text,
+			conversation.PortableReasoningUnavailableText,
+		)
+	}
+}
+
+func TestStoreAppendTurnDoesNotBackfillReplayOnlyReasoningWithoutToolReplay(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "memory")
+	store := NewStore(root, "Jared", &fakeCommitter{})
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	if err := store.AppendTurn(context.Background(), []conversation.Message{
+		conversation.UserMessage("hello"),
+		conversation.AssistantMessage(conversation.Reasoning("", map[string]json.RawMessage{
+			"openai_responses": json.RawMessage(`{"id":"rs_123","type":"reasoning","encrypted_content":"abc","summary":[]}`),
+		})),
+		conversation.AssistantMessage(conversation.Text("done", "")),
+	}); err != nil {
+		t.Fatalf("AppendTurn() error = %v", err)
+	}
+
+	got, err := store.LoadRecentMessages(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("LoadRecentMessages() error = %v", err)
+	}
+	if got[1].Parts[0].Text != "" {
+		t.Fatalf("reasoning text = %q, want empty", got[1].Parts[0].Text)
 	}
 }
 

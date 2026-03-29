@@ -1,23 +1,27 @@
 providers:
+  - name: openai
+    type: openai-codex
+
   - name: moonshot
     type: openai-compatible
     base_url: https://api.moonshot.ai/v1
     key_env: MOONSHOT_API_KEY
 
 models:
+  - name: gpt-5.4
+    provider: openai
+    capabilities: [text, tool_calling, reasoning]
+
   - name: kimi-k2.5
     provider: moonshot
-    capabilities:
-      - text
-      - tool_calling
-      - reasoning
+    capabilities: [text, tool_calling, reasoning]
 
 agent:
   name: Q15
   models:
+    - gpt-5.4
     - kimi-k2.5
   memory_recent_turns: 6
   telegram:
     token_env: Q15_TELEGRAM_TOKEN
-    allowed_user_ids:
-      - 123456789
+    allowed_user_ids_env: Q15_TELEGRAM_ALLOWED_USER_IDS

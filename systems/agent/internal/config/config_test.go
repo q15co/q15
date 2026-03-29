@@ -108,6 +108,64 @@ agent:
 	if runtime.TelegramToken != "tg-123" {
 		t.Fatalf("TelegramToken = %q, want %q", runtime.TelegramToken, "tg-123")
 	}
+	if got, want := runtime.TelegramAllowedUserIDs, []int64{123456789}; len(got) != len(want) ||
+		got[0] != want[0] {
+		t.Fatalf("TelegramAllowedUserIDs = %#v, want %#v", got, want)
+	}
+}
+
+func TestLoadAgentRuntimeYAMLResolvesTelegramAllowedUserIDsFromEnvFile(t *testing.T) {
+	t.Setenv("MOONSHOT_API_KEY", "api-123")
+	t.Setenv("Q15_TELEGRAM_TOKEN", "tg-123")
+	idsPath := filepath.Join(t.TempDir(), "allowed_user_ids")
+	if err := os.WriteFile(idsPath, []byte("123456789\n987654321\n"), 0o644); err != nil {
+		t.Fatalf("write allowed_user_ids file: %v", err)
+	}
+	t.Setenv("Q15_TELEGRAM_ALLOWED_USER_IDS_FILE", idsPath)
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+providers:
+  - name: moonshot
+    type: openai-compatible
+    base_url: https://api.moonshot.ai/v1
+    key_env: MOONSHOT_API_KEY
+
+models:
+  - name: kimi-k2.5
+    provider: moonshot
+
+agent:
+  name: Q15
+  models:
+    - kimi-k2.5
+  telegram:
+    token_env: Q15_TELEGRAM_TOKEN
+    allowed_user_ids_env: Q15_TELEGRAM_ALLOWED_USER_IDS
+`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	runtime, err := LoadAgentRuntime(path)
+	if err != nil {
+		t.Fatalf("LoadAgentRuntime() error = %v", err)
+	}
+	if runtime == nil {
+		t.Fatal("LoadAgentRuntime() returned nil runtime")
+	}
+	want := []int64{123456789, 987654321}
+	if len(runtime.TelegramAllowedUserIDs) != len(want) {
+		t.Fatalf(
+			"TelegramAllowedUserIDs len = %d, want %d",
+			len(runtime.TelegramAllowedUserIDs),
+			len(want),
+		)
+	}
+	for i := range want {
+		if runtime.TelegramAllowedUserIDs[i] != want[i] {
+			t.Fatalf("TelegramAllowedUserIDs = %#v, want %#v", runtime.TelegramAllowedUserIDs, want)
+		}
+	}
 }
 
 func TestLoadAgentRuntimeEmptyConfigReturnsNilRuntime(t *testing.T) {
@@ -226,5 +284,33 @@ func TestResolveAgentRuntimeResolvesOpenAICodexProviderWithoutAPIKey(t *testing.
 	}
 	if got := runtime.Models[0].ProviderAPIKey; got != "" {
 		t.Fatalf("ProviderAPIKey = %q, want empty string", got)
+	}
+}
+
+func TestValidateRejectsBothTelegramAllowedUserIDSources(t *testing.T) {
+	cfg := Config{
+		Providers: []Provider{
+			testOpenAICodexProvider("openai"),
+		},
+		Models: []Model{
+			testModel("gpt-5", "openai", "text"),
+		},
+		Agent: &Agent{
+			Name:   "Q15",
+			Models: []string{"gpt-5"},
+			Telegram: Telegram{
+				TokenEnv:          "TEST_TELEGRAM_TOKEN",
+				AllowedUserIDs:    []int64{123456789},
+				AllowedUserIDsEnv: "Q15_TELEGRAM_ALLOWED_USER_IDS",
+			},
+		},
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected validation error for mixed allowed user id sources")
+	}
+	if !strings.Contains(err.Error(), "allowed_user_ids_env are mutually exclusive") {
+		t.Fatalf("unexpected validation error: %v", err)
 	}
 }

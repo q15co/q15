@@ -19,5 +19,4 @@ agent:
   memory_recent_turns: 6
   telegram:
     token_env: Q15_TELEGRAM_TOKEN
-    allowed_user_ids:
-      - 123456789
+    allowed_user_ids_env: Q15_TELEGRAM_ALLOWED_USER_IDS

@@ -25,18 +25,25 @@ The runtime contract is fixed in the binaries. Overlays only need to provide:
 - `ConfigMap/q15-agent-config` data matching `agent-config.yaml`
 - `ConfigMap/q15-proxy-policy` data matching `proxy-policy.yaml`
 - `Secret/q15-agent-env` with keys referenced by the agent config
-  - Example: `MOONSHOT_API_KEY`, `Q15_TELEGRAM_TOKEN`
+  - Example: `MOONSHOT_API_KEY`, `Q15_TELEGRAM_TOKEN`, `Q15_TELEGRAM_ALLOWED_USER_IDS`
 - `Secret/q15-agent-auth` with key `auth.json`
 - `Secret/q15-proxy-env` with keys matching the uppercased proxy secret aliases in
   `proxy-policy.yaml`
   - Example: `GITHUB_TOKEN`
 - PVCs named `q15-workspace`, `q15-memory`, `q15-skills`, `q15-exec-nix`, and `q15-proxy-state`
 
+If multiple models are listed in `agent.models`, q15 tries them in order for one turn and falls back
+to the next entry when the earlier one fails.
+
 `q15-workspace` is the stack's long-term project and working-state PVC. A fresh
 `PersistentVolumeClaim/q15-workspace` may be empty on first deployment; pre-seeding it is optional
 and the empty initial state still satisfies the runtime contract. Operators should preserve that PVC
 across restarts and redeployments and treat it as durable stack state for retention and backup
 planning.
+
+`q15-memory` is also durable stack state. On `q15-agent` startup, stored turn files under
+`/memory/history/turns/` are eagerly upgraded to the latest transcript schema before replay.
+Unreadable files are moved aside under `/memory/history/quarantine/`.
 
 The supported Kubernetes topology is one namespace per q15 stack. Within that namespace, one stack
 contains:

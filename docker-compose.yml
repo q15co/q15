@@ -58,6 +58,7 @@ services:
       GOMAXPROCS: "1"
       MOONSHOT_API_KEY_FILE: /run/secrets/moonshot_api_key
       Q15_TELEGRAM_TOKEN_FILE: /run/secrets/q15_telegram_token
+      Q15_TELEGRAM_ALLOWED_USER_IDS_FILE: /run/secrets/q15_telegram_allowed_user_ids
       Q15_BRAVE_API_KEY: ${Q15_BRAVE_API_KEY-}
     configs:
       - source: q15_agent_config
@@ -79,6 +80,7 @@ services:
     secrets:
       - moonshot_api_key
       - q15_telegram_token
+      - q15_telegram_allowed_user_ids
 
 volumes:
   q15_exec_nix_store:
@@ -98,5 +100,7 @@ secrets:
     file: ./deploy/compose/secrets/moonshot_api_key
   q15_telegram_token:
     file: ./deploy/compose/secrets/q15_telegram_token
+  q15_telegram_allowed_user_ids:
+    file: ./deploy/compose/secrets/q15_telegram_allowed_user_ids
   github_token:
     file: ./deploy/compose/secrets/github_token

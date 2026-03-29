@@ -6,12 +6,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/packages/param"
 	"github.com/q15co/q15/systems/agent/internal/agent"
+	"github.com/q15co/q15/systems/agent/internal/conversation"
 )
 
 // Client adapts an OpenAI-compatible Chat Completions API to the agent model
@@ -21,6 +23,10 @@ type Client struct {
 }
 
 var _ agent.ModelClient = (*Client)(nil)
+
+const openAICompatibleReplayKey = "openai_compatible"
+
+const synthesizedReasoningContent = "Portable reasoning summary unavailable for replay; continuing with prior reasoning state."
 
 // NewClient constructs a Chat Completions-compatible model client.
 func NewClient(baseURL string, apiKey string) (*Client, error) {
@@ -45,7 +51,7 @@ func NewClient(baseURL string, apiKey string) (*Client, error) {
 func (c *Client) Complete(
 	ctx context.Context,
 	model string,
-	messages []agent.Message,
+	messages []conversation.Message,
 	tools []agent.ToolDefinition,
 ) (agent.ModelClientResult, error) {
 	if strings.TrimSpace(model) == "" {
@@ -71,90 +77,77 @@ func (c *Client) Complete(
 	}
 
 	choice := chatCompletion.Choices[0]
-	toolCalls, err := mapToolCalls(choice.Message.ToolCalls)
+	assistantMessage, err := parseAssistantMessage(
+		json.RawMessage(choice.Message.RawJSON()),
+		choice.Message.ToolCalls,
+	)
 	if err != nil {
 		return agent.ModelClientResult{}, err
 	}
 
-	content := strings.TrimSpace(choice.Message.Content)
-	if content == "" {
-		content = strings.TrimSpace(choice.Message.Refusal)
-	}
-
 	return agent.ModelClientResult{
-		Content:      content,
-		ToolCalls:    toolCalls,
+		Messages:     assistantMessage,
 		FinishReason: choice.FinishReason,
-		ProviderRaw:  json.RawMessage(choice.Message.RawJSON()),
 	}, nil
 }
 
-func mapMessages(messages []agent.Message) ([]openai.ChatCompletionMessageParamUnion, error) {
+func mapMessages(
+	messages []conversation.Message,
+) ([]openai.ChatCompletionMessageParamUnion, error) {
 	out := make([]openai.ChatCompletionMessageParamUnion, 0, len(messages))
+	droppedReplayParts := 0
 
-	for i, msg := range messages {
+	for i := 0; i < len(messages); i++ {
+		msg := messages[i]
 		switch msg.Role {
-		case agent.SystemRole:
-			out = append(out, openai.SystemMessage(msg.Content))
-		case agent.UserRole:
-			out = append(out, openai.UserMessage(msg.Content))
-		case agent.AssistantRole:
-			if len(msg.ProviderRaw) > 0 && isAssistantProviderRaw(msg.ProviderRaw) {
-				out = append(
-					out,
-					param.Override[openai.ChatCompletionMessageParamUnion](msg.ProviderRaw),
-				)
-				continue
+		case conversation.SystemRole:
+			out = append(out, openai.SystemMessage(conversation.TextValue(msg)))
+		case conversation.UserRole:
+			out = append(out, openai.UserMessage(conversation.TextValue(msg)))
+		case conversation.AssistantRole:
+			group := []conversation.Message{msg}
+			for i+1 < len(messages) && messages[i+1].Role == conversation.AssistantRole {
+				i++
+				group = append(group, messages[i])
 			}
 
-			toolCalls := mapAssistantToolCalls(msg.ToolCalls)
-			if len(toolCalls) == 0 {
-				out = append(out, openai.AssistantMessage(msg.Content))
+			raw, ok, dropped, err := buildAssistantReplayMessage(group)
+			if err != nil {
+				return nil, fmt.Errorf("message %d: %w", i, err)
+			}
+			droppedReplayParts += dropped
+			if !ok {
 				continue
 			}
-
-			assistant := openai.ChatCompletionAssistantMessageParam{
-				ToolCalls: toolCalls,
+			out = append(out, param.Override[openai.ChatCompletionMessageParamUnion](raw))
+		case conversation.ToolRole:
+			toolParts := 0
+			for _, part := range msg.Parts {
+				if part.Type != conversation.ToolResultPartType {
+					continue
+				}
+				toolParts++
+				if strings.TrimSpace(part.ToolCallID) == "" {
+					return nil, fmt.Errorf("message %d: tool result missing tool call id", i)
+				}
+				out = append(out, openai.ToolMessage(part.Content, part.ToolCallID))
 			}
-			if trimmed := strings.TrimSpace(msg.Content); trimmed != "" {
-				assistant.Content.OfString = param.NewOpt(trimmed)
+			if toolParts == 0 {
+				return nil, fmt.Errorf("message %d: tool message missing tool result part", i)
 			}
-			out = append(out, openai.ChatCompletionMessageParamUnion{
-				OfAssistant: &assistant,
-			})
-		case agent.ToolRole:
-			if strings.TrimSpace(msg.ToolCallID) == "" {
-				return nil, fmt.Errorf("message %d: tool message missing tool call id", i)
-			}
-			out = append(out, openai.ToolMessage(msg.Content, msg.ToolCallID))
 		default:
 			return nil, fmt.Errorf("message %d: unsupported role %q", i, msg.Role)
 		}
 	}
 
+	if droppedReplayParts > 0 {
+		log.Printf(
+			"q15: openai-compatible request dropped unmatched reasoning replay state parts=%d and continued without opaque replay",
+			droppedReplayParts,
+		)
+	}
+
 	return out, nil
-}
-
-func mapAssistantToolCalls(
-	calls []agent.ToolCall,
-) []openai.ChatCompletionMessageToolCallUnionParam {
-	if len(calls) == 0 {
-		return nil
-	}
-
-	out := make([]openai.ChatCompletionMessageToolCallUnionParam, 0, len(calls))
-	for _, call := range calls {
-		out = append(out, openai.ChatCompletionMessageToolCallUnionParam{
-			OfFunction: &openai.ChatCompletionMessageFunctionToolCallParam{
-				ID: call.ID,
-				Function: openai.ChatCompletionMessageFunctionToolCallFunctionParam{
-					Name:      call.Name,
-					Arguments: call.Arguments,
-				},
-			},
-		})
-	}
-	return out
 }
 
 func mapTools(tools []agent.ToolDefinition) []openai.ChatCompletionToolUnionParam {
@@ -191,38 +184,174 @@ func mapTools(tools []agent.ToolDefinition) []openai.ChatCompletionToolUnionPara
 	return out
 }
 
-func mapToolCalls(toolCalls []openai.ChatCompletionMessageToolCallUnion) ([]agent.ToolCall, error) {
-	if len(toolCalls) == 0 {
-		return nil, nil
+func parseAssistantMessage(
+	raw json.RawMessage,
+	toolCalls []openai.ChatCompletionMessageToolCallUnion,
+) ([]conversation.Message, error) {
+	var reasoningText string
+	var reasoningOpaque string
+	if len(raw) > 0 {
+		var probe struct {
+			Content          string `json:"content"`
+			Refusal          string `json:"refusal"`
+			ReasoningContent string `json:"reasoning_content"`
+			ReasoningOpaque  string `json:"reasoning_opaque"`
+		}
+		if err := json.Unmarshal(raw, &probe); err == nil {
+			reasoningText = strings.TrimSpace(probe.ReasoningContent)
+			reasoningOpaque = strings.TrimSpace(probe.ReasoningOpaque)
+			if probe.Content == "" && probe.Refusal != "" {
+				var fallback struct {
+					Content string `json:"content"`
+				}
+				if content := strings.TrimSpace(probe.Refusal); content != "" {
+					fallback.Content = content
+				}
+				_ = fallback
+			}
+		}
 	}
 
-	out := make([]agent.ToolCall, 0, len(toolCalls))
+	content := ""
+	refusal := ""
+	if len(raw) > 0 {
+		var probe struct {
+			Content string `json:"content"`
+			Refusal string `json:"refusal"`
+		}
+		if err := json.Unmarshal(raw, &probe); err == nil {
+			content = strings.TrimSpace(probe.Content)
+			refusal = strings.TrimSpace(probe.Refusal)
+		}
+	}
+	if content == "" {
+		content = refusal
+	}
+
+	parts := make([]conversation.Part, 0, 2+len(toolCalls))
+	if reasoningText != "" || reasoningOpaque != "" {
+		var replay map[string]json.RawMessage
+		if reasoningOpaque != "" {
+			rawReplay, err := json.Marshal(map[string]string{
+				"reasoning_opaque": reasoningOpaque,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("marshal reasoning replay: %w", err)
+			}
+			replay = map[string]json.RawMessage{
+				openAICompatibleReplayKey: rawReplay,
+			}
+		}
+		parts = append(parts, conversation.Reasoning(reasoningText, replay))
+	}
+	if content != "" {
+		parts = append(parts, conversation.Text(content, ""))
+	}
+
 	for _, toolCall := range toolCalls {
 		switch call := toolCall.AsAny().(type) {
 		case openai.ChatCompletionMessageFunctionToolCall:
-			out = append(out, agent.ToolCall{
-				ID:        call.ID,
-				Name:      call.Function.Name,
-				Arguments: call.Function.Arguments,
-			})
+			parts = append(parts, conversation.ToolCall(
+				call.ID,
+				call.Function.Name,
+				call.Function.Arguments,
+			))
 		default:
 			return nil, fmt.Errorf("unsupported tool call type %q", toolCall.Type)
 		}
 	}
 
-	return out, nil
+	if len(parts) == 0 {
+		return nil, nil
+	}
+	return []conversation.Message{conversation.AssistantMessage(parts...)}, nil
 }
 
-func isAssistantProviderRaw(raw json.RawMessage) bool {
+func buildAssistantReplayMessage(
+	messages []conversation.Message,
+) (json.RawMessage, bool, int, error) {
+	text := ""
+	reasoningText := ""
+	reasoningOpaque := ""
+	toolCalls := make([]map[string]any, 0)
+	droppedReplayParts := 0
+
+	for _, msg := range messages {
+		for _, part := range msg.Parts {
+			switch part.Type {
+			case conversation.TextPartType:
+				text += part.Text
+			case conversation.ReasoningPartType:
+				if strings.TrimSpace(part.Text) != "" {
+					if reasoningText == "" {
+						reasoningText = part.Text
+					} else {
+						reasoningText += "\n" + part.Text
+					}
+				}
+				if opaque := extractCompatibleReasoningOpaque(part.Replay); opaque != "" {
+					if reasoningOpaque == "" {
+						reasoningOpaque = opaque
+					}
+				} else if len(part.Replay) > 0 && strings.TrimSpace(part.Text) == "" {
+					droppedReplayParts++
+				}
+			case conversation.ToolCallPartType:
+				toolCalls = append(toolCalls, map[string]any{
+					"id":   part.ID,
+					"type": "function",
+					"function": map[string]any{
+						"name":      part.Name,
+						"arguments": conversation.NormalizePart(part).Arguments,
+					},
+				})
+			}
+		}
+	}
+
+	if len(toolCalls) > 0 && strings.TrimSpace(reasoningText) == "" {
+		reasoningText = synthesizedReasoningContent
+	}
+
+	if strings.TrimSpace(text) == "" && reasoningText == "" && reasoningOpaque == "" &&
+		len(toolCalls) == 0 {
+		return nil, false, droppedReplayParts, nil
+	}
+
+	payload := map[string]any{
+		"role":    "assistant",
+		"content": strings.TrimSpace(text),
+	}
+	if reasoningText != "" {
+		payload["reasoning_content"] = reasoningText
+	}
+	if reasoningOpaque != "" {
+		payload["reasoning_opaque"] = reasoningOpaque
+	}
+	if len(toolCalls) > 0 {
+		payload["tool_calls"] = toolCalls
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return nil, false, droppedReplayParts, fmt.Errorf(
+			"marshal assistant replay message: %w",
+			err,
+		)
+	}
+	return raw, true, droppedReplayParts, nil
+}
+
+func extractCompatibleReasoningOpaque(replay map[string]json.RawMessage) string {
+	raw := replay[openAICompatibleReplayKey]
 	if len(raw) == 0 {
-		return false
+		return ""
 	}
 
 	var probe struct {
-		Role string `json:"role"`
+		ReasoningOpaque string `json:"reasoning_opaque"`
 	}
 	if err := json.Unmarshal(raw, &probe); err != nil {
-		return false
+		return ""
 	}
-	return strings.EqualFold(strings.TrimSpace(probe.Role), "assistant")
+	return strings.TrimSpace(probe.ReasoningOpaque)
 }

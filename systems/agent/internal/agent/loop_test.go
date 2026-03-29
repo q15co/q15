@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/q15co/q15/systems/agent/internal/conversation"
 )
 
 type fakeModelClient struct {
 	results  []ModelClientResult
-	callMsgs [][]Message
+	callMsgs [][]conversation.Message
 }
 
 type failingModelClient struct {
@@ -20,7 +22,7 @@ type failingModelClient struct {
 func (f *fakeModelClient) Complete(
 	ctx context.Context,
 	model string,
-	messages []Message,
+	messages []conversation.Message,
 	tools []ToolDefinition,
 ) (ModelClientResult, error) {
 	_ = ctx
@@ -28,7 +30,7 @@ func (f *fakeModelClient) Complete(
 	_ = tools
 	f.callMsgs = append(f.callMsgs, copyMessages(messages))
 	if len(f.results) == 0 {
-		return ModelClientResult{Content: "ok"}, nil
+		return assistantResult("ok"), nil
 	}
 	out := f.results[0]
 	f.results = f.results[1:]
@@ -38,7 +40,7 @@ func (f *fakeModelClient) Complete(
 func (f *failingModelClient) Complete(
 	ctx context.Context,
 	model string,
-	messages []Message,
+	messages []conversation.Message,
 	tools []ToolDefinition,
 ) (ModelClientResult, error) {
 	_ = ctx
@@ -49,23 +51,26 @@ func (f *failingModelClient) Complete(
 }
 
 type fakeConversationStore struct {
-	loadMessages []Message
+	loadMessages []conversation.Message
 	coreMemory   CoreMemory
 	skillCatalog SkillCatalog
 	appendCalls  int
-	lastAppend   []Message
+	lastAppend   []conversation.Message
 }
 
 func (f *fakeConversationStore) LoadRecentMessages(
 	ctx context.Context,
 	turns int,
-) ([]Message, error) {
+) ([]conversation.Message, error) {
 	_ = ctx
 	_ = turns
 	return copyMessages(f.loadMessages), nil
 }
 
-func (f *fakeConversationStore) AppendTurn(ctx context.Context, messages []Message) error {
+func (f *fakeConversationStore) AppendTurn(
+	ctx context.Context,
+	messages []conversation.Message,
+) error {
 	_ = ctx
 	f.appendCalls++
 	f.lastAppend = copyMessages(messages)
@@ -80,6 +85,37 @@ func (f *fakeConversationStore) LoadCoreMemory(ctx context.Context) (CoreMemory,
 func (f *fakeConversationStore) LoadSkillCatalog(ctx context.Context) (SkillCatalog, error) {
 	_ = ctx
 	return f.skillCatalog, nil
+}
+
+func assistantResult(text string) ModelClientResult {
+	if strings.TrimSpace(text) == "" {
+		return ModelClientResult{}
+	}
+	return ModelClientResult{
+		Messages: []conversation.Message{
+			conversation.AssistantMessage(conversation.Text(text, "")),
+		},
+	}
+}
+
+func toolCallResult(id, name, arguments string) ModelClientResult {
+	return ModelClientResult{
+		Messages: []conversation.Message{
+			conversation.AssistantMessage(conversation.ToolCall(id, name, arguments)),
+		},
+		FinishReason: "tool_calls",
+	}
+}
+
+func messageText(msg conversation.Message) string {
+	return conversation.TextValue(msg)
+}
+
+func firstPart(msg conversation.Message) conversation.Part {
+	if len(msg.Parts) == 0 {
+		return conversation.Part{}
+	}
+	return msg.Parts[0]
 }
 
 func TestDefaultSystemPromptUsesStructuredPromptSections(t *testing.T) {
@@ -121,15 +157,13 @@ func TestDefaultSystemPromptForNamePanicsOnEmptyName(t *testing.T) {
 
 func TestLoopReply_LoadsRecentAndPersistsTurn(t *testing.T) {
 	store := &fakeConversationStore{
-		loadMessages: []Message{
-			{Role: UserRole, Content: "old-question"},
-			{Role: AssistantRole, Content: "old-answer"},
+		loadMessages: []conversation.Message{
+			conversation.UserMessage("old-question"),
+			conversation.AssistantMessage(conversation.Text("old-answer", "")),
 		},
 	}
 	model := &fakeModelClient{
-		results: []ModelClientResult{
-			{Content: "new-answer"},
-		},
+		results: []ModelClientResult{assistantResult("new-answer")},
 	}
 
 	loop := NewLoop(model, nil, []string{"m1"}, DefaultSystemPrompt, store, 5)
@@ -149,14 +183,15 @@ func TestLoopReply_LoadsRecentAndPersistsTurn(t *testing.T) {
 	if len(gotModelInput) != 4 {
 		t.Fatalf("model input len = %d, want 4", len(gotModelInput))
 	}
-	if gotModelInput[0].Role != SystemRole {
+	if gotModelInput[0].Role != conversation.SystemRole {
 		t.Fatalf("model input[0].Role = %q, want system", gotModelInput[0].Role)
 	}
-	if gotModelInput[1].Content != "old-question" || gotModelInput[2].Content != "old-answer" {
+	if messageText(gotModelInput[1]) != "old-question" ||
+		messageText(gotModelInput[2]) != "old-answer" {
 		t.Fatalf("model input missing recent history: %#v", gotModelInput)
 	}
-	if gotModelInput[3].Content != "new-question" {
-		t.Fatalf("model input current user = %q, want new-question", gotModelInput[3].Content)
+	if messageText(gotModelInput[3]) != "new-question" {
+		t.Fatalf("model input current user = %q, want new-question", messageText(gotModelInput[3]))
 	}
 
 	if store.appendCalls != 1 {
@@ -165,10 +200,12 @@ func TestLoopReply_LoadsRecentAndPersistsTurn(t *testing.T) {
 	if len(store.lastAppend) != 2 {
 		t.Fatalf("persisted turn len = %d, want 2", len(store.lastAppend))
 	}
-	if store.lastAppend[0].Role != UserRole || store.lastAppend[0].Content != "new-question" {
+	if store.lastAppend[0].Role != conversation.UserRole ||
+		messageText(store.lastAppend[0]) != "new-question" {
 		t.Fatalf("persisted user message = %#v", store.lastAppend[0])
 	}
-	if store.lastAppend[1].Role != AssistantRole || store.lastAppend[1].Content != "new-answer" {
+	if store.lastAppend[1].Role != conversation.AssistantRole ||
+		messageText(store.lastAppend[1]) != "new-answer" {
 		t.Fatalf("persisted assistant message = %#v", store.lastAppend[1])
 	}
 }
@@ -177,12 +214,8 @@ func TestLoopReply_PersistsToolCallFlow(t *testing.T) {
 	store := &fakeConversationStore{}
 	model := &fakeModelClient{
 		results: []ModelClientResult{
-			{
-				ToolCalls: []ToolCall{
-					{ID: "call-1", Name: "echo", Arguments: `{"value":"x"}`},
-				},
-			},
-			{Content: "final"},
+			toolCallResult("call-1", "echo", `{"value":"x"}`),
+			assistantResult("final"),
 		},
 	}
 
@@ -208,46 +241,131 @@ func TestLoopReply_PersistsToolCallFlow(t *testing.T) {
 	if len(store.lastAppend) != 4 {
 		t.Fatalf("persisted turn len = %d, want 4", len(store.lastAppend))
 	}
-	if store.lastAppend[1].Role != AssistantRole || len(store.lastAppend[1].ToolCalls) != 1 {
+
+	assistantCalls := conversation.ToolCalls([]conversation.Message{store.lastAppend[1]})
+	if store.lastAppend[1].Role != conversation.AssistantRole || len(assistantCalls) != 1 {
 		t.Fatalf("persisted assistant tool call message = %#v", store.lastAppend[1])
 	}
-	if store.lastAppend[2].Role != ToolRole || store.lastAppend[2].Content != "tool-output" {
+
+	toolPart := firstPart(store.lastAppend[2])
+	if store.lastAppend[2].Role != conversation.ToolRole ||
+		toolPart.Type != conversation.ToolResultPartType ||
+		toolPart.Content != "tool-output" ||
+		toolPart.IsError {
 		t.Fatalf("persisted tool message = %#v", store.lastAppend[2])
 	}
-	if store.lastAppend[3].Role != AssistantRole || store.lastAppend[3].Content != "final" {
+	if store.lastAppend[3].Role != conversation.AssistantRole ||
+		messageText(store.lastAppend[3]) != "final" {
 		t.Fatalf("persisted final assistant message = %#v", store.lastAppend[3])
 	}
 }
 
-func TestLoopReply_PersistsAssistantPhase(t *testing.T) {
+func TestLoopReply_PersistsToolErrorsAsErrorResults(t *testing.T) {
+	store := &fakeConversationStore{}
+	model := &fakeModelClient{
+		results: []ModelClientResult{
+			toolCallResult("call-1", "echo", `{"value":"x"}`),
+			assistantResult("final"),
+		},
+	}
+
+	registry, err := NewToolRegistry(&testTool{
+		def: ToolDefinition{Name: "echo"},
+		run: func(context.Context, string) (string, error) {
+			return "", errors.New("boom")
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewToolRegistry() error = %v", err)
+	}
+
+	loop := NewLoop(model, registry, []string{"m1"}, DefaultSystemPrompt, store, 3)
+	if _, err := loop.Reply(context.Background(), "question", nil); err != nil {
+		t.Fatalf("Reply() error = %v", err)
+	}
+
+	toolPart := firstPart(store.lastAppend[2])
+	if toolPart.Type != conversation.ToolResultPartType || !toolPart.IsError {
+		t.Fatalf("tool result part = %#v, want tool_result with is_error", toolPart)
+	}
+	if !strings.Contains(toolPart.Content, "tool error: boom") {
+		t.Fatalf("tool error content = %q", toolPart.Content)
+	}
+}
+
+func TestLoopReply_PersistsAssistantDisposition(t *testing.T) {
 	store := &fakeConversationStore{}
 	model := &fakeModelClient{
 		results: []ModelClientResult{
 			{
-				Content: "working",
-				Phase:   "commentary",
+				Messages: []conversation.Message{
+					conversation.AssistantMessage(
+						conversation.Text("working", conversation.TextDispositionCommentary),
+						conversation.ToolCall("call-1", "echo", `{"value":"x"}`),
+					),
+				},
+			},
+			assistantResult("done"),
+		},
+	}
+
+	registry, err := NewToolRegistry(&testTool{
+		def: ToolDefinition{Name: "echo"},
+		run: func(context.Context, string) (string, error) {
+			return "tool-output", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewToolRegistry() error = %v", err)
+	}
+
+	loop := NewLoop(model, registry, []string{"m1"}, DefaultSystemPrompt, store, 3)
+	if _, err := loop.Reply(context.Background(), "say hi", nil); err != nil {
+		t.Fatalf("Reply() error = %v", err)
+	}
+	if len(store.lastAppend) != 4 {
+		t.Fatalf("persisted turn len = %d, want 4", len(store.lastAppend))
+	}
+	if got := firstPart(store.lastAppend[1]).Disposition; got != conversation.TextDispositionCommentary {
+		t.Fatalf(
+			"persisted assistant disposition = %q, want %q",
+			got,
+			conversation.TextDispositionCommentary,
+		)
+	}
+}
+
+func TestLoopReply_PrefersFinalDispositionOverCommentary(t *testing.T) {
+	store := &fakeConversationStore{}
+	model := &fakeModelClient{
+		results: []ModelClientResult{
+			{
+				Messages: []conversation.Message{
+					conversation.AssistantMessage(
+						conversation.Text("thinking", conversation.TextDispositionCommentary),
+					),
+					conversation.AssistantMessage(
+						conversation.Text("final answer", conversation.TextDispositionFinal),
+					),
+				},
 			},
 		},
 	}
 
 	loop := NewLoop(model, nil, []string{"m1"}, DefaultSystemPrompt, store, 3)
-	if _, err := loop.Reply(context.Background(), "say hi", nil); err != nil {
+	out, err := loop.Reply(context.Background(), "say hi", nil)
+	if err != nil {
 		t.Fatalf("Reply() error = %v", err)
 	}
-	if len(store.lastAppend) != 2 {
-		t.Fatalf("persisted turn len = %d, want 2", len(store.lastAppend))
-	}
-	if got := store.lastAppend[1].Phase; got != "commentary" {
-		t.Fatalf("persisted assistant phase = %q, want %q", got, "commentary")
+	if out != "final answer" {
+		t.Fatalf("Reply() = %q, want %q", out, "final answer")
 	}
 }
 
 func TestLoopReply_DoesNotAppendGenericToolSteeringPromptWhenToolsEnabled(t *testing.T) {
 	store := &fakeConversationStore{}
 	model := &fakeModelClient{
-		results: []ModelClientResult{
-			{Content: "done"},
-		},
+		results: []ModelClientResult{assistantResult("done")},
 	}
 
 	registry, err := NewToolRegistry(&testTool{
@@ -272,16 +390,16 @@ func TestLoopReply_DoesNotAppendGenericToolSteeringPromptWhenToolsEnabled(t *tes
 		t.Fatalf("model calls = %d, want 1", len(model.callMsgs))
 	}
 	last := model.callMsgs[0][len(model.callMsgs[0])-1]
-	if last.Role != UserRole || last.Content != "please check the workspace" {
+	if last.Role != conversation.UserRole || messageText(last) != "please check the workspace" {
 		t.Fatalf("last model message = %#v, want user input as last message", last)
 	}
 	if len(store.lastAppend) != 2 {
 		t.Fatalf("persisted turn len = %d, want 2", len(store.lastAppend))
 	}
 	for i, msg := range model.callMsgs[0] {
-		if msg.Role == SystemRole &&
+		if msg.Role == conversation.SystemRole &&
 			strings.Contains(
-				msg.Content,
+				messageText(msg),
 				"call the relevant tool(s) immediately instead of narrating intent",
 			) {
 			t.Fatalf("model input should not include removed steering prompt, found at index %d", i)
@@ -293,12 +411,8 @@ func TestLoopReply_EmitsProgressEventsInSuccessOrder(t *testing.T) {
 	store := &fakeConversationStore{}
 	model := &fakeModelClient{
 		results: []ModelClientResult{
-			{
-				ToolCalls: []ToolCall{
-					{ID: "call-1", Name: "read_file", Arguments: `{"path":"/workspace/README.md"}`},
-				},
-			},
-			{Content: "done"},
+			toolCallResult("call-1", "read_file", `{"path":"/workspace/README.md"}`),
+			assistantResult("done"),
 		},
 	}
 
@@ -399,9 +513,7 @@ func TestLoopReply_EmitsRunFailedOnModelError(t *testing.T) {
 func TestLoopReply_DoesNotAppendSteeringPromptWithoutTools(t *testing.T) {
 	store := &fakeConversationStore{}
 	model := &fakeModelClient{
-		results: []ModelClientResult{
-			{Content: "plain"},
-		},
+		results: []ModelClientResult{assistantResult("plain")},
 	}
 
 	loop := NewLoop(model, nil, []string{"m1"}, DefaultSystemPrompt, store, 3)
@@ -416,8 +528,12 @@ func TestLoopReply_DoesNotAppendSteeringPromptWithoutTools(t *testing.T) {
 		t.Fatalf("model calls = %d, want 1", len(model.callMsgs))
 	}
 	last := model.callMsgs[0][len(model.callMsgs[0])-1]
-	if last.Role != UserRole {
-		t.Fatalf("last model message role = %q, want %q", last.Role, UserRole)
+	if last.Role != conversation.UserRole {
+		t.Fatalf(
+			"last model message role = %q, want %q",
+			last.Role,
+			conversation.UserRole,
+		)
 	}
 }
 
@@ -425,8 +541,8 @@ func TestLoopReply_RetriesOnceOnEmptyAssistantResponse(t *testing.T) {
 	store := &fakeConversationStore{}
 	model := &fakeModelClient{
 		results: []ModelClientResult{
-			{Content: ""},
-			{Content: "after-retry"},
+			{},
+			assistantResult("after-retry"),
 		},
 	}
 
@@ -446,13 +562,14 @@ func TestLoopReply_RetriesOnceOnEmptyAssistantResponse(t *testing.T) {
 		t.Fatalf("second call should include messages")
 	}
 	last := second[len(second)-1]
-	if last.Role != SystemRole || last.Content != emptyResponseRetrySteeringPrompt {
+	if last.Role != conversation.SystemRole ||
+		messageText(last) != emptyResponseRetrySteeringPrompt {
 		t.Fatalf("second call last message = %#v, want empty-response retry steering prompt", last)
 	}
 	if len(store.lastAppend) != 2 {
 		t.Fatalf("persisted turn len = %d, want 2", len(store.lastAppend))
 	}
-	if store.lastAppend[1].Content != "after-retry" {
+	if messageText(store.lastAppend[1]) != "after-retry" {
 		t.Fatalf("persisted assistant message = %#v", store.lastAppend[1])
 	}
 }
@@ -461,7 +578,7 @@ func TestLoopReply_ReturnsNoTextAfterEmptyRetryExhausted(t *testing.T) {
 	store := &fakeConversationStore{}
 	emptyResults := make([]ModelClientResult, 0, maxEmptyAssistantRetries+1)
 	for i := 0; i < maxEmptyAssistantRetries+1; i++ {
-		emptyResults = append(emptyResults, ModelClientResult{Content: ""})
+		emptyResults = append(emptyResults, ModelClientResult{})
 	}
 	model := &fakeModelClient{
 		results: emptyResults,
@@ -478,11 +595,12 @@ func TestLoopReply_ReturnsNoTextAfterEmptyRetryExhausted(t *testing.T) {
 	if len(model.callMsgs) != maxEmptyAssistantRetries+1 {
 		t.Fatalf("model calls = %d, want %d", len(model.callMsgs), maxEmptyAssistantRetries+1)
 	}
-	if len(store.lastAppend) != 2 {
-		t.Fatalf("persisted turn len = %d, want 2", len(store.lastAppend))
+	if len(store.lastAppend) != 1 {
+		t.Fatalf("persisted turn len = %d, want 1", len(store.lastAppend))
 	}
-	if store.lastAppend[1].Role != AssistantRole || store.lastAppend[1].Content != "" {
-		t.Fatalf("persisted assistant message = %#v", store.lastAppend[1])
+	if store.lastAppend[0].Role != conversation.UserRole ||
+		messageText(store.lastAppend[0]) != "still there?" {
+		t.Fatalf("persisted turn = %#v", store.lastAppend)
 	}
 }
 
@@ -500,9 +618,7 @@ func TestLoopReply_IncludesCoreMemoryInSystemMessage(t *testing.T) {
 		},
 	}
 	model := &fakeModelClient{
-		results: []ModelClientResult{
-			{Content: "ok"},
-		},
+		results: []ModelClientResult{assistantResult("ok")},
 	}
 
 	loop := NewLoop(model, nil, []string{"m1"}, DefaultSystemPrompt, store, 3)
@@ -515,7 +631,7 @@ func TestLoopReply_IncludesCoreMemoryInSystemMessage(t *testing.T) {
 		t.Fatalf("model calls = %d, want 1", len(model.callMsgs))
 	}
 
-	system := model.callMsgs[0][0].Content
+	system := messageText(model.callMsgs[0][0])
 	if !strings.Contains(system, "<core_memory>") {
 		t.Fatalf("system prompt missing core memory section: %q", system)
 	}
@@ -545,7 +661,7 @@ func TestLoopReply_IncludesSkillCatalogInSystemMessage(t *testing.T) {
 		},
 	}
 	model := &fakeModelClient{
-		results: []ModelClientResult{{Content: "ok"}},
+		results: []ModelClientResult{assistantResult("ok")},
 	}
 
 	loop := NewLoop(model, nil, []string{"m1"}, DefaultSystemPrompt, store, 3)
@@ -553,7 +669,7 @@ func TestLoopReply_IncludesSkillCatalogInSystemMessage(t *testing.T) {
 		t.Fatalf("Reply() error = %v", err)
 	}
 
-	system := model.callMsgs[0][0].Content
+	system := messageText(model.callMsgs[0][0])
 	for _, want := range []string{
 		"<skill_catalog>",
 		`<skill name="skill-creator" path="/skills/@builtin/skill-creator/SKILL.md" source="builtin">`,
@@ -587,17 +703,13 @@ func TestLoopReply_AllowsMoreThanTwelveToolCallTurns(t *testing.T) {
 	const toolTurns = 14
 	results := make([]ModelClientResult, 0, toolTurns+1)
 	for i := 0; i < toolTurns; i++ {
-		results = append(results, ModelClientResult{
-			ToolCalls: []ToolCall{
-				{
-					ID:        fmt.Sprintf("call-%d", i),
-					Name:      "echo",
-					Arguments: `{"value":"x"}`,
-				},
-			},
-		})
+		results = append(results, toolCallResult(
+			fmt.Sprintf("call-%d", i),
+			"echo",
+			`{"value":"x"}`,
+		))
 	}
-	results = append(results, ModelClientResult{Content: "done"})
+	results = append(results, assistantResult("done"))
 
 	model := &fakeModelClient{results: results}
 	registry, err := NewToolRegistry(&testTool{
@@ -628,15 +740,11 @@ func TestLoopReply_StopsAtHardLimitAndPersistsInterruptedTurn(t *testing.T) {
 
 	results := make([]ModelClientResult, 0, defaultMaxTurns)
 	for i := 0; i < defaultMaxTurns; i++ {
-		results = append(results, ModelClientResult{
-			ToolCalls: []ToolCall{
-				{
-					ID:        fmt.Sprintf("call-%d", i),
-					Name:      "echo",
-					Arguments: fmt.Sprintf(`{"step":%d}`, i),
-				},
-			},
-		})
+		results = append(results, toolCallResult(
+			fmt.Sprintf("call-%d", i),
+			"echo",
+			fmt.Sprintf(`{"step":%d}`, i),
+		))
 	}
 
 	model := &fakeModelClient{results: results}
@@ -669,11 +777,11 @@ func TestLoopReply_StopsAtHardLimitAndPersistsInterruptedTurn(t *testing.T) {
 		t.Fatalf("persisted turn is empty")
 	}
 	last := store.lastAppend[len(store.lastAppend)-1]
-	if last.Role != AssistantRole {
+	if last.Role != conversation.AssistantRole {
 		t.Fatalf("last persisted role = %q, want assistant", last.Role)
 	}
-	if !strings.Contains(last.Content, "reached maximum tool-call turns (96)") {
-		t.Fatalf("last persisted message = %q", last.Content)
+	if !strings.Contains(messageText(last), "reached maximum tool-call turns (96)") {
+		t.Fatalf("last persisted message = %q", messageText(last))
 	}
 }
 
@@ -682,15 +790,11 @@ func TestLoopReply_StopsOnNoProgressToolLoop(t *testing.T) {
 
 	results := make([]ModelClientResult, 0, defaultToolLoopCriticalThreshold+5)
 	for i := 0; i < defaultToolLoopCriticalThreshold+5; i++ {
-		results = append(results, ModelClientResult{
-			ToolCalls: []ToolCall{
-				{
-					ID:        fmt.Sprintf("call-%d", i),
-					Name:      "echo",
-					Arguments: `{"value":"stuck"}`,
-				},
-			},
-		})
+		results = append(results, toolCallResult(
+			fmt.Sprintf("call-%d", i),
+			"echo",
+			`{"value":"stuck"}`,
+		))
 	}
 
 	model := &fakeModelClient{results: results}
@@ -723,7 +827,7 @@ func TestLoopReply_StopsOnNoProgressToolLoop(t *testing.T) {
 		t.Fatalf("AppendTurn calls = %d, want 1", store.appendCalls)
 	}
 	last := store.lastAppend[len(store.lastAppend)-1]
-	if !strings.Contains(last.Content, "detected repeated tool-call loop") {
-		t.Fatalf("last persisted message = %q", last.Content)
+	if !strings.Contains(messageText(last), "detected repeated tool-call loop") {
+		t.Fatalf("last persisted message = %q", messageText(last))
 	}
 }

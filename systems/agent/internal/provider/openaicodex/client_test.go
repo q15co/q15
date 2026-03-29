@@ -7,20 +7,23 @@ import (
 
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/q15co/q15/systems/agent/internal/agent"
+	"github.com/q15co/q15/systems/agent/internal/conversation"
 )
 
 func TestMapMessagesAndTools(t *testing.T) {
-	input, instructions, err := mapMessages([]agent.Message{
-		{Role: agent.SystemRole, Content: "sys"},
-		{Role: agent.UserRole, Content: "hello"},
-		{
-			Role:    agent.AssistantRole,
-			Content: "calling tool",
-			ToolCalls: []agent.ToolCall{
-				{ID: "call-1", Name: "shell", Arguments: `{"cmd":"pwd"}`},
-			},
-		},
-		{Role: agent.ToolRole, ToolCallID: "call-1", Content: "ok"},
+	input, instructions, err := mapMessages([]conversation.Message{
+		conversation.SystemMessage("sys"),
+		conversation.UserMessage("hello"),
+		conversation.AssistantMessage(
+			conversation.Reasoning("portable summary", map[string]json.RawMessage{
+				openAIResponsesReplayKey: json.RawMessage(
+					`{"type":"reasoning","encrypted_content":"abc"}`,
+				),
+			}),
+			conversation.Text("calling tool", conversation.TextDispositionCommentary),
+			conversation.ToolCall("call-1", "shell", `{"cmd":"pwd"}`),
+		),
+		conversation.ToolResultMessage("call-1", "ok", false),
 	})
 	if err != nil {
 		t.Fatalf("mapMessages error = %v", err)
@@ -28,22 +31,37 @@ func TestMapMessagesAndTools(t *testing.T) {
 	if instructions != "sys" {
 		t.Fatalf("instructions = %q, want %q", instructions, "sys")
 	}
-	if len(input) != 4 {
-		t.Fatalf("input len = %d, want 4", len(input))
+	if len(input) != 5 {
+		t.Fatalf("input len = %d, want 5", len(input))
 	}
 
 	if got := input[0].OfMessage; got == nil || got.Role != responses.EasyInputMessageRoleUser {
 		t.Fatalf("input[0] should be user message: %#v", input[0])
 	}
-	if got := input[1].OfMessage; got == nil ||
-		got.Role != responses.EasyInputMessageRoleAssistant {
-		t.Fatalf("input[1] should be assistant message: %#v", input[1])
+
+	reasoningJSON := marshalInputItemToString(t, input[1])
+	if !strings.Contains(reasoningJSON, `"type":"reasoning"`) ||
+		!strings.Contains(reasoningJSON, `"encrypted_content":"abc"`) {
+		t.Fatalf("input[1] should be reasoning replay item: %s", reasoningJSON)
 	}
-	if got := input[2].OfFunctionCall; got == nil || got.CallID != "call-1" {
-		t.Fatalf("input[2] should be function call with call-1: %#v", input[2])
+
+	assistantJSON := marshalInputItemToString(t, input[2])
+	for _, want := range []string{
+		`"type":"message"`,
+		`"role":"assistant"`,
+		`"phase":"commentary"`,
+		`"text":"calling tool"`,
+	} {
+		if !strings.Contains(assistantJSON, want) {
+			t.Fatalf("input[2] missing %q: %s", want, assistantJSON)
+		}
 	}
-	if got := input[3].OfFunctionCallOutput; got == nil || got.CallID != "call-1" {
-		t.Fatalf("input[3] should be function call output with call-1: %#v", input[3])
+
+	if got := input[3].OfFunctionCall; got == nil || got.CallID != "call-1" {
+		t.Fatalf("input[3] should be function call with call-1: %#v", input[3])
+	}
+	if got := input[4].OfFunctionCallOutput; got == nil || got.CallID != "call-1" {
+		t.Fatalf("input[4] should be function call output with call-1: %#v", input[4])
 	}
 
 	tools := mapTools([]agent.ToolDefinition{
@@ -71,10 +89,10 @@ func TestMapMessagesAndTools(t *testing.T) {
 }
 
 func TestMapMessagesConcatenatesSystemInstructions(t *testing.T) {
-	_, instructions, err := mapMessages([]agent.Message{
-		{Role: agent.SystemRole, Content: "base"},
-		{Role: agent.UserRole, Content: "hello"},
-		{Role: agent.SystemRole, Content: "steering"},
+	_, instructions, err := mapMessages([]conversation.Message{
+		conversation.SystemMessage("base"),
+		conversation.UserMessage("hello"),
+		conversation.SystemMessage("steering"),
 	})
 	if err != nil {
 		t.Fatalf("mapMessages() error = %v", err)
@@ -84,13 +102,11 @@ func TestMapMessagesConcatenatesSystemInstructions(t *testing.T) {
 	}
 }
 
-func TestMapMessagesPreservesAssistantPhaseOnReplay(t *testing.T) {
-	input, _, err := mapMessages([]agent.Message{
-		{
-			Role:    agent.AssistantRole,
-			Content: "resumed assistant message",
-			Phase:   "commentary",
-		},
+func TestMapMessagesPreservesAssistantDispositionOnReplay(t *testing.T) {
+	input, _, err := mapMessages([]conversation.Message{
+		conversation.AssistantMessage(
+			conversation.Text("resumed assistant message", conversation.TextDispositionCommentary),
+		),
 	})
 	if err != nil {
 		t.Fatalf("mapMessages() error = %v", err)
@@ -99,11 +115,7 @@ func TestMapMessagesPreservesAssistantPhaseOnReplay(t *testing.T) {
 		t.Fatalf("input len = %d, want 1", len(input))
 	}
 
-	data, err := json.Marshal(input[0])
-	if err != nil {
-		t.Fatalf("json.Marshal(input[0]) error = %v", err)
-	}
-	body := string(data)
+	body := marshalInputItemToString(t, input[0])
 	for _, want := range []string{
 		`"role":"assistant"`,
 		`"phase":"commentary"`,
@@ -115,34 +127,61 @@ func TestMapMessagesPreservesAssistantPhaseOnReplay(t *testing.T) {
 	}
 }
 
-func TestParseResponseContentAndToolCalls(t *testing.T) {
-	resp := &responses.Response{
-		Status: "completed",
-		Output: []responses.ResponseOutputItemUnion{
+func TestParseResponseContentToolCallsReasoningAndPhase(t *testing.T) {
+	var resp responses.Response
+	if err := json.Unmarshal([]byte(`{
+		"status": "completed",
+		"output": [
 			{
-				Type: "message",
-				Content: []responses.ResponseOutputMessageContentUnion{
-					{Type: "output_text", Text: "hello"},
-				},
+				"type": "reasoning",
+				"id": "rs_123",
+				"encrypted_content": "abc",
+				"summary": [{"type": "summary_text", "text": "portable summary"}]
 			},
 			{
-				Type:      "function_call",
-				CallID:    "call-1",
-				Name:      "shell",
-				Arguments: `{"cmd":"ls"}`,
+				"type": "message",
+				"role": "assistant",
+				"phase": "commentary",
+				"content": [{"type": "output_text", "text": "hello"}]
 			},
-		},
+			{
+				"type": "function_call",
+				"call_id": "call-1",
+				"name": "shell",
+				"arguments": "{\"cmd\":\"ls\"}"
+			}
+		]
+	}`), &resp); err != nil {
+		t.Fatalf("json.Unmarshal(response) error = %v", err)
 	}
 
-	got := parseResponse(resp)
-	if got.Content != "hello" {
-		t.Fatalf("content = %q, want %q", got.Content, "hello")
+	got := parseResponse(&resp)
+	if len(got.Messages) != 3 {
+		t.Fatalf("messages len = %d, want 3", len(got.Messages))
 	}
-	if len(got.ToolCalls) != 1 {
-		t.Fatalf("tool calls len = %d, want 1", len(got.ToolCalls))
+	if got.Messages[0].Parts[0].Type != conversation.ReasoningPartType ||
+		got.Messages[0].Parts[0].Text != "portable summary" {
+		t.Fatalf("reasoning message = %#v", got.Messages[0])
 	}
-	if got.ToolCalls[0].ID != "call-1" || got.ToolCalls[0].Name != "shell" {
-		t.Fatalf("unexpected tool call: %#v", got.ToolCalls[0])
+	if string(got.Messages[0].Parts[0].Replay[openAIResponsesReplayKey]) == "" {
+		t.Fatalf("reasoning replay missing: %#v", got.Messages[0].Parts[0])
+	}
+	if got.Messages[1].Parts[0].Type != conversation.TextPartType ||
+		got.Messages[1].Parts[0].Disposition != conversation.TextDispositionCommentary {
+		t.Fatalf("assistant text message = %#v", got.Messages[1])
+	}
+	if conversation.FinalAnswer(got.Messages) != "" {
+		t.Fatalf(
+			"FinalAnswer() = %q, want empty for commentary-only text",
+			conversation.FinalAnswer(got.Messages),
+		)
+	}
+	calls := conversation.ToolCalls(got.Messages)
+	if len(calls) != 1 {
+		t.Fatalf("tool calls len = %d, want 1", len(calls))
+	}
+	if calls[0].ID != "call-1" || calls[0].Name != "shell" {
+		t.Fatalf("unexpected tool call: %#v", calls[0])
 	}
 	if got.FinishReason != "tool_calls" {
 		t.Fatalf("finish reason = %q, want %q", got.FinishReason, "tool_calls")
@@ -166,52 +205,58 @@ func TestParseResponseIncompleteMapsToLengthFinishReason(t *testing.T) {
 	if got.FinishReason != "length" {
 		t.Fatalf("finish reason = %q, want %q", got.FinishReason, "length")
 	}
-	if got.Content != "partial" {
-		t.Fatalf("content = %q, want %q", got.Content, "partial")
+	if conversation.FinalAnswer(got.Messages) != "partial" {
+		t.Fatalf("FinalAnswer() = %q, want %q", conversation.FinalAnswer(got.Messages), "partial")
 	}
 }
 
-func TestParseResponsePreservesAssistantPhaseAndRawMessage(t *testing.T) {
-	var resp responses.Response
+func TestMergeResultWithStreamSnapshotFillsMissingReasoningSummary(t *testing.T) {
+	snapshot := newStreamSnapshot()
+
+	var evt responses.ResponseStreamEventUnion
 	if err := json.Unmarshal([]byte(`{
-		"status": "completed",
-		"output": [
-			{
-				"type": "message",
-				"role": "assistant",
-				"phase": "commentary",
-				"content": [{"type": "output_text", "text": "hello"}]
-			}
-		]
-	}`), &resp); err != nil {
-		t.Fatalf("json.Unmarshal(response) error = %v", err)
+		"type": "response.reasoning_summary_text.done",
+		"item_id": "rs_123",
+		"output_index": 0,
+		"sequence_number": 1,
+		"summary_index": 0,
+		"text": "portable summary from stream"
+	}`), &evt); err != nil {
+		t.Fatalf("json.Unmarshal(event) error = %v", err)
+	}
+	snapshot.Record(evt)
+
+	result := agent.ModelClientResult{
+		Messages: []conversation.Message{
+			conversation.AssistantMessage(
+				conversation.Reasoning("", map[string]json.RawMessage{
+					openAIResponsesReplayKey: json.RawMessage(
+						`{"id":"rs_123","type":"reasoning","encrypted_content":"abc","summary":[]}`,
+					),
+				}),
+			),
+		},
 	}
 
-	got := parseResponse(&resp)
-	if got.Content != "hello" {
-		t.Fatalf("content = %q, want %q", got.Content, "hello")
+	got := mergeResultWithStreamSnapshot(result, snapshot)
+	if len(got.Messages) != 1 || len(got.Messages[0].Parts) != 1 {
+		t.Fatalf("messages = %#v", got.Messages)
 	}
-	if got.Phase != "commentary" {
-		t.Fatalf("phase = %q, want %q", got.Phase, "commentary")
-	}
-	var raw struct {
-		Phase string `json:"phase"`
-		Role  string `json:"role"`
-	}
-	if err := json.Unmarshal(got.ProviderRaw, &raw); err != nil {
-		t.Fatalf("json.Unmarshal(provider raw) error = %v", err)
-	}
-	if raw.Role != "assistant" || raw.Phase != "commentary" {
-		t.Fatalf("provider raw = %#v, want assistant commentary", raw)
+	if got.Messages[0].Parts[0].Text != "portable summary from stream" {
+		t.Fatalf(
+			"reasoning text = %q, want %q",
+			got.Messages[0].Parts[0].Text,
+			"portable summary from stream",
+		)
 	}
 }
 
-func TestBuildRequestParamsSetsToolChoiceAndParallelToolCalls(t *testing.T) {
+func TestBuildRequestParamsSetsToolChoiceParallelCallsAndReasoningConfig(t *testing.T) {
 	params, err := buildRequestParams(
 		"gpt-5-codex",
-		[]agent.Message{
-			{Role: agent.SystemRole, Content: "sys"},
-			{Role: agent.UserRole, Content: "hello"},
+		[]conversation.Message{
+			conversation.SystemMessage("sys"),
+			conversation.UserMessage("hello"),
 		},
 		[]agent.ToolDefinition{
 			{
@@ -249,13 +294,24 @@ func TestBuildRequestParamsSetsToolChoiceAndParallelToolCalls(t *testing.T) {
 	if got := body["parallel_tool_calls"]; got != true {
 		t.Fatalf("parallel_tool_calls = %#v, want true", got)
 	}
+	include, ok := body["include"].([]any)
+	if !ok || len(include) != 1 || include[0] != "reasoning.encrypted_content" {
+		t.Fatalf("include = %#v, want reasoning.encrypted_content", body["include"])
+	}
+	reasoning, ok := body["reasoning"].(map[string]any)
+	if !ok {
+		t.Fatalf("reasoning = %#v, want object", body["reasoning"])
+	}
+	if got := reasoning["summary"]; got != "auto" {
+		t.Fatalf("reasoning.summary = %#v, want %q", got, "auto")
+	}
 }
 
 func TestBuildRequestParamsUsesDefaultInstructionsWhenMissingSystemMessage(t *testing.T) {
 	params, err := buildRequestParams(
 		"gpt-5-codex",
-		[]agent.Message{
-			{Role: agent.UserRole, Content: "hello"},
+		[]conversation.Message{
+			conversation.UserMessage("hello"),
 		},
 		nil,
 	)
@@ -386,13 +442,11 @@ func TestStreamSnapshotRecordsTextRefusalAndToolCalls(t *testing.T) {
 		ItemID: "msg-1",
 		Delta:  "Hello ",
 	})
-	// Done text for the same item should be ignored when deltas were already seen.
 	snapshot.Record(responses.ResponseStreamEventUnion{
 		Type:   "response.output_text.done",
 		ItemID: "msg-1",
 		Text:   "Hello ",
 	})
-	// Done text for a different item should still be captured.
 	snapshot.Record(responses.ResponseStreamEventUnion{
 		Type:   "response.output_text.done",
 		ItemID: "msg-2",
@@ -447,11 +501,15 @@ func TestMergeResultWithStreamSnapshotUsesSnapshotFallback(t *testing.T) {
 	})
 
 	result := mergeResultWithStreamSnapshot(agent.ModelClientResult{}, snapshot)
-	if result.Content != "Recovered text" {
-		t.Fatalf("content = %q, want %q", result.Content, "Recovered text")
+	if conversation.FinalAnswer(result.Messages) != "Recovered text" {
+		t.Fatalf(
+			"FinalAnswer() = %q, want %q",
+			conversation.FinalAnswer(result.Messages),
+			"Recovered text",
+		)
 	}
-	if len(result.ToolCalls) != 1 {
-		t.Fatalf("tool calls len = %d, want 1", len(result.ToolCalls))
+	if len(conversation.ToolCalls(result.Messages)) != 1 {
+		t.Fatalf("tool calls len = %d, want 1", len(conversation.ToolCalls(result.Messages)))
 	}
 	if result.FinishReason != "tool_calls" {
 		t.Fatalf("finish reason = %q, want %q", result.FinishReason, "tool_calls")
@@ -467,15 +525,27 @@ func TestMergeResultWithStreamSnapshotPreservesParsedContent(t *testing.T) {
 	})
 
 	result := mergeResultWithStreamSnapshot(agent.ModelClientResult{
-		Content:      "parsed",
+		Messages: []conversation.Message{
+			conversation.AssistantMessage(conversation.Text("parsed", "")),
+		},
 		FinishReason: "stop",
 	}, snapshot)
-	if result.Content != "parsed" {
-		t.Fatalf("content = %q, want %q", result.Content, "parsed")
+	if conversation.FinalAnswer(result.Messages) != "parsed" {
+		t.Fatalf("FinalAnswer() = %q, want %q", conversation.FinalAnswer(result.Messages), "parsed")
 	}
-	if len(result.ToolCalls) != 0 {
-		t.Fatalf("tool calls len = %d, want 0", len(result.ToolCalls))
+	if len(conversation.ToolCalls(result.Messages)) != 0 {
+		t.Fatalf("tool calls len = %d, want 0", len(conversation.ToolCalls(result.Messages)))
 	}
+}
+
+func marshalInputItemToString(t *testing.T, item responses.ResponseInputItemUnionParam) string {
+	t.Helper()
+
+	data, err := json.Marshal(item)
+	if err != nil {
+		t.Fatalf("json.Marshal(item) error = %v", err)
+	}
+	return string(data)
 }
 
 func marshalParamsToMap(t *testing.T, params responses.ResponseNewParams) map[string]any {

@@ -5,20 +5,25 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/packages/param"
 	"github.com/openai/openai-go/v3/responses"
+	"github.com/openai/openai-go/v3/shared"
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/auth"
+	"github.com/q15co/q15/systems/agent/internal/conversation"
 )
 
 const (
 	codexBaseURL    = "https://chatgpt.com/backend-api/codex"
 	codexOriginator = "codex_cli_rs"
 	codexBetaHeader = "responses=experimental"
+
+	openAIResponsesReplayKey = "openai_responses"
 )
 
 type tokenSource func(context.Context) (token string, accountID string, err error)
@@ -48,7 +53,7 @@ func NewClient() (*Client, error) {
 func (c *Client) Complete(
 	ctx context.Context,
 	model string,
-	messages []agent.Message,
+	messages []conversation.Message,
 	tools []agent.ToolDefinition,
 ) (agent.ModelClientResult, error) {
 	if strings.TrimSpace(model) == "" {
@@ -120,7 +125,7 @@ func (c *Client) Complete(
 
 func buildRequestParams(
 	model string,
-	messages []agent.Message,
+	messages []conversation.Message,
 	tools []agent.ToolDefinition,
 ) (responses.ResponseNewParams, error) {
 	input, instructions, err := mapMessages(messages)
@@ -139,6 +144,12 @@ func buildRequestParams(
 		},
 		Instructions: openai.Opt(instructions),
 		Store:        openai.Opt(false),
+		Include: []responses.ResponseIncludable{
+			responses.ResponseIncludableReasoningEncryptedContent,
+		},
+		Reasoning: shared.ReasoningParam{
+			Summary: shared.ReasoningSummaryAuto,
+		},
 	}
 	mappedTools := mapTools(tools)
 	if len(mappedTools) > 0 {
@@ -151,85 +162,99 @@ func buildRequestParams(
 	return params, nil
 }
 
-func mapMessages(messages []agent.Message) (responses.ResponseInputParam, string, error) {
+func mapMessages(messages []conversation.Message) (responses.ResponseInputParam, string, error) {
 	input := make(responses.ResponseInputParam, 0, len(messages))
 	instructionsParts := make([]string, 0, 1)
+	droppedReplayParts := 0
 
 	for i, msg := range messages {
 		switch msg.Role {
-		case agent.SystemRole:
-			if trimmed := strings.TrimSpace(msg.Content); trimmed != "" {
+		case conversation.SystemRole:
+			if trimmed := strings.TrimSpace(messageText(msg)); trimmed != "" {
 				instructionsParts = append(instructionsParts, trimmed)
 			}
-		case agent.UserRole:
-			if strings.TrimSpace(msg.ToolCallID) != "" {
-				input = append(input, responses.ResponseInputItemUnionParam{
-					OfFunctionCallOutput: &responses.ResponseInputItemFunctionCallOutputParam{
-						CallID: msg.ToolCallID,
-						Output: responses.ResponseInputItemFunctionCallOutputOutputUnionParam{
-							OfString: openai.Opt(msg.Content),
-						},
-					},
-				})
-				continue
-			}
-
+		case conversation.UserRole:
 			input = append(input, responses.ResponseInputItemUnionParam{
 				OfMessage: &responses.EasyInputMessageParam{
 					Role: responses.EasyInputMessageRoleUser,
 					Content: responses.EasyInputMessageContentUnionParam{
-						OfString: openai.Opt(msg.Content),
+						OfString: openai.Opt(messageText(msg)),
 					},
 				},
 			})
-		case agent.AssistantRole:
-			if raw, ok, err := buildAssistantReplayMessage(msg); err != nil {
-				return nil, "", err
-			} else if ok {
-				input = append(input, param.Override[responses.ResponseInputItemUnionParam](raw))
-			} else if trimmed := strings.TrimSpace(msg.Content); trimmed != "" {
+		case conversation.AssistantRole:
+			for _, part := range msg.Parts {
+				part = conversation.NormalizePart(part)
+				switch part.Type {
+				case conversation.TextPartType:
+					raw, ok, err := buildAssistantTextReplayMessage(part)
+					if err != nil {
+						return nil, "", fmt.Errorf("message %d: %w", i, err)
+					}
+					if ok {
+						input = append(
+							input,
+							param.Override[responses.ResponseInputItemUnionParam](raw),
+						)
+					}
+				case conversation.ReasoningPartType:
+					raw, ok, dropped, err := buildReasoningReplayItem(part)
+					if err != nil {
+						return nil, "", fmt.Errorf("message %d: %w", i, err)
+					}
+					droppedReplayParts += dropped
+					if ok {
+						input = append(
+							input,
+							param.Override[responses.ResponseInputItemUnionParam](raw),
+						)
+					}
+				case conversation.ToolCallPartType:
+					if strings.TrimSpace(part.Name) == "" {
+						return nil, "", fmt.Errorf("message %d: tool call name is required", i)
+					}
+					input = append(input, responses.ResponseInputItemUnionParam{
+						OfFunctionCall: &responses.ResponseFunctionToolCallParam{
+							CallID:    part.ID,
+							Name:      part.Name,
+							Arguments: part.Arguments,
+						},
+					})
+				}
+			}
+		case conversation.ToolRole:
+			toolParts := 0
+			for _, part := range msg.Parts {
+				part = conversation.NormalizePart(part)
+				if part.Type != conversation.ToolResultPartType {
+					continue
+				}
+				toolParts++
+				if strings.TrimSpace(part.ToolCallID) == "" {
+					return nil, "", fmt.Errorf("message %d: tool result missing tool call id", i)
+				}
 				input = append(input, responses.ResponseInputItemUnionParam{
-					OfMessage: &responses.EasyInputMessageParam{
-						Role: responses.EasyInputMessageRoleAssistant,
-						Content: responses.EasyInputMessageContentUnionParam{
-							OfString: openai.Opt(trimmed),
+					OfFunctionCallOutput: &responses.ResponseInputItemFunctionCallOutputParam{
+						CallID: part.ToolCallID,
+						Output: responses.ResponseInputItemFunctionCallOutputOutputUnionParam{
+							OfString: openai.Opt(part.Content),
 						},
 					},
 				})
 			}
-
-			for _, tc := range msg.ToolCalls {
-				name := strings.TrimSpace(tc.Name)
-				if name == "" {
-					return nil, "", fmt.Errorf("message %d: tool call name is required", i)
-				}
-				args := strings.TrimSpace(tc.Arguments)
-				if args == "" {
-					args = "{}"
-				}
-				input = append(input, responses.ResponseInputItemUnionParam{
-					OfFunctionCall: &responses.ResponseFunctionToolCallParam{
-						CallID:    tc.ID,
-						Name:      name,
-						Arguments: args,
-					},
-				})
+			if toolParts == 0 {
+				return nil, "", fmt.Errorf("message %d: tool message missing tool result part", i)
 			}
-		case agent.ToolRole:
-			if strings.TrimSpace(msg.ToolCallID) == "" {
-				return nil, "", fmt.Errorf("message %d: tool message missing tool call id", i)
-			}
-			input = append(input, responses.ResponseInputItemUnionParam{
-				OfFunctionCallOutput: &responses.ResponseInputItemFunctionCallOutputParam{
-					CallID: msg.ToolCallID,
-					Output: responses.ResponseInputItemFunctionCallOutputOutputUnionParam{
-						OfString: openai.Opt(msg.Content),
-					},
-				},
-			})
 		default:
 			return nil, "", fmt.Errorf("message %d: unsupported role %q", i, msg.Role)
 		}
+	}
+
+	if droppedReplayParts > 0 {
+		log.Printf(
+			"q15: openai-responses request dropped unmatched reasoning replay state parts=%d and continued without opaque replay",
+			droppedReplayParts,
+		)
 	}
 
 	return input, strings.Join(instructionsParts, "\n\n"), nil
@@ -276,35 +301,18 @@ func parseResponse(resp *responses.Response) agent.ModelClientResult {
 		}
 	}
 
-	content := strings.TrimSpace(resp.OutputText())
-	assistantPhase := ""
-	var assistantRaw json.RawMessage
-	var toolCalls []agent.ToolCall
-	if len(resp.Output) > 0 {
-		toolCalls = make([]agent.ToolCall, 0)
-	}
+	messages := make([]conversation.Message, 0, len(resp.Output))
+	toolCalls := 0
 
 	for _, item := range resp.Output {
 		switch item.Type {
 		case "message":
-			if raw, phase, ok := responseAssistantMessageRaw(item); ok {
-				assistantRaw = raw
-				if phase != "" {
-					assistantPhase = phase
-				}
+			if msg, ok := parseAssistantMessageItem(item); ok {
+				messages = append(messages, msg)
 			}
-			if content != "" {
-				continue
-			}
-			for _, part := range item.Content {
-				switch part.Type {
-				case "output_text":
-					content = strings.TrimSpace(content + part.Text)
-				case "refusal":
-					if content == "" {
-						content = strings.TrimSpace(part.Refusal)
-					}
-				}
+		case "reasoning":
+			if msg, ok := parseReasoningItem(item); ok {
+				messages = append(messages, msg)
 			}
 		case "function_call":
 			name := strings.TrimSpace(item.Name)
@@ -315,16 +323,15 @@ func parseResponse(resp *responses.Response) agent.ModelClientResult {
 			if args == "" {
 				args = "{}"
 			}
-			toolCalls = append(toolCalls, agent.ToolCall{
-				ID:        item.CallID,
-				Name:      name,
-				Arguments: args,
-			})
+			toolCalls++
+			messages = append(messages, conversation.AssistantMessage(
+				conversation.ToolCall(item.CallID, name, args),
+			))
 		}
 	}
 
 	finishReason := "stop"
-	if len(toolCalls) > 0 {
+	if toolCalls > 0 {
 		finishReason = "tool_calls"
 	}
 	if resp.Status == responses.ResponseStatusIncomplete {
@@ -332,25 +339,14 @@ func parseResponse(resp *responses.Response) agent.ModelClientResult {
 	}
 
 	return agent.ModelClientResult{
-		Content:      content,
-		Phase:        assistantPhase,
-		ToolCalls:    toolCalls,
+		Messages:     messages,
 		FinishReason: finishReason,
-		ProviderRaw:  assistantRaw,
 	}
 }
 
-func buildAssistantReplayMessage(msg agent.Message) (json.RawMessage, bool, error) {
-	phase := strings.TrimSpace(msg.Phase)
-	if phase == "" {
-		return nil, false, nil
-	}
-
-	content := strings.TrimSpace(msg.Content)
-	if content == "" {
-		if isAssistantResponseOutputMessage(msg.ProviderRaw) {
-			return append(json.RawMessage(nil), msg.ProviderRaw...), true, nil
-		}
+func buildAssistantTextReplayMessage(part conversation.Part) (json.RawMessage, bool, error) {
+	text := strings.TrimSpace(part.Text)
+	if text == "" {
 		return nil, false, nil
 	}
 
@@ -360,71 +356,177 @@ func buildAssistantReplayMessage(msg agent.Message) (json.RawMessage, bool, erro
 		"content": []map[string]any{
 			{
 				"type": "output_text",
-				"text": content,
+				"text": text,
 			},
 		},
-		"phase": phase,
+	}
+	switch part.Disposition {
+	case conversation.TextDispositionCommentary:
+		payload["phase"] = "commentary"
+	case conversation.TextDispositionFinal:
+		payload["phase"] = "final_answer"
 	}
 	raw, err := json.Marshal(payload)
 	if err != nil {
-		return nil, false, fmt.Errorf("marshal assistant replay message: %w", err)
+		return nil, false, fmt.Errorf("marshal assistant text replay message: %w", err)
 	}
 	return raw, true, nil
 }
 
-func responseAssistantMessageRaw(
-	item responses.ResponseOutputItemUnion,
-) (json.RawMessage, string, bool) {
-	raw := strings.TrimSpace(item.RawJSON())
-	if raw == "" {
-		return nil, "", false
+func buildReasoningReplayItem(part conversation.Part) (json.RawMessage, bool, int, error) {
+	if raw := part.Replay[openAIResponsesReplayKey]; len(raw) > 0 {
+		return append(json.RawMessage(nil), raw...), true, 0, nil
+	}
+	if strings.TrimSpace(part.Text) == "" {
+		if len(part.Replay) > 0 {
+			return nil, false, 1, nil
+		}
+		return nil, false, 0, nil
 	}
 
+	payload := map[string]any{
+		"type": "reasoning",
+		"summary": []map[string]any{
+			{
+				"type": "summary_text",
+				"text": strings.TrimSpace(part.Text),
+			},
+		},
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return nil, false, 0, fmt.Errorf("marshal reasoning replay item: %w", err)
+	}
+	return raw, true, 0, nil
+}
+
+func parseAssistantMessageItem(
+	item responses.ResponseOutputItemUnion,
+) (conversation.Message, bool) {
+	disposition := responseDisposition(item.RawJSON())
+	parts := make([]conversation.Part, 0, len(item.Content))
+	for _, part := range item.Content {
+		switch part.Type {
+		case "output_text":
+			if strings.TrimSpace(part.Text) == "" {
+				continue
+			}
+			parts = append(parts, conversation.Text(part.Text, disposition))
+		case "refusal":
+			if strings.TrimSpace(part.Refusal) == "" {
+				continue
+			}
+			parts = append(parts, conversation.Text(part.Refusal, disposition))
+		}
+	}
+	if len(parts) == 0 {
+		return conversation.Message{}, false
+	}
+	return conversation.AssistantMessage(parts...), true
+}
+
+func parseReasoningItem(item responses.ResponseOutputItemUnion) (conversation.Message, bool) {
+	text := extractReasoningText(item)
+	replay := map[string]json.RawMessage(nil)
+	if raw := strings.TrimSpace(item.RawJSON()); raw != "" {
+		replay = map[string]json.RawMessage{
+			openAIResponsesReplayKey: json.RawMessage(raw),
+		}
+	}
+	if strings.TrimSpace(text) == "" && len(replay) == 0 {
+		return conversation.Message{}, false
+	}
+	return conversation.AssistantMessage(conversation.Reasoning(text, replay)), true
+}
+
+func extractReasoningText(item responses.ResponseOutputItemUnion) string {
+	var builder strings.Builder
+	for _, part := range item.Summary {
+		if text := strings.TrimSpace(part.Text); text != "" {
+			if builder.Len() > 0 {
+				builder.WriteString("\n")
+			}
+			builder.WriteString(text)
+		}
+	}
+	if builder.Len() > 0 {
+		return builder.String()
+	}
+
+	raw := strings.TrimSpace(item.RawJSON())
+	if raw == "" {
+		return ""
+	}
 	var probe struct {
-		Type  string `json:"type"`
-		Role  string `json:"role"`
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal([]byte(raw), &probe); err != nil {
+		return ""
+	}
+	for _, part := range probe.Content {
+		if part.Type != "reasoning_text" {
+			continue
+		}
+		if text := strings.TrimSpace(part.Text); text != "" {
+			if builder.Len() > 0 {
+				builder.WriteString("\n")
+			}
+			builder.WriteString(text)
+		}
+	}
+	return builder.String()
+}
+
+func responseDisposition(raw string) conversation.TextDisposition {
+	if strings.TrimSpace(raw) == "" {
+		return ""
+	}
+	var probe struct {
 		Phase string `json:"phase"`
 	}
 	if err := json.Unmarshal([]byte(raw), &probe); err != nil {
-		return nil, "", false
+		return ""
 	}
-	if !strings.EqualFold(strings.TrimSpace(probe.Type), "message") {
-		return nil, "", false
+	switch strings.TrimSpace(probe.Phase) {
+	case "commentary":
+		return conversation.TextDispositionCommentary
+	case "final_answer":
+		return conversation.TextDispositionFinal
+	default:
+		return ""
 	}
-	if !strings.EqualFold(strings.TrimSpace(probe.Role), "assistant") {
-		return nil, "", false
-	}
-	return json.RawMessage(raw), strings.TrimSpace(probe.Phase), true
 }
 
-func isAssistantResponseOutputMessage(raw json.RawMessage) bool {
-	if len(raw) == 0 {
-		return false
+func messageText(msg conversation.Message) string {
+	var builder strings.Builder
+	for _, part := range msg.Parts {
+		if part.Type != conversation.TextPartType {
+			continue
+		}
+		builder.WriteString(part.Text)
 	}
-
-	var probe struct {
-		Type string `json:"type"`
-		Role string `json:"role"`
-	}
-	if err := json.Unmarshal(raw, &probe); err != nil {
-		return false
-	}
-	return strings.EqualFold(strings.TrimSpace(probe.Type), "message") &&
-		strings.EqualFold(strings.TrimSpace(probe.Role), "assistant")
+	return builder.String()
 }
 
 type streamSnapshot struct {
 	textBuilder         strings.Builder
 	refusalBuilder      strings.Builder
 	toolCalls           []agent.ToolCall
+	reasoningSummaries  map[string]*strings.Builder
 	seenToolCallKeys    map[string]struct{}
+	reasoningSummaryIDs map[string]struct{}
 	textDeltaItemIDs    map[string]struct{}
 	refusalDeltaItemIDs map[string]struct{}
 }
 
 func newStreamSnapshot() *streamSnapshot {
 	return &streamSnapshot{
+		reasoningSummaries:  make(map[string]*strings.Builder),
 		seenToolCallKeys:    make(map[string]struct{}),
+		reasoningSummaryIDs: make(map[string]struct{}),
 		textDeltaItemIDs:    make(map[string]struct{}),
 		refusalDeltaItemIDs: make(map[string]struct{}),
 	}
@@ -460,6 +562,18 @@ func (s *streamSnapshot) Record(evt responses.ResponseStreamEventUnion) {
 			}
 		}
 		s.refusalBuilder.WriteString(evt.Refusal)
+	case "response.reasoning_summary_text.delta":
+		if evt.ItemID != "" {
+			s.reasoningSummaryIDs[evt.ItemID] = struct{}{}
+		}
+		s.reasoningSummaryBuilder(evt.ItemID).WriteString(evt.Delta)
+	case "response.reasoning_summary_text.done":
+		if evt.ItemID != "" {
+			if _, hasDelta := s.reasoningSummaryIDs[evt.ItemID]; hasDelta {
+				break
+			}
+		}
+		s.reasoningSummaryBuilder(evt.ItemID).WriteString(evt.Text)
 	case "response.output_item.done":
 		if evt.Item.Type != "function_call" {
 			break
@@ -491,6 +605,19 @@ func (s *streamSnapshot) Record(evt responses.ResponseStreamEventUnion) {
 	}
 }
 
+func (s *streamSnapshot) reasoningSummaryBuilder(itemID string) *strings.Builder {
+	if s == nil {
+		return &strings.Builder{}
+	}
+	builder, ok := s.reasoningSummaries[itemID]
+	if ok {
+		return builder
+	}
+	builder = &strings.Builder{}
+	s.reasoningSummaries[itemID] = builder
+	return builder
+}
+
 func (s *streamSnapshot) Text() string {
 	if s == nil {
 		return ""
@@ -513,20 +640,78 @@ func mergeResultWithStreamSnapshot(
 		return result
 	}
 
-	if strings.TrimSpace(result.Content) == "" {
-		if text := snapshot.Text(); text != "" {
-			result.Content = text
-		} else if refusal := snapshot.Refusal(); refusal != "" {
-			result.Content = refusal
+	for i := range result.Messages {
+		for j := range result.Messages[i].Parts {
+			part := result.Messages[i].Parts[j]
+			if part.Type != conversation.ReasoningPartType || strings.TrimSpace(part.Text) != "" {
+				continue
+			}
+			if summary := snapshot.ReasoningSummary(part); summary != "" {
+				result.Messages[i].Parts[j].Text = summary
+			}
 		}
 	}
-	if len(result.ToolCalls) == 0 && len(snapshot.toolCalls) > 0 {
-		result.ToolCalls = append(result.ToolCalls, snapshot.toolCalls...)
+
+	if strings.TrimSpace(conversation.FinalAnswer(result.Messages)) == "" {
+		if text := snapshot.Text(); text != "" {
+			result.Messages = append(result.Messages, conversation.AssistantMessage(
+				conversation.Text(text, ""),
+			))
+		} else if refusal := snapshot.Refusal(); refusal != "" {
+			result.Messages = append(result.Messages, conversation.AssistantMessage(
+				conversation.Text(refusal, ""),
+			))
+		}
+	}
+	if len(agentToolCalls(result.Messages)) == 0 && len(snapshot.toolCalls) > 0 {
+		for _, call := range snapshot.toolCalls {
+			result.Messages = append(result.Messages, conversation.AssistantMessage(
+				conversation.ToolCall(call.ID, call.Name, call.Arguments),
+			))
+		}
 		if result.FinishReason == "" || result.FinishReason == "stop" {
 			result.FinishReason = "tool_calls"
 		}
 	}
 	return result
+}
+
+func (s *streamSnapshot) ReasoningSummary(part conversation.Part) string {
+	if s == nil {
+		return ""
+	}
+	raw := part.Replay[openAIResponsesReplayKey]
+	if len(raw) == 0 {
+		return ""
+	}
+	var probe struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return ""
+	}
+	builder := s.reasoningSummaries[strings.TrimSpace(probe.ID)]
+	if builder == nil {
+		return ""
+	}
+	return strings.TrimSpace(builder.String())
+}
+
+func agentToolCalls(messages []conversation.Message) []agent.ToolCall {
+	var out []agent.ToolCall
+	for _, msg := range messages {
+		for _, part := range msg.Parts {
+			if part.Type != conversation.ToolCallPartType {
+				continue
+			}
+			out = append(out, agent.ToolCall{
+				ID:        part.ID,
+				Name:      part.Name,
+				Arguments: part.Arguments,
+			})
+		}
+	}
+	return out
 }
 
 func isStreamResponsePresent(resp responses.Response) bool {

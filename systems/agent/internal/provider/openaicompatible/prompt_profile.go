@@ -4,25 +4,23 @@ import (
 	"strings"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
+	"github.com/q15co/q15/systems/agent/internal/conversation"
 )
 
-func withPromptProfile(messages []agent.Message) []agent.Message {
+func withPromptProfile(messages []conversation.Message) []conversation.Message {
 	profile := strings.TrimSpace(renderPromptProfile())
 	if profile == "" {
 		return messages
 	}
 
-	out := append([]agent.Message(nil), messages...)
-	out = append(out, agent.Message{
-		Role:    agent.SystemRole,
-		Content: profile,
-	})
+	out := append([]conversation.Message(nil), messages...)
+	out = append(out, conversation.SystemMessage(profile))
 	return out
 }
 
 func renderPromptProfile() string {
 	lines := []string{
-		"This endpoint does not round-trip assistant commentary phase metadata in q15, so keep preambles rare and short.",
+		"This endpoint does not preserve assistant commentary disposition metadata in q15, so keep preambles rare and short.",
 		"For action requests, make the first substantive reply either a relevant tool call or one concise blocker question when a tool is required.",
 		"Do not split the turn into plan-only narration followed by delayed execution.",
 	}

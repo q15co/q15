@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 
 	"go.yaml.in/yaml/v3"
@@ -52,9 +53,10 @@ type Agent struct {
 
 // Telegram defines Telegram integration settings for an agent.
 type Telegram struct {
-	Token          string  `yaml:"token"`
-	TokenEnv       string  `yaml:"token_env"`
-	AllowedUserIDs []int64 `yaml:"allowed_user_ids"`
+	Token             string  `yaml:"token"`
+	TokenEnv          string  `yaml:"token_env"`
+	AllowedUserIDs    []int64 `yaml:"allowed_user_ids"`
+	AllowedUserIDsEnv string  `yaml:"allowed_user_ids_env"`
 }
 
 // ModelCapabilities is the normalized capability set for one configured model.
@@ -195,6 +197,28 @@ func (a Agent) TelegramToken() (string, error) {
 	return resolveSecretEnvValue(envName)
 }
 
+// TelegramAllowedUserIDs resolves the Telegram allow-list from inline values or
+// allowed_user_ids_env. The environment source accepts comma-separated or
+// whitespace-separated integer user IDs and also supports the standard
+// *_FILE companion via resolveSecretEnvValue.
+func (a Agent) TelegramAllowedUserIDs() ([]int64, error) {
+	envName := strings.TrimSpace(a.Telegram.AllowedUserIDsEnv)
+	if len(a.Telegram.AllowedUserIDs) > 0 && envName != "" {
+		return nil, errors.New(
+			"set either telegram.allowed_user_ids or telegram.allowed_user_ids_env, not both",
+		)
+	}
+	if envName == "" {
+		return normalizeAllowedUserIDs(a.Telegram.AllowedUserIDs)
+	}
+
+	value, err := resolveSecretEnvValue(envName)
+	if err != nil {
+		return nil, err
+	}
+	return parseAllowedUserIDs(value)
+}
+
 // ResolveAgentRuntime resolves the configured agent into a runtime value.
 func (c Config) ResolveAgentRuntime() (*AgentRuntime, error) {
 	if err := c.Validate(); err != nil {
@@ -277,7 +301,7 @@ func (c Config) ResolveAgentRuntime() (*AgentRuntime, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve telegram token for agent %q: %w", agentCfg.Name, err)
 	}
-	allowedUserIDs, err := normalizeAllowedUserIDs(agentCfg.Telegram.AllowedUserIDs)
+	allowedUserIDs, err := agentCfg.TelegramAllowedUserIDs()
 	if err != nil {
 		return nil, fmt.Errorf(
 			"resolve telegram allowed users for agent %q: %w",
@@ -389,8 +413,19 @@ func (c Config) validate() error {
 		strings.TrimSpace(c.Agent.Telegram.TokenEnv) == "" {
 		return errors.New("agent.telegram requires token or token_env")
 	}
-	if _, err := normalizeAllowedUserIDs(c.Agent.Telegram.AllowedUserIDs); err != nil {
-		return fmt.Errorf("agent.telegram.allowed_user_ids: %w", err)
+	allowedUserIDsEnv := strings.TrimSpace(c.Agent.Telegram.AllowedUserIDsEnv)
+	if len(c.Agent.Telegram.AllowedUserIDs) == 0 && allowedUserIDsEnv == "" {
+		return errors.New("agent.telegram requires allowed_user_ids or allowed_user_ids_env")
+	}
+	if len(c.Agent.Telegram.AllowedUserIDs) > 0 && allowedUserIDsEnv != "" {
+		return errors.New(
+			"agent.telegram.allowed_user_ids and agent.telegram.allowed_user_ids_env are mutually exclusive",
+		)
+	}
+	if len(c.Agent.Telegram.AllowedUserIDs) > 0 {
+		if _, err := normalizeAllowedUserIDs(c.Agent.Telegram.AllowedUserIDs); err != nil {
+			return fmt.Errorf("agent.telegram.allowed_user_ids: %w", err)
+		}
 	}
 
 	return nil
@@ -481,4 +516,24 @@ func normalizeAllowedUserIDs(ids []int64) ([]int64, error) {
 	}
 
 	return out, nil
+}
+
+func parseAllowedUserIDs(value string) ([]int64, error) {
+	fields := strings.FieldsFunc(value, func(r rune) bool {
+		return r == ',' || r == '\n' || r == '\r' || r == '\t' || r == ' '
+	})
+	if len(fields) == 0 {
+		return nil, errors.New("must contain at least one user id")
+	}
+
+	ids := make([]int64, 0, len(fields))
+	for i, field := range fields {
+		id, err := strconv.ParseInt(strings.TrimSpace(field), 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("[%d] %q is not a valid int64", i, field)
+		}
+		ids = append(ids, id)
+	}
+
+	return normalizeAllowedUserIDs(ids)
 }

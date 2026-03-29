@@ -13,6 +13,7 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/bus"
 	"github.com/q15co/q15/systems/agent/internal/channel/telegram"
 	"github.com/q15co/q15/systems/agent/internal/config"
+	"github.com/q15co/q15/systems/agent/internal/conversation"
 	"github.com/q15co/q15/systems/agent/internal/execution"
 	"github.com/q15co/q15/systems/agent/internal/fileops"
 	"github.com/q15co/q15/systems/agent/internal/memory"
@@ -401,7 +402,7 @@ var _ agent.ModelClient = (*routedModelAdapter)(nil)
 func (r *routedModelAdapter) Complete(
 	ctx context.Context,
 	model string,
-	messages []agent.Message,
+	messages []conversation.Message,
 	tools []agent.ToolDefinition,
 ) (agent.ModelClientResult, error) {
 	model = strings.TrimSpace(model)
