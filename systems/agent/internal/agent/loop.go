@@ -5,8 +5,11 @@ package agent
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
+
+	"github.com/q15co/q15/systems/agent/internal/conversation"
 )
 
 const (
@@ -124,7 +127,7 @@ func (l *Loop) Reply(
 		}
 	}
 
-	var recentMessages []Message
+	var recentMessages []conversation.Message
 	if l.store != nil {
 		var err error
 		recentMessages, err = l.store.LoadRecentMessages(ctx, l.recentTurns)
@@ -137,15 +140,12 @@ func (l *Loop) Reply(
 		}
 	}
 
-	messages := make([]Message, 0, 2+len(recentMessages))
-	messages = append(messages, Message{Role: SystemRole, Content: systemText})
+	messages := make([]conversation.Message, 0, 2+len(recentMessages))
+	messages = append(messages, systemMessage(systemText))
 	messages = append(messages, copyMessages(recentMessages)...)
 
 	turnStart := len(messages)
-	messages = append(messages, Message{
-		Role:    UserRole,
-		Content: userInput,
-	})
+	messages = append(messages, userMessage(userInput))
 
 	var toolDefs []ToolDefinition
 	if l.tools != nil {
@@ -157,10 +157,10 @@ func (l *Loop) Reply(
 	for turn := 0; turn < l.maxTurns; turn++ {
 		requestMessages := copyMessages(messages)
 		if emptyAssistantRetries > 0 {
-			requestMessages = append(requestMessages, Message{
-				Role:    SystemRole,
-				Content: emptyResponseRetrySteeringPrompt,
-			})
+			requestMessages = append(
+				requestMessages,
+				systemMessage(emptyResponseRetrySteeringPrompt),
+			)
 		}
 		modelRef, result, err := l.completeWithObserver(
 			ctx,
@@ -179,25 +179,20 @@ func (l *Loop) Reply(
 			return "", fmt.Errorf("model complete: %w", err)
 		}
 
-		assistantContent := strings.TrimSpace(result.Content)
-		if len(result.ToolCalls) == 0 && assistantContent == "" &&
+		resultMessages := conversation.NormalizeMessages(copyMessages(result.Messages))
+		toolCalls := resultToolCalls(resultMessages)
+		answer := finalAnswer(resultMessages)
+		if len(toolCalls) == 0 && answer == "" &&
 			emptyAssistantRetries < maxEmptyAssistantRetries {
 			emptyAssistantRetries++
 			continue
 		}
 		emptyAssistantRetries = 0
 
-		assistantMsg := Message{
-			Role:        AssistantRole,
-			Content:     assistantContent,
-			Phase:       result.Phase,
-			ToolCalls:   result.ToolCalls,
-			ProviderRaw: result.ProviderRaw,
-		}
-		messages = append(messages, assistantMsg)
+		messages = append(messages, resultMessages...)
 
-		if len(result.ToolCalls) == 0 {
-			answer := assistantContent
+		if len(toolCalls) == 0 {
+			answer = finalAnswer(messages[turnStart:])
 			if answer == "" {
 				answer = "(assistant returned no text)"
 			}
@@ -220,7 +215,7 @@ func (l *Loop) Reply(
 			return answer, nil
 		}
 
-		for _, call := range result.ToolCalls {
+		for _, call := range toolCalls {
 			emitRunEvent(ctx, observer, RunEvent{
 				Type:     RunEventToolStarted,
 				Turn:     turn,
@@ -239,11 +234,7 @@ func (l *Loop) Reply(
 				ToolOutput: output,
 				Err:        err,
 			})
-			messages = append(messages, Message{
-				Role:       ToolRole,
-				Content:    output,
-				ToolCallID: call.ID,
-			})
+			messages = append(messages, toolResultMessage(call.ID, output, err != nil))
 
 			if assessment := loopDetector.Record(call, output); assessment.Critical {
 				stopSummary := formatStopSummary(
@@ -252,10 +243,7 @@ func (l *Loop) Reply(
 					assessment.RepeatCount,
 					assessment.NoProgressCount,
 				)
-				messages = append(messages, Message{
-					Role:    AssistantRole,
-					Content: stopSummary,
-				})
+				messages = append(messages, assistantTextMessage(stopSummary, ""))
 				if err := l.persistTurn(ctx, messages, turnStart); err != nil {
 					emitRunEvent(ctx, observer, RunEvent{
 						Type:      RunEventRunFailed,
@@ -292,10 +280,7 @@ func (l *Loop) Reply(
 		loopDetector.MaxRepeatCount(),
 		loopDetector.MaxNoProgressCount(),
 	)
-	messages = append(messages, Message{
-		Role:    AssistantRole,
-		Content: stopSummary,
-	})
+	messages = append(messages, assistantTextMessage(stopSummary, ""))
 	if err := l.persistTurn(ctx, messages, turnStart); err != nil {
 		emitRunEvent(ctx, observer, RunEvent{
 			Type:      RunEventRunFailed,
@@ -328,7 +313,7 @@ func (l *Loop) runTool(ctx context.Context, call ToolCall) (string, error) {
 
 func (l *Loop) completeWithObserver(
 	ctx context.Context,
-	messages []Message,
+	messages []conversation.Message,
 	tools []ToolDefinition,
 	turn int,
 	observer RunObserver,
@@ -336,7 +321,7 @@ func (l *Loop) completeWithObserver(
 	var lastErr error
 	lastModelRef := ""
 
-	for _, modelRef := range l.modelRefs {
+	for attempt, modelRef := range l.modelRefs {
 		lastModelRef = modelRef
 		emitRunEvent(ctx, observer, RunEvent{
 			Type:     RunEventModelTurnStarted,
@@ -345,8 +330,25 @@ func (l *Loop) completeWithObserver(
 		})
 		result, err := l.modelClient.Complete(ctx, modelRef, messages, tools)
 		if err == nil {
+			log.Printf(
+				"q15: model turn=%d selected ref=%q attempt=%d/%d finish_reason=%q returned_messages=%d",
+				turn,
+				modelRef,
+				attempt+1,
+				len(l.modelRefs),
+				result.FinishReason,
+				len(result.Messages),
+			)
 			return modelRef, result, nil
 		}
+		log.Printf(
+			"q15: model turn=%d ref=%q attempt=%d/%d failed: %v",
+			turn,
+			modelRef,
+			attempt+1,
+			len(l.modelRefs),
+			err,
+		)
 		lastErr = err
 	}
 
@@ -360,7 +362,11 @@ func (l *Loop) completeWithObserver(
 	)
 }
 
-func (l *Loop) persistTurn(ctx context.Context, messages []Message, turnStart int) error {
+func (l *Loop) persistTurn(
+	ctx context.Context,
+	messages []conversation.Message,
+	turnStart int,
+) error {
 	if l.store == nil {
 		return nil
 	}

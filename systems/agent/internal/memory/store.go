@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
+	"github.com/q15co/q15/systems/agent/internal/conversation"
 	"github.com/yuin/goldmark"
 	meta "github.com/yuin/goldmark-meta"
 	"github.com/yuin/goldmark/parser"
@@ -99,18 +101,40 @@ func (s *Store) Init(ctx context.Context) error {
 		return err
 	}
 
+	upgrade, err := s.upgradeHistory()
+	if err != nil {
+		return fmt.Errorf("upgrade transcript history: %w", err)
+	}
+	if upgrade.Upgraded > 0 || upgrade.Quarantined > 0 {
+		log.Printf(
+			"q15: transcript history upgrade finished (upgraded=%d quarantined=%d)",
+			upgrade.Upgraded,
+			upgrade.Quarantined,
+		)
+	}
+	headSynced, err := s.syncHeadStateWithHistory()
+	if err != nil {
+		return fmt.Errorf("synchronize memory head state: %w", err)
+	}
+
 	if err := s.committer.EnsureRepo(ctx, s.rootDir); err != nil {
 		return fmt.Errorf("ensure git memory repo: %w", err)
 	}
-	if _, err := s.committer.CommitAll(ctx, s.rootDir, "memory: initialize repository"); err != nil {
-		return fmt.Errorf("commit memory scaffold: %w", err)
+	commitMessage := "memory: initialize repository"
+	if upgrade.Upgraded > 0 || upgrade.Quarantined > 0 {
+		commitMessage = "memory: upgrade transcript history to v2"
+	} else if headSynced {
+		commitMessage = "memory: synchronize transcript head state"
+	}
+	if _, err := s.committer.CommitAll(ctx, s.rootDir, commitMessage); err != nil {
+		return fmt.Errorf("commit memory changes: %w", err)
 	}
 
 	return nil
 }
 
 // LoadRecentMessages loads the most recent persisted conversation turns.
-func (s *Store) LoadRecentMessages(ctx context.Context, turns int) ([]agent.Message, error) {
+func (s *Store) LoadRecentMessages(ctx context.Context, turns int) ([]conversation.Message, error) {
 	_ = ctx
 	if turns <= 0 {
 		return nil, nil
@@ -132,7 +156,7 @@ func (s *Store) LoadRecentMessages(ctx context.Context, turns int) ([]agent.Mess
 		start = len(paths) - turns
 	}
 
-	out := make([]agent.Message, 0, turns*2)
+	out := make([]conversation.Message, 0, turns*2)
 	for _, path := range paths[start:] {
 		turn, err := s.readTurn(path)
 		if err != nil {
@@ -160,7 +184,12 @@ func (s *Store) LoadCoreMemory(ctx context.Context) (agent.CoreMemory, error) {
 }
 
 // AppendTurn persists one completed conversation turn and commits it to git.
-func (s *Store) AppendTurn(ctx context.Context, messages []agent.Message) error {
+func (s *Store) AppendTurn(ctx context.Context, messages []conversation.Message) error {
+	if len(messages) == 0 {
+		return nil
+	}
+
+	messages = sanitizeStoredMessages(copyMessages(messages))
 	if len(messages) == 0 {
 		return nil
 	}
@@ -176,10 +205,11 @@ func (s *Store) AppendTurn(ctx context.Context, messages []agent.Message) error 
 	seq := head.LastSeq + 1
 	now := time.Now().UTC()
 	record := turnRecord{
-		ID:        fmt.Sprintf("turn-%020d", seq),
-		Seq:       seq,
-		CreatedAt: now,
-		Messages:  copyMessages(messages),
+		SchemaVersion: conversation.SchemaVersion,
+		ID:            fmt.Sprintf("turn-%020d", seq),
+		Seq:           seq,
+		CreatedAt:     now,
+		Messages:      copyMessages(messages),
 	}
 
 	turnPath := s.turnPath(now, seq)
@@ -446,6 +476,13 @@ func (s *Store) readTurn(path string) (turnRecord, error) {
 	if err := json.Unmarshal(data, &record); err != nil {
 		return turnRecord{}, fmt.Errorf("decode turn record %q: %w", path, err)
 	}
+	if record.SchemaVersion != conversation.SchemaVersion {
+		return turnRecord{}, fmt.Errorf(
+			"turn record %q has unsupported schema_version %d",
+			path,
+			record.SchemaVersion,
+		)
+	}
 	return record, nil
 }
 
@@ -466,6 +503,39 @@ func (s *Store) headStatePath() string {
 	return filepath.Join(s.rootDir, headStateRelativePath)
 }
 
+func (s *Store) syncHeadStateWithHistory() (bool, error) {
+	paths, err := s.listTurnPaths()
+	if err != nil {
+		return false, err
+	}
+
+	var maxSeq int64
+	for _, path := range paths {
+		record, err := s.readTurn(path)
+		if err != nil {
+			return false, err
+		}
+		if record.Seq > maxSeq {
+			maxSeq = record.Seq
+		}
+	}
+
+	head, err := s.readHeadState()
+	if err != nil {
+		return false, err
+	}
+	if head.LastSeq >= maxSeq {
+		return false, nil
+	}
+
+	head.LastSeq = maxSeq
+	head.UpdatedAt = time.Now().UTC()
+	if err := writeJSONFileAtomic(s.headStatePath(), head); err != nil {
+		return false, fmt.Errorf("write synchronized memory head state: %w", err)
+	}
+	return true, nil
+}
+
 func (s *Store) turnPath(ts time.Time, seq int64) string {
 	return filepath.Join(
 		s.rootDir,
@@ -478,22 +548,8 @@ func (s *Store) turnPath(ts time.Time, seq int64) string {
 	)
 }
 
-func copyMessages(in []agent.Message) []agent.Message {
-	if len(in) == 0 {
-		return nil
-	}
-
-	out := make([]agent.Message, len(in))
-	for i, msg := range in {
-		out[i] = msg
-		if len(msg.ToolCalls) > 0 {
-			out[i].ToolCalls = append([]agent.ToolCall(nil), msg.ToolCalls...)
-		}
-		if len(msg.ProviderRaw) > 0 {
-			out[i].ProviderRaw = append([]byte(nil), msg.ProviderRaw...)
-		}
-	}
-	return out
+func copyMessages(in []conversation.Message) []conversation.Message {
+	return conversation.CloneMessages(sanitizeStoredMessages(in))
 }
 
 func writeJSONFileAtomic(path string, value any) error {

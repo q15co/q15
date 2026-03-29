@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
+	"github.com/q15co/q15/systems/agent/internal/conversation"
 	"github.com/q15co/q15/systems/agent/internal/memory"
 	q15skills "github.com/q15co/q15/systems/agent/internal/skills"
 )
@@ -17,11 +18,14 @@ var _ agent.ConversationStore = (*runtimeStore)(nil)
 var _ agent.CoreMemoryStore = (*runtimeStore)(nil)
 var _ agent.SkillCatalogStore = (*runtimeStore)(nil)
 
-func (s *runtimeStore) LoadRecentMessages(ctx context.Context, turns int) ([]agent.Message, error) {
+func (s *runtimeStore) LoadRecentMessages(
+	ctx context.Context,
+	turns int,
+) ([]conversation.Message, error) {
 	return s.memory.LoadRecentMessages(ctx, turns)
 }
 
-func (s *runtimeStore) AppendTurn(ctx context.Context, messages []agent.Message) error {
+func (s *runtimeStore) AppendTurn(ctx context.Context, messages []conversation.Message) error {
 	return s.memory.AppendTurn(ctx, messages)
 }
 

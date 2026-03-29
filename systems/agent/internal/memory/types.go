@@ -3,14 +3,15 @@ package memory
 import (
 	"time"
 
-	"github.com/q15co/q15/systems/agent/internal/agent"
+	"github.com/q15co/q15/systems/agent/internal/conversation"
 )
 
 type turnRecord struct {
-	ID        string          `json:"id"`
-	Seq       int64           `json:"seq"`
-	CreatedAt time.Time       `json:"created_at"`
-	Messages  []agent.Message `json:"messages"`
+	SchemaVersion int                    `json:"schema_version"`
+	ID            string                 `json:"id"`
+	Seq           int64                  `json:"seq"`
+	CreatedAt     time.Time              `json:"created_at"`
+	Messages      []conversation.Message `json:"messages"`
 }
 
 type headState struct {

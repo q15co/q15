@@ -26,6 +26,10 @@ Notes:
 - Pin `Q15_IMAGE_TAG` to one immutable published tag across `q15-agent`, `q15-exec`, and
   `q15-proxy`. Do not use `main` as the default for long-running stacks.
 - `/workspace` is expected to persist long-term for one stack. It may be empty on first startup.
+- `/memory` should also persist across updates. `q15-agent` eagerly upgrades stored turn history to
+  the latest transcript schema on startup.
+- In `agent-config.yaml`, `agent.models` order defines the per-turn fallback order. The checked-in
+  Compose example uses Codex first and Moonshot/Kimi second.
 - Update or rollback by changing the pinned tag and redeploying while preserving the persistent
   volumes.
 - GHCR runtime images are intended to be publicly pullable without registry auth for normal

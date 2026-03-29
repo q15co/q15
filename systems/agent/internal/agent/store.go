@@ -1,11 +1,15 @@
 package agent
 
-import "context"
+import (
+	"context"
+
+	"github.com/q15co/q15/systems/agent/internal/conversation"
+)
 
 // ConversationStore persists assistant/user/tool messages between replies.
 type ConversationStore interface {
-	LoadRecentMessages(ctx context.Context, turns int) ([]Message, error)
-	AppendTurn(ctx context.Context, messages []Message) error
+	LoadRecentMessages(ctx context.Context, turns int) ([]conversation.Message, error)
+	AppendTurn(ctx context.Context, messages []conversation.Message) error
 }
 
 // CoreMemory holds small, high-signal identity/profile notes that should stay

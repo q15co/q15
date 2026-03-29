@@ -2,40 +2,23 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
+
+	"github.com/q15co/q15/systems/agent/internal/conversation"
 )
 
 // Role identifies the speaker role for a chat message.
-type Role string
+type Role = conversation.Role
 
 const (
 	// SystemRole is a system instruction message.
-	SystemRole Role = "system"
+	SystemRole Role = conversation.SystemRole
 	// UserRole is an end-user message.
-	UserRole Role = "user"
+	UserRole Role = conversation.UserRole
 	// AssistantRole is a model assistant message.
-	AssistantRole Role = "assistant"
+	AssistantRole Role = conversation.AssistantRole
 	// ToolRole is a synthetic message containing tool output.
-	ToolRole Role = "tool"
+	ToolRole Role = conversation.ToolRole
 )
-
-// Message is a model-facing chat message used by the loop.
-type Message struct {
-	// Role is the message author role.
-	Role Role
-	// Content is the text payload for this message.
-	Content string
-	// Phase classifies assistant text when a provider supports commentary vs
-	// final-answer distinctions.
-	Phase string
-	// ToolCalls are requested tool invocations emitted by the model.
-	ToolCalls []ToolCall
-	// ToolCallID links a tool result message back to its originating call.
-	ToolCallID string
-	// ProviderRaw stores an optional provider-specific raw assistant message payload.
-	// The core loop treats this as opaque pass-through data.
-	ProviderRaw json.RawMessage
-}
 
 // ToolCall describes one requested tool invocation.
 type ToolCall struct {
@@ -62,16 +45,10 @@ type ToolDefinition struct {
 
 // ModelClientResult is the output of one model completion call.
 type ModelClientResult struct {
-	// Content is the assistant text returned by the model.
-	Content string
-	// Phase classifies assistant text when a provider supports message phases.
-	Phase string
-	// ToolCalls are requested tool invocations returned by the model.
-	ToolCalls []ToolCall
+	// Messages are the ordered canonical transcript items returned by the model.
+	Messages []conversation.Message
 	// FinishReason is the provider-reported completion reason when available.
 	FinishReason string
-	// ProviderRaw is the raw assistant message payload returned by the model adapter.
-	ProviderRaw json.RawMessage
 }
 
 // ModelClient adapts a model provider to the loop.
@@ -81,7 +58,7 @@ type ModelClient interface {
 	Complete(
 		ctx context.Context,
 		model string,
-		messages []Message,
+		messages []conversation.Message,
 		tools []ToolDefinition,
 	) (ModelClientResult, error)
 }

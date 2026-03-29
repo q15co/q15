@@ -6,6 +6,7 @@ import (
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/config"
+	"github.com/q15co/q15/systems/agent/internal/conversation"
 )
 
 type fakeModelClient struct {
@@ -20,7 +21,7 @@ type fakeModelCall struct {
 func (f *fakeModelClient) Complete(
 	_ context.Context,
 	model string,
-	_ []agent.Message,
+	_ []conversation.Message,
 	tools []agent.ToolDefinition,
 ) (agent.ModelClientResult, error) {
 	call := fakeModelCall{model: model}
@@ -28,7 +29,11 @@ func (f *fakeModelClient) Complete(
 		call.tools = append([]agent.ToolDefinition(nil), tools...)
 	}
 	f.calls = append(f.calls, call)
-	return agent.ModelClientResult{Content: "ok"}, nil
+	return agent.ModelClientResult{
+		Messages: []conversation.Message{
+			conversation.AssistantMessage(conversation.Text("ok", "")),
+		},
+	}, nil
 }
 
 func TestNewModelAdapterRoutesConfiguredModelsAndSuppressesTools(t *testing.T) {
