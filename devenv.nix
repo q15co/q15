@@ -3,7 +3,7 @@
   lib,
   ...
 }: let
-  mdformatPkg = pkgs.python3.withPackages (ps: [
+  mdformatPkg = pkgs.python312.withPackages (ps: [
     ps.mdformat
     ps.mdformat-gfm
     ps.mdformat-frontmatter

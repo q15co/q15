@@ -34,8 +34,12 @@ jobs:
           authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
           skipPush: ${{ secrets.CACHIX_AUTH_TOKEN == '' || github.event_name == 'pull_request' }}
 
-      - name: Install devenv
-        run: nix profile install nixpkgs#devenv
+      - name: Install pinned devenv CLI
+        run: |
+          # Pin the CLI to a known-good nixpkgs commit so CI does not float with
+          # whatever version `nixpkgs#devenv` happens to expose on the runner.
+          # This commit packages devenv 1.11.2.
+          nix profile install "github:NixOS/nixpkgs/80d901ec0377e19ac3f7bb8c035201e2e098cc97#devenv"
 
       - name: Run devenv test (hooks/lint/static checks)
         run: devenv -c test
