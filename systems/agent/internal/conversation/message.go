@@ -7,7 +7,9 @@ import (
 	"strings"
 )
 
-// SchemaVersion is the current persisted transcript schema version.
+// SchemaVersion is the current persisted transcript schema version. New writes
+// always use this version; older versions are accepted only during startup
+// migration.
 const SchemaVersion = 2
 
 // PortableReasoningUnavailableText is an explicit placeholder used when a
@@ -47,6 +49,10 @@ const (
 )
 
 // Message is one canonical conversation message.
+//
+// This is the canonical persisted and replayable transcript shape. Providers,
+// the loop, and stores should map to and from this model rather than
+// reintroducing alternative message types as sources of truth.
 type Message struct {
 	Role  Role   `json:"role"`
 	Parts []Part `json:"parts,omitempty"`
@@ -58,9 +64,13 @@ type Part struct {
 	Type PartType `json:"type"`
 
 	// Text and Reasoning parts.
-	Text        string                     `json:"text,omitempty"`
-	Disposition TextDisposition            `json:"disposition,omitempty"`
-	Replay      map[string]json.RawMessage `json:"replay,omitempty"`
+	Text        string          `json:"text,omitempty"`
+	Disposition TextDisposition `json:"disposition,omitempty"`
+	// Replay stores provider-specific reconstruction metadata for a reasoning
+	// part. It is supplemental only: portable transcript fields remain the
+	// canonical source of truth, and replay consumers should prefer Text when it
+	// is available.
+	Replay map[string]json.RawMessage `json:"replay,omitempty"`
 
 	// Tool call parts.
 	ID        string `json:"id,omitempty"`

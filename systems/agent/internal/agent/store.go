@@ -6,7 +6,8 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/conversation"
 )
 
-// ConversationStore persists assistant/user/tool messages between replies.
+// ConversationStore persists the canonical conversation.Message transcript
+// between replies.
 type ConversationStore interface {
 	LoadRecentMessages(ctx context.Context, turns int) ([]conversation.Message, error)
 	AppendTurn(ctx context.Context, messages []conversation.Message) error

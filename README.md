@@ -158,7 +158,7 @@ providers:
     key_env: MOONSHOT_API_KEY
 
 models:
-  - name: gpt-5-codex
+  - name: gpt-5.4
     provider: openai
     capabilities:
       - text
@@ -175,18 +175,18 @@ models:
 agent:
   name: Q15
   models:
-    - gpt-5-codex
+    - gpt-5.4
     - kimi-k2.5
   memory_recent_turns: 6
   telegram:
     token_env: Q15_TELEGRAM_TOKEN
-    allowed_user_ids:
-      - 123456789
+    allowed_user_ids_env: Q15_TELEGRAM_ALLOWED_USER_IDS
 ```
 
 Notes:
 
-- provider keys and Telegram tokens can come from `NAME` or `NAME_FILE`
+- provider keys, Telegram tokens, and Telegram allowed-user lists can come from `NAME` or
+  `NAME_FILE`
 - `openai-codex` uses `/etc/q15/auth/auth.json` from `q15-auth`; `openai-compatible` providers use
   `key_env`
 - `agent.models` order is the per-turn retry/fallback order

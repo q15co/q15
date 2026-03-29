@@ -183,7 +183,7 @@ func TestStoreInterruptedTurnPersistsAndReplays(t *testing.T) {
 	if len(got) != len(interrupted) {
 		t.Fatalf("LoadRecentMessages len = %d, want %d", len(got), len(interrupted))
 	}
-	if got[len(got)-1].Role != agent.AssistantRole {
+	if got[len(got)-1].Role != conversation.AssistantRole {
 		t.Fatalf("last replayed role = %q, want assistant", got[len(got)-1].Role)
 	}
 	if got[1].Parts[0].Disposition != conversation.TextDispositionCommentary {

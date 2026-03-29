@@ -6,20 +6,6 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/conversation"
 )
 
-// Role identifies the speaker role for a chat message.
-type Role = conversation.Role
-
-const (
-	// SystemRole is a system instruction message.
-	SystemRole Role = conversation.SystemRole
-	// UserRole is an end-user message.
-	UserRole Role = conversation.UserRole
-	// AssistantRole is a model assistant message.
-	AssistantRole Role = conversation.AssistantRole
-	// ToolRole is a synthetic message containing tool output.
-	ToolRole Role = conversation.ToolRole
-)
-
 // ToolCall describes one requested tool invocation.
 type ToolCall struct {
 	// ID uniquely identifies the call within a model response.
@@ -45,13 +31,16 @@ type ToolDefinition struct {
 
 // ModelClientResult is the output of one model completion call.
 type ModelClientResult struct {
-	// Messages are the ordered canonical transcript items returned by the model.
+	// Messages are the ordered canonical conversation.Message items returned by
+	// the model. This is the only transcript shape providers return to the loop.
 	Messages []conversation.Message
 	// FinishReason is the provider-reported completion reason when available.
 	FinishReason string
 }
 
-// ModelClient adapts a model provider to the loop.
+// ModelClient adapts a model provider to the loop using canonical
+// conversation.Message history. Provider-native request/response details stay
+// inside the adapter.
 type ModelClient interface {
 	// Complete runs one completion for the selected model using message history and
 	// optional tool definitions.

@@ -183,7 +183,7 @@ func TestLoopReply_LoadsRecentAndPersistsTurn(t *testing.T) {
 	if len(gotModelInput) != 4 {
 		t.Fatalf("model input len = %d, want 4", len(gotModelInput))
 	}
-	if gotModelInput[0].Role != SystemRole {
+	if gotModelInput[0].Role != conversation.SystemRole {
 		t.Fatalf("model input[0].Role = %q, want system", gotModelInput[0].Role)
 	}
 	if messageText(gotModelInput[1]) != "old-question" ||
@@ -200,10 +200,11 @@ func TestLoopReply_LoadsRecentAndPersistsTurn(t *testing.T) {
 	if len(store.lastAppend) != 2 {
 		t.Fatalf("persisted turn len = %d, want 2", len(store.lastAppend))
 	}
-	if store.lastAppend[0].Role != UserRole || messageText(store.lastAppend[0]) != "new-question" {
+	if store.lastAppend[0].Role != conversation.UserRole ||
+		messageText(store.lastAppend[0]) != "new-question" {
 		t.Fatalf("persisted user message = %#v", store.lastAppend[0])
 	}
-	if store.lastAppend[1].Role != AssistantRole ||
+	if store.lastAppend[1].Role != conversation.AssistantRole ||
 		messageText(store.lastAppend[1]) != "new-answer" {
 		t.Fatalf("persisted assistant message = %#v", store.lastAppend[1])
 	}
@@ -242,17 +243,19 @@ func TestLoopReply_PersistsToolCallFlow(t *testing.T) {
 	}
 
 	assistantCalls := conversation.ToolCalls([]conversation.Message{store.lastAppend[1]})
-	if store.lastAppend[1].Role != AssistantRole || len(assistantCalls) != 1 {
+	if store.lastAppend[1].Role != conversation.AssistantRole || len(assistantCalls) != 1 {
 		t.Fatalf("persisted assistant tool call message = %#v", store.lastAppend[1])
 	}
 
 	toolPart := firstPart(store.lastAppend[2])
-	if store.lastAppend[2].Role != ToolRole || toolPart.Type != conversation.ToolResultPartType ||
+	if store.lastAppend[2].Role != conversation.ToolRole ||
+		toolPart.Type != conversation.ToolResultPartType ||
 		toolPart.Content != "tool-output" ||
 		toolPart.IsError {
 		t.Fatalf("persisted tool message = %#v", store.lastAppend[2])
 	}
-	if store.lastAppend[3].Role != AssistantRole || messageText(store.lastAppend[3]) != "final" {
+	if store.lastAppend[3].Role != conversation.AssistantRole ||
+		messageText(store.lastAppend[3]) != "final" {
 		t.Fatalf("persisted final assistant message = %#v", store.lastAppend[3])
 	}
 }
@@ -387,14 +390,14 @@ func TestLoopReply_DoesNotAppendGenericToolSteeringPromptWhenToolsEnabled(t *tes
 		t.Fatalf("model calls = %d, want 1", len(model.callMsgs))
 	}
 	last := model.callMsgs[0][len(model.callMsgs[0])-1]
-	if last.Role != UserRole || messageText(last) != "please check the workspace" {
+	if last.Role != conversation.UserRole || messageText(last) != "please check the workspace" {
 		t.Fatalf("last model message = %#v, want user input as last message", last)
 	}
 	if len(store.lastAppend) != 2 {
 		t.Fatalf("persisted turn len = %d, want 2", len(store.lastAppend))
 	}
 	for i, msg := range model.callMsgs[0] {
-		if msg.Role == SystemRole &&
+		if msg.Role == conversation.SystemRole &&
 			strings.Contains(
 				messageText(msg),
 				"call the relevant tool(s) immediately instead of narrating intent",
@@ -525,8 +528,12 @@ func TestLoopReply_DoesNotAppendSteeringPromptWithoutTools(t *testing.T) {
 		t.Fatalf("model calls = %d, want 1", len(model.callMsgs))
 	}
 	last := model.callMsgs[0][len(model.callMsgs[0])-1]
-	if last.Role != UserRole {
-		t.Fatalf("last model message role = %q, want %q", last.Role, UserRole)
+	if last.Role != conversation.UserRole {
+		t.Fatalf(
+			"last model message role = %q, want %q",
+			last.Role,
+			conversation.UserRole,
+		)
 	}
 }
 
@@ -555,7 +562,8 @@ func TestLoopReply_RetriesOnceOnEmptyAssistantResponse(t *testing.T) {
 		t.Fatalf("second call should include messages")
 	}
 	last := second[len(second)-1]
-	if last.Role != SystemRole || messageText(last) != emptyResponseRetrySteeringPrompt {
+	if last.Role != conversation.SystemRole ||
+		messageText(last) != emptyResponseRetrySteeringPrompt {
 		t.Fatalf("second call last message = %#v, want empty-response retry steering prompt", last)
 	}
 	if len(store.lastAppend) != 2 {
@@ -590,7 +598,8 @@ func TestLoopReply_ReturnsNoTextAfterEmptyRetryExhausted(t *testing.T) {
 	if len(store.lastAppend) != 1 {
 		t.Fatalf("persisted turn len = %d, want 1", len(store.lastAppend))
 	}
-	if store.lastAppend[0].Role != UserRole || messageText(store.lastAppend[0]) != "still there?" {
+	if store.lastAppend[0].Role != conversation.UserRole ||
+		messageText(store.lastAppend[0]) != "still there?" {
 		t.Fatalf("persisted turn = %#v", store.lastAppend)
 	}
 }
@@ -768,7 +777,7 @@ func TestLoopReply_StopsAtHardLimitAndPersistsInterruptedTurn(t *testing.T) {
 		t.Fatalf("persisted turn is empty")
 	}
 	last := store.lastAppend[len(store.lastAppend)-1]
-	if last.Role != AssistantRole {
+	if last.Role != conversation.AssistantRole {
 		t.Fatalf("last persisted role = %q, want assistant", last.Role)
 	}
 	if !strings.Contains(messageText(last), "reached maximum tool-call turns (96)") {

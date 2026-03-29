@@ -14,6 +14,7 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/conversation"
 )
 
+// legacyTurnRecord is a migration-only v1 transcript shape.
 type legacyTurnRecord struct {
 	ID        string          `json:"id"`
 	Seq       int64           `json:"seq"`
@@ -21,6 +22,7 @@ type legacyTurnRecord struct {
 	Messages  []legacyMessage `json:"messages"`
 }
 
+// legacyMessage is a migration-only v1 message shape.
 type legacyMessage struct {
 	Role        string           `json:"role"`
 	Content     string           `json:"content"`
@@ -73,6 +75,9 @@ type historyUpgradeResult struct {
 	Quarantined int
 }
 
+// upgradeHistory is the only place where legacy transcript schemas are
+// supported. Runtime reads and new writes stay on the current canonical schema
+// only.
 func (s *Store) upgradeHistory() (historyUpgradeResult, error) {
 	paths, err := s.listTurnPaths()
 	if err != nil {
