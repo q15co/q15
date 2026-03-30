@@ -28,8 +28,11 @@ Notes:
 - `/workspace` is expected to persist long-term for one stack. It may be empty on first startup.
 - `/memory` should also persist across updates. `q15-agent` eagerly upgrades stored turn history to
   the latest transcript schema on startup.
-- In `agent-config.yaml`, `agent.models` order defines the per-turn fallback order. The checked-in
-  Compose example uses OpenAI `gpt-5.4` first and Moonshot/Kimi second.
+- In `agent-config.yaml`, `agent.models` order defines the deterministic per-turn fallback
+  preference order. q15 filters out models that do not satisfy the currently inferred request
+  requirements before any provider call. Current inference is text-first; image-input and
+  tool-calling requirement inference are staged for the corresponding canonical request signals. The
+  checked-in Compose example uses OpenAI `gpt-5.4` first and Moonshot/Kimi second.
 - The checked-in Compose config reads the Telegram allow-list from `Q15_TELEGRAM_ALLOWED_USER_IDS`
   or `Q15_TELEGRAM_ALLOWED_USER_IDS_FILE`, so local user IDs stay out of tracked YAML.
 - Update or rollback by changing the pinned tag and redeploying while preserving the persistent

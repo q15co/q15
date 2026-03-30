@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/q15co/q15/systems/agent/internal/conversation"
+	"github.com/q15co/q15/systems/agent/internal/modelselection"
 )
 
 const (
@@ -23,6 +24,7 @@ const (
 type Loop struct {
 	mu          sync.Mutex
 	modelClient ModelClient
+	planner     modelselection.Planner
 	tools       ToolRegistry
 	store       ConversationStore
 	modelRefs   []string
@@ -43,6 +45,28 @@ func NewLoop(
 	store ConversationStore,
 	recentTurns int,
 ) *Loop {
+	return NewLoopWithPlanner(
+		modelClient,
+		nil,
+		tools,
+		modelRefs,
+		systemText,
+		store,
+		recentTurns,
+	)
+}
+
+// NewLoopWithPlanner constructs a loop with an explicit model-selection
+// planner. When planner is nil, the configured model refs are used as-is.
+func NewLoopWithPlanner(
+	modelClient ModelClient,
+	planner modelselection.Planner,
+	tools ToolRegistry,
+	modelRefs []string,
+	systemText string,
+	store ConversationStore,
+	recentTurns int,
+) *Loop {
 	systemText = strings.TrimSpace(systemText)
 	if systemText == "" {
 		systemText = DefaultSystemPrompt
@@ -50,9 +74,13 @@ func NewLoop(
 	if recentTurns == 0 {
 		recentTurns = defaultRecentTurns
 	}
+	if planner == nil {
+		planner = modelselection.Passthrough{}
+	}
 	modelRefs = normalizeModelRefs(modelRefs)
 	return &Loop{
 		modelClient: modelClient,
+		planner:     planner,
 		tools:       tools,
 		store:       store,
 		modelRefs:   modelRefs,
@@ -318,10 +346,36 @@ func (l *Loop) completeWithObserver(
 	turn int,
 	observer RunObserver,
 ) (string, ModelClientResult, error) {
+	if len(l.modelRefs) == 0 {
+		return "", ModelClientResult{}, fmt.Errorf("no models configured")
+	}
+
+	requirements := modelselection.InferRequirements(modelselection.Request{
+		Messages:  messages,
+		ToolCount: len(tools),
+	})
+	plan, err := l.planner.Plan(l.modelRefs, requirements)
+	if err != nil {
+		return "", ModelClientResult{}, err
+	}
+
+	log.Printf(
+		"q15: model selection turn=%d requirements=[%s] eligible=%v skipped=%s",
+		turn,
+		requirements.String(),
+		plan.EligibleRefs,
+		plan.SkipSummary(),
+	)
+	if len(plan.EligibleRefs) == 0 {
+		return "", ModelClientResult{}, &modelselection.NoEligibleError{
+			Requirements: requirements,
+			Skipped:      append([]modelselection.Skip(nil), plan.Skipped...),
+		}
+	}
 	var lastErr error
 	lastModelRef := ""
 
-	for attempt, modelRef := range l.modelRefs {
+	for attempt, modelRef := range plan.EligibleRefs {
 		lastModelRef = modelRef
 		emitRunEvent(ctx, observer, RunEvent{
 			Type:     RunEventModelTurnStarted,
@@ -335,7 +389,7 @@ func (l *Loop) completeWithObserver(
 				turn,
 				modelRef,
 				attempt+1,
-				len(l.modelRefs),
+				len(plan.EligibleRefs),
 				result.FinishReason,
 				len(result.Messages),
 			)
@@ -346,7 +400,7 @@ func (l *Loop) completeWithObserver(
 			turn,
 			modelRef,
 			attempt+1,
-			len(l.modelRefs),
+			len(plan.EligibleRefs),
 			err,
 		)
 		lastErr = err
@@ -357,7 +411,7 @@ func (l *Loop) completeWithObserver(
 	}
 	return lastModelRef, ModelClientResult{}, fmt.Errorf(
 		"all models failed (%v): %w",
-		l.modelRefs,
+		plan.EligibleRefs,
 		lastErr,
 	)
 }

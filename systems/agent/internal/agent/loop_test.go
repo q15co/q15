@@ -8,15 +8,24 @@ import (
 	"testing"
 
 	"github.com/q15co/q15/systems/agent/internal/conversation"
+	"github.com/q15co/q15/systems/agent/internal/modelselection"
 )
 
 type fakeModelClient struct {
-	results  []ModelClientResult
-	callMsgs [][]conversation.Message
+	results    []ModelClientResult
+	callMsgs   [][]conversation.Message
+	callModels []string
+	complete   func(context.Context, string, []conversation.Message, []ToolDefinition) (ModelClientResult, error)
 }
 
 type failingModelClient struct {
 	err error
+}
+
+type fakePlanner struct {
+	plan                func([]string, modelselection.Requirements) (modelselection.Plan, error)
+	plannedModelRefs    [][]string
+	plannedRequirements []modelselection.Requirements
 }
 
 func (f *fakeModelClient) Complete(
@@ -25,16 +34,33 @@ func (f *fakeModelClient) Complete(
 	messages []conversation.Message,
 	tools []ToolDefinition,
 ) (ModelClientResult, error) {
-	_ = ctx
-	_ = model
-	_ = tools
 	f.callMsgs = append(f.callMsgs, copyMessages(messages))
+	f.callModels = append(f.callModels, model)
+	if f.complete != nil {
+		return f.complete(ctx, model, messages, tools)
+	}
+	_ = ctx
+	_ = tools
 	if len(f.results) == 0 {
 		return assistantResult("ok"), nil
 	}
 	out := f.results[0]
 	f.results = f.results[1:]
 	return out, nil
+}
+
+func (f *fakePlanner) Plan(
+	modelRefs []string,
+	requirements modelselection.Requirements,
+) (modelselection.Plan, error) {
+	f.plannedModelRefs = append(f.plannedModelRefs, append([]string(nil), modelRefs...))
+	f.plannedRequirements = append(f.plannedRequirements, requirements)
+	if f.plan != nil {
+		return f.plan(modelRefs, requirements)
+	}
+	return modelselection.Plan{
+		EligibleRefs: append([]string(nil), modelRefs...),
+	}, nil
 }
 
 func (f *failingModelClient) Complete(
@@ -507,6 +533,120 @@ func TestLoopReply_EmitsRunFailedOnModelError(t *testing.T) {
 	}
 	if got[2].Err == nil {
 		t.Fatal("run failed error should not be nil")
+	}
+}
+
+func TestLoopReply_UsesEligibleFallbackCandidatesOnly(t *testing.T) {
+	store := &fakeConversationStore{}
+	planner := &fakePlanner{
+		plan: func(modelRefs []string, requirements modelselection.Requirements) (modelselection.Plan, error) {
+			if len(modelRefs) != 2 || modelRefs[0] != "m1" || modelRefs[1] != "m2" {
+				t.Fatalf("planned model refs = %#v, want [m1 m2]", modelRefs)
+			}
+			if !requirements.Text || requirements.ImageInput || requirements.ToolCalling {
+				t.Fatalf("requirements = %#v, want text-only", requirements)
+			}
+			return modelselection.Plan{
+				EligibleRefs: []string{"m2"},
+				Skipped: []modelselection.Skip{
+					{Ref: "m1", Reason: "missing capabilities [text]"},
+				},
+			}, nil
+		},
+	}
+	model := &fakeModelClient{
+		results: []ModelClientResult{assistantResult("done")},
+	}
+
+	loop := NewLoopWithPlanner(
+		model,
+		planner,
+		nil,
+		[]string{"m1", "m2"},
+		DefaultSystemPrompt,
+		store,
+		3,
+	)
+	out, err := loop.Reply(context.Background(), "hello", nil)
+	if err != nil {
+		t.Fatalf("Reply() error = %v", err)
+	}
+	if out != "done" {
+		t.Fatalf("Reply() = %q, want %q", out, "done")
+	}
+	if len(model.callModels) != 1 || model.callModels[0] != "m2" {
+		t.Fatalf("callModels = %#v, want [m2]", model.callModels)
+	}
+	if len(planner.plannedRequirements) != 1 {
+		t.Fatalf("plannedRequirements len = %d, want 1", len(planner.plannedRequirements))
+	}
+}
+
+func TestLoopReply_FailsBeforeProviderCallsWhenNoEligibleModels(t *testing.T) {
+	store := &fakeConversationStore{}
+	planner := &fakePlanner{
+		plan: func(_ []string, _ modelselection.Requirements) (modelselection.Plan, error) {
+			return modelselection.Plan{
+				Skipped: []modelselection.Skip{
+					{Ref: "m1", Reason: "missing capabilities [text]"},
+					{Ref: "m2", Reason: "missing capabilities [text]"},
+				},
+			}, nil
+		},
+	}
+	model := &fakeModelClient{}
+
+	loop := NewLoopWithPlanner(
+		model,
+		planner,
+		nil,
+		[]string{"m1", "m2"},
+		DefaultSystemPrompt,
+		store,
+		3,
+	)
+	out, err := loop.Reply(context.Background(), "hello", nil)
+	if out != "" {
+		t.Fatalf("Reply() output = %q, want empty", out)
+	}
+	var noEligibleErr *modelselection.NoEligibleError
+	if !errors.As(err, &noEligibleErr) {
+		t.Fatalf("Reply() error = %v, want NoEligibleError", err)
+	}
+	if len(model.callModels) != 0 {
+		t.Fatalf("callModels = %#v, want no provider calls", model.callModels)
+	}
+	if store.appendCalls != 0 {
+		t.Fatalf("AppendTurn calls = %d, want 0", store.appendCalls)
+	}
+}
+
+func TestLoopReply_FallsBackAcrossEligibleModelsInOrder(t *testing.T) {
+	store := &fakeConversationStore{}
+	model := &fakeModelClient{
+		complete: func(
+			_ context.Context,
+			model string,
+			_ []conversation.Message,
+			_ []ToolDefinition,
+		) (ModelClientResult, error) {
+			if model == "m1" {
+				return ModelClientResult{}, errors.New("boom")
+			}
+			return assistantResult("done"), nil
+		},
+	}
+
+	loop := NewLoop(model, nil, []string{"m1", "m2"}, DefaultSystemPrompt, store, 3)
+	out, err := loop.Reply(context.Background(), "hello", nil)
+	if err != nil {
+		t.Fatalf("Reply() error = %v", err)
+	}
+	if out != "done" {
+		t.Fatalf("Reply() = %q, want %q", out, "done")
+	}
+	if len(model.callModels) != 2 || model.callModels[0] != "m1" || model.callModels[1] != "m2" {
+		t.Fatalf("callModels = %#v, want [m1 m2]", model.callModels)
 	}
 }
 

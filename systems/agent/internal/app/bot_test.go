@@ -7,6 +7,7 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/config"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
+	"github.com/q15co/q15/systems/agent/internal/modelselection"
 )
 
 type fakeModelClient struct {
@@ -128,5 +129,132 @@ func TestNewModelAdapterRoutesConfiguredModelsAndSuppressesTools(t *testing.T) {
 			clients["openai-sub"].calls[0].model,
 			"gpt-5-codex",
 		)
+	}
+}
+
+func TestRoutedModelAdapterPlanSelectionFiltersByCapabilitiesAndPreservesOrder(t *testing.T) {
+	adapter, err := newModelAdapterWithFactory([]config.AgentModelRuntime{
+		{
+			Ref:           "text-only",
+			ProviderName:  "moonshot",
+			ProviderModel: "kimi-k2.5",
+			Capabilities: config.ModelCapabilities{
+				Text: true,
+			},
+		},
+		{
+			Ref:           "vision",
+			ProviderName:  "vision",
+			ProviderModel: "gpt-4.1",
+			Capabilities: config.ModelCapabilities{
+				Text:       true,
+				ImageInput: true,
+			},
+		},
+		{
+			Ref:           "vision-tools",
+			ProviderName:  "vision-tools",
+			ProviderModel: "gpt-5",
+			Capabilities: config.ModelCapabilities{
+				Text:        true,
+				ImageInput:  true,
+				ToolCalling: true,
+			},
+		},
+	}, func(_ config.AgentModelRuntime) (agent.ModelClient, error) {
+		return &fakeModelClient{}, nil
+	})
+	if err != nil {
+		t.Fatalf("newModelAdapterWithFactory() error = %v", err)
+	}
+
+	var planner modelselection.Planner = adapter
+
+	plan, err := planner.Plan(
+		[]string{"text-only", "vision", "vision-tools"},
+		modelselection.Requirements{
+			Text:       true,
+			ImageInput: true,
+		},
+	)
+	if err != nil {
+		t.Fatalf("Plan() error = %v", err)
+	}
+	if got, want := plan.EligibleRefs, []string{"vision", "vision-tools"}; len(got) != len(want) ||
+		got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("eligible refs = %#v, want %#v", got, want)
+	}
+	if len(plan.Skipped) != 1 {
+		t.Fatalf("skipped len = %d, want 1", len(plan.Skipped))
+	}
+	if plan.Skipped[0].Ref != "text-only" ||
+		plan.Skipped[0].Reason != "missing capabilities [image_input]" {
+		t.Fatalf("skipped[0] = %#v", plan.Skipped[0])
+	}
+}
+
+func TestRoutedModelAdapterPlanSelectionRejectsUnknownModelRef(t *testing.T) {
+	adapter, err := newModelAdapterWithFactory([]config.AgentModelRuntime{
+		{
+			Ref:           "primary",
+			ProviderName:  "moonshot",
+			ProviderModel: "kimi-k2.5",
+			Capabilities: config.ModelCapabilities{
+				Text: true,
+			},
+		},
+	}, func(_ config.AgentModelRuntime) (agent.ModelClient, error) {
+		return &fakeModelClient{}, nil
+	})
+	if err != nil {
+		t.Fatalf("newModelAdapterWithFactory() error = %v", err)
+	}
+
+	var planner modelselection.Planner = adapter
+	if _, err := planner.Plan(
+		[]string{"missing"},
+		modelselection.Requirements{Text: true},
+	); err == nil {
+		t.Fatal("Plan() error = nil, want unknown model error")
+	}
+}
+
+func TestRoutedModelAdapterPlanSelectionReturnsEmptyPlanWhenNoCandidatesMatch(t *testing.T) {
+	adapter, err := newModelAdapterWithFactory([]config.AgentModelRuntime{
+		{
+			Ref:           "text-only",
+			ProviderName:  "moonshot",
+			ProviderModel: "kimi-k2.5",
+			Capabilities: config.ModelCapabilities{
+				Text: true,
+			},
+		},
+	}, func(_ config.AgentModelRuntime) (agent.ModelClient, error) {
+		return &fakeModelClient{}, nil
+	})
+	if err != nil {
+		t.Fatalf("newModelAdapterWithFactory() error = %v", err)
+	}
+
+	var planner modelselection.Planner = adapter
+	plan, err := planner.Plan(
+		[]string{"text-only"},
+		modelselection.Requirements{
+			Text:        true,
+			ImageInput:  true,
+			ToolCalling: true,
+		},
+	)
+	if err != nil {
+		t.Fatalf("Plan() error = %v", err)
+	}
+	if len(plan.EligibleRefs) != 0 {
+		t.Fatalf("eligible refs = %#v, want empty", plan.EligibleRefs)
+	}
+	if len(plan.Skipped) != 1 {
+		t.Fatalf("skipped len = %d, want 1", len(plan.Skipped))
+	}
+	if plan.Skipped[0].Reason != "missing capabilities [image_input, tool_calling]" {
+		t.Fatalf("skip reason = %q", plan.Skipped[0].Reason)
 	}
 }
