@@ -190,9 +190,11 @@ Notes:
 - `openai-codex` uses `/etc/q15/auth/auth.json` from `q15-auth`; `openai-compatible` providers use
   `key_env`
 - `models[].capabilities` drive capability-aware selection; q15 skips models that cannot satisfy the
-  current request before calling a provider
+  currently inferred request requirements before calling a provider
 - `agent.models` order is the deterministic per-turn fallback preference order after capability
   filtering
+- current inference is intentionally text-first; image-input and tool-calling requirement inference
+  land when canonical request signals for those modes are available
 - agent memory lives under `/memory`
 - `Q15_BRAVE_API_KEY` remains optional for Brave web search
 

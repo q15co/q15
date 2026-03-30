@@ -33,8 +33,10 @@ The runtime contract is fixed in the binaries. Overlays only need to provide:
 - PVCs named `q15-workspace`, `q15-memory`, `q15-skills`, `q15-exec-nix`, and `q15-proxy-state`
 
 If multiple models are listed in `agent.models`, q15 treats that list as the deterministic per-turn
-fallback preference order. It filters out models that do not satisfy the current request
+fallback preference order. It filters out models that do not satisfy the currently inferred request
 requirements before any provider call, then falls back across the remaining eligible entries.
+Current inference is text-first; image-input and tool-calling requirement inference are staged for
+the corresponding canonical request signals.
 
 `q15-workspace` is the stack's long-term project and working-state PVC. A fresh
 `PersistentVolumeClaim/q15-workspace` may be empty on first deployment; pre-seeding it is optional

@@ -6,7 +6,7 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/conversation"
 )
 
-func TestInferRequirementsDefaultsToTextOnly(t *testing.T) {
+func TestInferRequirements_CurrentScopeIsTextOnly(t *testing.T) {
 	got := InferRequirements(Request{
 		Messages: []conversation.Message{
 			conversation.SystemMessage("system"),
@@ -17,6 +17,20 @@ func TestInferRequirementsDefaultsToTextOnly(t *testing.T) {
 
 	if !got.Text || got.ImageInput || got.ToolCalling {
 		t.Fatalf("InferRequirements() = %#v, want text-only requirements", got)
+	}
+}
+
+func TestInferRequirements_ToolsDoNotYetRequireToolCalling(t *testing.T) {
+	got := InferRequirements(Request{
+		Messages: []conversation.Message{
+			conversation.SystemMessage("system"),
+			conversation.UserMessage("hello"),
+		},
+		ToolCount: 3,
+	})
+
+	if got.ToolCalling {
+		t.Fatalf("InferRequirements() = %#v, want ToolCalling false for current scope", got)
 	}
 }
 
