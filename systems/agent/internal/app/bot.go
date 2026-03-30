@@ -101,7 +101,8 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 		skills: skillManager,
 	}
 
-	botAgent := agent.NewLoop(
+	botAgent := agent.NewLoopWithPlanner(
+		modelAdapter,
 		modelAdapter,
 		toolRegistry,
 		models,
@@ -418,14 +419,14 @@ func (r *routedModelAdapter) Complete(
 	return endpoint.client.Complete(ctx, endpoint.providerModel, messages, tools)
 }
 
-func newModelAdapter(models []config.AgentModelRuntime) (agent.ModelClient, error) {
+func newModelAdapter(models []config.AgentModelRuntime) (*routedModelAdapter, error) {
 	return newModelAdapterWithFactory(models, defaultModelClientFactory)
 }
 
 func newModelAdapterWithFactory(
 	models []config.AgentModelRuntime,
 	clientFactory modelClientFactory,
-) (agent.ModelClient, error) {
+) (*routedModelAdapter, error) {
 	if len(models) == 0 {
 		return nil, errors.New("at least one model is required")
 	}
