@@ -1,5 +1,5 @@
-// Package tools provides model-callable runtime tools for the agent.
-package tools
+// Package web provides web search and web fetch tools for the agent.
+package web
 
 import (
 	"context"

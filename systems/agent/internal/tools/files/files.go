@@ -1,5 +1,5 @@
-// Package tools provides model-callable runtime tools for the agent.
-package tools
+// Package files provides file read/write/edit/patch tools for the agent.
+package files
 
 import (
 	"context"

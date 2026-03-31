@@ -1,4 +1,4 @@
-package tools
+package web
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 )
 
 func TestWebFetchDefinition(t *testing.T) {
-	tool := NewWebFetch()
+	tool := NewFetch()
 
 	def := tool.Definition()
 	if def.Name != "web_fetch" {
@@ -20,7 +20,7 @@ func TestWebFetchDefinition(t *testing.T) {
 }
 
 func TestWebFetchRunErrorsOnInvalidJSON(t *testing.T) {
-	tool := NewWebFetch()
+	tool := NewFetch()
 
 	_, err := tool.Run(context.Background(), "{")
 	if err == nil || !strings.Contains(err.Error(), "invalid arguments JSON") {
@@ -29,7 +29,7 @@ func TestWebFetchRunErrorsOnInvalidJSON(t *testing.T) {
 }
 
 func TestWebFetchRunErrorsOnMissingURL(t *testing.T) {
-	tool := NewWebFetch()
+	tool := NewFetch()
 
 	_, err := tool.Run(context.Background(), `{"url":"   "}`)
 	if err == nil || !strings.Contains(err.Error(), "missing required argument: url") {
@@ -38,7 +38,7 @@ func TestWebFetchRunErrorsOnMissingURL(t *testing.T) {
 }
 
 func TestWebFetchRunErrorsOnInvalidMode(t *testing.T) {
-	tool := NewWebFetch()
+	tool := NewFetch()
 
 	_, err := tool.Run(context.Background(), `{"url":"https://example.com","mode":"weird"}`)
 	if err == nil || !strings.Contains(err.Error(), "invalid mode") {
@@ -47,7 +47,7 @@ func TestWebFetchRunErrorsOnInvalidMode(t *testing.T) {
 }
 
 func TestWebFetchRunErrorsOnNegativeOffset(t *testing.T) {
-	tool := NewWebFetch()
+	tool := NewFetch()
 
 	_, err := tool.Run(context.Background(), `{"url":"https://example.com","offset":-1}`)
 	if err == nil || !strings.Contains(err.Error(), "offset must be >= 0") {
@@ -86,7 +86,7 @@ func TestWebFetchRunArticleModeFormatsMetadata(t *testing.T) {
 	}))
 	defer server.Close()
 
-	tool := NewWebFetch()
+	tool := NewFetch()
 	tool.client = server.Client()
 
 	got, err := tool.Run(context.Background(), `{"url":"`+server.URL+`","mode":"article"}`)
@@ -147,7 +147,7 @@ func TestWebFetchRunAutoFallsBackToPageAndCleansContent(t *testing.T) {
 	}))
 	defer server.Close()
 
-	tool := NewWebFetch()
+	tool := NewFetch()
 	tool.client = server.Client()
 
 	got, err := tool.Run(context.Background(), `{"url":"`+server.URL+`","mode":"auto"}`)
@@ -198,7 +198,7 @@ func TestWebFetchRunIncludesRequestedURLOnRedirect(t *testing.T) {
 	}))
 	defer server.Close()
 
-	tool := NewWebFetch()
+	tool := NewFetch()
 	tool.client = server.Client()
 
 	got, err := tool.Run(context.Background(), `{"url":"`+server.URL+`/start","mode":"page"}`)
@@ -224,7 +224,7 @@ func TestWebFetchRunDecodesCharset(t *testing.T) {
 	}))
 	defer server.Close()
 
-	tool := NewWebFetch()
+	tool := NewFetch()
 	tool.client = server.Client()
 
 	got, err := tool.Run(context.Background(), `{"url":"`+server.URL+`","mode":"page"}`)
@@ -243,7 +243,7 @@ func TestWebFetchRunRejectsNonHTML(t *testing.T) {
 	}))
 	defer server.Close()
 
-	tool := NewWebFetch()
+	tool := NewFetch()
 	tool.client = server.Client()
 
 	_, err := tool.Run(context.Background(), `{"url":"`+server.URL+`"}`)
@@ -258,7 +258,7 @@ func TestWebFetchRunHTTPError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	tool := NewWebFetch()
+	tool := NewFetch()
 	tool.client = server.Client()
 
 	_, err := tool.Run(context.Background(), `{"url":"`+server.URL+`"}`)
@@ -275,7 +275,7 @@ func TestWebFetchRunTimeout(t *testing.T) {
 	}))
 	defer server.Close()
 
-	tool := NewWebFetch()
+	tool := NewFetch()
 	client := server.Client()
 	client.Timeout = 50 * time.Millisecond
 	tool.client = client
@@ -300,7 +300,7 @@ func TestWebFetchRunClampsMaxCharsAndCachesSlices(t *testing.T) {
 	}))
 	defer server.Close()
 
-	tool := NewWebFetch()
+	tool := NewFetch()
 	tool.client = server.Client()
 
 	first, err := tool.Run(
@@ -353,7 +353,7 @@ func TestWebFetchRunErrorsOnOffsetPastEnd(t *testing.T) {
 	}))
 	defer server.Close()
 
-	tool := NewWebFetch()
+	tool := NewFetch()
 	tool.client = server.Client()
 
 	_, err := tool.Run(context.Background(), `{"url":"`+server.URL+`","mode":"page","offset":20}`)
@@ -371,7 +371,7 @@ func TestWebFetchRunEnforcesBodyLimit(t *testing.T) {
 	}))
 	defer server.Close()
 
-	tool := NewWebFetch()
+	tool := NewFetch()
 	tool.client = server.Client()
 	tool.maxResponseBytes = 1024
 
@@ -392,7 +392,7 @@ func TestWebFetchRunArticleModeErrorsWhenNoReadableArticleExists(t *testing.T) {
 	}))
 	defer server.Close()
 
-	tool := NewWebFetch()
+	tool := NewFetch()
 	tool.client = server.Client()
 
 	_, err := tool.Run(context.Background(), `{"url":"`+server.URL+`","mode":"article"}`)
