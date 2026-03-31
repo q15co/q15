@@ -1,4 +1,5 @@
-package tools
+// Package skills provides the validate_skill tool for the agent.
+package skills
 
 import (
 	"context"

@@ -1,5 +1,6 @@
-// Package tools provides model-callable runtime tools for the agent.
-package tools
+// Package exec provides the exec tool and its helpers for filtering nix
+// bootstrap stderr noise from tool results.
+package exec
 
 import (
 	"bytes"
@@ -159,6 +160,9 @@ func formatExecSessionResult(
 	stdout string,
 	stderr string,
 ) string {
+	// Filter known benign nix bootstrap/fetch chatter on successful runs.
+	stderr = filterNixBootstrapStderr(stderr, exitCode)
+
 	lines := make([]string, 0, 6)
 	if hasExitCode {
 		lines = append(lines, fmt.Sprintf("Exit-Code: %d", exitCode))
@@ -168,8 +172,10 @@ func formatExecSessionResult(
 	}
 	lines = append(lines, "--- STDOUT ---")
 	lines = append(lines, stdout)
-	lines = append(lines, "--- STDERR ---")
-	lines = append(lines, stderr)
+	if strings.TrimSpace(stderr) != "" {
+		lines = append(lines, "--- STDERR ---")
+		lines = append(lines, stderr)
+	}
 	return strings.Join(lines, "\n")
 }
 

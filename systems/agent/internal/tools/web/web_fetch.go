@@ -1,5 +1,5 @@
-// Package tools provides model-callable runtime tools for the agent.
-package tools
+// Package web provides web search and web fetch tools for the agent.
+package web
 
 import (
 	"bytes"
@@ -44,8 +44,8 @@ const (
 
 var webFetchExtraBlankLines = regexp.MustCompile(`\n{3,}`)
 
-// WebFetch fetches HTML pages and returns cleaned markdown slices with metadata.
-type WebFetch struct {
+// Fetch fetches HTML pages and returns cleaned markdown slices with metadata.
+type Fetch struct {
 	client           *http.Client
 	cache            *webFetchCache
 	userAgent        string
@@ -76,9 +76,9 @@ type webFetchCacheEntry struct {
 	document webFetchDocument
 }
 
-// NewWebFetch constructs a web fetch tool with bounded network and cache settings.
-func NewWebFetch() *WebFetch {
-	return &WebFetch{
+// NewFetch constructs a web fetch tool with bounded network and cache settings.
+func NewFetch() *Fetch {
+	return &Fetch{
 		client: &http.Client{Timeout: defaultWebFetchTimeout},
 		cache: newWebFetchCache(
 			defaultWebFetchCacheTTL,
@@ -91,7 +91,7 @@ func NewWebFetch() *WebFetch {
 }
 
 // Definition returns the tool schema exposed to the model.
-func (w *WebFetch) Definition() agent.ToolDefinition {
+func (w *Fetch) Definition() agent.ToolDefinition {
 	return agent.ToolDefinition{
 		Name:        "web_fetch",
 		Description: "Fetch a known web page URL, convert readable HTML content to markdown, and return a bounded slice with fetch metadata.",
@@ -133,7 +133,7 @@ func (w *WebFetch) Definition() agent.ToolDefinition {
 }
 
 // Run executes one web fetch request from raw JSON tool arguments.
-func (w *WebFetch) Run(ctx context.Context, arguments string) (string, error) {
+func (w *Fetch) Run(ctx context.Context, arguments string) (string, error) {
 	if w == nil {
 		return "", fmt.Errorf("web fetch tool is not configured")
 	}
@@ -192,7 +192,7 @@ func (w *WebFetch) Run(ctx context.Context, arguments string) (string, error) {
 	return renderWebFetchDocument(document, offset, maxChars)
 }
 
-func (w *WebFetch) fetchDocument(
+func (w *Fetch) fetchDocument(
 	ctx context.Context,
 	requestedURL string,
 	mode string,
@@ -271,7 +271,7 @@ func normalizeWebFetchMode(mode string) (string, error) {
 	}
 }
 
-func (w *WebFetch) fetchHTML(
+func (w *Fetch) fetchHTML(
 	ctx context.Context,
 	requestURL string,
 ) ([]byte, string, *url.URL, error) {
@@ -708,4 +708,4 @@ func (c *webFetchCache) pruneExpiredLocked(now time.Time) {
 	}
 }
 
-var _ agent.Tool = (*WebFetch)(nil)
+var _ agent.Tool = (*Fetch)(nil)
