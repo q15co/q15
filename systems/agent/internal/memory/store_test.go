@@ -151,6 +151,38 @@ func TestStoreAppendAndLoadRecentMessages(t *testing.T) {
 	}
 }
 
+func TestStoreAppendAndLoadRecentMessagesWithImageParts(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "memory")
+	store := NewStore(root, "Jared", &fakeCommitter{})
+
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	want := []conversation.Message{
+		conversation.UserMessageParts(
+			conversation.Text("inspect this", ""),
+			conversation.Image("media://sha256/abc", ""),
+		),
+		conversation.AssistantMessage(conversation.Text("done", "")),
+	}
+	if err := store.AppendTurn(context.Background(), want); err != nil {
+		t.Fatalf("AppendTurn() error = %v", err)
+	}
+
+	got, err := store.LoadRecentMessages(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("LoadRecentMessages() error = %v", err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("LoadRecentMessages len = %d, want %d", len(got), len(want))
+	}
+	if got[0].Parts[1].Type != conversation.ImagePartType ||
+		got[0].Parts[1].MediaRef != "media://sha256/abc" {
+		t.Fatalf("replayed image part = %#v", got[0].Parts[1])
+	}
+}
+
 func TestStoreInterruptedTurnPersistsAndReplays(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "memory")
 	store := NewStore(root, "Jared", &fakeCommitter{})
@@ -202,7 +234,7 @@ func TestStoreInterruptedTurnPersistsAndReplays(t *testing.T) {
 	}
 }
 
-func TestStoreInitMigratesLegacyTurnsToV2AndSynchronizesHead(t *testing.T) {
+func TestStoreInitMigratesLegacyTurnsToCurrentSchemaAndSynchronizesHead(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "memory")
 	legacyPath := filepath.Join(
 		root,
@@ -244,11 +276,11 @@ func TestStoreInitMigratesLegacyTurnsToV2AndSynchronizesHead(t *testing.T) {
 	if err := store.Init(context.Background()); err != nil {
 		t.Fatalf("Init() error = %v", err)
 	}
-	if committer.lastMessage != "memory: upgrade transcript history to v2" {
+	if committer.lastMessage != "memory: upgrade transcript history to v3" {
 		t.Fatalf(
 			"commit message = %q, want %q",
 			committer.lastMessage,
-			"memory: upgrade transcript history to v2",
+			"memory: upgrade transcript history to v3",
 		)
 	}
 
@@ -417,11 +449,11 @@ func TestStoreInitQuarantinesUnreadableLegacyTurns(t *testing.T) {
 	if err := store.Init(context.Background()); err != nil {
 		t.Fatalf("Init() error = %v", err)
 	}
-	if committer.lastMessage != "memory: upgrade transcript history to v2" {
+	if committer.lastMessage != "memory: upgrade transcript history to v3" {
 		t.Fatalf(
 			"commit message = %q, want %q",
 			committer.lastMessage,
-			"memory: upgrade transcript history to v2",
+			"memory: upgrade transcript history to v3",
 		)
 	}
 	if _, err := os.Stat(legacyPath); !os.IsNotExist(err) {
@@ -450,7 +482,7 @@ func TestStoreInitQuarantinesUnreadableLegacyTurns(t *testing.T) {
 	}
 }
 
-func TestStoreInitSanitizesExistingV2Turns(t *testing.T) {
+func TestStoreInitSanitizesExistingV2TurnsIntoCurrentSchema(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "memory")
 	turnPath := filepath.Join(
 		root,
@@ -486,11 +518,11 @@ func TestStoreInitSanitizesExistingV2Turns(t *testing.T) {
 	if err := store.Init(context.Background()); err != nil {
 		t.Fatalf("Init() error = %v", err)
 	}
-	if committer.lastMessage != "memory: upgrade transcript history to v2" {
+	if committer.lastMessage != "memory: upgrade transcript history to v3" {
 		t.Fatalf(
 			"commit message = %q, want %q",
 			committer.lastMessage,
-			"memory: upgrade transcript history to v2",
+			"memory: upgrade transcript history to v3",
 		)
 	}
 
@@ -550,11 +582,11 @@ func TestStoreInitBackfillsReplayOnlyReasoningForExistingToolReplay(t *testing.T
 	if err := store.Init(context.Background()); err != nil {
 		t.Fatalf("Init() error = %v", err)
 	}
-	if committer.lastMessage != "memory: upgrade transcript history to v2" {
+	if committer.lastMessage != "memory: upgrade transcript history to v3" {
 		t.Fatalf(
 			"commit message = %q, want %q",
 			committer.lastMessage,
-			"memory: upgrade transcript history to v2",
+			"memory: upgrade transcript history to v3",
 		)
 	}
 

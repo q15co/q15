@@ -1,13 +1,17 @@
 package openaicodex
 
 import (
+	"encoding/base64"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
+	q15media "github.com/q15co/q15/systems/agent/internal/media"
 )
 
 func TestMapMessagesAndTools(t *testing.T) {
@@ -24,7 +28,7 @@ func TestMapMessagesAndTools(t *testing.T) {
 			conversation.ToolCall("call-1", "shell", `{"cmd":"pwd"}`),
 		),
 		conversation.ToolResultMessage("call-1", "ok", false),
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("mapMessages error = %v", err)
 	}
@@ -93,7 +97,7 @@ func TestMapMessagesConcatenatesSystemInstructions(t *testing.T) {
 		conversation.SystemMessage("base"),
 		conversation.UserMessage("hello"),
 		conversation.SystemMessage("steering"),
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("mapMessages() error = %v", err)
 	}
@@ -107,7 +111,7 @@ func TestMapMessagesPreservesAssistantDispositionOnReplay(t *testing.T) {
 		conversation.AssistantMessage(
 			conversation.Text("resumed assistant message", conversation.TextDispositionCommentary),
 		),
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("mapMessages() error = %v", err)
 	}
@@ -185,6 +189,87 @@ func TestParseResponseContentToolCallsReasoningAndPhase(t *testing.T) {
 	}
 	if got.FinishReason != "tool_calls" {
 		t.Fatalf("finish reason = %q, want %q", got.FinishReason, "tool_calls")
+	}
+}
+
+func TestMapMessagesBuildsMultipartUserInputForImageInput(t *testing.T) {
+	store, ref, rawImage := mustStoreTestImage(t)
+
+	input, _, err := mapMessages([]conversation.Message{
+		conversation.UserMessageParts(
+			conversation.Text("describe this screenshot", ""),
+			conversation.Image(ref, ""),
+		),
+	}, store)
+	if err != nil {
+		t.Fatalf("mapMessages() error = %v", err)
+	}
+	if len(input) != 1 {
+		t.Fatalf("input len = %d, want 1", len(input))
+	}
+
+	body := marshalInputItemToString(t, input[0])
+	wantDataURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString(rawImage)
+	for _, want := range []string{
+		`"role":"user"`,
+		`"type":"input_text"`,
+		`"text":"describe this screenshot"`,
+		`"type":"input_image"`,
+		wantDataURL,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("serialized input missing %q: %s", want, body)
+		}
+	}
+}
+
+func TestMapMessagesRejectsInvalidImageInput(t *testing.T) {
+	store, err := q15media.NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileStore() error = %v", err)
+	}
+
+	_, _, err = mapMessages([]conversation.Message{
+		conversation.UserMessageParts(conversation.Image("media://sha256/not-real", "")),
+	}, store)
+	if err == nil || !strings.Contains(err.Error(), "resolve image input") {
+		t.Fatalf("mapMessages() error = %v, want image resolution failure", err)
+	}
+}
+
+func TestMapMessagesAddsVisionFollowupForToolProducedImage(t *testing.T) {
+	store, ref, _ := mustStoreTestImage(t)
+
+	input, _, err := mapMessages([]conversation.Message{
+		{
+			Role: conversation.ToolRole,
+			Parts: []conversation.Part{
+				conversation.ToolResult("call-1", "captured screenshot", false),
+				conversation.Image(ref, ""),
+			},
+		},
+	}, store)
+	if err != nil {
+		t.Fatalf("mapMessages() error = %v", err)
+	}
+	if len(input) != 2 {
+		t.Fatalf("input len = %d, want 2", len(input))
+	}
+
+	toolJSON := marshalInputItemToString(t, input[0])
+	if !strings.Contains(toolJSON, `"call_id":"call-1"`) {
+		t.Fatalf("tool output item = %s", toolJSON)
+	}
+
+	followupJSON := marshalInputItemToString(t, input[1])
+	for _, want := range []string{
+		`"role":"user"`,
+		toolImageFollowupText,
+		`"type":"input_image"`,
+	} {
+		if !strings.Contains(followupJSON, want) {
+			t.Fatalf("followup missing %q: %s", want, followupJSON)
+		}
 	}
 }
 
@@ -266,6 +351,7 @@ func TestBuildRequestParamsSetsToolChoiceParallelCallsAndReasoningConfig(t *test
 				},
 			},
 		},
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("buildRequestParams() error = %v", err)
@@ -313,6 +399,7 @@ func TestBuildRequestParamsUsesDefaultInstructionsWhenMissingSystemMessage(t *te
 		[]conversation.Message{
 			conversation.UserMessage("hello"),
 		},
+		nil,
 		nil,
 	)
 	if err != nil {
@@ -561,4 +648,35 @@ func marshalParamsToMap(t *testing.T, params responses.ResponseNewParams) map[st
 		t.Fatalf("json.Unmarshal(params) error = %v", err)
 	}
 	return out
+}
+
+func mustStoreTestImage(t *testing.T) (*q15media.FileStore, string, []byte) {
+	t.Helper()
+
+	store, err := q15media.NewFileStore(filepath.Join(t.TempDir(), "media"))
+	if err != nil {
+		t.Fatalf("NewFileStore() error = %v", err)
+	}
+
+	rawImage := []byte{
+		0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n',
+		0x00, 0x00, 0x00, 0x0d, 'I', 'H', 'D', 'R',
+		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+		0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+		0x89, 0x00, 0x00, 0x00, 0x0d, 'I', 'D', 'A', 'T',
+		0x78, 0x9c, 0x63, 0xf8, 0xcf, 0xc0, 0x00, 0x00,
+		0x03, 0x01, 0x01, 0x00, 0xc9, 0xfe, 0x92, 0xef,
+		0x00, 0x00, 0x00, 0x00, 'I', 'E', 'N', 'D',
+		0xae, 0x42, 0x60, 0x82,
+	}
+	imagePath := filepath.Join(t.TempDir(), "image.png")
+	if err := os.WriteFile(imagePath, rawImage, 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	ref, err := store.Store(imagePath, q15media.Meta{ContentType: "image/png"}, "test")
+	if err != nil {
+		t.Fatalf("Store() error = %v", err)
+	}
+	return store, ref, rawImage
 }

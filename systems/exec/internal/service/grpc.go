@@ -18,6 +18,7 @@ type RuntimeInfo struct {
 	ExecutorType        string
 	WorkspaceDir        string
 	MemoryDir           string
+	MediaDir            string
 	SkillsDir           string
 	ProxyEnabled        bool
 	ProxyPolicyRevision string
@@ -61,6 +62,7 @@ func (s *GRPCServer) GetRuntimeInfo(
 		ExecutorType:        s.info.ExecutorType,
 		WorkspaceDir:        s.info.WorkspaceDir,
 		MemoryDir:           s.info.MemoryDir,
+		MediaDir:            s.info.MediaDir,
 		SkillsDir:           s.info.SkillsDir,
 		ProxyEnabled:        s.info.ProxyEnabled,
 		ProxyPolicyRevision: s.info.ProxyPolicyRevision,

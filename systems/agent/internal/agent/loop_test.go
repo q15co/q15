@@ -144,6 +144,10 @@ func firstPart(msg conversation.Message) conversation.Part {
 	return msg.Parts[0]
 }
 
+func userTextMessage(text string) conversation.Message {
+	return conversation.UserMessage(text)
+}
+
 func TestDefaultSystemPromptUsesStructuredPromptSections(t *testing.T) {
 	for _, want := range []string{
 		"<identity>",
@@ -194,7 +198,7 @@ func TestLoopReply_LoadsRecentAndPersistsTurn(t *testing.T) {
 
 	loop := NewLoop(model, nil, []string{"m1"}, DefaultSystemPrompt, store, 5)
 
-	out, err := loop.Reply(context.Background(), "new-question", nil)
+	out, err := loop.Reply(context.Background(), userTextMessage("new-question"), nil)
 	if err != nil {
 		t.Fatalf("Reply() error = %v", err)
 	}
@@ -257,7 +261,7 @@ func TestLoopReply_PersistsToolCallFlow(t *testing.T) {
 
 	loop := NewLoop(model, registry, []string{"m1"}, DefaultSystemPrompt, store, 3)
 
-	out, err := loop.Reply(context.Background(), "question", nil)
+	out, err := loop.Reply(context.Background(), userTextMessage("question"), nil)
 	if err != nil {
 		t.Fatalf("Reply() error = %v", err)
 	}
@@ -306,7 +310,7 @@ func TestLoopReply_PersistsToolErrorsAsErrorResults(t *testing.T) {
 	}
 
 	loop := NewLoop(model, registry, []string{"m1"}, DefaultSystemPrompt, store, 3)
-	if _, err := loop.Reply(context.Background(), "question", nil); err != nil {
+	if _, err := loop.Reply(context.Background(), userTextMessage("question"), nil); err != nil {
 		t.Fatalf("Reply() error = %v", err)
 	}
 
@@ -346,7 +350,7 @@ func TestLoopReply_PersistsAssistantDisposition(t *testing.T) {
 	}
 
 	loop := NewLoop(model, registry, []string{"m1"}, DefaultSystemPrompt, store, 3)
-	if _, err := loop.Reply(context.Background(), "say hi", nil); err != nil {
+	if _, err := loop.Reply(context.Background(), userTextMessage("say hi"), nil); err != nil {
 		t.Fatalf("Reply() error = %v", err)
 	}
 	if len(store.lastAppend) != 4 {
@@ -379,7 +383,7 @@ func TestLoopReply_PrefersFinalDispositionOverCommentary(t *testing.T) {
 	}
 
 	loop := NewLoop(model, nil, []string{"m1"}, DefaultSystemPrompt, store, 3)
-	out, err := loop.Reply(context.Background(), "say hi", nil)
+	out, err := loop.Reply(context.Background(), userTextMessage("say hi"), nil)
 	if err != nil {
 		t.Fatalf("Reply() error = %v", err)
 	}
@@ -405,7 +409,11 @@ func TestLoopReply_DoesNotAppendGenericToolSteeringPromptWhenToolsEnabled(t *tes
 	}
 
 	loop := NewLoop(model, registry, []string{"m1"}, DefaultSystemPrompt, store, 3)
-	out, err := loop.Reply(context.Background(), "please check the workspace", nil)
+	out, err := loop.Reply(
+		context.Background(),
+		userTextMessage("please check the workspace"),
+		nil,
+	)
 	if err != nil {
 		t.Fatalf("Reply() error = %v", err)
 	}
@@ -457,7 +465,7 @@ func TestLoopReply_EmitsProgressEventsInSuccessOrder(t *testing.T) {
 	var got []RunEvent
 	out, err := loop.Reply(
 		context.Background(),
-		"read the readme",
+		userTextMessage("read the readme"),
 		RunObserverFunc(func(_ context.Context, event RunEvent) {
 			got = append(got, event)
 		}),
@@ -509,7 +517,7 @@ func TestLoopReply_EmitsRunFailedOnModelError(t *testing.T) {
 	var got []RunEvent
 	_, err := loop.Reply(
 		context.Background(),
-		"hello",
+		userTextMessage("hello"),
 		RunObserverFunc(func(_ context.Context, event RunEvent) {
 			got = append(got, event)
 		}),
@@ -567,7 +575,7 @@ func TestLoopReply_UsesEligibleFallbackCandidatesOnly(t *testing.T) {
 		store,
 		3,
 	)
-	out, err := loop.Reply(context.Background(), "hello", nil)
+	out, err := loop.Reply(context.Background(), userTextMessage("hello"), nil)
 	if err != nil {
 		t.Fatalf("Reply() error = %v", err)
 	}
@@ -605,7 +613,7 @@ func TestLoopReply_FailsBeforeProviderCallsWhenNoEligibleModels(t *testing.T) {
 		store,
 		3,
 	)
-	out, err := loop.Reply(context.Background(), "hello", nil)
+	out, err := loop.Reply(context.Background(), userTextMessage("hello"), nil)
 	if out != "" {
 		t.Fatalf("Reply() output = %q, want empty", out)
 	}
@@ -618,6 +626,55 @@ func TestLoopReply_FailsBeforeProviderCallsWhenNoEligibleModels(t *testing.T) {
 	}
 	if store.appendCalls != 0 {
 		t.Fatalf("AppendTurn calls = %d, want 0", store.appendCalls)
+	}
+}
+
+func TestLoopReply_ToolProducedImageRequiresImageInputOnNextTurn(t *testing.T) {
+	store := &fakeConversationStore{}
+	planner := &fakePlanner{}
+	model := &fakeModelClient{
+		results: []ModelClientResult{
+			toolCallResult("call-1", "load_image", `{"path":"artifact.png"}`),
+			assistantResult("done"),
+		},
+	}
+	registry, err := NewToolRegistry(&structuredTestTool{
+		def: ToolDefinition{Name: "load_image"},
+		runResult: func(context.Context, string) (ToolResult, error) {
+			return ToolResult{
+				Output:    "Loaded image: /workspace/artifact.png",
+				MediaRefs: []string{"media://sha256/abc"},
+			}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewToolRegistry() error = %v", err)
+	}
+
+	loop := NewLoopWithPlanner(
+		model,
+		planner,
+		registry,
+		[]string{"m1"},
+		DefaultSystemPrompt,
+		store,
+		3,
+	)
+	out, err := loop.Reply(context.Background(), userTextMessage("inspect the screenshot"), nil)
+	if err != nil {
+		t.Fatalf("Reply() error = %v", err)
+	}
+	if out != "done" {
+		t.Fatalf("Reply() = %q, want done", out)
+	}
+	if len(planner.plannedRequirements) != 2 {
+		t.Fatalf("plannedRequirements len = %d, want 2", len(planner.plannedRequirements))
+	}
+	if planner.plannedRequirements[0].ImageInput {
+		t.Fatalf("first turn requirements = %#v, want text-only", planner.plannedRequirements[0])
+	}
+	if !planner.plannedRequirements[1].ImageInput {
+		t.Fatalf("second turn requirements = %#v, want image_input", planner.plannedRequirements[1])
 	}
 }
 
@@ -638,7 +695,7 @@ func TestLoopReply_FallsBackAcrossEligibleModelsInOrder(t *testing.T) {
 	}
 
 	loop := NewLoop(model, nil, []string{"m1", "m2"}, DefaultSystemPrompt, store, 3)
-	out, err := loop.Reply(context.Background(), "hello", nil)
+	out, err := loop.Reply(context.Background(), userTextMessage("hello"), nil)
 	if err != nil {
 		t.Fatalf("Reply() error = %v", err)
 	}
@@ -657,7 +714,7 @@ func TestLoopReply_DoesNotAppendSteeringPromptWithoutTools(t *testing.T) {
 	}
 
 	loop := NewLoop(model, nil, []string{"m1"}, DefaultSystemPrompt, store, 3)
-	out, err := loop.Reply(context.Background(), "what is 2 + 2?", nil)
+	out, err := loop.Reply(context.Background(), userTextMessage("what is 2 + 2?"), nil)
 	if err != nil {
 		t.Fatalf("Reply() error = %v", err)
 	}
@@ -687,7 +744,7 @@ func TestLoopReply_RetriesOnceOnEmptyAssistantResponse(t *testing.T) {
 	}
 
 	loop := NewLoop(model, nil, []string{"m1"}, DefaultSystemPrompt, store, 3)
-	out, err := loop.Reply(context.Background(), "answer me", nil)
+	out, err := loop.Reply(context.Background(), userTextMessage("answer me"), nil)
 	if err != nil {
 		t.Fatalf("Reply() error = %v", err)
 	}
@@ -725,7 +782,7 @@ func TestLoopReply_ReturnsNoTextAfterEmptyRetryExhausted(t *testing.T) {
 	}
 
 	loop := NewLoop(model, nil, []string{"m1"}, DefaultSystemPrompt, store, 3)
-	out, err := loop.Reply(context.Background(), "still there?", nil)
+	out, err := loop.Reply(context.Background(), userTextMessage("still there?"), nil)
 	if err != nil {
 		t.Fatalf("Reply() error = %v", err)
 	}
@@ -763,7 +820,7 @@ func TestLoopReply_IncludesCoreMemoryInSystemMessage(t *testing.T) {
 
 	loop := NewLoop(model, nil, []string{"m1"}, DefaultSystemPrompt, store, 3)
 
-	_, err := loop.Reply(context.Background(), "hello", nil)
+	_, err := loop.Reply(context.Background(), userTextMessage("hello"), nil)
 	if err != nil {
 		t.Fatalf("Reply() error = %v", err)
 	}
@@ -805,7 +862,7 @@ func TestLoopReply_IncludesSkillCatalogInSystemMessage(t *testing.T) {
 	}
 
 	loop := NewLoop(model, nil, []string{"m1"}, DefaultSystemPrompt, store, 3)
-	if _, err := loop.Reply(context.Background(), "hello", nil); err != nil {
+	if _, err := loop.Reply(context.Background(), userTextMessage("hello"), nil); err != nil {
 		t.Fatalf("Reply() error = %v", err)
 	}
 
@@ -863,7 +920,7 @@ func TestLoopReply_AllowsMoreThanTwelveToolCallTurns(t *testing.T) {
 	}
 
 	loop := NewLoop(model, registry, []string{"m1"}, DefaultSystemPrompt, store, 3)
-	out, err := loop.Reply(context.Background(), "question", nil)
+	out, err := loop.Reply(context.Background(), userTextMessage("question"), nil)
 	if err != nil {
 		t.Fatalf("Reply() error = %v", err)
 	}
@@ -899,7 +956,7 @@ func TestLoopReply_StopsAtHardLimitAndPersistsInterruptedTurn(t *testing.T) {
 	}
 
 	loop := NewLoop(model, registry, []string{"m1"}, DefaultSystemPrompt, store, 3)
-	out, err := loop.Reply(context.Background(), "question", nil)
+	out, err := loop.Reply(context.Background(), userTextMessage("question"), nil)
 	if out != "" {
 		t.Fatalf("Reply() output = %q, want empty", out)
 	}
@@ -949,7 +1006,7 @@ func TestLoopReply_StopsOnNoProgressToolLoop(t *testing.T) {
 	}
 
 	loop := NewLoop(model, registry, []string{"m1"}, DefaultSystemPrompt, store, 3)
-	out, err := loop.Reply(context.Background(), "question", nil)
+	out, err := loop.Reply(context.Background(), userTextMessage("question"), nil)
 	if out != "" {
 		t.Fatalf("Reply() output = %q, want empty", out)
 	}

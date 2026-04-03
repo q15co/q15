@@ -34,6 +34,9 @@ services:
         source: q15_memory
         target: /memory
       - type: volume
+        source: q15_media
+        target: /media
+      - type: volume
         source: q15_skills
         target: /skills
       - type: volume
@@ -51,6 +54,7 @@ services:
       GODEBUG: updatemaxprocs=0
       GOMAXPROCS: "1"
       MOONSHOT_API_KEY_FILE: /run/q15-secrets/moonshot_api_key
+      ZAI_API_KEY_FILE: /run/q15-secrets/zai_api_key
       Q15_TELEGRAM_TOKEN_FILE: /run/q15-secrets/q15_telegram_token
       Q15_TELEGRAM_ALLOWED_USER_IDS_FILE: /run/q15-secrets/q15_telegram_allowed_user_ids
       Q15_BRAVE_API_KEY: ${Q15_BRAVE_API_KEY-}
@@ -68,6 +72,10 @@ services:
         target: /run/q15-secrets/moonshot_api_key
         read_only: true
       - type: bind
+        source: ./secrets/zai_api_key
+        target: /run/q15-secrets/zai_api_key
+        read_only: true
+      - type: bind
         source: ./secrets/q15_telegram_token
         target: /run/q15-secrets/q15_telegram_token
         read_only: true
@@ -82,11 +90,15 @@ services:
         source: q15_memory
         target: /memory
       - type: volume
+        source: q15_media
+        target: /media
+      - type: volume
         source: q15_skills
         target: /skills
 
 volumes:
   q15_exec_nix_store:
+  q15_media:
   q15_memory:
   q15_proxy_state:
   q15_skills:

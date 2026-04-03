@@ -20,6 +20,7 @@ type InboundMessage struct {
 	UserID    string
 	MessageID string
 	Text      string
+	Media     []string
 }
 
 // OutboundMessage is a transport-bound message leaving the runtime.

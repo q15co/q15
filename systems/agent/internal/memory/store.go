@@ -122,7 +122,10 @@ func (s *Store) Init(ctx context.Context) error {
 	}
 	commitMessage := "memory: initialize repository"
 	if upgrade.Upgraded > 0 || upgrade.Quarantined > 0 {
-		commitMessage = "memory: upgrade transcript history to v2"
+		commitMessage = fmt.Sprintf(
+			"memory: upgrade transcript history to v%d",
+			conversation.SchemaVersion,
+		)
 	} else if headSynced {
 		commitMessage = "memory: synchronize transcript head state"
 	}

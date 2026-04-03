@@ -11,6 +11,7 @@ func TestNormalizeMessagesDropsEmptyAndNormalizesFields(t *testing.T) {
 			Role: AssistantRole,
 			Parts: []Part{
 				{Type: TextPartType, Text: "hello", Disposition: "final"},
+				{Type: ImagePartType, MediaRef: " media://abc ", DataURL: " "},
 				{Type: ToolCallPartType, ID: " call-1 ", Name: " echo ", Arguments: ""},
 				{
 					Type: ReasoningPartType,
@@ -29,8 +30,8 @@ func TestNormalizeMessagesDropsEmptyAndNormalizesFields(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("NormalizeMessages len = %d, want 1", len(got))
 	}
-	if len(got[0].Parts) != 3 {
-		t.Fatalf("NormalizeMessages parts len = %d, want 3", len(got[0].Parts))
+	if len(got[0].Parts) != 4 {
+		t.Fatalf("NormalizeMessages parts len = %d, want 4", len(got[0].Parts))
 	}
 	if got[0].Parts[0].Disposition != TextDispositionFinal {
 		t.Fatalf(
@@ -39,12 +40,15 @@ func TestNormalizeMessagesDropsEmptyAndNormalizesFields(t *testing.T) {
 			TextDispositionFinal,
 		)
 	}
-	if got[0].Parts[1].ID != "call-1" || got[0].Parts[1].Name != "echo" ||
-		got[0].Parts[1].Arguments != "{}" {
-		t.Fatalf("tool call normalization = %#v", got[0].Parts[1])
+	if got[0].Parts[1].MediaRef != "media://abc" || got[0].Parts[1].DataURL != "" {
+		t.Fatalf("image normalization = %#v", got[0].Parts[1])
 	}
-	if len(got[0].Parts[2].Replay) != 1 {
-		t.Fatalf("reasoning replay len = %d, want 1", len(got[0].Parts[2].Replay))
+	if got[0].Parts[2].ID != "call-1" || got[0].Parts[2].Name != "echo" ||
+		got[0].Parts[2].Arguments != "{}" {
+		t.Fatalf("tool call normalization = %#v", got[0].Parts[2])
+	}
+	if len(got[0].Parts[3].Replay) != 1 {
+		t.Fatalf("reasoning replay len = %d, want 1", len(got[0].Parts[3].Replay))
 	}
 }
 
@@ -138,5 +142,50 @@ func TestMessageJSONRoundTripPreservesReasoningReplay(t *testing.T) {
 	}
 	if got.Parts[1].Disposition != TextDispositionFinal {
 		t.Fatalf("text disposition = %q, want %q", got.Parts[1].Disposition, TextDispositionFinal)
+	}
+}
+
+func TestMessageJSONRoundTripPreservesImagePart(t *testing.T) {
+	input := Message{
+		Role: UserRole,
+		Parts: []Part{
+			Text("describe this", ""),
+			Image("media://sha256/abc", ""),
+		},
+	}
+
+	data, err := json.Marshal(input)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+
+	var got Message
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+
+	if got.Role != UserRole {
+		t.Fatalf("role = %q, want user", got.Role)
+	}
+	if len(got.Parts) != 2 {
+		t.Fatalf("parts len = %d, want 2", len(got.Parts))
+	}
+	if got.Parts[1].Type != ImagePartType || got.Parts[1].MediaRef != "media://sha256/abc" {
+		t.Fatalf("image part = %#v", got.Parts[1])
+	}
+}
+
+func TestHasImageParts(t *testing.T) {
+	if HasImageParts([]Message{UserMessage("hello")}) {
+		t.Fatal("HasImageParts() = true, want false")
+	}
+
+	if !HasImageParts([]Message{
+		UserMessageParts(
+			Text("hello", ""),
+			Image("media://sha256/abc", ""),
+		),
+	}) {
+		t.Fatal("HasImageParts() = false, want true")
 	}
 }

@@ -10,7 +10,7 @@ import (
 // SchemaVersion is the current persisted transcript schema version. New writes
 // always use this version; older versions are accepted only during startup
 // migration.
-const SchemaVersion = 2
+const SchemaVersion = 3
 
 // PortableReasoningUnavailableText is an explicit placeholder used when a
 // provider only exposed opaque replay state and no portable reasoning text.
@@ -33,6 +33,7 @@ type PartType string
 // Canonical message part types.
 const (
 	TextPartType       PartType = "text"
+	ImagePartType      PartType = "image"
 	ReasoningPartType  PartType = "reasoning"
 	ToolCallPartType   PartType = "tool_call"
 	ToolResultPartType PartType = "tool_result"
@@ -66,6 +67,9 @@ type Part struct {
 	// Text and Reasoning parts.
 	Text        string          `json:"text,omitempty"`
 	Disposition TextDisposition `json:"disposition,omitempty"`
+	// Image parts.
+	MediaRef string `json:"media_ref,omitempty"`
+	DataURL  string `json:"data_url,omitempty"`
 	// Replay stores provider-specific reconstruction metadata for a reasoning
 	// part. It is supplemental only: portable transcript fields remain the
 	// canonical source of truth, and replay consumers should prefer Text when it
@@ -89,6 +93,15 @@ func Text(text string, disposition TextDisposition) Part {
 		Type:        TextPartType,
 		Text:        text,
 		Disposition: normalizeDisposition(disposition),
+	}
+}
+
+// Image creates one image part backed by either a media ref or a data URL.
+func Image(mediaRef, dataURL string) Part {
+	return Part{
+		Type:     ImagePartType,
+		MediaRef: strings.TrimSpace(mediaRef),
+		DataURL:  strings.TrimSpace(dataURL),
 	}
 }
 
@@ -129,6 +142,11 @@ func SystemMessage(text string) Message {
 // UserMessage creates a user message with one text part.
 func UserMessage(text string) Message {
 	return Message{Role: UserRole, Parts: []Part{Text(text, "")}}
+}
+
+// UserMessageParts creates a user message from ordered parts.
+func UserMessageParts(parts ...Part) Message {
+	return Message{Role: UserRole, Parts: CloneParts(parts)}
 }
 
 // AssistantMessage creates an assistant message from ordered parts.

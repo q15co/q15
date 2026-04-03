@@ -10,17 +10,18 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/bus"
 	channelport "github.com/q15co/q15/systems/agent/internal/channel"
+	"github.com/q15co/q15/systems/agent/internal/conversation"
 )
 
 type fakeObservedAgent struct {
 	mu         sync.Mutex
 	replyCalls int
-	reply      func(context.Context, string, agent.RunObserver) (string, error)
+	reply      func(context.Context, conversation.Message, agent.RunObserver) (string, error)
 }
 
 func (f *fakeObservedAgent) Reply(
 	ctx context.Context,
-	userInput string,
+	userInput conversation.Message,
 	observer agent.RunObserver,
 ) (string, error) {
 	f.mu.Lock()
@@ -161,7 +162,7 @@ func TestRunAgentWorker_FinishesSessionAndForwardsEvents(t *testing.T) {
 	messageBus := bus.New(8)
 	session := &fakeSession{}
 	agentImpl := &fakeObservedAgent{
-		reply: func(ctx context.Context, _ string, observer agent.RunObserver) (string, error) {
+		reply: func(ctx context.Context, _ conversation.Message, observer agent.RunObserver) (string, error) {
 			observer.OnRunEvent(ctx, agent.RunEvent{Type: agent.RunEventRunStarted})
 			return "done", nil
 		},
@@ -214,6 +215,82 @@ func TestRunAgentWorker_FinishesSessionAndForwardsEvents(t *testing.T) {
 	}
 }
 
+func TestUserMessageFromInboundBuildsOrderedTextAndImageParts(t *testing.T) {
+	got := userMessageFromInbound(bus.InboundMessage{
+		Text:  "hello",
+		Media: []string{"media://sha256/abc"},
+	})
+
+	if got.Role != conversation.UserRole {
+		t.Fatalf("role = %q, want user", got.Role)
+	}
+	if len(got.Parts) != 2 {
+		t.Fatalf("parts len = %d, want 2", len(got.Parts))
+	}
+	if got.Parts[0].Type != conversation.TextPartType || got.Parts[0].Text != "hello" {
+		t.Fatalf("parts[0] = %#v", got.Parts[0])
+	}
+	if got.Parts[1].Type != conversation.ImagePartType ||
+		got.Parts[1].MediaRef != "media://sha256/abc" {
+		t.Fatalf("parts[1] = %#v", got.Parts[1])
+	}
+}
+
+func TestRunAgentWorker_AcceptsMediaOnlyInboundMessage(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	messageBus := bus.New(8)
+	session := &fakeSession{}
+	agentImpl := &fakeObservedAgent{
+		reply: func(_ context.Context, msg conversation.Message, _ agent.RunObserver) (string, error) {
+			if len(msg.Parts) != 1 {
+				t.Fatalf("reply message parts len = %d, want 1", len(msg.Parts))
+			}
+			if msg.Parts[0].Type != conversation.ImagePartType ||
+				msg.Parts[0].MediaRef != "media://sha256/abc" {
+				t.Fatalf("reply image part = %#v", msg.Parts[0])
+			}
+			return "done", nil
+		},
+	}
+	endpoint := &fakeEndpoint{
+		channel: bus.ChannelTelegram,
+		open: func(context.Context, bus.InboundMessage) (channelport.AgentSession, error) {
+			return session, nil
+		},
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- runAgentWorker(ctx, messageBus, agentImpl, endpoint)
+	}()
+
+	if err := messageBus.PublishInbound(ctx, bus.InboundMessage{
+		Channel: bus.ChannelTelegram,
+		ChatID:  "123",
+		Media:   []string{"media://sha256/abc"},
+	}); err != nil {
+		t.Fatalf("PublishInbound() error = %v", err)
+	}
+
+	waitForCondition(t, 2*time.Second, func() bool {
+		session.mu.Lock()
+		defer session.mu.Unlock()
+		return len(session.finishedTexts) == 1
+	})
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("runAgentWorker() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for worker exit")
+	}
+}
+
 func TestRunAgentWorker_FormatsStopErrors(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -221,7 +298,7 @@ func TestRunAgentWorker_FormatsStopErrors(t *testing.T) {
 	messageBus := bus.New(8)
 	session := &fakeSession{}
 	agentImpl := &fakeObservedAgent{
-		reply: func(context.Context, string, agent.RunObserver) (string, error) {
+		reply: func(context.Context, conversation.Message, agent.RunObserver) (string, error) {
 			return "", &agent.StopError{
 				Reason: agent.StopReasonToolLoopDetected,
 				Detail: "tool loop detected",
@@ -325,7 +402,7 @@ func TestRunAgentWorker_CancellationAbortsSession(t *testing.T) {
 	messageBus := bus.New(8)
 	session := &fakeSession{}
 	agentImpl := &fakeObservedAgent{
-		reply: func(ctx context.Context, _ string, _ agent.RunObserver) (string, error) {
+		reply: func(ctx context.Context, _ conversation.Message, _ agent.RunObserver) (string, error) {
 			<-ctx.Done()
 			return "", ctx.Err()
 		},

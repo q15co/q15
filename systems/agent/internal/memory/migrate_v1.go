@@ -130,10 +130,24 @@ func (s *Store) upgradeTurn(path string) (bool, bool, error) {
 			return false, false, fmt.Errorf("rewrite turn record %q: %w", path, err)
 		}
 		return true, false, nil
-	case conversation.SchemaVersion:
+	case 2:
 		var record turnRecord
 		if err := json.Unmarshal(data, &record); err != nil {
 			return false, true, s.quarantineTurn(path, fmt.Errorf("decode v2 turn record: %w", err))
+		}
+		record.SchemaVersion = conversation.SchemaVersion
+		record.Messages = sanitizeStoredMessages(record.Messages)
+		if err := writeJSONFileAtomic(path, record); err != nil {
+			return false, false, fmt.Errorf("rewrite upgraded turn record %q: %w", path, err)
+		}
+		return true, false, nil
+	case conversation.SchemaVersion:
+		var record turnRecord
+		if err := json.Unmarshal(data, &record); err != nil {
+			return false, true, s.quarantineTurn(
+				path,
+				fmt.Errorf("decode v%d turn record: %w", conversation.SchemaVersion, err),
+			)
 		}
 		sanitized := sanitizeStoredMessages(record.Messages)
 		if reflect.DeepEqual(record.Messages, sanitized) {

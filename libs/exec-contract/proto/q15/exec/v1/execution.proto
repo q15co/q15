@@ -31,6 +31,7 @@ message GetRuntimeInfoResponse {
   repeated RuntimeCapability capabilities = 6;
   bool proxy_enabled = 7;
   string proxy_policy_revision = 8;
+  string media_dir = 9;
 }
 
 enum SessionState {

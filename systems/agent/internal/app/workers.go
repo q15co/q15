@@ -12,6 +12,7 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/bus"
 	channelport "github.com/q15co/q15/systems/agent/internal/channel"
+	"github.com/q15co/q15/systems/agent/internal/conversation"
 )
 
 var agentSessionAbortTimeout = 5 * time.Second
@@ -37,8 +38,8 @@ func runAgentWorker(
 				continue
 			}
 
-			text := strings.TrimSpace(in.Text)
-			if text == "" {
+			userMessage := userMessageFromInbound(in)
+			if len(userMessage.Parts) == 0 {
 				continue
 			}
 
@@ -54,7 +55,7 @@ func runAgentWorker(
 				continue
 			}
 
-			answer, err := a.Reply(runCtx, text, session)
+			answer, err := a.Reply(runCtx, userMessage, session)
 			if ctx.Err() != nil {
 				cleanupCtx, cleanupCancel := context.WithTimeout(
 					context.WithoutCancel(ctx),
@@ -72,6 +73,22 @@ func runAgentWorker(
 			cancel()
 		}
 	}
+}
+
+func userMessageFromInbound(in bus.InboundMessage) conversation.Message {
+	parts := make([]conversation.Part, 0, 1+len(in.Media))
+
+	if text := strings.TrimSpace(in.Text); text != "" {
+		parts = append(parts, conversation.Text(text, ""))
+	}
+	for _, ref := range in.Media {
+		ref = strings.TrimSpace(ref)
+		if ref == "" {
+			continue
+		}
+		parts = append(parts, conversation.Image(ref, ""))
+	}
+	return conversation.UserMessageParts(parts...)
 }
 
 func buildEndpointRegistry(

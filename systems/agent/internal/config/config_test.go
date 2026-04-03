@@ -95,6 +95,9 @@ agent:
 	if runtime.MemoryLocalDir != "/memory" {
 		t.Fatalf("MemoryLocalDir = %q, want %q", runtime.MemoryLocalDir, "/memory")
 	}
+	if runtime.MediaLocalDir != "/media" {
+		t.Fatalf("MediaLocalDir = %q, want %q", runtime.MediaLocalDir, "/media")
+	}
 	if runtime.SkillsLocalDir != "/skills" {
 		t.Fatalf("SkillsLocalDir = %q, want %q", runtime.SkillsLocalDir, "/skills")
 	}

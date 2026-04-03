@@ -7,18 +7,28 @@ providers:
     base_url: https://api.moonshot.ai/v1
     key_env: MOONSHOT_API_KEY
 
+  - name: zai
+    type: openai-compatible
+    base_url: https://api.z.ai/api/coding/paas/v4
+    key_env: ZAI_API_KEY
+
 models:
   - name: gpt-5.4
     provider: openai
+    capabilities: [text, tool_calling, reasoning, image_input]
+
+  - name: glm-5-turbo
+    provider: zai
     capabilities: [text, tool_calling, reasoning]
 
   - name: kimi-k2.5
     provider: moonshot
-    capabilities: [text, tool_calling, reasoning]
+    capabilities: [text, tool_calling, reasoning, image_input]
 
 agent:
   name: Q15
   models:
+    - glm-5-turbo
     - gpt-5.4
     - kimi-k2.5
   memory_recent_turns: 6

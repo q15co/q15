@@ -10,12 +10,14 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/execution"
 	"github.com/q15co/q15/systems/agent/internal/fileops"
+	q15media "github.com/q15co/q15/systems/agent/internal/media"
 )
 
 func TestComposeSystemPromptIncludesRuntimeAndExecGuidance(t *testing.T) {
 	info := runtimeEnvironmentInfo{
 		WorkspaceDir:        "/workspace",
 		MemoryDir:           "/memory",
+		MediaDir:            "/media",
 		SkillsDir:           "/skills",
 		ExecutorType:        "local-nix-shell",
 		ProxyEnabled:        true,
@@ -42,6 +44,7 @@ func TestComposeSystemPromptIncludesRuntimeAndExecGuidance(t *testing.T) {
 		"<runtime_environment>",
 		"- Workspace: /workspace",
 		"- Persistent memory repo: /memory",
+		"- Runtime media root: /media",
 		"- Shared skills root: /skills",
 		"- Command runtime: q15-exec sessions via local-nix-shell",
 		"- Proxy-mediated exec env injection is enabled (policy revision: rev-1).",
@@ -72,7 +75,25 @@ func TestBuildToolListIncludesOnlyCurrentRuntimeTools(t *testing.T) {
 	t.Parallel()
 
 	fileExec := &stubFileExecutor{}
-	toolList, err := buildToolList(&stubExecutionService{}, fileExec, nil, "")
+	mediaStore, err := q15media.NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileStore() error = %v", err)
+	}
+	toolList, err := buildToolList(
+		&stubExecutionService{},
+		fileExec,
+		nil,
+		fileops.Settings{
+			WorkspaceLocalDir:   t.TempDir(),
+			WorkspaceRuntimeDir: "/workspace",
+			MemoryLocalDir:      t.TempDir(),
+			MemoryRuntimeDir:    "/memory",
+			SkillsLocalDir:      t.TempDir(),
+			SkillsRuntimeDir:    "/skills",
+		},
+		mediaStore,
+		"",
+	)
 	if err != nil {
 		t.Fatalf("buildToolList() error = %v", err)
 	}
@@ -84,6 +105,7 @@ func TestBuildToolListIncludesOnlyCurrentRuntimeTools(t *testing.T) {
 		"apply_patch",
 		"validate_skill",
 		"exec",
+		"load_image",
 		"web_fetch",
 	}; !equalStrings(got, want) {
 		t.Fatalf("tool names = %v, want %v", got, want)
@@ -94,7 +116,25 @@ func TestBuildToolListAppendsWebSearchWhenConfigured(t *testing.T) {
 	t.Parallel()
 
 	fileExec := &stubFileExecutor{}
-	toolList, err := buildToolList(&stubExecutionService{}, fileExec, nil, "brave-key")
+	mediaStore, err := q15media.NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileStore() error = %v", err)
+	}
+	toolList, err := buildToolList(
+		&stubExecutionService{},
+		fileExec,
+		nil,
+		fileops.Settings{
+			WorkspaceLocalDir:   t.TempDir(),
+			WorkspaceRuntimeDir: "/workspace",
+			MemoryLocalDir:      t.TempDir(),
+			MemoryRuntimeDir:    "/memory",
+			SkillsLocalDir:      t.TempDir(),
+			SkillsRuntimeDir:    "/skills",
+		},
+		mediaStore,
+		"brave-key",
+	)
 	if err != nil {
 		t.Fatalf("buildToolList() error = %v", err)
 	}
@@ -106,6 +146,7 @@ func TestBuildToolListAppendsWebSearchWhenConfigured(t *testing.T) {
 		"apply_patch",
 		"validate_skill",
 		"exec",
+		"load_image",
 		"web_fetch",
 		"web_search",
 	}; !equalStrings(got, want) {
@@ -118,7 +159,13 @@ type stubExecutionService struct{}
 func (stubExecutionService) GetRuntimeInfo(
 	context.Context,
 ) (*execpb.GetRuntimeInfoResponse, error) {
-	return &execpb.GetRuntimeInfoResponse{ExecutorType: "local-shell"}, nil
+	return &execpb.GetRuntimeInfoResponse{
+		ExecutorType: "local-shell",
+		WorkspaceDir: "/workspace",
+		MemoryDir:    "/memory",
+		MediaDir:     "/media",
+		SkillsDir:    "/skills",
+	}, nil
 }
 
 func (stubExecutionService) StartSession(
