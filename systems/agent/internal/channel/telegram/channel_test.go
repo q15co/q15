@@ -1,15 +1,19 @@
 package telegram
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
+	"net/http"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/mymmrac/telego"
 	ta "github.com/mymmrac/telego/telegoapi"
+	q15media "github.com/q15co/q15/systems/agent/internal/media"
 )
 
 type apiCall struct {
@@ -21,6 +25,12 @@ type mockAPICaller struct {
 	calls     []apiCall
 	responses []*ta.Response
 	callErr   error
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
 
 func (m *mockAPICaller) Call(
@@ -78,6 +88,18 @@ func newTestChannelWithCaller(t *testing.T, caller ta.Caller) *Channel {
 	}
 
 	return &Channel{bot: bot}
+}
+
+var testTelegramPNGBytes = []byte{
+	0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n',
+	0x00, 0x00, 0x00, 0x0d, 'I', 'H', 'D', 'R',
+	0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+	0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+	0x89, 0x00, 0x00, 0x00, 0x0d, 'I', 'D', 'A', 'T',
+	0x78, 0x9c, 0x63, 0xf8, 0xcf, 0xc0, 0x00, 0x00,
+	0x03, 0x01, 0x01, 0x00, 0xc9, 0xfe, 0x92, 0xef,
+	0x00, 0x00, 0x00, 0x00, 'I', 'E', 'N', 'D',
+	0xae, 0x42, 0x60, 0x82,
 }
 
 func TestSendText_UsesHTMLParseMode(t *testing.T) {
@@ -337,6 +359,345 @@ func TestHandleMessage_IncludesMessageID(t *testing.T) {
 	}
 	if got.UserID != "7" {
 		t.Fatalf("UserID = %q, want %q", got.UserID, "7")
+	}
+}
+
+func TestHandleMessage_PhotoStoresMediaPreservesCaptionAndUsesExpectedScope(t *testing.T) {
+	store, err := q15media.NewFileStore(filepath.Join(t.TempDir(), "media"))
+	if err != nil {
+		t.Fatalf("NewFileStore() error = %v", err)
+	}
+
+	caller := &mockAPICaller{
+		responses: []*ta.Response{
+			{
+				Ok: true,
+				Result: []byte(
+					`{"file_id":"high","file_unique_id":"u1","file_path":"photos/high.png"}`,
+				),
+			},
+		},
+	}
+	ch := newTestChannelWithCaller(t, caller)
+	ch.mediaStore = store
+	ch.downloadClient = &http.Client{
+		Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Status:     "200 OK",
+				Body:       io.NopCloser(bytes.NewReader(testTelegramPNGBytes)),
+				Header:     make(http.Header),
+			}, nil
+		}),
+	}
+
+	var got IncomingMessage
+	ch.onMessage = func(msg IncomingMessage) {
+		got = msg
+	}
+
+	err = ch.handleMessage(context.Background(), &telego.Message{
+		MessageID: 42,
+		Caption:   "describe this",
+		Photo: []telego.PhotoSize{
+			{FileID: "low"},
+			{FileID: "high"},
+		},
+		Chat: telego.Chat{ID: 123},
+		From: &telego.User{ID: 7},
+	})
+	if err != nil {
+		t.Fatalf("handleMessage() error = %v", err)
+	}
+
+	if got.Text != "describe this" {
+		t.Fatalf("Text = %q, want %q", got.Text, "describe this")
+	}
+	if len(got.Media) != 1 {
+		t.Fatalf("Media len = %d, want 1", len(got.Media))
+	}
+	if !strings.HasPrefix(got.Media[0], "media://sha256/") {
+		t.Fatalf("Media[0] = %q, want media ref", got.Media[0])
+	}
+	if len(caller.calls) != 1 {
+		t.Fatalf("API calls = %d, want 1", len(caller.calls))
+	}
+	if !strings.HasSuffix(caller.calls[0].url, "/getFile") {
+		t.Fatalf("first URL = %q, want suffix /getFile", caller.calls[0].url)
+	}
+	if gotFileID := caller.calls[0].body["file_id"]; gotFileID != "high" {
+		t.Fatalf("getFile file_id = %#v, want %q", gotFileID, "high")
+	}
+
+	localPath, meta, err := store.Resolve(got.Media[0])
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if meta.Source != "telegram" {
+		t.Fatalf("meta.Source = %q, want telegram", meta.Source)
+	}
+	if meta.ContentType != "image/png" {
+		t.Fatalf("meta.ContentType = %q, want image/png", meta.ContentType)
+	}
+	if meta.Filename != "high.png" {
+		t.Fatalf("meta.Filename = %q, want high.png", meta.Filename)
+	}
+	if !strings.Contains(
+		localPath,
+		string(filepath.Separator)+"objects"+string(filepath.Separator),
+	) {
+		t.Fatalf("localPath = %q, want stored object path", localPath)
+	}
+
+	if err := store.ReleaseAll("telegram:123:42"); err != nil {
+		t.Fatalf("ReleaseAll() error = %v", err)
+	}
+	if _, _, err := store.Resolve(got.Media[0]); err == nil {
+		t.Fatal("Resolve() error = nil after releasing expected scope, want non-nil")
+	}
+}
+
+func TestHandleMessage_PhotoOnlyProducesMediaOnlyMessage(t *testing.T) {
+	store, err := q15media.NewFileStore(filepath.Join(t.TempDir(), "media"))
+	if err != nil {
+		t.Fatalf("NewFileStore() error = %v", err)
+	}
+
+	caller := &mockAPICaller{
+		responses: []*ta.Response{
+			{
+				Ok:     true,
+				Result: []byte(`{"file_id":"photo","file_unique_id":"u1","file_path":"photo.jpg"}`),
+			},
+		},
+	}
+	ch := newTestChannelWithCaller(t, caller)
+	ch.mediaStore = store
+	ch.downloadClient = &http.Client{
+		Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Status:     "200 OK",
+				Body:       io.NopCloser(bytes.NewReader(testTelegramPNGBytes)),
+				Header:     make(http.Header),
+			}, nil
+		}),
+	}
+
+	var got IncomingMessage
+	ch.onMessage = func(msg IncomingMessage) {
+		got = msg
+	}
+
+	err = ch.handleMessage(context.Background(), &telego.Message{
+		MessageID: 4,
+		Photo:     []telego.PhotoSize{{FileID: "photo"}},
+		Chat:      telego.Chat{ID: 321},
+	})
+	if err != nil {
+		t.Fatalf("handleMessage() error = %v", err)
+	}
+
+	if got.Text != "" {
+		t.Fatalf("Text = %q, want empty", got.Text)
+	}
+	if len(got.Media) != 1 {
+		t.Fatalf("Media len = %d, want 1", len(got.Media))
+	}
+}
+
+func TestHandleMessage_UnauthorizedUserSkipsMediaIngest(t *testing.T) {
+	caller := &mockAPICaller{}
+	ch := newTestChannelWithCaller(t, caller)
+	if err := WithAllowedUserIDs([]int64{1})(ch); err != nil {
+		t.Fatalf("WithAllowedUserIDs() error = %v", err)
+	}
+
+	var got bool
+	downloadCalls := 0
+	ch.onMessage = func(IncomingMessage) {
+		got = true
+	}
+	ch.downloadClient = &http.Client{
+		Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+			downloadCalls++
+			return nil, nil
+		}),
+	}
+
+	err := ch.handleMessage(context.Background(), &telego.Message{
+		MessageID: 1,
+		Caption:   "nope",
+		Photo:     []telego.PhotoSize{{FileID: "photo"}},
+		Chat:      telego.Chat{ID: 123},
+		From:      &telego.User{ID: 999},
+	})
+	if err != nil {
+		t.Fatalf("handleMessage() error = %v", err)
+	}
+
+	if got {
+		t.Fatal("onMessage called, want unauthorized message to be ignored")
+	}
+	if len(caller.calls) != 0 {
+		t.Fatalf("API calls = %d, want 0", len(caller.calls))
+	}
+	if downloadCalls != 0 {
+		t.Fatalf("downloadCalls = %d, want 0", downloadCalls)
+	}
+}
+
+func TestHandleMessage_UnsupportedAttachmentsBecomeSyntheticTextOnlyMessages(t *testing.T) {
+	tests := []struct {
+		name    string
+		kind    string
+		message telego.Message
+	}{
+		{
+			name: "animation",
+			kind: "animation",
+			message: telego.Message{
+				Animation: &telego.Animation{FileID: "anim"},
+				Caption:   "check this",
+			},
+		},
+		{
+			name: "audio",
+			kind: "audio",
+			message: telego.Message{
+				Audio:   &telego.Audio{FileID: "audio"},
+				Caption: "check this",
+			},
+		},
+		{
+			name: "document",
+			kind: "document",
+			message: telego.Message{
+				Document: &telego.Document{FileID: "doc"},
+				Caption:  "check this",
+			},
+		},
+		{
+			name: "sticker",
+			kind: "sticker",
+			message: telego.Message{
+				Sticker: &telego.Sticker{FileID: "sticker"},
+			},
+		},
+		{
+			name: "video",
+			kind: "video",
+			message: telego.Message{
+				Video:   &telego.Video{FileID: "video"},
+				Caption: "check this",
+			},
+		},
+		{
+			name: "video note",
+			kind: "video note",
+			message: telego.Message{
+				VideoNote: &telego.VideoNote{FileID: "video-note"},
+				Caption:   "check this",
+			},
+		},
+		{
+			name: "voice",
+			kind: "voice",
+			message: telego.Message{
+				Voice:   &telego.Voice{FileID: "voice"},
+				Caption: "check this",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got IncomingMessage
+			ch := &Channel{
+				onMessage: func(msg IncomingMessage) {
+					got = msg
+				},
+			}
+
+			msg := tt.message
+			msg.MessageID = 8
+			msg.Chat = telego.Chat{ID: 123}
+
+			err := ch.handleMessage(context.Background(), &msg)
+			if err != nil {
+				t.Fatalf("handleMessage() error = %v", err)
+			}
+
+			if len(got.Media) != 0 {
+				t.Fatalf("Media = %#v, want empty", got.Media)
+			}
+			if !strings.Contains(got.Text, "Telegram currently supports photos/images only.") {
+				t.Fatalf("Text = %q, want support warning", got.Text)
+			}
+			if !strings.Contains(got.Text, "must not pretend it saw the attachment") {
+				t.Fatalf("Text = %q, want explicit agent warning", got.Text)
+			}
+			if !strings.Contains(got.Text, tt.kind) {
+				t.Fatalf("Text = %q, want attachment kind %q", got.Text, tt.kind)
+			}
+			if strings.Contains(msg.Caption, "check this") &&
+				!strings.Contains(got.Text, "Original user text: check this") {
+				t.Fatalf("Text = %q, want original caption preserved", got.Text)
+			}
+		})
+	}
+}
+
+func TestHandleMessage_PhotoIngestFailureBecomesSyntheticTextOnlyMessage(t *testing.T) {
+	store, err := q15media.NewFileStore(filepath.Join(t.TempDir(), "media"))
+	if err != nil {
+		t.Fatalf("NewFileStore() error = %v", err)
+	}
+
+	caller := &mockAPICaller{
+		responses: []*ta.Response{
+			{
+				Ok:     true,
+				Result: []byte(`{"file_id":"photo","file_unique_id":"u1","file_path":"photo.jpg"}`),
+			},
+		},
+	}
+	ch := newTestChannelWithCaller(t, caller)
+	ch.mediaStore = store
+	ch.downloadClient = &http.Client{
+		Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Status:     "200 OK",
+				Body:       io.NopCloser(strings.NewReader("not an image")),
+				Header:     make(http.Header),
+			}, nil
+		}),
+	}
+
+	var got IncomingMessage
+	ch.onMessage = func(msg IncomingMessage) {
+		got = msg
+	}
+
+	err = ch.handleMessage(context.Background(), &telego.Message{
+		MessageID: 9,
+		Caption:   "please inspect",
+		Photo:     []telego.PhotoSize{{FileID: "photo"}},
+		Chat:      telego.Chat{ID: 123},
+	})
+	if err != nil {
+		t.Fatalf("handleMessage() error = %v", err)
+	}
+
+	if len(got.Media) != 0 {
+		t.Fatalf("Media = %#v, want empty", got.Media)
+	}
+	if !strings.Contains(got.Text, "could not load it") {
+		t.Fatalf("Text = %q, want ingest failure notice", got.Text)
+	}
+	if !strings.Contains(got.Text, "Original user text: please inspect") {
+		t.Fatalf("Text = %q, want original caption preserved", got.Text)
 	}
 }
 

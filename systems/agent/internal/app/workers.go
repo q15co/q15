@@ -55,7 +55,7 @@ func runAgentWorker(
 				continue
 			}
 
-			answer, err := a.Reply(runCtx, userMessage, session)
+			reply, err := a.Reply(runCtx, userMessage, session)
 			if ctx.Err() != nil {
 				cleanupCtx, cleanupCancel := context.WithTimeout(
 					context.WithoutCancel(ctx),
@@ -67,9 +67,9 @@ func runAgentWorker(
 				return nil
 			}
 			if err != nil {
-				answer = formatReplyError(err)
+				reply = agent.ReplyResult{Text: formatReplyError(err)}
 			}
-			session.Finish(runCtx, answer)
+			session.Finish(runCtx, reply)
 			cancel()
 		}
 	}

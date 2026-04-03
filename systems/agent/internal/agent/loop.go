@@ -117,13 +117,13 @@ func (l *Loop) Reply(
 	ctx context.Context,
 	userMessage conversation.Message,
 	observer RunObserver,
-) (string, error) {
+) (ReplyResult, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	userMessage, err := normalizeUserMessage(userMessage)
 	if err != nil {
-		return "", err
+		return ReplyResult{}, err
 	}
 
 	systemText := l.systemText
@@ -138,7 +138,7 @@ func (l *Loop) Reply(
 					Type: RunEventRunFailed,
 					Err:  err,
 				})
-				return "", fmt.Errorf("load core memory: %w", err)
+				return ReplyResult{}, fmt.Errorf("load core memory: %w", err)
 			}
 			systemText = injectCoreMemory(systemText, coreMemory)
 		}
@@ -149,7 +149,7 @@ func (l *Loop) Reply(
 					Type: RunEventRunFailed,
 					Err:  err,
 				})
-				return "", fmt.Errorf("load skill catalog: %w", err)
+				return ReplyResult{}, fmt.Errorf("load skill catalog: %w", err)
 			}
 			systemText = injectSkillCatalog(systemText, skillCatalog)
 		}
@@ -164,7 +164,7 @@ func (l *Loop) Reply(
 				Type: RunEventRunFailed,
 				Err:  err,
 			})
-			return "", fmt.Errorf("load recent messages: %w", err)
+			return ReplyResult{}, fmt.Errorf("load recent messages: %w", err)
 		}
 	}
 
@@ -204,7 +204,7 @@ func (l *Loop) Reply(
 				ModelRef: modelRef,
 				Err:      err,
 			})
-			return "", fmt.Errorf("model complete: %w", err)
+			return ReplyResult{}, fmt.Errorf("model complete: %w", err)
 		}
 
 		resultMessages := conversation.NormalizeMessages(copyMessages(result.Messages))
@@ -232,7 +232,7 @@ func (l *Loop) Reply(
 					FinalText: answer,
 					Err:       err,
 				})
-				return "", fmt.Errorf("persist turn: %w", err)
+				return ReplyResult{}, fmt.Errorf("persist turn: %w", err)
 			}
 			emitRunEvent(ctx, observer, RunEvent{
 				Type:      RunEventRunFinished,
@@ -240,7 +240,7 @@ func (l *Loop) Reply(
 				ModelRef:  modelRef,
 				FinalText: answer,
 			})
-			return answer, nil
+			return ReplyResult{Text: answer}, nil
 		}
 
 		for _, call := range toolCalls {
@@ -282,7 +282,7 @@ func (l *Loop) Reply(
 						FinalText: stopSummary,
 						Err:       err,
 					})
-					return "", fmt.Errorf("persist interrupted turn: %w", err)
+					return ReplyResult{}, fmt.Errorf("persist interrupted turn: %w", err)
 				}
 				stopErr := &StopError{
 					Reason: StopReasonToolLoopDetected,
@@ -299,7 +299,7 @@ func (l *Loop) Reply(
 					FinalText: stopSummary,
 					Err:       stopErr,
 				})
-				return "", stopErr
+				return ReplyResult{}, stopErr
 			}
 		}
 	}
@@ -317,7 +317,7 @@ func (l *Loop) Reply(
 			FinalText: stopSummary,
 			Err:       err,
 		})
-		return "", fmt.Errorf("persist interrupted turn: %w", err)
+		return ReplyResult{}, fmt.Errorf("persist interrupted turn: %w", err)
 	}
 	stopErr := &StopError{
 		Reason: StopReasonToolTurnLimit,
@@ -328,7 +328,7 @@ func (l *Loop) Reply(
 		FinalText: stopSummary,
 		Err:       stopErr,
 	})
-	return "", stopErr
+	return ReplyResult{}, stopErr
 }
 
 func (l *Loop) runTool(ctx context.Context, call ToolCall) (ToolResult, error) {

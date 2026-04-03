@@ -202,8 +202,11 @@ func TestLoopReply_LoadsRecentAndPersistsTurn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reply() error = %v", err)
 	}
-	if out != "new-answer" {
-		t.Fatalf("Reply() = %q, want %q", out, "new-answer")
+	if out.Text != "new-answer" {
+		t.Fatalf("Reply().Text = %q, want %q", out.Text, "new-answer")
+	}
+	if len(out.MediaRefs) != 0 {
+		t.Fatalf("Reply().MediaRefs = %#v, want empty", out.MediaRefs)
 	}
 	if len(model.callMsgs) != 1 {
 		t.Fatalf("model calls = %d, want 1", len(model.callMsgs))
@@ -265,8 +268,8 @@ func TestLoopReply_PersistsToolCallFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reply() error = %v", err)
 	}
-	if out != "final" {
-		t.Fatalf("Reply() = %q, want final", out)
+	if out.Text != "final" {
+		t.Fatalf("Reply().Text = %q, want final", out.Text)
 	}
 	if len(store.lastAppend) != 4 {
 		t.Fatalf("persisted turn len = %d, want 4", len(store.lastAppend))
@@ -387,8 +390,8 @@ func TestLoopReply_PrefersFinalDispositionOverCommentary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reply() error = %v", err)
 	}
-	if out != "final answer" {
-		t.Fatalf("Reply() = %q, want %q", out, "final answer")
+	if out.Text != "final answer" {
+		t.Fatalf("Reply().Text = %q, want %q", out.Text, "final answer")
 	}
 }
 
@@ -417,8 +420,8 @@ func TestLoopReply_DoesNotAppendGenericToolSteeringPromptWhenToolsEnabled(t *tes
 	if err != nil {
 		t.Fatalf("Reply() error = %v", err)
 	}
-	if out != "done" {
-		t.Fatalf("Reply() = %q, want %q", out, "done")
+	if out.Text != "done" {
+		t.Fatalf("Reply().Text = %q, want %q", out.Text, "done")
 	}
 	if len(model.callMsgs) != 1 {
 		t.Fatalf("model calls = %d, want 1", len(model.callMsgs))
@@ -473,8 +476,8 @@ func TestLoopReply_EmitsProgressEventsInSuccessOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reply() error = %v", err)
 	}
-	if out != "done" {
-		t.Fatalf("Reply() = %q, want done", out)
+	if out.Text != "done" {
+		t.Fatalf("Reply().Text = %q, want done", out.Text)
 	}
 
 	wantTypes := []RunEventType{
@@ -579,8 +582,8 @@ func TestLoopReply_UsesEligibleFallbackCandidatesOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reply() error = %v", err)
 	}
-	if out != "done" {
-		t.Fatalf("Reply() = %q, want %q", out, "done")
+	if out.Text != "done" {
+		t.Fatalf("Reply().Text = %q, want %q", out.Text, "done")
 	}
 	if len(model.callModels) != 1 || model.callModels[0] != "m2" {
 		t.Fatalf("callModels = %#v, want [m2]", model.callModels)
@@ -614,8 +617,8 @@ func TestLoopReply_FailsBeforeProviderCallsWhenNoEligibleModels(t *testing.T) {
 		3,
 	)
 	out, err := loop.Reply(context.Background(), userTextMessage("hello"), nil)
-	if out != "" {
-		t.Fatalf("Reply() output = %q, want empty", out)
+	if out.Text != "" {
+		t.Fatalf("Reply().Text = %q, want empty", out.Text)
 	}
 	var noEligibleErr *modelselection.NoEligibleError
 	if !errors.As(err, &noEligibleErr) {
@@ -664,8 +667,8 @@ func TestLoopReply_ToolProducedImageRequiresImageInputOnNextTurn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reply() error = %v", err)
 	}
-	if out != "done" {
-		t.Fatalf("Reply() = %q, want done", out)
+	if out.Text != "done" {
+		t.Fatalf("Reply().Text = %q, want done", out.Text)
 	}
 	if len(planner.plannedRequirements) != 2 {
 		t.Fatalf("plannedRequirements len = %d, want 2", len(planner.plannedRequirements))
@@ -699,8 +702,8 @@ func TestLoopReply_FallsBackAcrossEligibleModelsInOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reply() error = %v", err)
 	}
-	if out != "done" {
-		t.Fatalf("Reply() = %q, want %q", out, "done")
+	if out.Text != "done" {
+		t.Fatalf("Reply().Text = %q, want %q", out.Text, "done")
 	}
 	if len(model.callModels) != 2 || model.callModels[0] != "m1" || model.callModels[1] != "m2" {
 		t.Fatalf("callModels = %#v, want [m1 m2]", model.callModels)
@@ -718,8 +721,8 @@ func TestLoopReply_DoesNotAppendSteeringPromptWithoutTools(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reply() error = %v", err)
 	}
-	if out != "plain" {
-		t.Fatalf("Reply() = %q, want %q", out, "plain")
+	if out.Text != "plain" {
+		t.Fatalf("Reply().Text = %q, want %q", out.Text, "plain")
 	}
 	if len(model.callMsgs) != 1 {
 		t.Fatalf("model calls = %d, want 1", len(model.callMsgs))
@@ -748,8 +751,8 @@ func TestLoopReply_RetriesOnceOnEmptyAssistantResponse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reply() error = %v", err)
 	}
-	if out != "after-retry" {
-		t.Fatalf("Reply() = %q, want %q", out, "after-retry")
+	if out.Text != "after-retry" {
+		t.Fatalf("Reply().Text = %q, want %q", out.Text, "after-retry")
 	}
 	if len(model.callMsgs) != 2 {
 		t.Fatalf("model calls = %d, want 2", len(model.callMsgs))
@@ -786,8 +789,12 @@ func TestLoopReply_ReturnsNoTextAfterEmptyRetryExhausted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reply() error = %v", err)
 	}
-	if out != "(assistant returned no text)" {
-		t.Fatalf("Reply() = %q, want %q", out, "(assistant returned no text)")
+	if out.Text != "(assistant returned no text)" {
+		t.Fatalf(
+			"Reply().Text = %q, want %q",
+			out.Text,
+			"(assistant returned no text)",
+		)
 	}
 	if len(model.callMsgs) != maxEmptyAssistantRetries+1 {
 		t.Fatalf("model calls = %d, want %d", len(model.callMsgs), maxEmptyAssistantRetries+1)
@@ -924,8 +931,8 @@ func TestLoopReply_AllowsMoreThanTwelveToolCallTurns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reply() error = %v", err)
 	}
-	if out != "done" {
-		t.Fatalf("Reply() = %q, want done", out)
+	if out.Text != "done" {
+		t.Fatalf("Reply().Text = %q, want done", out.Text)
 	}
 	if len(model.callMsgs) != toolTurns+1 {
 		t.Fatalf("model calls = %d, want %d", len(model.callMsgs), toolTurns+1)
@@ -957,8 +964,8 @@ func TestLoopReply_StopsAtHardLimitAndPersistsInterruptedTurn(t *testing.T) {
 
 	loop := NewLoop(model, registry, []string{"m1"}, DefaultSystemPrompt, store, 3)
 	out, err := loop.Reply(context.Background(), userTextMessage("question"), nil)
-	if out != "" {
-		t.Fatalf("Reply() output = %q, want empty", out)
+	if out.Text != "" {
+		t.Fatalf("Reply().Text = %q, want empty", out.Text)
 	}
 	var stopErr *StopError
 	if !errors.As(err, &stopErr) {
@@ -1007,8 +1014,8 @@ func TestLoopReply_StopsOnNoProgressToolLoop(t *testing.T) {
 
 	loop := NewLoop(model, registry, []string{"m1"}, DefaultSystemPrompt, store, 3)
 	out, err := loop.Reply(context.Background(), userTextMessage("question"), nil)
-	if out != "" {
-		t.Fatalf("Reply() output = %q, want empty", out)
+	if out.Text != "" {
+		t.Fatalf("Reply().Text = %q, want empty", out.Text)
 	}
 	var stopErr *StopError
 	if !errors.As(err, &stopErr) {

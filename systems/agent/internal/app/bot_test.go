@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
+	"github.com/q15co/q15/systems/agent/internal/bus"
+	"github.com/q15co/q15/systems/agent/internal/channel/telegram"
 	"github.com/q15co/q15/systems/agent/internal/config"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
 	q15media "github.com/q15co/q15/systems/agent/internal/media"
@@ -257,5 +259,28 @@ func TestRoutedModelAdapterPlanSelectionReturnsEmptyPlanWhenNoCandidatesMatch(t 
 	}
 	if plan.Skipped[0].Reason != "missing capabilities [image_input, tool_calling]" {
 		t.Fatalf("skip reason = %q", plan.Skipped[0].Reason)
+	}
+}
+
+func TestTelegramInboundMessagePreservesMediaRefs(t *testing.T) {
+	got := telegramInboundMessage(telegram.IncomingMessage{
+		ChatID:    "chat-1",
+		UserID:    "user-1",
+		MessageID: "msg-1",
+		Text:      "describe this",
+		Media:     []string{"media://sha256/abc"},
+	})
+
+	if got.Channel != bus.ChannelTelegram {
+		t.Fatalf("Channel = %q, want %q", got.Channel, bus.ChannelTelegram)
+	}
+	if got.ChatID != "chat-1" || got.UserID != "user-1" || got.MessageID != "msg-1" {
+		t.Fatalf("inbound = %#v", got)
+	}
+	if got.Text != "describe this" {
+		t.Fatalf("Text = %q, want describe this", got.Text)
+	}
+	if len(got.Media) != 1 || got.Media[0] != "media://sha256/abc" {
+		t.Fatalf("Media = %#v, want telegram media ref", got.Media)
 	}
 }
