@@ -14,5 +14,5 @@ type Agent interface {
 		ctx context.Context,
 		userMessage conversation.Message,
 		observer RunObserver,
-	) (string, error)
+	) (ReplyResult, error)
 }

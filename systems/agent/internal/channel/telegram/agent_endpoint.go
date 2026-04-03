@@ -255,7 +255,7 @@ func (s *agentRunSession) OnRunEvent(ctx context.Context, event agent.RunEvent) 
 	}
 }
 
-func (s *agentRunSession) Finish(ctx context.Context, finalText string) {
+func (s *agentRunSession) Finish(ctx context.Context, result agent.ReplyResult) {
 	s.mu.Lock()
 	if s.finished {
 		s.mu.Unlock()
@@ -271,6 +271,7 @@ func (s *agentRunSession) Finish(ctx context.Context, finalText string) {
 		typingStop()
 	}
 
+	finalText := result.Text
 	if strings.TrimSpace(finalText) == "" {
 		finalText = "(assistant returned no text)"
 	}

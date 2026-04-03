@@ -16,14 +16,14 @@ import (
 type fakeObservedAgent struct {
 	mu         sync.Mutex
 	replyCalls int
-	reply      func(context.Context, conversation.Message, agent.RunObserver) (string, error)
+	reply      func(context.Context, conversation.Message, agent.RunObserver) (agent.ReplyResult, error)
 }
 
 func (f *fakeObservedAgent) Reply(
 	ctx context.Context,
 	userInput conversation.Message,
 	observer agent.RunObserver,
-) (string, error) {
+) (agent.ReplyResult, error) {
 	f.mu.Lock()
 	f.replyCalls++
 	f.mu.Unlock()
@@ -31,7 +31,7 @@ func (f *fakeObservedAgent) Reply(
 	if f.reply != nil {
 		return f.reply(ctx, userInput, observer)
 	}
-	return "ok", nil
+	return agent.ReplyResult{Text: "ok"}, nil
 }
 
 func (f *fakeObservedAgent) Calls() int {
@@ -75,9 +75,9 @@ func (f *fakeEndpoint) OpenCalls() int {
 type fakeSession struct {
 	mu sync.Mutex
 
-	events        []agent.RunEvent
-	finishedTexts []string
-	abortReasons  []string
+	events       []agent.RunEvent
+	finished     []agent.ReplyResult
+	abortReasons []string
 }
 
 func (f *fakeSession) OnRunEvent(_ context.Context, event agent.RunEvent) {
@@ -86,10 +86,10 @@ func (f *fakeSession) OnRunEvent(_ context.Context, event agent.RunEvent) {
 	f.events = append(f.events, event)
 }
 
-func (f *fakeSession) Finish(_ context.Context, finalText string) {
+func (f *fakeSession) Finish(_ context.Context, result agent.ReplyResult) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.finishedTexts = append(f.finishedTexts, finalText)
+	f.finished = append(f.finished, result)
 }
 
 func (f *fakeSession) Abort(_ context.Context, reason string) {
@@ -162,9 +162,9 @@ func TestRunAgentWorker_FinishesSessionAndForwardsEvents(t *testing.T) {
 	messageBus := bus.New(8)
 	session := &fakeSession{}
 	agentImpl := &fakeObservedAgent{
-		reply: func(ctx context.Context, _ conversation.Message, observer agent.RunObserver) (string, error) {
+		reply: func(ctx context.Context, _ conversation.Message, observer agent.RunObserver) (agent.ReplyResult, error) {
 			observer.OnRunEvent(ctx, agent.RunEvent{Type: agent.RunEventRunStarted})
-			return "done", nil
+			return agent.ReplyResult{Text: "done"}, nil
 		},
 	}
 	endpoint := &fakeEndpoint{
@@ -190,13 +190,17 @@ func TestRunAgentWorker_FinishesSessionAndForwardsEvents(t *testing.T) {
 	waitForCondition(t, 2*time.Second, func() bool {
 		session.mu.Lock()
 		defer session.mu.Unlock()
-		return len(session.finishedTexts) == 1 && len(session.events) == 1
+		return len(session.finished) == 1 && len(session.events) == 1
 	})
 
 	session.mu.Lock()
-	if got := session.finishedTexts[0]; got != "done" {
+	if got := session.finished[0].Text; got != "done" {
 		session.mu.Unlock()
-		t.Fatalf("finishedTexts[0] = %q, want %q", got, "done")
+		t.Fatalf("finished[0].Text = %q, want %q", got, "done")
+	}
+	if len(session.finished[0].MediaRefs) != 0 {
+		session.mu.Unlock()
+		t.Fatalf("finished[0].MediaRefs = %#v, want empty", session.finished[0].MediaRefs)
 	}
 	if got := session.events[0].Type; got != agent.RunEventRunStarted {
 		session.mu.Unlock()
@@ -243,7 +247,7 @@ func TestRunAgentWorker_AcceptsMediaOnlyInboundMessage(t *testing.T) {
 	messageBus := bus.New(8)
 	session := &fakeSession{}
 	agentImpl := &fakeObservedAgent{
-		reply: func(_ context.Context, msg conversation.Message, _ agent.RunObserver) (string, error) {
+		reply: func(_ context.Context, msg conversation.Message, _ agent.RunObserver) (agent.ReplyResult, error) {
 			if len(msg.Parts) != 1 {
 				t.Fatalf("reply message parts len = %d, want 1", len(msg.Parts))
 			}
@@ -251,7 +255,7 @@ func TestRunAgentWorker_AcceptsMediaOnlyInboundMessage(t *testing.T) {
 				msg.Parts[0].MediaRef != "media://sha256/abc" {
 				t.Fatalf("reply image part = %#v", msg.Parts[0])
 			}
-			return "done", nil
+			return agent.ReplyResult{Text: "done"}, nil
 		},
 	}
 	endpoint := &fakeEndpoint{
@@ -277,8 +281,68 @@ func TestRunAgentWorker_AcceptsMediaOnlyInboundMessage(t *testing.T) {
 	waitForCondition(t, 2*time.Second, func() bool {
 		session.mu.Lock()
 		defer session.mu.Unlock()
-		return len(session.finishedTexts) == 1
+		return len(session.finished) == 1
 	})
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("runAgentWorker() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for worker exit")
+	}
+}
+
+func TestRunAgentWorker_PassesStructuredReplyResultToSession(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	messageBus := bus.New(8)
+	session := &fakeSession{}
+	agentImpl := &fakeObservedAgent{
+		reply: func(_ context.Context, _ conversation.Message, _ agent.RunObserver) (agent.ReplyResult, error) {
+			return agent.ReplyResult{
+				Text:      "done",
+				MediaRefs: []string{"media://sha256/reply"},
+			}, nil
+		},
+	}
+	endpoint := &fakeEndpoint{
+		channel: bus.ChannelTelegram,
+		open: func(context.Context, bus.InboundMessage) (channelport.AgentSession, error) {
+			return session, nil
+		},
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- runAgentWorker(ctx, messageBus, agentImpl, endpoint)
+	}()
+
+	if err := messageBus.PublishInbound(ctx, bus.InboundMessage{
+		Channel: bus.ChannelTelegram,
+		ChatID:  "123",
+		Text:    "hello",
+	}); err != nil {
+		t.Fatalf("PublishInbound() error = %v", err)
+	}
+
+	waitForCondition(t, 2*time.Second, func() bool {
+		session.mu.Lock()
+		defer session.mu.Unlock()
+		return len(session.finished) == 1
+	})
+
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if got := session.finished[0].Text; got != "done" {
+		t.Fatalf("finished[0].Text = %q, want done", got)
+	}
+	if got := session.finished[0].MediaRefs; len(got) != 1 || got[0] != "media://sha256/reply" {
+		t.Fatalf("finished[0].MediaRefs = %#v, want reply media ref", got)
+	}
 
 	cancel()
 	select {
@@ -298,8 +362,8 @@ func TestRunAgentWorker_FormatsStopErrors(t *testing.T) {
 	messageBus := bus.New(8)
 	session := &fakeSession{}
 	agentImpl := &fakeObservedAgent{
-		reply: func(context.Context, conversation.Message, agent.RunObserver) (string, error) {
-			return "", &agent.StopError{
+		reply: func(context.Context, conversation.Message, agent.RunObserver) (agent.ReplyResult, error) {
+			return agent.ReplyResult{}, &agent.StopError{
 				Reason: agent.StopReasonToolLoopDetected,
 				Detail: "tool loop detected",
 			}
@@ -328,16 +392,16 @@ func TestRunAgentWorker_FormatsStopErrors(t *testing.T) {
 	waitForCondition(t, 2*time.Second, func() bool {
 		session.mu.Lock()
 		defer session.mu.Unlock()
-		return len(session.finishedTexts) == 1
+		return len(session.finished) == 1
 	})
 
 	session.mu.Lock()
-	got := session.finishedTexts[0]
+	got := session.finished[0].Text
 	session.mu.Unlock()
 
 	want := "I stopped this run because tool calls appeared stuck in a loop. Progress was saved."
 	if got != want {
-		t.Fatalf("finishedTexts[0] = %q, want %q", got, want)
+		t.Fatalf("finished[0].Text = %q, want %q", got, want)
 	}
 
 	cancel()
@@ -402,9 +466,9 @@ func TestRunAgentWorker_CancellationAbortsSession(t *testing.T) {
 	messageBus := bus.New(8)
 	session := &fakeSession{}
 	agentImpl := &fakeObservedAgent{
-		reply: func(ctx context.Context, _ conversation.Message, _ agent.RunObserver) (string, error) {
+		reply: func(ctx context.Context, _ conversation.Message, _ agent.RunObserver) (agent.ReplyResult, error) {
 			<-ctx.Done()
-			return "", ctx.Err()
+			return agent.ReplyResult{}, ctx.Err()
 		},
 	}
 	endpoint := &fakeEndpoint{

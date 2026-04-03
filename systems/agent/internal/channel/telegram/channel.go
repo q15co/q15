@@ -5,7 +5,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -14,6 +17,7 @@ import (
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
 	tu "github.com/mymmrac/telego/telegoutil"
+	q15media "github.com/q15co/q15/systems/agent/internal/media"
 )
 
 // IncomingMessage is a normalized Telegram update delivered to the app layer.
@@ -22,6 +26,7 @@ type IncomingMessage struct {
 	UserID    string
 	MessageID string
 	Text      string
+	Media     []string
 }
 
 // MessageHandler processes one inbound Telegram message.
@@ -33,6 +38,8 @@ type Option func(*Channel) error
 // Channel wraps the Telegram bot client and transport helpers.
 type Channel struct {
 	bot            *telego.Bot
+	downloadClient *http.Client
+	mediaStore     q15media.Store
 	onMessage      MessageHandler
 	allowedUserIDs map[int64]struct{}
 }
@@ -57,8 +64,9 @@ func NewChannel(token string, onMessage MessageHandler, opts ...Option) (*Channe
 	}
 
 	ch := &Channel{
-		bot:       bot,
-		onMessage: onMessage,
+		bot:            bot,
+		downloadClient: http.DefaultClient,
+		onMessage:      onMessage,
 	}
 
 	for _, opt := range opts {
@@ -100,12 +108,7 @@ func (c *Channel) Start(ctx context.Context) error {
 	return nil
 }
 
-func (c *Channel) handleMessage(_ context.Context, message *telego.Message) error {
-	text := strings.TrimSpace(message.Text)
-	if text == "" {
-		return nil
-	}
-
+func (c *Channel) handleMessage(ctx context.Context, message *telego.Message) error {
 	if len(c.allowedUserIDs) > 0 {
 		if message.From == nil {
 			fmt.Fprintln(
@@ -120,6 +123,7 @@ func (c *Channel) handleMessage(_ context.Context, message *telego.Message) erro
 		}
 	}
 
+	text := inputText(message)
 	msg := IncomingMessage{
 		ChatID:    strconv.FormatInt(message.Chat.ID, 10),
 		MessageID: strconv.Itoa(message.MessageID),
@@ -127,6 +131,31 @@ func (c *Channel) handleMessage(_ context.Context, message *telego.Message) erro
 	}
 	if message.From != nil {
 		msg.UserID = strconv.FormatInt(message.From.ID, 10)
+	}
+
+	if len(message.Photo) > 0 {
+		ref, err := c.storePhoto(
+			ctx,
+			message.Photo[len(message.Photo)-1].FileID,
+			mediaScope(msg.ChatID, msg.MessageID),
+		)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "telegram photo ingest error: %v\n", err)
+			msg.Text = attachmentFailureText("photo", text)
+			msg.Media = nil
+			c.onMessage(msg)
+			return nil
+		}
+		msg.Media = []string{ref}
+	} else if kind := unsupportedTelegramAttachmentKind(message); kind != "" {
+		msg.Text = unsupportedAttachmentText(kind, text)
+		msg.Media = nil
+		c.onMessage(msg)
+		return nil
+	}
+
+	if msg.Text == "" && len(msg.Media) == 0 {
+		return nil
 	}
 
 	c.onMessage(msg)
@@ -298,6 +327,17 @@ func (c *Channel) ClearReaction(ctx context.Context, chatID, messageID string) e
 	return c.SetReaction(ctx, chatID, messageID, "")
 }
 
+// WithMediaStore configures runtime-owned media storage for inbound Telegram media.
+func WithMediaStore(store q15media.Store) Option {
+	return func(c *Channel) error {
+		if store == nil {
+			return errors.New("telegram media store is required")
+		}
+		c.mediaStore = store
+		return nil
+	}
+}
+
 // WithAllowedUserIDs restricts inbound handling to a Telegram user allowlist.
 func WithAllowedUserIDs(ids []int64) Option {
 	return func(c *Channel) error {
@@ -316,6 +356,214 @@ func WithAllowedUserIDs(ids []int64) Option {
 		c.allowedUserIDs = allowed
 		return nil
 	}
+}
+
+func inputText(message *telego.Message) string {
+	if message == nil {
+		return ""
+	}
+
+	parts := make([]string, 0, 2)
+	if text := strings.TrimSpace(message.Text); text != "" {
+		parts = append(parts, text)
+	}
+	if caption := strings.TrimSpace(message.Caption); caption != "" {
+		parts = append(parts, caption)
+	}
+	return strings.Join(parts, "\n")
+}
+
+func mediaScope(chatID, messageID string) string {
+	return "telegram:" + strings.TrimSpace(chatID) + ":" + strings.TrimSpace(messageID)
+}
+
+func unsupportedTelegramAttachmentKind(message *telego.Message) string {
+	if message == nil {
+		return ""
+	}
+
+	switch {
+	case message.Animation != nil:
+		return "animation"
+	case message.Audio != nil:
+		return "audio"
+	case message.Document != nil:
+		return "document"
+	case message.Sticker != nil:
+		return "sticker"
+	case message.Video != nil:
+		return "video"
+	case message.VideoNote != nil:
+		return "video note"
+	case message.Voice != nil:
+		return "voice"
+	default:
+		return ""
+	}
+}
+
+func unsupportedAttachmentText(kind, originalText string) string {
+	return attachmentNotice(
+		fmt.Sprintf("The user sent a Telegram %s attachment.", strings.TrimSpace(kind)),
+		originalText,
+	)
+}
+
+func attachmentFailureText(kind, originalText string) string {
+	return attachmentNotice(
+		fmt.Sprintf(
+			"The user sent a Telegram %s attachment, but q15 could not load it.",
+			strings.TrimSpace(kind),
+		),
+		originalText,
+	)
+}
+
+func attachmentNotice(summary, originalText string) string {
+	lines := []string{
+		"System note: " + strings.TrimSpace(summary),
+		"Telegram currently supports photos/images only.",
+		"The agent must not pretend it saw the attachment.",
+	}
+	originalText = strings.TrimSpace(originalText)
+	if originalText != "" {
+		lines = append(lines, "Original user text: "+originalText)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (c *Channel) storePhoto(ctx context.Context, fileID, scope string) (string, error) {
+	if c.mediaStore == nil {
+		return "", fmt.Errorf("telegram media store is not configured")
+	}
+
+	fileID = strings.TrimSpace(fileID)
+	if fileID == "" {
+		return "", fmt.Errorf("telegram file id is required")
+	}
+
+	file, err := c.bot.GetFile(ctx, &telego.GetFileParams{FileID: fileID})
+	if err != nil {
+		return "", fmt.Errorf("get telegram file %q: %w", fileID, err)
+	}
+
+	localPath, contentType, filename, err := c.downloadPhoto(ctx, file)
+	if err != nil {
+		return "", err
+	}
+	defer func() {
+		_ = os.Remove(localPath)
+	}()
+
+	ref, err := c.mediaStore.Store(localPath, q15media.Meta{
+		Filename:    filename,
+		ContentType: contentType,
+		Source:      "telegram",
+	}, scope)
+	if err != nil {
+		return "", fmt.Errorf("store telegram photo %q: %w", filename, err)
+	}
+	return ref, nil
+}
+
+func (c *Channel) downloadPhoto(
+	ctx context.Context,
+	file *telego.File,
+) (localPath string, contentType string, filename string, err error) {
+	if file == nil {
+		return "", "", "", fmt.Errorf("telegram file is required")
+	}
+	if strings.TrimSpace(file.FilePath) == "" {
+		return "", "", "", fmt.Errorf("telegram file path is required")
+	}
+
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		c.bot.FileDownloadURL(file.FilePath),
+		nil,
+	)
+	if err != nil {
+		return "", "", "", fmt.Errorf("build telegram file download request: %w", err)
+	}
+
+	resp, err := c.httpClient().Do(req)
+	if err != nil {
+		return "", "", "", fmt.Errorf("download telegram file %q: %w", file.FilePath, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", "", "", fmt.Errorf(
+			"download telegram file %q: unexpected status %s",
+			file.FilePath,
+			resp.Status,
+		)
+	}
+
+	tmp, err := os.CreateTemp("", "q15-telegram-photo-*")
+	if err != nil {
+		return "", "", "", fmt.Errorf("create temp file for telegram photo: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = os.Remove(tmp.Name())
+		}
+	}()
+
+	if _, err = io.Copy(tmp, resp.Body); err != nil {
+		_ = tmp.Close()
+		return "", "", "", fmt.Errorf("write telegram photo to temp file: %w", err)
+	}
+	if err = tmp.Close(); err != nil {
+		return "", "", "", fmt.Errorf("close telegram temp photo file: %w", err)
+	}
+
+	contentType, err = detectImageContentType(tmp.Name())
+	if err != nil {
+		return "", "", "", err
+	}
+	filename = normalizeFilename(file.FilePath, "photo.jpg")
+	return tmp.Name(), contentType, filename, nil
+}
+
+func (c *Channel) httpClient() *http.Client {
+	if c.downloadClient != nil {
+		return c.downloadClient
+	}
+	return http.DefaultClient
+}
+
+func detectImageContentType(localPath string) (string, error) {
+	f, err := os.Open(localPath)
+	if err != nil {
+		return "", fmt.Errorf("open telegram media file %q: %w", localPath, err)
+	}
+	defer f.Close()
+
+	header := make([]byte, 512)
+	n, err := f.Read(header)
+	if err != nil && err != io.EOF {
+		return "", fmt.Errorf("read telegram media header %q: %w", localPath, err)
+	}
+
+	contentType := strings.ToLower(http.DetectContentType(header[:n]))
+	if !strings.HasPrefix(contentType, "image/") {
+		return "", fmt.Errorf(
+			"telegram media file %q is not an image (detected %q)",
+			localPath,
+			contentType,
+		)
+	}
+	return contentType, nil
+}
+
+func normalizeFilename(filePath, fallback string) string {
+	name := strings.TrimSpace(filepath.Base(strings.TrimSpace(filePath)))
+	if name == "" || name == "." || name == string(filepath.Separator) {
+		return fallback
+	}
+	return name
 }
 
 // SplitText splits text into Telegram-safe chunks.

@@ -38,6 +38,16 @@ type ToolResult struct {
 	MediaRefs []string
 }
 
+// ReplyResult is the structured end-user response for one completed turn.
+type ReplyResult struct {
+	// Text is the final assistant text to render back to the user.
+	Text string
+	// MediaRefs are transport-agnostic media-store refs attached to the final
+	// assistant response. Current transports may ignore them until outbound
+	// multimodal support is implemented.
+	MediaRefs []string
+}
+
 // ModelClientResult is the output of one model completion call.
 type ModelClientResult struct {
 	// Messages are the ordered canonical conversation.Message items returned by

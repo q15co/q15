@@ -126,17 +126,14 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 	messageBus := bus.New(bus.DefaultBufferSize)
 
 	channel, err := telegram.NewChannel(token, func(msg telegram.IncomingMessage) {
-		err := messageBus.PublishInbound(ctx, bus.InboundMessage{
-			Channel:   bus.ChannelTelegram,
-			ChatID:    msg.ChatID,
-			UserID:    msg.UserID,
-			MessageID: msg.MessageID,
-			Text:      msg.Text,
-		})
+		err := messageBus.PublishInbound(ctx, telegramInboundMessage(msg))
 		if err != nil && !errors.Is(err, context.Canceled) {
 			fmt.Fprintf(os.Stderr, "publish inbound error: %v\n", err)
 		}
-	}, telegram.WithAllowedUserIDs(rt.TelegramAllowedUserIDs))
+	},
+		telegram.WithMediaStore(mediaStore),
+		telegram.WithAllowedUserIDs(rt.TelegramAllowedUserIDs),
+	)
 	if err != nil {
 		return err
 	}
@@ -158,6 +155,17 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 			return nil
 		}
 		return err
+	}
+}
+
+func telegramInboundMessage(msg telegram.IncomingMessage) bus.InboundMessage {
+	return bus.InboundMessage{
+		Channel:   bus.ChannelTelegram,
+		ChatID:    msg.ChatID,
+		UserID:    msg.UserID,
+		MessageID: msg.MessageID,
+		Text:      msg.Text,
+		Media:     append([]string(nil), msg.Media...),
 	}
 }
 

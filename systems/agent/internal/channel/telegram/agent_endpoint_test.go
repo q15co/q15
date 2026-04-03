@@ -279,7 +279,7 @@ func TestAgentRunSession_ProgressShowsPlaceholderAndEditsFinal(t *testing.T) {
 				return len(channel.sendMessageTexts) == 1
 			})
 
-			session.Finish(ctx, "done")
+			session.Finish(ctx, agent.ReplyResult{Text: "done"})
 
 			channel.mu.Lock()
 			defer channel.mu.Unlock()
@@ -343,7 +343,7 @@ func TestAgentRunSession_QuietWaitsForHardStall(t *testing.T) {
 			}
 			channel.mu.Unlock()
 
-			session.Finish(ctx, "done")
+			session.Finish(ctx, agent.ReplyResult{Text: "done"})
 		},
 	)
 }
@@ -424,7 +424,7 @@ func TestAgentRunSession_MultiChunkFinalKeepsPlaceholder(t *testing.T) {
 			})
 
 			longText := strings.Repeat("a", 3900) + " " + strings.Repeat("b", 3900)
-			session.Finish(ctx, longText)
+			session.Finish(ctx, agent.ReplyResult{Text: longText})
 
 			channel.mu.Lock()
 			defer channel.mu.Unlock()
@@ -459,7 +459,7 @@ func TestAgentRunSession_EditFailureFallsBackToNormalSend(t *testing.T) {
 				return len(channel.sendMessageTexts) == 1
 			})
 
-			session.Finish(ctx, "done")
+			session.Finish(ctx, agent.ReplyResult{Text: "done"})
 
 			channel.mu.Lock()
 			defer channel.mu.Unlock()

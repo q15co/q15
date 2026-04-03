@@ -17,6 +17,6 @@ type AgentEndpoint interface {
 // AgentSession owns transport-specific run UX for one inbound message.
 type AgentSession interface {
 	agent.RunObserver
-	Finish(ctx context.Context, finalText string)
+	Finish(ctx context.Context, result agent.ReplyResult)
 	Abort(ctx context.Context, reason string)
 }
