@@ -21,6 +21,7 @@ const (
 	defaultVersion        = "dev"
 	runtimeWorkspaceDir   = "/workspace"
 	runtimeMemoryDir      = "/memory"
+	runtimeMediaDir       = "/media"
 	runtimeSkillsDir      = "/skills"
 )
 
@@ -89,6 +90,7 @@ func Serve(ctx context.Context, cfg Settings) error {
 		ExecutorType:        cfg.Executor.Type(),
 		WorkspaceDir:        runtimeWorkspaceDir,
 		MemoryDir:           runtimeMemoryDir,
+		MediaDir:            runtimeMediaDir,
 		SkillsDir:           runtimeSkillsDir,
 		ProxyEnabled:        proxyProfile.Enabled,
 		ProxyPolicyRevision: proxyProfile.PolicyRevision,

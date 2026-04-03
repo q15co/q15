@@ -29,6 +29,15 @@ type ToolDefinition struct {
 	Parameters map[string]any
 }
 
+// ToolResult is the structured result of one tool invocation.
+type ToolResult struct {
+	// Output is the textual result returned to the model as the tool-result body.
+	Output string
+	// MediaRefs are media-store refs attached to the tool result for follow-up
+	// multimodal inspection on the next model turn.
+	MediaRefs []string
+}
+
 // ModelClientResult is the output of one model completion call.
 type ModelClientResult struct {
 	// Messages are the ordered canonical conversation.Message items returned by
@@ -60,10 +69,16 @@ type Tool interface {
 	Run(ctx context.Context, arguments string) (string, error)
 }
 
+// StructuredTool is an optional extension for tools that can return media refs
+// or other structured result metadata in addition to text output.
+type StructuredTool interface {
+	RunResult(ctx context.Context, arguments string) (ToolResult, error)
+}
+
 // ToolRegistry resolves and executes tools requested by the model.
 type ToolRegistry interface {
 	// Definitions returns all tool definitions visible to the model.
 	Definitions() []ToolDefinition
 	// Run executes a single tool call.
-	Run(ctx context.Context, call ToolCall) (string, error)
+	Run(ctx context.Context, call ToolCall) (ToolResult, error)
 }

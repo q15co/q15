@@ -273,6 +273,16 @@ func resolvePath(cfg Settings, raw string) (resolvedPath, error) {
 	}, nil
 }
 
+// ResolveLocalPath resolves one runtime-visible path to the agent-local file
+// path plus its canonical runtime path.
+func ResolveLocalPath(cfg Settings, rawPath string) (string, string, error) {
+	resolved, err := resolvePath(cfg, rawPath)
+	if err != nil {
+		return "", "", err
+	}
+	return filepath.Join(resolved.rootLocalDir, resolved.rel), resolved.runtimePath, nil
+}
+
 func normalizeRuntimeRoot(root string) string {
 	root = strings.TrimSpace(root)
 	if root == "" {

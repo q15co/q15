@@ -7,9 +7,12 @@ package tools
 
 import (
 	"github.com/q15co/q15/systems/agent/internal/execution"
+	"github.com/q15co/q15/systems/agent/internal/fileops"
+	q15media "github.com/q15co/q15/systems/agent/internal/media"
 
 	"github.com/q15co/q15/systems/agent/internal/tools/exec"
 	"github.com/q15co/q15/systems/agent/internal/tools/files"
+	mediatools "github.com/q15co/q15/systems/agent/internal/tools/media"
 	"github.com/q15co/q15/systems/agent/internal/tools/skills"
 	"github.com/q15co/q15/systems/agent/internal/tools/web"
 )
@@ -40,6 +43,11 @@ func NewApplyPatch(exec FileToolExecutor) *files.ApplyPatch {
 // NewExec delegates to exec.NewExec.
 func NewExec(client execution.Service) *exec.Exec {
 	return exec.NewExec(client)
+}
+
+// NewLoadImage delegates to media.NewLoadImage.
+func NewLoadImage(paths fileops.Settings, mediaStore q15media.Store) *mediatools.LoadImage {
+	return mediatools.NewLoadImage(paths, mediaStore)
 }
 
 // NewValidateSkill delegates to skills.NewValidateSkill.

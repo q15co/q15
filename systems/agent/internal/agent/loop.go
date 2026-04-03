@@ -115,15 +115,15 @@ func normalizeModelRefs(modelRefs []string) []string {
 // persist the resulting messages while optionally reporting progress events.
 func (l *Loop) Reply(
 	ctx context.Context,
-	userInput string,
+	userMessage conversation.Message,
 	observer RunObserver,
 ) (string, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	userInput = strings.TrimSpace(userInput)
-	if userInput == "" {
-		return "", fmt.Errorf("empty user input")
+	userMessage, err := normalizeUserMessage(userMessage)
+	if err != nil {
+		return "", err
 	}
 
 	systemText := l.systemText
@@ -173,7 +173,7 @@ func (l *Loop) Reply(
 	messages = append(messages, copyMessages(recentMessages)...)
 
 	turnStart := len(messages)
-	messages = append(messages, userMessage(userInput))
+	messages = append(messages, copyMessages([]conversation.Message{userMessage})...)
 
 	var toolDefs []ToolDefinition
 	if l.tools != nil {
@@ -250,9 +250,11 @@ func (l *Loop) Reply(
 				ModelRef: modelRef,
 				ToolCall: call,
 			})
-			output, err := l.runTool(ctx, call)
+			toolResult, err := l.runTool(ctx, call)
+			output := toolResult.Output
 			if err != nil {
 				output = "tool error: " + err.Error()
+				toolResult = ToolResult{Output: output}
 			}
 			emitRunEvent(ctx, observer, RunEvent{
 				Type:       RunEventToolFinished,
@@ -262,7 +264,7 @@ func (l *Loop) Reply(
 				ToolOutput: output,
 				Err:        err,
 			})
-			messages = append(messages, toolResultMessage(call.ID, output, err != nil))
+			messages = append(messages, toolResultMessage(call.ID, toolResult, err != nil))
 
 			if assessment := loopDetector.Record(call, output); assessment.Critical {
 				stopSummary := formatStopSummary(
@@ -329,12 +331,12 @@ func (l *Loop) Reply(
 	return "", stopErr
 }
 
-func (l *Loop) runTool(ctx context.Context, call ToolCall) (string, error) {
+func (l *Loop) runTool(ctx context.Context, call ToolCall) (ToolResult, error) {
 	if l.tools == nil {
-		return "", fmt.Errorf("no tool registry configured for call %q", call.Name)
+		return ToolResult{}, fmt.Errorf("no tool registry configured for call %q", call.Name)
 	}
 	if strings.TrimSpace(call.ID) == "" {
-		return "", fmt.Errorf("tool call is missing id")
+		return ToolResult{}, fmt.Errorf("tool call is missing id")
 	}
 	return l.tools.Run(ctx, call)
 }

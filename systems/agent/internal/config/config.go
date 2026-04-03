@@ -16,6 +16,7 @@ import (
 const (
 	defaultMemoryRecentTurns    = 6
 	runtimeWorkspaceLocalDir    = "/workspace"
+	runtimeMediaLocalDir        = "/media"
 	runtimeSkillsLocalDir       = "/skills"
 	runtimeExecutionServiceAddr = "q15-exec:50051"
 )
@@ -89,6 +90,7 @@ type AgentRuntime struct {
 	Models                 []AgentModelRuntime
 	WorkspaceLocalDir      string
 	MemoryLocalDir         string
+	MediaLocalDir          string
 	SkillsLocalDir         string
 	MemoryRecentTurns      int
 	Execution              ExecutionRuntime
@@ -320,6 +322,7 @@ func (c Config) ResolveAgentRuntime() (*AgentRuntime, error) {
 		Models:                 resolvedModels,
 		WorkspaceLocalDir:      runtimeWorkspaceLocalDir,
 		MemoryLocalDir:         "/memory",
+		MediaLocalDir:          runtimeMediaLocalDir,
 		SkillsLocalDir:         runtimeSkillsLocalDir,
 		MemoryRecentTurns:      memoryRecentTurns,
 		Execution:              ExecutionRuntime{ServiceAddress: runtimeExecutionServiceAddr},

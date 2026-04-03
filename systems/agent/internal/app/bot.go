@@ -16,6 +16,7 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/conversation"
 	"github.com/q15co/q15/systems/agent/internal/execution"
 	"github.com/q15co/q15/systems/agent/internal/fileops"
+	q15media "github.com/q15co/q15/systems/agent/internal/media"
 	"github.com/q15co/q15/systems/agent/internal/memory"
 	"github.com/q15co/q15/systems/agent/internal/provider/openaicodex"
 	"github.com/q15co/q15/systems/agent/internal/provider/openaicompatible"
@@ -26,6 +27,7 @@ import (
 type runtimeEnvironmentInfo struct {
 	WorkspaceDir        string
 	MemoryDir           string
+	MediaDir            string
 	SkillsDir           string
 	ExecutorType        string
 	ProxyEnabled        bool
@@ -43,11 +45,6 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 		return errors.New("at least one model is required")
 	}
 
-	modelAdapter, err := newModelAdapter(rt.Models)
-	if err != nil {
-		return err
-	}
-
 	executionClient, executionInfo, err := connectExecutionService(ctx, &rt.Execution)
 	if err != nil {
 		return fmt.Errorf("connect execution service for agent %q: %w", rt.Name, err)
@@ -58,6 +55,14 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 	if err != nil {
 		return fmt.Errorf("resolve runtime environment for agent %q: %w", rt.Name, err)
 	}
+	mediaStore, err := q15media.NewFileStore(runtimeInfo.MediaDir)
+	if err != nil {
+		return fmt.Errorf("initialize media store for agent %q: %w", rt.Name, err)
+	}
+	modelAdapter, err := newModelAdapter(rt.Models, mediaStore)
+	if err != nil {
+		return err
+	}
 
 	skillManager := q15skills.NewManager(q15skills.Settings{
 		WorkspaceLocalDir:   rt.WorkspaceLocalDir,
@@ -65,16 +70,24 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 		SkillsLocalDir:      rt.SkillsLocalDir,
 		SkillsRuntimeDir:    runtimeInfo.SkillsDir,
 	})
-	fileExec := q15skills.NewFileExecutor(fileops.NewExecutor(fileops.Settings{
+	fileSettings := fileops.Settings{
 		WorkspaceLocalDir:   rt.WorkspaceLocalDir,
 		WorkspaceRuntimeDir: runtimeInfo.WorkspaceDir,
 		MemoryLocalDir:      rt.MemoryLocalDir,
 		MemoryRuntimeDir:    runtimeInfo.MemoryDir,
 		SkillsLocalDir:      rt.SkillsLocalDir,
 		SkillsRuntimeDir:    runtimeInfo.SkillsDir,
-	}), skillManager)
+	}
+	fileExec := q15skills.NewFileExecutor(fileops.NewExecutor(fileSettings), skillManager)
 	braveAPIKey := strings.TrimSpace(os.Getenv("Q15_BRAVE_API_KEY"))
-	toolList, err := buildToolList(executionClient, fileExec, skillManager, braveAPIKey)
+	toolList, err := buildToolList(
+		executionClient,
+		fileExec,
+		skillManager,
+		fileSettings,
+		mediaStore,
+		braveAPIKey,
+	)
 	if err != nil {
 		return fmt.Errorf("configure tools for agent %q: %w", rt.Name, err)
 	}
@@ -152,6 +165,8 @@ func buildToolList(
 	execClient execution.Service,
 	fileExec tools.FileToolExecutor,
 	skillManager *q15skills.Manager,
+	fileSettings fileops.Settings,
+	mediaStore q15media.Store,
 	braveAPIKey string,
 ) ([]agent.Tool, error) {
 	toolList := []agent.Tool{
@@ -161,6 +176,7 @@ func buildToolList(
 		tools.NewApplyPatch(fileExec),
 		tools.NewValidateSkill(skillManager),
 		tools.NewExec(execClient),
+		tools.NewLoadImage(fileSettings, mediaStore),
 		tools.NewWebFetch(),
 	}
 
@@ -244,6 +260,13 @@ func renderRuntimeEnvironmentPrompt(
 				info.MemoryDir,
 				info.MemoryDir,
 			),
+		)
+	}
+	if info.MediaDir != "" {
+		lines = append(
+			lines,
+			fmt.Sprintf("- Runtime media root: %s", info.MediaDir),
+			"- Image inputs are stored in the runtime media root and passed to providers via media refs; do not treat it as a normal text-edit root.",
 		)
 	}
 	if info.ExecutorType != "" {
@@ -364,6 +387,12 @@ func resolveRuntimeEnvironment(
 			"exec service runtime info is missing memory_dir",
 		)
 	}
+	mediaDir := strings.TrimSpace(info.GetMediaDir())
+	if mediaDir == "" {
+		return runtimeEnvironmentInfo{}, errors.New(
+			"exec service runtime info is missing media_dir",
+		)
+	}
 	skillsDir := strings.TrimSpace(info.GetSkillsDir())
 	if skillsDir == "" {
 		return runtimeEnvironmentInfo{}, errors.New(
@@ -379,6 +408,7 @@ func resolveRuntimeEnvironment(
 	return runtimeEnvironmentInfo{
 		WorkspaceDir:        workspaceDir,
 		MemoryDir:           memoryDir,
+		MediaDir:            mediaDir,
 		SkillsDir:           skillsDir,
 		ExecutorType:        executorType,
 		ProxyEnabled:        info.GetProxyEnabled(),
@@ -396,7 +426,7 @@ type routedModelEndpoint struct {
 	capabilities  config.ModelCapabilities
 }
 
-type modelClientFactory func(config.AgentModelRuntime) (agent.ModelClient, error)
+type modelClientFactory func(config.AgentModelRuntime, q15media.Store) (agent.ModelClient, error)
 
 var _ agent.ModelClient = (*routedModelAdapter)(nil)
 
@@ -419,12 +449,16 @@ func (r *routedModelAdapter) Complete(
 	return endpoint.client.Complete(ctx, endpoint.providerModel, messages, tools)
 }
 
-func newModelAdapter(models []config.AgentModelRuntime) (*routedModelAdapter, error) {
-	return newModelAdapterWithFactory(models, defaultModelClientFactory)
+func newModelAdapter(
+	models []config.AgentModelRuntime,
+	mediaStore q15media.Store,
+) (*routedModelAdapter, error) {
+	return newModelAdapterWithFactory(models, mediaStore, defaultModelClientFactory)
 }
 
 func newModelAdapterWithFactory(
 	models []config.AgentModelRuntime,
+	mediaStore q15media.Store,
 	clientFactory modelClientFactory,
 ) (*routedModelAdapter, error) {
 	if len(models) == 0 {
@@ -455,7 +489,7 @@ func newModelAdapterWithFactory(
 		client, ok := modelClients[providerName]
 		if !ok {
 			var err error
-			client, err = clientFactory(modelCfg)
+			client, err = clientFactory(modelCfg, mediaStore)
 			if err != nil {
 				return nil, fmt.Errorf("configure provider for model %q: %w", ref, err)
 			}
@@ -472,15 +506,19 @@ func newModelAdapterWithFactory(
 	return &routedModelAdapter{endpoints: endpoints}, nil
 }
 
-func defaultModelClientFactory(modelCfg config.AgentModelRuntime) (agent.ModelClient, error) {
+func defaultModelClientFactory(
+	modelCfg config.AgentModelRuntime,
+	mediaStore q15media.Store,
+) (agent.ModelClient, error) {
 	switch strings.ToLower(strings.TrimSpace(modelCfg.ProviderType)) {
 	case "openai-compatible":
 		return openaicompatible.NewClient(
 			modelCfg.ProviderBaseURL,
 			modelCfg.ProviderAPIKey,
+			mediaStore,
 		)
 	case "openai-codex":
-		return openaicodex.NewClient()
+		return openaicodex.NewClient(mediaStore)
 	default:
 		return nil, fmt.Errorf("unsupported provider type %q", modelCfg.ProviderType)
 	}

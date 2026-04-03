@@ -6,7 +6,7 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/conversation"
 )
 
-func TestInferRequirements_CurrentScopeIsTextOnly(t *testing.T) {
+func TestInferRequirements_TextOnlyMessagesRequireTextOnly(t *testing.T) {
 	got := InferRequirements(Request{
 		Messages: []conversation.Message{
 			conversation.SystemMessage("system"),
@@ -17,6 +17,22 @@ func TestInferRequirements_CurrentScopeIsTextOnly(t *testing.T) {
 
 	if !got.Text || got.ImageInput || got.ToolCalling {
 		t.Fatalf("InferRequirements() = %#v, want text-only requirements", got)
+	}
+}
+
+func TestInferRequirements_ImagePartsRequireImageInput(t *testing.T) {
+	got := InferRequirements(Request{
+		Messages: []conversation.Message{
+			conversation.SystemMessage("system"),
+			conversation.UserMessageParts(
+				conversation.Text("describe this", ""),
+				conversation.Image("media://sha256/abc", ""),
+			),
+		},
+	})
+
+	if !got.Text || !got.ImageInput || got.ToolCalling {
+		t.Fatalf("InferRequirements() = %#v, want text + image_input requirements", got)
 	}
 }
 

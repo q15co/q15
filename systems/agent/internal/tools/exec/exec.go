@@ -36,6 +36,7 @@ func (e *Exec) Definition() agent.ToolDefinition {
 			"Use for commands, builds, tests, formatting, git, and other CLI workflows.",
 			"Every call must include a non-empty packages array of required nix installables.",
 			"The exec service starts a command session and waits for it to complete before returning stdout, stderr, and exit status.",
+			"If you want the model to inspect a generated image afterward, write it under a shared root like /workspace and then call load_image on that path.",
 		},
 		Parameters: map[string]any{
 			"type": "object",

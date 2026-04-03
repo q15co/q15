@@ -95,6 +95,9 @@ func NormalizePart(part Part) Part {
 	switch part.Type {
 	case TextPartType:
 		part.Disposition = normalizeDisposition(part.Disposition)
+	case ImagePartType:
+		part.MediaRef = strings.TrimSpace(part.MediaRef)
+		part.DataURL = strings.TrimSpace(part.DataURL)
 	case ReasoningPartType:
 	case ToolCallPartType:
 		part.ID = strings.TrimSpace(part.ID)
@@ -111,6 +114,8 @@ func shouldKeepPart(part Part) bool {
 	switch part.Type {
 	case TextPartType:
 		return strings.TrimSpace(part.Text) != ""
+	case ImagePartType:
+		return strings.TrimSpace(part.MediaRef) != "" || strings.TrimSpace(part.DataURL) != ""
 	case ReasoningPartType:
 		return strings.TrimSpace(part.Text) != "" || len(part.Replay) > 0
 	case ToolCallPartType:
@@ -174,4 +179,16 @@ func FinalAnswer(messages []Message) string {
 		return finalText
 	}
 	return plainText
+}
+
+// HasImageParts reports whether any message contains one or more image parts.
+func HasImageParts(messages []Message) bool {
+	for _, msg := range messages {
+		for _, part := range msg.Parts {
+			if NormalizePart(part).Type == ImagePartType {
+				return true
+			}
+		}
+	}
+	return false
 }

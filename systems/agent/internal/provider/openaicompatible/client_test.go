@@ -1,12 +1,16 @@
 package openaicompatible
 
 import (
+	"encoding/base64"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/openai/openai-go/v3"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
+	q15media "github.com/q15co/q15/systems/agent/internal/media"
 )
 
 func TestMapMessagesBuildsAssistantReplayWithReasoningAndTools(t *testing.T) {
@@ -18,7 +22,7 @@ func TestMapMessagesBuildsAssistantReplayWithReasoningAndTools(t *testing.T) {
 			conversation.Text("hello", ""),
 			conversation.ToolCall("call-1", "shell", `{"cmd":"pwd"}`),
 		),
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("mapMessages error = %v", err)
 	}
@@ -54,7 +58,7 @@ func TestMapMessagesUsesPortableReasoningTextAcrossProviderFallback(t *testing.T
 				),
 			}),
 		),
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("mapMessages error = %v", err)
 	}
@@ -87,7 +91,7 @@ func TestMapMessagesCoalescesContiguousAssistantMessagesForToolReplay(t *testing
 		conversation.AssistantMessage(
 			conversation.ToolCall("call-1", "shell", `{"cmd":"pwd"}`),
 		),
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("mapMessages error = %v", err)
 	}
@@ -125,7 +129,7 @@ func TestMapMessagesSynthesizesReasoningContentForOpaqueToolReplay(t *testing.T)
 		conversation.AssistantMessage(
 			conversation.ToolCall("call-1", "shell", `{"cmd":"pwd"}`),
 		),
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("mapMessages error = %v", err)
 	}
@@ -155,7 +159,7 @@ func TestMapMessagesSynthesizesReasoningContentForToolReplayWithoutReasoningPart
 		conversation.AssistantMessage(
 			conversation.ToolCall("call-1", "shell", `{"cmd":"pwd"}`),
 		),
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("mapMessages error = %v", err)
 	}
@@ -232,6 +236,98 @@ func TestParseAssistantMessageExtractsReasoningAndTools(t *testing.T) {
 	}
 }
 
+func TestMapMessagesBuildsMultipartUserMessageForImageInput(t *testing.T) {
+	store, ref, rawImage := mustStoreTestImage(t)
+
+	messages, err := mapMessages([]conversation.Message{
+		conversation.UserMessageParts(
+			conversation.Text("what is this?", ""),
+			conversation.Image(ref, ""),
+		),
+	}, store)
+	if err != nil {
+		t.Fatalf("mapMessages() error = %v", err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("messages len = %d, want 1", len(messages))
+	}
+
+	data, err := json.Marshal(messages[0])
+	if err != nil {
+		t.Fatalf("json.Marshal(messages[0]) error = %v", err)
+	}
+	body := string(data)
+	wantDataURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString(rawImage)
+	for _, want := range []string{
+		`"role":"user"`,
+		`"type":"text"`,
+		`"text":"what is this?"`,
+		`"type":"image_url"`,
+		wantDataURL,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("serialized user message missing %q: %s", want, body)
+		}
+	}
+}
+
+func TestMapMessagesRejectsInvalidImageInput(t *testing.T) {
+	store, err := q15media.NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileStore() error = %v", err)
+	}
+
+	_, err = mapMessages([]conversation.Message{
+		conversation.UserMessageParts(conversation.Image("media://sha256/not-real", "")),
+	}, store)
+	if err == nil || !strings.Contains(err.Error(), "resolve image input") {
+		t.Fatalf("mapMessages() error = %v, want image resolution failure", err)
+	}
+}
+
+func TestMapMessagesAddsVisionFollowupForToolProducedImage(t *testing.T) {
+	store, ref, _ := mustStoreTestImage(t)
+
+	messages, err := mapMessages([]conversation.Message{
+		{
+			Role: conversation.ToolRole,
+			Parts: []conversation.Part{
+				conversation.ToolResult("call-1", "captured screenshot", false),
+				conversation.Image(ref, ""),
+			},
+		},
+	}, store)
+	if err != nil {
+		t.Fatalf("mapMessages() error = %v", err)
+	}
+	if len(messages) != 2 {
+		t.Fatalf("messages len = %d, want 2", len(messages))
+	}
+
+	toolJSON, err := json.Marshal(messages[0])
+	if err != nil {
+		t.Fatalf("json.Marshal(tool message) error = %v", err)
+	}
+	if !strings.Contains(string(toolJSON), `"role":"tool"`) {
+		t.Fatalf("tool message = %s, want tool role", string(toolJSON))
+	}
+
+	followupJSON, err := json.Marshal(messages[1])
+	if err != nil {
+		t.Fatalf("json.Marshal(followup message) error = %v", err)
+	}
+	body := string(followupJSON)
+	for _, want := range []string{
+		`"role":"user"`,
+		toolImageFollowupText,
+		`"type":"image_url"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("followup missing %q: %s", want, body)
+		}
+	}
+}
+
 func TestWithPromptProfileAppendsOpenAICompatibleProfile(t *testing.T) {
 	base := []conversation.Message{
 		conversation.SystemMessage("base"),
@@ -258,4 +354,35 @@ func TestWithPromptProfileAppendsOpenAICompatibleProfile(t *testing.T) {
 	if strings.Contains(lastText, `model="`) {
 		t.Fatalf("profile should not depend on model name:\n%s", lastText)
 	}
+}
+
+func mustStoreTestImage(t *testing.T) (*q15media.FileStore, string, []byte) {
+	t.Helper()
+
+	store, err := q15media.NewFileStore(filepath.Join(t.TempDir(), "media"))
+	if err != nil {
+		t.Fatalf("NewFileStore() error = %v", err)
+	}
+
+	rawImage := []byte{
+		0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n',
+		0x00, 0x00, 0x00, 0x0d, 'I', 'H', 'D', 'R',
+		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+		0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+		0x89, 0x00, 0x00, 0x00, 0x0d, 'I', 'D', 'A', 'T',
+		0x78, 0x9c, 0x63, 0xf8, 0xcf, 0xc0, 0x00, 0x00,
+		0x03, 0x01, 0x01, 0x00, 0xc9, 0xfe, 0x92, 0xef,
+		0x00, 0x00, 0x00, 0x00, 'I', 'E', 'N', 'D',
+		0xae, 0x42, 0x60, 0x82,
+	}
+	imagePath := filepath.Join(t.TempDir(), "image.png")
+	if err := os.WriteFile(imagePath, rawImage, 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	ref, err := store.Store(imagePath, q15media.Meta{ContentType: "image/png"}, "test")
+	if err != nil {
+		t.Fatalf("Store() error = %v", err)
+	}
+	return store, ref, rawImage
 }

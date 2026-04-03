@@ -15,16 +15,16 @@ type Request struct {
 // InferRequirements derives the model capabilities required for one request
 // from the canonical transcript and the currently visible tool set.
 //
-// This PR intentionally lands the planning/filtering framework first. Today
-// q15 only infers the one requirement it can prove for every model turn: text.
 // Tool calling is not auto-required yet because existing behavior allows
-// fallback to eligible non-tool models by omitting tools. Image input will be
-// inferred once canonical transcript turns can carry image parts.
+// fallback to eligible non-tool models by omitting tools.
 func InferRequirements(request Request) Requirements {
-	_ = request.Messages
 	_ = request.ToolCount
 
-	return Requirements{
+	requirements := Requirements{
 		Text: true,
 	}
+	if conversation.HasImageParts(request.Messages) {
+		requirements.ImageInput = true
+	}
+	return requirements
 }

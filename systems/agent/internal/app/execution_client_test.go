@@ -21,6 +21,10 @@ func (testExecInfoServer) GetRuntimeInfo(
 	return &execpb.GetRuntimeInfoResponse{
 		ServiceVersion: "test",
 		ExecutorType:   "local-shell",
+		WorkspaceDir:   "/workspace",
+		MemoryDir:      "/memory",
+		MediaDir:       "/media",
+		SkillsDir:      "/skills",
 	}, nil
 }
 

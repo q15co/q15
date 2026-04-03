@@ -80,13 +80,15 @@ func (e *AgentEndpoint) OpenSession(
 	msg bus.InboundMessage,
 ) (channelport.AgentSession, error) {
 	text := strings.TrimSpace(msg.Text)
-	if text == "" {
+	if text == "" && len(msg.Media) == 0 {
 		return nil, nil
 	}
 
-	handled, err := e.handleProgressCommand(ctx, msg)
-	if handled || err != nil {
-		return nil, err
+	if text != "" {
+		handled, err := e.handleProgressCommand(ctx, msg)
+		if handled || err != nil {
+			return nil, err
+		}
 	}
 
 	session := newAgentRunSession(

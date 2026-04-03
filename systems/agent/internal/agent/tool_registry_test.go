@@ -23,6 +23,26 @@ func (t *testTool) Run(ctx context.Context, arguments string) (string, error) {
 	return t.run(ctx, arguments)
 }
 
+type structuredTestTool struct {
+	def       ToolDefinition
+	runResult func(context.Context, string) (ToolResult, error)
+}
+
+func (t *structuredTestTool) Definition() ToolDefinition {
+	return t.def
+}
+
+func (t *structuredTestTool) Run(context.Context, string) (string, error) {
+	return "", nil
+}
+
+func (t *structuredTestTool) RunResult(ctx context.Context, arguments string) (ToolResult, error) {
+	if t.runResult == nil {
+		return ToolResult{}, nil
+	}
+	return t.runResult(ctx, arguments)
+}
+
 func TestNewToolRegistryAggregatesAndDispatches(t *testing.T) {
 	var gotArgs string
 
@@ -53,11 +73,37 @@ func TestNewToolRegistryAggregatesAndDispatches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if out != "ok" {
-		t.Fatalf("Run() = %q, want %q", out, "ok")
+	if out.Output != "ok" {
+		t.Fatalf("Run().Output = %q, want %q", out.Output, "ok")
 	}
 	if gotArgs != `{"x":1}` {
 		t.Fatalf("tool received arguments %q, want %q", gotArgs, `{"x":1}`)
+	}
+}
+
+func TestToolRegistryUsesStructuredToolResultsWhenAvailable(t *testing.T) {
+	reg, err := NewToolRegistry(&structuredTestTool{
+		def: ToolDefinition{Name: "image"},
+		runResult: func(context.Context, string) (ToolResult, error) {
+			return ToolResult{
+				Output:    "loaded",
+				MediaRefs: []string{"media://sha256/abc"},
+			}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewToolRegistry() error = %v", err)
+	}
+
+	got, err := reg.Run(context.Background(), ToolCall{Name: "image"})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if got.Output != "loaded" {
+		t.Fatalf("Run().Output = %q, want %q", got.Output, "loaded")
+	}
+	if len(got.MediaRefs) != 1 || got.MediaRefs[0] != "media://sha256/abc" {
+		t.Fatalf("Run().MediaRefs = %#v", got.MediaRefs)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/config"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
+	q15media "github.com/q15co/q15/systems/agent/internal/media"
 	"github.com/q15co/q15/systems/agent/internal/modelselection"
 )
 
@@ -68,7 +69,7 @@ func TestNewModelAdapterRoutesConfiguredModelsAndSuppressesTools(t *testing.T) {
 				ToolCalling: true,
 			},
 		},
-	}, func(modelCfg config.AgentModelRuntime) (agent.ModelClient, error) {
+	}, nil, func(modelCfg config.AgentModelRuntime, _ q15media.Store) (agent.ModelClient, error) {
 		factoryCalls[modelCfg.ProviderName]++
 		client := &fakeModelClient{}
 		clients[modelCfg.ProviderName] = client
@@ -161,7 +162,7 @@ func TestRoutedModelAdapterPlanSelectionFiltersByCapabilitiesAndPreservesOrder(t
 				ToolCalling: true,
 			},
 		},
-	}, func(_ config.AgentModelRuntime) (agent.ModelClient, error) {
+	}, nil, func(_ config.AgentModelRuntime, _ q15media.Store) (agent.ModelClient, error) {
 		return &fakeModelClient{}, nil
 	})
 	if err != nil {
@@ -203,7 +204,7 @@ func TestRoutedModelAdapterPlanSelectionRejectsUnknownModelRef(t *testing.T) {
 				Text: true,
 			},
 		},
-	}, func(_ config.AgentModelRuntime) (agent.ModelClient, error) {
+	}, nil, func(_ config.AgentModelRuntime, _ q15media.Store) (agent.ModelClient, error) {
 		return &fakeModelClient{}, nil
 	})
 	if err != nil {
@@ -229,7 +230,7 @@ func TestRoutedModelAdapterPlanSelectionReturnsEmptyPlanWhenNoCandidatesMatch(t 
 				Text: true,
 			},
 		},
-	}, func(_ config.AgentModelRuntime) (agent.ModelClient, error) {
+	}, nil, func(_ config.AgentModelRuntime, _ q15media.Store) (agent.ModelClient, error) {
 		return &fakeModelClient{}, nil
 	})
 	if err != nil {

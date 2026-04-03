@@ -14,12 +14,14 @@ import (
 	"github.com/openai/openai-go/v3/packages/param"
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
+	q15media "github.com/q15co/q15/systems/agent/internal/media"
 )
 
 // Client adapts an OpenAI-compatible Chat Completions API to the agent model
 // interface.
 type Client struct {
-	client openai.Client
+	client     openai.Client
+	mediaStore q15media.Store
 }
 
 var _ agent.ModelClient = (*Client)(nil)
@@ -28,8 +30,10 @@ const openAICompatibleReplayKey = "openai_compatible"
 
 const synthesizedReasoningContent = "Portable reasoning summary unavailable for replay; continuing with prior reasoning state."
 
+const toolImageFollowupText = "Use the attached image output from the previous tool result when continuing."
+
 // NewClient constructs a Chat Completions-compatible model client.
-func NewClient(baseURL string, apiKey string) (*Client, error) {
+func NewClient(baseURL string, apiKey string, mediaStore q15media.Store) (*Client, error) {
 	baseURL = strings.TrimSpace(baseURL)
 	if baseURL == "" {
 		return nil, fmt.Errorf("provider base url is required")
@@ -44,7 +48,10 @@ func NewClient(baseURL string, apiKey string) (*Client, error) {
 		option.WithAPIKey(apiKey),
 	)
 
-	return &Client{client: client}, nil
+	return &Client{
+		client:     client,
+		mediaStore: mediaStore,
+	}, nil
 }
 
 // Complete sends one completion request to the configured compatible endpoint.
@@ -58,7 +65,7 @@ func (c *Client) Complete(
 		return agent.ModelClientResult{}, fmt.Errorf("model name is required")
 	}
 
-	reqMessages, err := mapMessages(withPromptProfile(messages))
+	reqMessages, err := mapMessages(withPromptProfile(messages), c.mediaStore)
 	if err != nil {
 		return agent.ModelClientResult{}, err
 	}
@@ -93,6 +100,7 @@ func (c *Client) Complete(
 
 func mapMessages(
 	messages []conversation.Message,
+	mediaStore q15media.Store,
 ) ([]openai.ChatCompletionMessageParamUnion, error) {
 	out := make([]openai.ChatCompletionMessageParamUnion, 0, len(messages))
 	droppedReplayParts := 0
@@ -101,9 +109,17 @@ func mapMessages(
 		msg := messages[i]
 		switch msg.Role {
 		case conversation.SystemRole:
-			out = append(out, openai.SystemMessage(conversation.TextValue(msg)))
+			text, err := textOnlyMessageContent(msg)
+			if err != nil {
+				return nil, fmt.Errorf("message %d: %w", i, err)
+			}
+			out = append(out, openai.SystemMessage(text))
 		case conversation.UserRole:
-			out = append(out, openai.UserMessage(conversation.TextValue(msg)))
+			userMessage, err := buildUserMessage(msg, mediaStore)
+			if err != nil {
+				return nil, fmt.Errorf("message %d: %w", i, err)
+			}
+			out = append(out, userMessage)
 		case conversation.AssistantRole:
 			group := []conversation.Message{msg}
 			for i+1 < len(messages) && messages[i+1].Role == conversation.AssistantRole {
@@ -122,18 +138,29 @@ func mapMessages(
 			out = append(out, param.Override[openai.ChatCompletionMessageParamUnion](raw))
 		case conversation.ToolRole:
 			toolParts := 0
+			imageParts := make([]conversation.Part, 0, len(msg.Parts))
 			for _, part := range msg.Parts {
-				if part.Type != conversation.ToolResultPartType {
-					continue
+				part = conversation.NormalizePart(part)
+				switch part.Type {
+				case conversation.ToolResultPartType:
+					toolParts++
+					if strings.TrimSpace(part.ToolCallID) == "" {
+						return nil, fmt.Errorf("message %d: tool result missing tool call id", i)
+					}
+					out = append(out, openai.ToolMessage(part.Content, part.ToolCallID))
+				case conversation.ImagePartType:
+					imageParts = append(imageParts, part)
 				}
-				toolParts++
-				if strings.TrimSpace(part.ToolCallID) == "" {
-					return nil, fmt.Errorf("message %d: tool result missing tool call id", i)
-				}
-				out = append(out, openai.ToolMessage(part.Content, part.ToolCallID))
 			}
-			if toolParts == 0 {
+			if toolParts == 0 && len(imageParts) == 0 {
 				return nil, fmt.Errorf("message %d: tool message missing tool result part", i)
+			}
+			if len(imageParts) > 0 {
+				followup, err := buildToolImageFollowupMessage(imageParts, mediaStore)
+				if err != nil {
+					return nil, fmt.Errorf("message %d: %w", i, err)
+				}
+				out = append(out, followup)
 			}
 		default:
 			return nil, fmt.Errorf("message %d: unsupported role %q", i, msg.Role)
@@ -148,6 +175,70 @@ func mapMessages(
 	}
 
 	return out, nil
+}
+
+func buildUserMessage(
+	msg conversation.Message,
+	mediaStore q15media.Store,
+) (openai.ChatCompletionMessageParamUnion, error) {
+	textOnly := true
+	contentParts := make([]openai.ChatCompletionContentPartUnionParam, 0, len(msg.Parts))
+	var textBuilder strings.Builder
+
+	for _, part := range conversation.NormalizeParts(msg.Parts) {
+		switch part.Type {
+		case conversation.TextPartType:
+			textBuilder.WriteString(part.Text)
+			contentParts = append(contentParts, openai.TextContentPart(part.Text))
+		case conversation.ImagePartType:
+			textOnly = false
+			dataURL, err := q15media.ResolveImagePartDataURL(
+				part,
+				mediaStore,
+				q15media.DefaultMaxImageBytes,
+			)
+			if err != nil {
+				return openai.ChatCompletionMessageParamUnion{}, fmt.Errorf(
+					"resolve image input: %w",
+					err,
+				)
+			}
+			contentParts = append(contentParts, openai.ImageContentPart(
+				openai.ChatCompletionContentPartImageImageURLParam{URL: dataURL},
+			))
+		default:
+			return openai.ChatCompletionMessageParamUnion{}, fmt.Errorf(
+				"unsupported user message part type %q",
+				part.Type,
+			)
+		}
+	}
+
+	if textOnly {
+		return openai.UserMessage(textBuilder.String()), nil
+	}
+	return openai.UserMessage(contentParts), nil
+}
+
+func buildToolImageFollowupMessage(
+	imageParts []conversation.Part,
+	mediaStore q15media.Store,
+) (openai.ChatCompletionMessageParamUnion, error) {
+	parts := make([]conversation.Part, 0, 1+len(imageParts))
+	parts = append(parts, conversation.Text(toolImageFollowupText, ""))
+	parts = append(parts, conversation.CloneParts(imageParts)...)
+	return buildUserMessage(conversation.UserMessageParts(parts...), mediaStore)
+}
+
+func textOnlyMessageContent(msg conversation.Message) (string, error) {
+	var builder strings.Builder
+	for _, part := range conversation.NormalizeParts(msg.Parts) {
+		if part.Type != conversation.TextPartType {
+			return "", fmt.Errorf("unsupported non-text part %q in text-only message", part.Type)
+		}
+		builder.WriteString(part.Text)
+	}
+	return builder.String(), nil
 }
 
 func mapTools(tools []agent.ToolDefinition) []openai.ChatCompletionToolUnionParam {

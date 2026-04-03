@@ -28,6 +28,7 @@ func TestGRPCServerRunsSessionsEndToEnd(t *testing.T) {
 		ExecutorType:        "local-shell",
 		WorkspaceDir:        "/workspace",
 		MemoryDir:           "/memory",
+		MediaDir:            "/media",
 		SkillsDir:           "/skills",
 		ProxyEnabled:        true,
 		ProxyPolicyRevision: "rev-123",
@@ -70,6 +71,9 @@ func TestGRPCServerRunsSessionsEndToEnd(t *testing.T) {
 	}
 	if got := info.GetProxyPolicyRevision(); got != "rev-123" {
 		t.Fatalf("proxy policy revision = %q, want rev-123", got)
+	}
+	if got := info.GetMediaDir(); got != "/media" {
+		t.Fatalf("media dir = %q, want /media", got)
 	}
 
 	started, err := client.StartSession(ctx, &execpb.StartSessionRequest{
@@ -145,6 +149,7 @@ func TestGRPCServerSupportsInteractiveStdin(t *testing.T) {
 		ExecutorType:   "local-shell",
 		WorkspaceDir:   "/workspace",
 		MemoryDir:      "/memory",
+		MediaDir:       "/media",
 		SkillsDir:      "/skills",
 	})
 	if err != nil {

@@ -16,6 +16,7 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/auth"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
+	q15media "github.com/q15co/q15/systems/agent/internal/media"
 )
 
 const (
@@ -24,6 +25,7 @@ const (
 	codexBetaHeader = "responses=experimental"
 
 	openAIResponsesReplayKey = "openai_responses"
+	toolImageFollowupText    = "Use the attached image output from the previous tool result when continuing."
 )
 
 type tokenSource func(context.Context) (token string, accountID string, err error)
@@ -31,13 +33,14 @@ type tokenSource func(context.Context) (token string, accountID string, err erro
 // Client adapts the OpenAI Codex responses API to the agent model interface.
 type Client struct {
 	client      openai.Client
+	mediaStore  q15media.Store
 	tokenSource tokenSource
 }
 
 var _ agent.ModelClient = (*Client)(nil)
 
 // NewClient constructs a Codex-backed model client with q15 defaults.
-func NewClient() (*Client, error) {
+func NewClient(mediaStore q15media.Store) (*Client, error) {
 	client := openai.NewClient(
 		option.WithBaseURL(codexBaseURL),
 		option.WithHeader("originator", codexOriginator),
@@ -45,6 +48,7 @@ func NewClient() (*Client, error) {
 	)
 	return &Client{
 		client:      client,
+		mediaStore:  mediaStore,
 		tokenSource: auth.LoadOpenAIToken,
 	}, nil
 }
@@ -71,7 +75,7 @@ func (c *Client) Complete(
 		return agent.ModelClientResult{}, fmt.Errorf("openai credential has empty access token")
 	}
 
-	params, err := buildRequestParams(model, messages, tools)
+	params, err := buildRequestParams(model, messages, tools, c.mediaStore)
 	if err != nil {
 		return agent.ModelClientResult{}, err
 	}
@@ -127,8 +131,9 @@ func buildRequestParams(
 	model string,
 	messages []conversation.Message,
 	tools []agent.ToolDefinition,
+	mediaStore q15media.Store,
 ) (responses.ResponseNewParams, error) {
-	input, instructions, err := mapMessages(messages)
+	input, instructions, err := mapMessages(messages, mediaStore)
 	if err != nil {
 		return responses.ResponseNewParams{}, err
 	}
@@ -162,7 +167,10 @@ func buildRequestParams(
 	return params, nil
 }
 
-func mapMessages(messages []conversation.Message) (responses.ResponseInputParam, string, error) {
+func mapMessages(
+	messages []conversation.Message,
+	mediaStore q15media.Store,
+) (responses.ResponseInputParam, string, error) {
 	input := make(responses.ResponseInputParam, 0, len(messages))
 	instructionsParts := make([]string, 0, 1)
 	droppedReplayParts := 0
@@ -170,18 +178,19 @@ func mapMessages(messages []conversation.Message) (responses.ResponseInputParam,
 	for i, msg := range messages {
 		switch msg.Role {
 		case conversation.SystemRole:
-			if trimmed := strings.TrimSpace(messageText(msg)); trimmed != "" {
+			text, err := textOnlyMessageContent(msg)
+			if err != nil {
+				return nil, "", fmt.Errorf("message %d: %w", i, err)
+			}
+			if trimmed := strings.TrimSpace(text); trimmed != "" {
 				instructionsParts = append(instructionsParts, trimmed)
 			}
 		case conversation.UserRole:
-			input = append(input, responses.ResponseInputItemUnionParam{
-				OfMessage: &responses.EasyInputMessageParam{
-					Role: responses.EasyInputMessageRoleUser,
-					Content: responses.EasyInputMessageContentUnionParam{
-						OfString: openai.Opt(messageText(msg)),
-					},
-				},
-			})
+			item, err := buildUserInputItem(msg, mediaStore)
+			if err != nil {
+				return nil, "", fmt.Errorf("message %d: %w", i, err)
+			}
+			input = append(input, item)
 		case conversation.AssistantRole:
 			for _, part := range msg.Parts {
 				part = conversation.NormalizePart(part)
@@ -224,26 +233,39 @@ func mapMessages(messages []conversation.Message) (responses.ResponseInputParam,
 			}
 		case conversation.ToolRole:
 			toolParts := 0
+			imageParts := make([]conversation.Part, 0, len(msg.Parts))
 			for _, part := range msg.Parts {
 				part = conversation.NormalizePart(part)
-				if part.Type != conversation.ToolResultPartType {
-					continue
-				}
-				toolParts++
-				if strings.TrimSpace(part.ToolCallID) == "" {
-					return nil, "", fmt.Errorf("message %d: tool result missing tool call id", i)
-				}
-				input = append(input, responses.ResponseInputItemUnionParam{
-					OfFunctionCallOutput: &responses.ResponseInputItemFunctionCallOutputParam{
-						CallID: part.ToolCallID,
-						Output: responses.ResponseInputItemFunctionCallOutputOutputUnionParam{
-							OfString: openai.Opt(part.Content),
+				switch part.Type {
+				case conversation.ToolResultPartType:
+					toolParts++
+					if strings.TrimSpace(part.ToolCallID) == "" {
+						return nil, "", fmt.Errorf(
+							"message %d: tool result missing tool call id",
+							i,
+						)
+					}
+					input = append(input, responses.ResponseInputItemUnionParam{
+						OfFunctionCallOutput: &responses.ResponseInputItemFunctionCallOutputParam{
+							CallID: part.ToolCallID,
+							Output: responses.ResponseInputItemFunctionCallOutputOutputUnionParam{
+								OfString: openai.Opt(part.Content),
+							},
 						},
-					},
-				})
+					})
+				case conversation.ImagePartType:
+					imageParts = append(imageParts, part)
+				}
 			}
-			if toolParts == 0 {
+			if toolParts == 0 && len(imageParts) == 0 {
 				return nil, "", fmt.Errorf("message %d: tool message missing tool result part", i)
+			}
+			if len(imageParts) > 0 {
+				item, err := buildToolImageFollowupInputItem(imageParts, mediaStore)
+				if err != nil {
+					return nil, "", fmt.Errorf("message %d: %w", i, err)
+				}
+				input = append(input, item)
 			}
 		default:
 			return nil, "", fmt.Errorf("message %d: unsupported role %q", i, msg.Role)
@@ -258,6 +280,70 @@ func mapMessages(messages []conversation.Message) (responses.ResponseInputParam,
 	}
 
 	return input, strings.Join(instructionsParts, "\n\n"), nil
+}
+
+func buildUserInputItem(
+	msg conversation.Message,
+	mediaStore q15media.Store,
+) (responses.ResponseInputItemUnionParam, error) {
+	contentParts := make(responses.ResponseInputMessageContentListParam, 0, len(msg.Parts))
+	textOnly := true
+	var textBuilder strings.Builder
+
+	for _, part := range conversation.NormalizeParts(msg.Parts) {
+		switch part.Type {
+		case conversation.TextPartType:
+			textBuilder.WriteString(part.Text)
+			contentParts = append(
+				contentParts,
+				responses.ResponseInputContentParamOfInputText(part.Text),
+			)
+		case conversation.ImagePartType:
+			textOnly = false
+			dataURL, err := q15media.ResolveImagePartDataURL(
+				part,
+				mediaStore,
+				q15media.DefaultMaxImageBytes,
+			)
+			if err != nil {
+				return responses.ResponseInputItemUnionParam{}, fmt.Errorf(
+					"resolve image input: %w",
+					err,
+				)
+			}
+			imagePart := responses.ResponseInputContentParamOfInputImage(
+				responses.ResponseInputImageDetailAuto,
+			)
+			imagePart.OfInputImage.ImageURL = openai.Opt(dataURL)
+			contentParts = append(contentParts, imagePart)
+		default:
+			return responses.ResponseInputItemUnionParam{}, fmt.Errorf(
+				"unsupported user message part type %q",
+				part.Type,
+			)
+		}
+	}
+
+	if textOnly {
+		return responses.ResponseInputItemParamOfMessage(
+			textBuilder.String(),
+			responses.EasyInputMessageRoleUser,
+		), nil
+	}
+	return responses.ResponseInputItemParamOfMessage(
+		contentParts,
+		responses.EasyInputMessageRoleUser,
+	), nil
+}
+
+func buildToolImageFollowupInputItem(
+	imageParts []conversation.Part,
+	mediaStore q15media.Store,
+) (responses.ResponseInputItemUnionParam, error) {
+	parts := make([]conversation.Part, 0, 1+len(imageParts))
+	parts = append(parts, conversation.Text(toolImageFollowupText, ""))
+	parts = append(parts, conversation.CloneParts(imageParts)...)
+	return buildUserInputItem(conversation.UserMessageParts(parts...), mediaStore)
 }
 
 func mapTools(tools []agent.ToolDefinition) []responses.ToolUnionParam {
@@ -500,15 +586,15 @@ func responseDisposition(raw string) conversation.TextDisposition {
 	}
 }
 
-func messageText(msg conversation.Message) string {
+func textOnlyMessageContent(msg conversation.Message) (string, error) {
 	var builder strings.Builder
-	for _, part := range msg.Parts {
+	for _, part := range conversation.NormalizeParts(msg.Parts) {
 		if part.Type != conversation.TextPartType {
-			continue
+			return "", fmt.Errorf("unsupported non-text part %q in text-only message", part.Type)
 		}
 		builder.WriteString(part.Text)
 	}
-	return builder.String()
+	return builder.String(), nil
 }
 
 type streamSnapshot struct {

@@ -61,19 +61,24 @@ func (r *Registry) Definitions() []ToolDefinition {
 }
 
 // Run executes a single tool call by name.
-func (r *Registry) Run(ctx context.Context, call ToolCall) (string, error) {
+func (r *Registry) Run(ctx context.Context, call ToolCall) (ToolResult, error) {
 	if r == nil {
-		return "", fmt.Errorf("no tool registry configured")
+		return ToolResult{}, fmt.Errorf("no tool registry configured")
 	}
 
 	name := strings.TrimSpace(call.Name)
 	if name == "" {
-		return "", fmt.Errorf("tool call is missing name")
+		return ToolResult{}, fmt.Errorf("tool call is missing name")
 	}
 
 	tool, ok := r.toolsByName[name]
 	if !ok {
-		return "", fmt.Errorf("unsupported tool: %s", name)
+		return ToolResult{}, fmt.Errorf("unsupported tool: %s", name)
 	}
-	return tool.Run(ctx, call.Arguments)
+	if structured, ok := tool.(StructuredTool); ok {
+		return structured.RunResult(ctx, call.Arguments)
+	}
+
+	output, err := tool.Run(ctx, call.Arguments)
+	return ToolResult{Output: output}, err
 }
