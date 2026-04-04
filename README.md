@@ -108,6 +108,12 @@ The fixed runtime contract is:
   - advertises `http://q15-proxy:18080`
   - uses `/var/lib/q15/proxy`
 
+`q15-exec` intentionally passes `--option build-users-group ""` to `nix shell`. That keeps Nix
+builds on the current container user, which is expected to be `root` in the current runtime images,
+because common container seccomp defaults can block `execve` after Nix drops to `nixbld` users. The
+security boundary for those builds is the container or Kubernetes namespace, not Nix `nixbld` user
+isolation inside the container.
+
 This repo no longer treats runtime wiring as a user-facing config surface.
 
 `/workspace` is the durable working state for a q15 stack. It is expected to preserve project files
