@@ -4,8 +4,8 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 
@@ -23,11 +23,8 @@ const (
 // Loop coordinates model calls, tool execution, and turn persistence.
 type Loop struct {
 	mu          sync.Mutex
-	modelClient ModelClient
-	planner     modelselection.Planner
-	tools       ToolRegistry
+	engine      *Engine
 	store       ConversationStore
-	modelRefs   []string
 	systemText  string
 	maxTurns    int
 	recentTurns int
@@ -77,15 +74,12 @@ func NewLoopWithPlanner(
 	if planner == nil {
 		planner = modelselection.Passthrough{}
 	}
-	modelRefs = normalizeModelRefs(modelRefs)
+	engine := NewEngineWithPlanner(modelClient, planner, tools, modelRefs)
 	return &Loop{
-		modelClient: modelClient,
-		planner:     planner,
-		tools:       tools,
+		engine:      engine,
 		store:       store,
-		modelRefs:   modelRefs,
 		systemText:  systemText,
-		maxTurns:    defaultMaxTurns,
+		maxTurns:    engine.maxTurns,
 		recentTurns: recentTurns,
 	}
 }
@@ -126,10 +120,11 @@ func (l *Loop) Reply(
 		return ReplyResult{}, err
 	}
 
-	systemText := l.systemText
 	emitRunEvent(ctx, observer, RunEvent{
 		Type: RunEventRunStarted,
 	})
+
+	systemText := l.systemText
 	if l.store != nil {
 		if coreStore, ok := l.store.(CoreMemoryStore); ok {
 			coreMemory, err := coreStore.LoadCoreMemory(ctx)
@@ -172,259 +167,70 @@ func (l *Loop) Reply(
 	messages = append(messages, systemMessage(systemText))
 	messages = append(messages, copyMessages(recentMessages)...)
 
-	turnStart := len(messages)
 	messages = append(messages, copyMessages([]conversation.Message{userMessage})...)
-
-	var toolDefs []ToolDefinition
-	if l.tools != nil {
-		toolDefs = l.tools.Definitions()
-	}
-	loopDetector := newToolLoopDetector()
-	emptyAssistantRetries := 0
-
-	for turn := 0; turn < l.maxTurns; turn++ {
-		requestMessages := copyMessages(messages)
-		if emptyAssistantRetries > 0 {
-			requestMessages = append(
-				requestMessages,
-				systemMessage(emptyResponseRetrySteeringPrompt),
+	result, err := l.engine.Run(ctx, EngineRequest{
+		Messages: messages,
+		UseTools: true,
+		Observer: observer,
+	})
+	if err != nil {
+		var stopErr *StopError
+		if errors.As(err, &stopErr) {
+			turnMessages := append(
+				copyMessages([]conversation.Message{userMessage}),
+				copyMessages(result.Messages)...,
 			)
-		}
-		modelRef, result, err := l.completeWithObserver(
-			ctx,
-			requestMessages,
-			toolDefs,
-			turn,
-			observer,
-		)
-		if err != nil {
-			emitRunEvent(ctx, observer, RunEvent{
-				Type:     RunEventRunFailed,
-				Turn:     turn,
-				ModelRef: modelRef,
-				Err:      err,
-			})
-			return ReplyResult{}, fmt.Errorf("model complete: %w", err)
-		}
-
-		resultMessages := conversation.NormalizeMessages(copyMessages(result.Messages))
-		toolCalls := resultToolCalls(resultMessages)
-		answer := finalAnswer(resultMessages)
-		if len(toolCalls) == 0 && answer == "" &&
-			emptyAssistantRetries < maxEmptyAssistantRetries {
-			emptyAssistantRetries++
-			continue
-		}
-		emptyAssistantRetries = 0
-
-		messages = append(messages, resultMessages...)
-
-		if len(toolCalls) == 0 {
-			answer = finalAnswer(messages[turnStart:])
-			if answer == "" {
-				answer = "(assistant returned no text)"
-			}
-			if err := l.persistTurn(ctx, messages, turnStart); err != nil {
+			if persistErr := l.persistTurn(ctx, turnMessages); persistErr != nil {
 				emitRunEvent(ctx, observer, RunEvent{
 					Type:      RunEventRunFailed,
-					Turn:      turn,
-					ModelRef:  modelRef,
-					FinalText: answer,
-					Err:       err,
+					Turn:      result.Turn,
+					ModelRef:  result.ModelRef,
+					FinalText: result.FinalText,
+					Err:       persistErr,
 				})
-				return ReplyResult{}, fmt.Errorf("persist turn: %w", err)
-			}
-			emitRunEvent(ctx, observer, RunEvent{
-				Type:      RunEventRunFinished,
-				Turn:      turn,
-				ModelRef:  modelRef,
-				FinalText: answer,
-			})
-			return ReplyResult{Text: answer}, nil
-		}
-
-		for _, call := range toolCalls {
-			emitRunEvent(ctx, observer, RunEvent{
-				Type:     RunEventToolStarted,
-				Turn:     turn,
-				ModelRef: modelRef,
-				ToolCall: call,
-			})
-			toolResult, err := l.runTool(ctx, call)
-			output := toolResult.Output
-			if err != nil {
-				output = "tool error: " + err.Error()
-				toolResult = ToolResult{Output: output}
-			}
-			emitRunEvent(ctx, observer, RunEvent{
-				Type:       RunEventToolFinished,
-				Turn:       turn,
-				ModelRef:   modelRef,
-				ToolCall:   call,
-				ToolOutput: output,
-				Err:        err,
-			})
-			messages = append(messages, toolResultMessage(call.ID, toolResult, err != nil))
-
-			if assessment := loopDetector.Record(call, output); assessment.Critical {
-				stopSummary := formatStopSummary(
-					StopReasonToolLoopDetected,
-					l.maxTurns,
-					assessment.RepeatCount,
-					assessment.NoProgressCount,
-				)
-				messages = append(messages, assistantTextMessage(stopSummary, ""))
-				if err := l.persistTurn(ctx, messages, turnStart); err != nil {
-					emitRunEvent(ctx, observer, RunEvent{
-						Type:      RunEventRunFailed,
-						Turn:      turn,
-						ModelRef:  modelRef,
-						FinalText: stopSummary,
-						Err:       err,
-					})
-					return ReplyResult{}, fmt.Errorf("persist interrupted turn: %w", err)
-				}
-				stopErr := &StopError{
-					Reason: StopReasonToolLoopDetected,
-					Detail: fmt.Sprintf(
-						"tool loop detected (repeat=%d, no_progress=%d)",
-						assessment.RepeatCount,
-						assessment.NoProgressCount,
-					),
-				}
-				emitRunEvent(ctx, observer, RunEvent{
-					Type:      RunEventRunFailed,
-					Turn:      turn,
-					ModelRef:  modelRef,
-					FinalText: stopSummary,
-					Err:       stopErr,
-				})
-				return ReplyResult{}, stopErr
+				return ReplyResult{}, fmt.Errorf("persist interrupted turn: %w", persistErr)
 			}
 		}
-	}
-
-	stopSummary := formatStopSummary(
-		StopReasonToolTurnLimit,
-		l.maxTurns,
-		loopDetector.MaxRepeatCount(),
-		loopDetector.MaxNoProgressCount(),
-	)
-	messages = append(messages, assistantTextMessage(stopSummary, ""))
-	if err := l.persistTurn(ctx, messages, turnStart); err != nil {
 		emitRunEvent(ctx, observer, RunEvent{
 			Type:      RunEventRunFailed,
-			FinalText: stopSummary,
+			Turn:      result.Turn,
+			ModelRef:  result.ModelRef,
+			FinalText: result.FinalText,
 			Err:       err,
 		})
-		return ReplyResult{}, fmt.Errorf("persist interrupted turn: %w", err)
-	}
-	stopErr := &StopError{
-		Reason: StopReasonToolTurnLimit,
-		Detail: fmt.Sprintf("max tool-call turns reached (%d)", l.maxTurns),
-	}
-	emitRunEvent(ctx, observer, RunEvent{
-		Type:      RunEventRunFailed,
-		FinalText: stopSummary,
-		Err:       stopErr,
-	})
-	return ReplyResult{}, stopErr
-}
-
-func (l *Loop) runTool(ctx context.Context, call ToolCall) (ToolResult, error) {
-	if l.tools == nil {
-		return ToolResult{}, fmt.Errorf("no tool registry configured for call %q", call.Name)
-	}
-	if strings.TrimSpace(call.ID) == "" {
-		return ToolResult{}, fmt.Errorf("tool call is missing id")
-	}
-	return l.tools.Run(ctx, call)
-}
-
-func (l *Loop) completeWithObserver(
-	ctx context.Context,
-	messages []conversation.Message,
-	tools []ToolDefinition,
-	turn int,
-	observer RunObserver,
-) (string, ModelClientResult, error) {
-	if len(l.modelRefs) == 0 {
-		return "", ModelClientResult{}, fmt.Errorf("no models configured")
+		return ReplyResult{}, err
 	}
 
-	requirements := modelselection.InferRequirements(modelselection.Request{
-		Messages:  messages,
-		ToolCount: len(tools),
-	})
-	plan, err := l.planner.Plan(l.modelRefs, requirements)
-	if err != nil {
-		return "", ModelClientResult{}, err
-	}
-
-	log.Printf(
-		"q15: model selection turn=%d requirements=[%s] eligible=%v skipped=%s",
-		turn,
-		requirements.String(),
-		plan.EligibleRefs,
-		plan.SkipSummary(),
+	turnMessages := append(
+		copyMessages([]conversation.Message{userMessage}),
+		copyMessages(result.Messages)...,
 	)
-	if len(plan.EligibleRefs) == 0 {
-		return "", ModelClientResult{}, &modelselection.NoEligibleError{
-			Requirements: requirements,
-			Skipped:      append([]modelselection.Skip(nil), plan.Skipped...),
-		}
-	}
-	var lastErr error
-	lastModelRef := ""
-
-	for attempt, modelRef := range plan.EligibleRefs {
-		lastModelRef = modelRef
+	if err := l.persistTurn(ctx, turnMessages); err != nil {
 		emitRunEvent(ctx, observer, RunEvent{
-			Type:     RunEventModelTurnStarted,
-			Turn:     turn,
-			ModelRef: modelRef,
+			Type:      RunEventRunFailed,
+			Turn:      result.Turn,
+			ModelRef:  result.ModelRef,
+			FinalText: result.FinalText,
+			Err:       err,
 		})
-		result, err := l.modelClient.Complete(ctx, modelRef, messages, tools)
-		if err == nil {
-			log.Printf(
-				"q15: model turn=%d selected ref=%q attempt=%d/%d finish_reason=%q returned_messages=%d",
-				turn,
-				modelRef,
-				attempt+1,
-				len(plan.EligibleRefs),
-				result.FinishReason,
-				len(result.Messages),
-			)
-			return modelRef, result, nil
-		}
-		log.Printf(
-			"q15: model turn=%d ref=%q attempt=%d/%d failed: %v",
-			turn,
-			modelRef,
-			attempt+1,
-			len(plan.EligibleRefs),
-			err,
-		)
-		lastErr = err
+		return ReplyResult{}, fmt.Errorf("persist turn: %w", err)
 	}
 
-	if lastErr == nil {
-		return "", ModelClientResult{}, fmt.Errorf("no models configured")
-	}
-	return lastModelRef, ModelClientResult{}, fmt.Errorf(
-		"all models failed (%v): %w",
-		plan.EligibleRefs,
-		lastErr,
-	)
+	emitRunEvent(ctx, observer, RunEvent{
+		Type:      RunEventRunFinished,
+		Turn:      result.Turn,
+		ModelRef:  result.ModelRef,
+		FinalText: result.FinalText,
+	})
+	return ReplyResult{Text: result.FinalText}, nil
 }
 
 func (l *Loop) persistTurn(
 	ctx context.Context,
 	messages []conversation.Message,
-	turnStart int,
 ) error {
 	if l.store == nil {
 		return nil
 	}
-	return l.store.AppendTurn(ctx, copyMessages(messages[turnStart:]))
+	return l.store.AppendTurn(ctx, copyMessages(messages))
 }

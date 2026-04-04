@@ -113,16 +113,17 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 		memory: memoryStore,
 		skills: skillManager,
 	}
-
-	botAgent := agent.NewLoopWithPlanner(
+	entryPoints := newRuntimeEntryPoints(
 		modelAdapter,
 		modelAdapter,
 		toolRegistry,
 		models,
 		systemPrompt,
 		store,
+		store,
 		rt.MemoryRecentTurns,
 	)
+	botAgent := entryPoints.NewInteractiveAgent()
 	messageBus := bus.New(bus.DefaultBufferSize)
 
 	channel, err := telegram.NewChannel(token, func(msg telegram.IncomingMessage) {
