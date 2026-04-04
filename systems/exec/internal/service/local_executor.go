@@ -160,6 +160,11 @@ func buildNixShellArgs(command string, packages []string, sslCertFile string) []
 		"--option",
 		"ssl-cert-file",
 		sslCertFile,
+		// In containerized q15-exec runtimes, default seccomp filters can block
+		// execve after Nix drops to nixbld users, so keep builds on the current user.
+		"--option",
+		"build-users-group",
+		"",
 		"shell",
 	}
 	args = append(args, packages...)
