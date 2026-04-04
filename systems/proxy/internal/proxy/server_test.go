@@ -564,7 +564,7 @@ func TestStart_KeepsProxyReplacementStateIsolatedPerServer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("clientA.Do(unmatched placeholder) error = %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if got := sawAuth.Load().(string); got != "Bearer __Q15_PROXY_ENV_agent_b__" {
 		t.Fatalf(
 			"proxyA should not rewrite proxyB placeholder, got %q",
@@ -627,7 +627,7 @@ func TestStart_AppliesSetBasicAuthOverHTTPS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("client.Get() error = %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if got := sawAuthHeader.Load().(string); got != basicAuthHeader(
 		"x-access-token",

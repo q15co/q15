@@ -13,9 +13,71 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  verify:
+    name: Release Verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Fetch main
+        run: git fetch --no-tags origin main:refs/remotes/origin/main
+
+      - name: Ensure tagged commit is on main
+        run: |
+          set -euo pipefail
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" "origin/main"; then
+            echo "tagged commit ${GITHUB_SHA} is not reachable from origin/main" >&2
+            exit 1
+          fi
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+          cache: true
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Cache repo-local tools
+        uses: actions/cache@v4
+        with:
+          path: .tools
+          key: ${{ runner.os }}-${{ runner.arch }}-tools-${{ hashFiles('scripts/tool-versions.sh', 'go.work') }}
+
+      - name: Install repo-local tools
+        run: make project-setup
+
+      - name: Run repo verification
+        run: make verify
+
+      - name: Validate GoReleaser config
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: check
+
   release-auth:
     name: Release q15-auth
+    needs: verify
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v5

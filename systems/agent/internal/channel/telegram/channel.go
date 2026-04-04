@@ -99,10 +99,12 @@ func (c *Channel) Start(ctx context.Context) error {
 		return c.handleMessage(ctx, &message)
 	}, th.AnyMessage())
 
-	go bh.Start()
+	go func() {
+		_ = bh.Start()
+	}()
 	go func() {
 		<-ctx.Done()
-		bh.Stop()
+		_ = bh.Stop()
 	}()
 
 	return nil

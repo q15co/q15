@@ -32,6 +32,39 @@ stack may attach an empty persistent volume or empty host directory at `/workspa
 initial state is valid, and operators may populate it later through normal agent work or manual
 setup.
 
+## Development Setup
+
+The standard contributor and agent workflow is:
+
+```bash
+make project-setup
+make verify
+```
+
+`make project-setup` installs the pinned repo-local toolchain under `./.tools`. Hooks, CI, and agent
+workflows use those same repo-owned commands and do not depend on `devenv`.
+
+Outside Nix, the setup script expects:
+
+- Go `1.25.x`
+- `python3`
+- `node` and `npm`
+- `curl`, `git`, and `tar`
+
+Optional local conveniences:
+
+```bash
+nix develop
+make hooks-install
+```
+
+- `nix develop` is a thin convenience shell for Nix users; it is not the source of truth for CI or
+  tooling behavior
+- `make hooks-install` installs one thin `pre-commit` hook that verifies `./.tools` and runs
+  `make lint-changed`
+- `make lint-changed FILES='path/a.go path/b.md'` is the explicit changed-file entrypoint for agents
+  and scripts
+
 ## Build And Test
 
 ```bash
@@ -48,7 +81,7 @@ Artifacts are written to `./bin`:
 
 ## Release Artifacts
 
-Runtime services are published as OCI images to GHCR on every `push` to `main`:
+Runtime services are published as OCI images to GHCR on verified pushes to `main`:
 
 - `ghcr.io/q15co/q15-agent`
 - `ghcr.io/q15co/q15-exec`
@@ -72,8 +105,9 @@ GHCR runtime images are intended to be publicly pullable without registry auth f
 self-hosted consumption. Maintain the GitHub package visibility for `q15-agent`, `q15-exec`, and
 `q15-proxy` as public outside this repo.
 
-`q15-auth` is published separately as GitHub Release archives on pushed tags that match `v*`. The
-release assets are:
+`q15-auth` is published separately as GitHub Release archives on pushed tags that match `v*`, after
+the tagged commit passes verification and is confirmed to be reachable from `main`. The release
+assets are:
 
 - `q15-auth_<version>_linux_amd64.tar.gz`
 - `q15-auth_<version>_linux_arm64.tar.gz`

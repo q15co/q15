@@ -83,12 +83,14 @@ func loginOpenAIDeviceCode(
 		return nil, err
 	}
 
-	fmt.Fprintf(
+	if _, err := fmt.Fprintf(
 		out,
 		"Open this URL in your browser:\n\n  %s\n\nThen enter this code: %s\n\nWaiting for authentication...\n",
 		info.VerifyURL,
 		info.UserCode,
-	)
+	); err != nil {
+		return nil, fmt.Errorf("write device authentication instructions: %w", err)
+	}
 
 	timeout := time.NewTimer(defaultDeviceAuthWindow)
 	defer timeout.Stop()

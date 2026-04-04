@@ -15,3 +15,6 @@ linters:
     - errcheck
     - ineffassign
     - unused
+  exclusions:
+    presets:
+      - std-error-handling
