@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# q15-managed-hook
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+
+"${repo_root}/scripts/project-setup.sh" --check
+make -C "${repo_root}" lint-changed

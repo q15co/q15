@@ -1,4 +1,4 @@
-name: Publish Images
+name: Publish Main Images
 
 on:
   push:
@@ -9,13 +9,64 @@ permissions:
   packages: write
 
 concurrency:
-  group: publish-images-${{ github.ref }}
+  group: publish-main-images-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  verify:
+    name: Main Verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+          cache: true
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Cache repo-local tools
+        uses: actions/cache@v4
+        with:
+          path: .tools
+          key: ${{ runner.os }}-${{ runner.arch }}-tools-${{ hashFiles('scripts/tool-versions.sh', 'go.work') }}
+
+      - name: Install repo-local tools
+        run: make project-setup
+
+      - name: Run repo verification
+        run: make verify
+
+      - name: Validate GoReleaser config
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: check
+
   build:
     name: Build ${{ matrix.service }} (${{ matrix.platform }})
+    needs: verify
     runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
     strategy:
       fail-fast: false
       matrix:
@@ -104,10 +155,13 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  merge:
+  publish:
     name: Publish ${{ matrix.service }} manifest
     runs-on: ubuntu-24.04
     needs: build
+    permissions:
+      contents: read
+      packages: write
     strategy:
       fail-fast: false
       matrix:

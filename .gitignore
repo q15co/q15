@@ -1,6 +1,7 @@
 q15.toml
 config.toml
 bin/
+.tools/
 .devenv/
 .devenv*
 .direnv/
