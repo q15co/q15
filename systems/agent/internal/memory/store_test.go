@@ -47,16 +47,39 @@ func TestStoreInitCreatesScaffold(t *testing.T) {
 		filepath.Join(root, "core", "AGENT.md"),
 		filepath.Join(root, "core", "USER.md"),
 		filepath.Join(root, "core", "SOUL.md"),
+		filepath.Join(root, "semantic"),
+		filepath.Join(root, "working"),
 		filepath.Join(root, "history", "turns"),
+		filepath.Join(root, "history", "state", "head.json"),
+		filepath.Join(root, "cognition", "indexer"),
 		filepath.Join(root, "notes", "inbox"),
 		filepath.Join(root, "notes", "zettel"),
 		filepath.Join(root, "notes", "maps"),
-		filepath.Join(root, "state", "head.json"),
 		filepath.Join(root, "README.md"),
 	}
 	for _, path := range requiredPaths {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("expected path %q to exist: %v", path, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, "state")); !os.IsNotExist(err) {
+		t.Fatalf("legacy state dir should not be created, err = %v", err)
+	}
+
+	readme, err := os.ReadFile(filepath.Join(root, "README.md"))
+	if err != nil {
+		t.Fatalf("ReadFile(README.md) error = %v", err)
+	}
+	for _, want := range []string{
+		"Core self-model files",
+		"Semantic memory is stored under semantic/",
+		"Working memory is stored under working/",
+		"history/state/head.json",
+		"cognition/",
+		"zettelkasten layout",
+	} {
+		if !strings.Contains(string(readme), want) {
+			t.Fatalf("README missing %q:\n%s", want, string(readme))
 		}
 	}
 

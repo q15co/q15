@@ -13,13 +13,14 @@ type ConversationStore interface {
 	AppendTurn(ctx context.Context, messages []conversation.Message) error
 }
 
-// CoreMemory holds small, high-signal identity/profile notes that should stay
-// in-context for every model call.
+// CoreMemory holds the agent's always-injected identity, personality, and
+// self-model files.
 type CoreMemory struct {
 	Files []CoreMemoryFile
 }
 
-// CoreMemoryFile is one markdown file loaded from persistent core memory.
+// CoreMemoryFile is one markdown file loaded from persistent core self-model
+// memory.
 type CoreMemoryFile struct {
 	RelativePath string
 	Description  string
@@ -27,7 +28,7 @@ type CoreMemoryFile struct {
 	Content      string
 }
 
-// CoreMemoryStore can provide persistent core memory for system prompt
+// CoreMemoryStore can provide persistent core self-model memory for system prompt
 // injection.
 type CoreMemoryStore interface {
 	LoadCoreMemory(ctx context.Context) (CoreMemory, error)

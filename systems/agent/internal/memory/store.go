@@ -24,9 +24,12 @@ import (
 )
 
 const (
-	headStateRelativePath = "state/head.json"
+	headStateRelativePath = "history/state/head.json"
 	readmeRelativePath    = "README.md"
 	coreDirPath           = "core"
+	semanticDirPath       = "semantic"
+	workingDirPath        = "working"
+	cognitionDirPath      = "cognition"
 )
 
 //go:embed core-seeds/AGENT.md core-seeds/USER.md core-seeds/SOUL.md
@@ -42,7 +45,8 @@ var coreFrontmatterParser = goldmark.New(
 	goldmark.WithExtensions(meta.Meta),
 )
 
-// Store persists conversation turns and core memory files on disk.
+// Store persists the agent's episodic history, core self-model files, and
+// related memory state on disk.
 type Store struct {
 	mu        sync.Mutex
 	rootDir   string
@@ -78,12 +82,15 @@ func (s *Store) Init(ctx context.Context) error {
 	}
 
 	dirs := []string{
-		filepath.Join(s.rootDir, "core"),
+		filepath.Join(s.rootDir, coreDirPath),
+		filepath.Join(s.rootDir, semanticDirPath),
+		filepath.Join(s.rootDir, workingDirPath),
 		filepath.Join(s.rootDir, "history", "turns"),
+		filepath.Join(s.rootDir, "history", "state"),
 		filepath.Join(s.rootDir, "notes", "inbox"),
 		filepath.Join(s.rootDir, "notes", "zettel"),
 		filepath.Join(s.rootDir, "notes", "maps"),
-		filepath.Join(s.rootDir, "state", "indexer"),
+		filepath.Join(s.rootDir, cognitionDirPath, "indexer"),
 	}
 	for _, dir := range dirs {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -170,7 +177,7 @@ func (s *Store) LoadRecentMessages(ctx context.Context, turns int) ([]conversati
 	return out, nil
 }
 
-// LoadCoreMemory loads the current core memory files for prompt injection.
+// LoadCoreMemory loads the current core self-model files for prompt injection.
 func (s *Store) LoadCoreMemory(ctx context.Context) (agent.CoreMemory, error) {
 	_ = ctx
 
@@ -244,12 +251,16 @@ func (s *Store) ensureREADME() error {
 	content := strings.TrimSpace(`
 # q15 Agent Memory
 
-This directory contains persistent agent memory.
+This directory contains q15's persistent agent-state root.
 
-	- Core memory (always injected into the system prompt) is stored in core/*.md (for example AGENT.md, USER.md, SOUL.md).
+	- Core self-model files (always injected into the system prompt) are stored in core/*.md (for example AGENT.md, USER.md, SOUL.md).
 	- Agent identity comes from config agent.name; use {{agent_name}} in core files instead of hardcoded names.
-	- Conversation turns are stored as canonical JSON files under history/turns/.
-	- Notes are organized under notes/inbox, notes/zettel, and notes/maps.
+	- Semantic memory is stored under semantic/ for durable extracted knowledge the agent knows; it is not auto-injected.
+	- Working memory is stored under working/ for bounded active state; it is not a general notebook.
+	- Episodic conversation turns are stored as canonical JSON files under history/turns/.
+	- Transcript sequence bookkeeping is stored under history/state/head.json.
+	- Cognition subsystem maintenance state is stored under cognition/.
+	- Auxiliary notebook files are organized under notes/inbox, notes/zettel, and notes/maps as the built-in zettelkasten layout.
 	- Git history tracks all memory changes.
 `)
 	if err := writeTextFileAtomic(path, content+"\n"); err != nil {
