@@ -1,4 +1,4 @@
-// Package memory provides persistent agent memory storage and git-backed
+// Package memory provides persistent agent-state storage and git-backed
 // history for conversation state.
 package memory
 

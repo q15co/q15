@@ -46,7 +46,11 @@ planning.
 
 `q15-memory` is also durable stack state. On `q15-agent` startup, stored turn files under
 `/memory/history/turns/` are eagerly upgraded to the latest transcript schema before replay.
-Unreadable files are moved aside under `/memory/history/quarantine/`.
+Unreadable files are moved aside under `/memory/history/quarantine/`. The same persistent root also
+holds core self-model files under `/memory/core/`, semantic and working layers under
+`/memory/semantic/` and `/memory/working/`, cognition maintenance state under `/memory/cognition/`,
+and zettelkasten notebook folders under `/memory/notes/inbox/`, `/memory/notes/zettel/`, and
+`/memory/notes/maps/`.
 
 The supported Kubernetes topology is one namespace per q15 stack. Within that namespace, one stack
 contains:
