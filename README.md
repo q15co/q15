@@ -217,6 +217,10 @@ agent:
   models:
     - gpt-5.4
     - kimi-k2.5
+  cognition:
+    models:
+      - kimi-k2.5
+      - gpt-5.4
   memory_recent_turns: 6
   telegram:
     token_env: Q15_TELEGRAM_TOKEN
@@ -233,6 +237,8 @@ Notes:
   currently inferred request requirements before calling a provider
 - `agent.models` order is the deterministic per-turn fallback preference order after capability
   filtering
+- `agent.cognition.models` is optional and sets the deterministic fallback order for background
+  cognition jobs; when omitted, cognition inherits `agent.models`
 - current inference is intentionally text-first; image-input and tool-calling requirement inference
   land when canonical request signals for those modes are available
 - agent memory lives under `/memory`

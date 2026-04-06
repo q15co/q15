@@ -9,21 +9,23 @@ import (
 )
 
 type runtimeEntryPoints struct {
-	modelClient       agent.ModelClient
-	planner           modelselection.Planner
-	tools             agent.ToolRegistry
-	modelRefs         []string
-	interactivePrompt string
-	interactiveStore  agent.ConversationStore
-	loader            cognition.ContextLoader
-	recentTurns       int
+	modelClient          agent.ModelClient
+	planner              modelselection.Planner
+	tools                agent.ToolRegistry
+	interactiveModelRefs []string
+	cognitionModelRefs   []string
+	interactivePrompt    string
+	interactiveStore     agent.ConversationStore
+	loader               cognition.ContextLoader
+	recentTurns          int
 }
 
 func newRuntimeEntryPoints(
 	modelClient agent.ModelClient,
 	planner modelselection.Planner,
 	tools agent.ToolRegistry,
-	modelRefs []string,
+	interactiveModelRefs []string,
+	cognitionModelRefs []string,
 	interactivePrompt string,
 	interactiveStore agent.ConversationStore,
 	loader cognition.ContextLoader,
@@ -32,15 +34,19 @@ func newRuntimeEntryPoints(
 	if planner == nil {
 		planner = modelselection.Passthrough{}
 	}
+	if len(cognitionModelRefs) == 0 {
+		cognitionModelRefs = interactiveModelRefs
+	}
 	return &runtimeEntryPoints{
-		modelClient:       modelClient,
-		planner:           planner,
-		tools:             tools,
-		modelRefs:         append([]string(nil), modelRefs...),
-		interactivePrompt: strings.TrimSpace(interactivePrompt),
-		interactiveStore:  interactiveStore,
-		loader:            loader,
-		recentTurns:       recentTurns,
+		modelClient:          modelClient,
+		planner:              planner,
+		tools:                tools,
+		interactiveModelRefs: append([]string(nil), interactiveModelRefs...),
+		cognitionModelRefs:   append([]string(nil), cognitionModelRefs...),
+		interactivePrompt:    strings.TrimSpace(interactivePrompt),
+		interactiveStore:     interactiveStore,
+		loader:               loader,
+		recentTurns:          recentTurns,
 	}
 }
 
@@ -52,7 +58,7 @@ func (r *runtimeEntryPoints) NewInteractiveAgent() agent.Agent {
 		r.modelClient,
 		r.planner,
 		r.tools,
-		r.modelRefs,
+		r.interactiveModelRefs,
 		r.interactivePrompt,
 		r.interactiveStore,
 		r.recentTurns,
@@ -67,7 +73,7 @@ func (r *runtimeEntryPoints) NewCognitionRunner() *cognition.Runner {
 		r.modelClient,
 		r.planner,
 		r.tools,
-		r.modelRefs,
+		r.cognitionModelRefs,
 		r.loader,
 	)
 }

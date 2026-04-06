@@ -36,7 +36,9 @@ If multiple models are listed in `agent.models`, q15 treats that list as the det
 fallback preference order. It filters out models that do not satisfy the currently inferred request
 requirements before any provider call, then falls back across the remaining eligible entries.
 Current inference is text-first; image-input and tool-calling requirement inference are staged for
-the corresponding canonical request signals.
+the corresponding canonical request signals. `agent.cognition.models` is optional and sets the
+deterministic fallback order for background cognition jobs. When omitted, cognition jobs inherit
+`agent.models`.
 
 `q15-workspace` is the stack's long-term project and working-state PVC. A fresh
 `PersistentVolumeClaim/q15-workspace` may be empty on first deployment; pre-seeding it is optional

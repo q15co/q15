@@ -16,6 +16,9 @@ agent:
   name: Q15
   models:
     - kimi-k2.5
+  cognition:
+    models:
+      - kimi-k2.5
   memory_recent_turns: 6
   telegram:
     token_env: Q15_TELEGRAM_TOKEN

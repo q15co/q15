@@ -83,11 +83,22 @@ agent:
 	if runtime.Name != "Q15" {
 		t.Fatalf("Name = %q, want %q", runtime.Name, "Q15")
 	}
-	if len(runtime.Models) != 2 {
-		t.Fatalf("Models len = %d, want 2", len(runtime.Models))
+	if len(runtime.InteractiveModels) != 2 {
+		t.Fatalf("InteractiveModels len = %d, want 2", len(runtime.InteractiveModels))
 	}
-	if runtime.Models[0].ProviderAPIKey != "api-123" {
-		t.Fatalf("ProviderAPIKey = %q, want %q", runtime.Models[0].ProviderAPIKey, "api-123")
+	if runtime.InteractiveModels[0].ProviderAPIKey != "api-123" {
+		t.Fatalf(
+			"ProviderAPIKey = %q, want %q",
+			runtime.InteractiveModels[0].ProviderAPIKey,
+			"api-123",
+		)
+	}
+	if len(runtime.CognitionModels) != 2 {
+		t.Fatalf("CognitionModels len = %d, want 2", len(runtime.CognitionModels))
+	}
+	if runtime.CognitionModels[0].Ref != "kimi-k2.5" ||
+		runtime.CognitionModels[1].Ref != "kimi-k2" {
+		t.Fatalf("CognitionModels = %#v, want interactive fallback order", runtime.CognitionModels)
 	}
 	if runtime.WorkspaceLocalDir != "/workspace" {
 		t.Fatalf("WorkspaceLocalDir = %q, want %q", runtime.WorkspaceLocalDir, "/workspace")
@@ -168,6 +179,71 @@ agent:
 		if runtime.TelegramAllowedUserIDs[i] != want[i] {
 			t.Fatalf("TelegramAllowedUserIDs = %#v, want %#v", runtime.TelegramAllowedUserIDs, want)
 		}
+	}
+}
+
+func TestLoadAgentRuntimeYAMLResolvesSeparateCognitionModels(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "api-openai")
+	t.Setenv("MOONSHOT_API_KEY", "api-moonshot")
+	t.Setenv("Q15_TELEGRAM_TOKEN", "tg-123")
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+providers:
+  - name: openai
+    type: openai-compatible
+    base_url: https://api.openai.example/v1
+    key_env: OPENAI_API_KEY
+
+  - name: moonshot
+    type: openai-compatible
+    base_url: https://api.moonshot.ai/v1
+    key_env: MOONSHOT_API_KEY
+
+models:
+  - name: gpt-5.4
+    provider: openai
+  - name: kimi-k2.5
+    provider: moonshot
+  - name: kimi-k2
+    provider: moonshot
+
+agent:
+  name: Q15
+  models:
+    - gpt-5.4
+    - kimi-k2.5
+  cognition:
+    models:
+      - kimi-k2
+      - gpt-5.4
+  telegram:
+    token_env: Q15_TELEGRAM_TOKEN
+    allowed_user_ids:
+      - 123456789
+`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	runtime, err := LoadAgentRuntime(path)
+	if err != nil {
+		t.Fatalf("LoadAgentRuntime() error = %v", err)
+	}
+	if runtime == nil {
+		t.Fatal("LoadAgentRuntime() returned nil runtime")
+	}
+	if got, want := len(runtime.InteractiveModels), 2; got != want {
+		t.Fatalf("InteractiveModels len = %d, want %d", got, want)
+	}
+	if runtime.InteractiveModels[0].Ref != "gpt-5.4" ||
+		runtime.InteractiveModels[1].Ref != "kimi-k2.5" {
+		t.Fatalf("InteractiveModels = %#v", runtime.InteractiveModels)
+	}
+	if got, want := len(runtime.CognitionModels), 2; got != want {
+		t.Fatalf("CognitionModels len = %d, want %d", got, want)
+	}
+	if runtime.CognitionModels[0].Ref != "kimi-k2" || runtime.CognitionModels[1].Ref != "gpt-5.4" {
+		t.Fatalf("CognitionModels = %#v", runtime.CognitionModels)
 	}
 }
 
@@ -285,8 +361,74 @@ func TestResolveAgentRuntimeResolvesOpenAICodexProviderWithoutAPIKey(t *testing.
 	if runtime == nil {
 		t.Fatal("ResolveAgentRuntime() returned nil runtime")
 	}
-	if got := runtime.Models[0].ProviderAPIKey; got != "" {
+	if got := runtime.InteractiveModels[0].ProviderAPIKey; got != "" {
 		t.Fatalf("ProviderAPIKey = %q, want empty string", got)
+	}
+	if got := runtime.CognitionModels[0].ProviderAPIKey; got != "" {
+		t.Fatalf("ProviderAPIKey = %q, want empty string", got)
+	}
+}
+
+func TestValidateRejectsUnknownCognitionModel(t *testing.T) {
+	cfg := Config{
+		Providers: []Provider{
+			testOpenAICodexProvider("openai"),
+		},
+		Models: []Model{
+			testModel("gpt-5", "openai", "text"),
+		},
+		Agent: &Agent{
+			Name:   "Q15",
+			Models: []string{"gpt-5"},
+			Cognition: Cognition{
+				Models: []string{"missing-model"},
+			},
+			Telegram: Telegram{
+				TokenEnv:       "TEST_TELEGRAM_TOKEN",
+				AllowedUserIDs: []int64{123456789},
+			},
+		},
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected validation error for unknown cognition model")
+	}
+	if !strings.Contains(
+		err.Error(),
+		`agent.cognition.models[0] model "missing-model" is not defined in models`,
+	) {
+		t.Fatalf("unexpected validation error: %v", err)
+	}
+}
+
+func TestValidateRejectsEmptyCognitionModelRef(t *testing.T) {
+	cfg := Config{
+		Providers: []Provider{
+			testOpenAICodexProvider("openai"),
+		},
+		Models: []Model{
+			testModel("gpt-5", "openai", "text"),
+		},
+		Agent: &Agent{
+			Name:   "Q15",
+			Models: []string{"gpt-5"},
+			Cognition: Cognition{
+				Models: []string{" "},
+			},
+			Telegram: Telegram{
+				TokenEnv:       "TEST_TELEGRAM_TOKEN",
+				AllowedUserIDs: []int64{123456789},
+			},
+		},
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected validation error for empty cognition model ref")
+	}
+	if !strings.Contains(err.Error(), "agent.cognition.models: [0] must not be empty") {
+		t.Fatalf("unexpected validation error: %v", err)
 	}
 }
 

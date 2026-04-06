@@ -70,7 +70,8 @@ func TestRuntimeEntryPointsBuildInteractiveAndCognitionPaths(t *testing.T) {
 		model,
 		modelselection.Passthrough{},
 		nil,
-		[]string{"primary"},
+		[]string{"interactive"},
+		[]string{"cognition"},
 		"Interactive prompt",
 		store,
 		store,
@@ -101,5 +102,14 @@ func TestRuntimeEntryPointsBuildInteractiveAndCognitionPaths(t *testing.T) {
 	}
 	if store.appendCalls != 1 {
 		t.Fatalf("appendCalls after cognition run = %d, want 1", store.appendCalls)
+	}
+	if len(model.calls) != 2 {
+		t.Fatalf("model calls = %d, want 2", len(model.calls))
+	}
+	if model.calls[0].model != "interactive" {
+		t.Fatalf("interactive model = %q, want %q", model.calls[0].model, "interactive")
+	}
+	if model.calls[1].model != "cognition" {
+		t.Fatalf("cognition model = %q, want %q", model.calls[1].model, "cognition")
 	}
 }
