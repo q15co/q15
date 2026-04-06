@@ -222,6 +222,69 @@ func TestRoutedModelAdapterPlanSelectionRejectsUnknownModelRef(t *testing.T) {
 	}
 }
 
+func TestMergedModelCatalogSupportsCognitionOnlyModelRefs(t *testing.T) {
+	merged := mergeModelRuntimes(
+		[]config.AgentModelRuntime{
+			{
+				Ref:           "interactive",
+				ProviderName:  "openai",
+				ProviderModel: "gpt-5.4",
+				Capabilities: config.ModelCapabilities{
+					Text: true,
+				},
+			},
+		},
+		[]config.AgentModelRuntime{
+			{
+				Ref:           "interactive",
+				ProviderName:  "openai",
+				ProviderModel: "gpt-5.4",
+				Capabilities: config.ModelCapabilities{
+					Text: true,
+				},
+			},
+			{
+				Ref:           "cognition",
+				ProviderName:  "moonshot",
+				ProviderModel: "kimi-k2.5",
+				Capabilities: config.ModelCapabilities{
+					Text: true,
+				},
+			},
+		},
+	)
+	if got, want := len(merged), 2; got != want {
+		t.Fatalf("merged len = %d, want %d", got, want)
+	}
+	if merged[0].Ref != "interactive" || merged[1].Ref != "cognition" {
+		t.Fatalf(
+			"merged refs = %#v, want interactive-first ordering",
+			[]string{merged[0].Ref, merged[1].Ref},
+		)
+	}
+
+	adapter, err := newModelAdapterWithFactory(
+		merged,
+		nil,
+		func(_ config.AgentModelRuntime, _ q15media.Store) (agent.ModelClient, error) {
+			return &fakeModelClient{}, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("newModelAdapterWithFactory() error = %v", err)
+	}
+
+	var planner modelselection.Planner = adapter
+	plan, err := planner.Plan([]string{"cognition"}, modelselection.Requirements{Text: true})
+	if err != nil {
+		t.Fatalf("Plan() error = %v", err)
+	}
+	if got, want := plan.EligibleRefs, []string{"cognition"}; len(got) != len(want) ||
+		got[0] != want[0] {
+		t.Fatalf("eligible refs = %#v, want %#v", got, want)
+	}
+}
+
 func TestRoutedModelAdapterPlanSelectionReturnsEmptyPlanWhenNoCandidatesMatch(t *testing.T) {
 	adapter, err := newModelAdapterWithFactory([]config.AgentModelRuntime{
 		{

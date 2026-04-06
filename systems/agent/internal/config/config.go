@@ -46,10 +46,16 @@ type Model struct {
 
 // Agent defines one configured q15 agent instance.
 type Agent struct {
-	Name              string   `yaml:"name"`
-	Models            []string `yaml:"models"`
-	MemoryRecentTurns int      `yaml:"memory_recent_turns"`
-	Telegram          Telegram `yaml:"telegram"`
+	Name              string    `yaml:"name"`
+	Models            []string  `yaml:"models"`
+	Cognition         Cognition `yaml:"cognition"`
+	MemoryRecentTurns int       `yaml:"memory_recent_turns"`
+	Telegram          Telegram  `yaml:"telegram"`
+}
+
+// Cognition defines optional background cognition settings for an agent.
+type Cognition struct {
+	Models []string `yaml:"models"`
 }
 
 // Telegram defines Telegram integration settings for an agent.
@@ -87,7 +93,8 @@ type ExecutionRuntime struct {
 // AgentRuntime is the resolved runtime config for the configured agent.
 type AgentRuntime struct {
 	Name                   string
-	Models                 []AgentModelRuntime
+	InteractiveModels      []AgentModelRuntime
+	CognitionModels        []AgentModelRuntime
 	WorkspaceLocalDir      string
 	MemoryLocalDir         string
 	MediaLocalDir          string
@@ -231,72 +238,30 @@ func (c Config) ResolveAgentRuntime() (*AgentRuntime, error) {
 	}
 
 	agentCfg := c.Agent
-	modelRefs, err := agentCfg.modelRefs()
+	interactiveModelRefs, err := agentCfg.modelRefs()
 	if err != nil {
 		return nil, fmt.Errorf("agent.models: %w", err)
 	}
 
-	resolvedModels := make([]AgentModelRuntime, 0, len(modelRefs))
-	for j, modelRef := range modelRefs {
-		fieldPath := fmt.Sprintf("agent.models[%d]", j)
-		modelCfg, ok := c.FindModel(modelRef)
-		if !ok {
-			return nil, fmt.Errorf("%s model %q is not defined in models", fieldPath, modelRef)
-		}
+	interactiveModels, err := c.resolveAgentModelRuntimes("agent.models", interactiveModelRefs)
+	if err != nil {
+		return nil, err
+	}
 
-		providerName := strings.TrimSpace(modelCfg.Provider)
-		provider, ok := c.FindProvider(providerName)
-		if !ok {
-			return nil, fmt.Errorf(
-				"%s model %q references undefined provider %q",
-				fieldPath,
-				modelRef,
-				providerName,
-			)
-		}
+	cognitionModelRefs, err := agentCfg.cognitionModelRefs()
+	if err != nil {
+		return nil, fmt.Errorf("agent.cognition.models: %w", err)
+	}
 
-		providerType := normalizeProviderType(provider.Type)
-		if providerType == "" {
-			return nil, fmt.Errorf(
-				"%s provider %q has unsupported type %q",
-				fieldPath,
-				provider.Name,
-				provider.Type,
-			)
-		}
-
-		var apiKey string
-		switch providerType {
-		case "openai-compatible":
-			apiKey, err = resolveSecretEnvValue(provider.KeyEnv)
-			if err != nil {
-				return nil, fmt.Errorf("provider %q requires %w", provider.Name, err)
-			}
-		case "openai-codex":
-			apiKey = ""
-		default:
-			return nil, fmt.Errorf(
-				"%s provider %q has unsupported type %q",
-				fieldPath,
-				provider.Name,
-				provider.Type,
-			)
-		}
-
-		capabilities, err := normalizeModelCapabilities(modelCfg.Capabilities)
+	cognitionModels := cloneAgentModelRuntimes(interactiveModels)
+	if len(cognitionModelRefs) > 0 {
+		cognitionModels, err = c.resolveAgentModelRuntimes(
+			"agent.cognition.models",
+			cognitionModelRefs,
+		)
 		if err != nil {
-			return nil, fmt.Errorf("%s capabilities: %w", fieldPath, err)
+			return nil, err
 		}
-
-		resolvedModels = append(resolvedModels, AgentModelRuntime{
-			Ref:             modelRef,
-			ProviderName:    provider.Name,
-			ProviderType:    providerType,
-			ProviderBaseURL: strings.TrimSpace(provider.BaseURL),
-			ProviderAPIKey:  apiKey,
-			ProviderModel:   modelCfg.resolvedProviderModel(),
-			Capabilities:    capabilities,
-		})
 	}
 
 	token, err := agentCfg.TelegramToken()
@@ -319,7 +284,8 @@ func (c Config) ResolveAgentRuntime() (*AgentRuntime, error) {
 
 	return &AgentRuntime{
 		Name:                   strings.TrimSpace(agentCfg.Name),
-		Models:                 resolvedModels,
+		InteractiveModels:      interactiveModels,
+		CognitionModels:        cognitionModels,
 		WorkspaceLocalDir:      runtimeWorkspaceLocalDir,
 		MemoryLocalDir:         "/memory",
 		MediaLocalDir:          runtimeMediaLocalDir,
@@ -412,6 +378,19 @@ func (c Config) validate() error {
 			return fmt.Errorf("agent.models[%d] model %q is not defined in models", j, modelRef)
 		}
 	}
+	cognitionModelRefs, err := c.Agent.cognitionModelRefs()
+	if err != nil {
+		return fmt.Errorf("agent.cognition.models: %w", err)
+	}
+	for j, modelRef := range cognitionModelRefs {
+		if _, ok := models[modelRef]; !ok {
+			return fmt.Errorf(
+				"agent.cognition.models[%d] model %q is not defined in models",
+				j,
+				modelRef,
+			)
+		}
+	}
 	if strings.TrimSpace(c.Agent.Telegram.Token) == "" &&
 		strings.TrimSpace(c.Agent.Telegram.TokenEnv) == "" {
 		return errors.New("agent.telegram requires token or token_env")
@@ -435,26 +414,11 @@ func (c Config) validate() error {
 }
 
 func (a Agent) modelRefs() ([]string, error) {
-	if len(a.Models) == 0 {
-		return nil, errors.New("must contain at least one model")
-	}
+	return normalizeConfiguredModelRefs(a.Models, true)
+}
 
-	refs := make([]string, 0, len(a.Models))
-	for i, modelRef := range a.Models {
-		modelRef = strings.TrimSpace(modelRef)
-		if modelRef == "" {
-			return nil, fmt.Errorf("[%d] must not be empty", i)
-		}
-		if strings.Contains(modelRef, "/") {
-			return nil, fmt.Errorf(
-				"[%d] uses unsupported %q format; define models and reference their name",
-				i,
-				"provider/model",
-			)
-		}
-		refs = append(refs, modelRef)
-	}
-	return refs, nil
+func (a Agent) cognitionModelRefs() ([]string, error) {
+	return normalizeConfiguredModelRefs(a.Cognition.Models, false)
 }
 
 func (m Model) resolvedProviderModel() string {
@@ -519,6 +483,114 @@ func normalizeAllowedUserIDs(ids []int64) ([]int64, error) {
 	}
 
 	return out, nil
+}
+
+func (c Config) resolveAgentModelRuntimes(
+	fieldName string,
+	modelRefs []string,
+) ([]AgentModelRuntime, error) {
+	resolvedModels := make([]AgentModelRuntime, 0, len(modelRefs))
+	for j, modelRef := range modelRefs {
+		fieldPath := fmt.Sprintf("%s[%d]", fieldName, j)
+		modelCfg, ok := c.FindModel(modelRef)
+		if !ok {
+			return nil, fmt.Errorf("%s model %q is not defined in models", fieldPath, modelRef)
+		}
+
+		providerName := strings.TrimSpace(modelCfg.Provider)
+		provider, ok := c.FindProvider(providerName)
+		if !ok {
+			return nil, fmt.Errorf(
+				"%s model %q references undefined provider %q",
+				fieldPath,
+				modelRef,
+				providerName,
+			)
+		}
+
+		providerType := normalizeProviderType(provider.Type)
+		if providerType == "" {
+			return nil, fmt.Errorf(
+				"%s provider %q has unsupported type %q",
+				fieldPath,
+				provider.Name,
+				provider.Type,
+			)
+		}
+
+		var apiKey string
+		var err error
+		switch providerType {
+		case "openai-compatible":
+			apiKey, err = resolveSecretEnvValue(provider.KeyEnv)
+			if err != nil {
+				return nil, fmt.Errorf("provider %q requires %w", provider.Name, err)
+			}
+		case "openai-codex":
+			apiKey = ""
+		default:
+			return nil, fmt.Errorf(
+				"%s provider %q has unsupported type %q",
+				fieldPath,
+				provider.Name,
+				provider.Type,
+			)
+		}
+
+		capabilities, err := normalizeModelCapabilities(modelCfg.Capabilities)
+		if err != nil {
+			return nil, fmt.Errorf("%s capabilities: %w", fieldPath, err)
+		}
+
+		resolvedModels = append(resolvedModels, AgentModelRuntime{
+			Ref:             modelRef,
+			ProviderName:    provider.Name,
+			ProviderType:    providerType,
+			ProviderBaseURL: strings.TrimSpace(provider.BaseURL),
+			ProviderAPIKey:  apiKey,
+			ProviderModel:   modelCfg.resolvedProviderModel(),
+			Capabilities:    capabilities,
+		})
+	}
+	return resolvedModels, nil
+}
+
+func cloneAgentModelRuntimes(in []AgentModelRuntime) []AgentModelRuntime {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]AgentModelRuntime, len(in))
+	copy(out, in)
+	return out
+}
+
+func normalizeConfiguredModelRefs(
+	models []string,
+	requireAtLeastOne bool,
+) ([]string, error) {
+	if len(models) == 0 {
+		if requireAtLeastOne {
+			return nil, errors.New("must contain at least one model")
+		}
+		return nil, nil
+	}
+
+	refs := make([]string, 0, len(models))
+	for i, modelRef := range models {
+		modelRef = strings.TrimSpace(modelRef)
+		if modelRef == "" {
+			return nil, fmt.Errorf("[%d] must not be empty", i)
+		}
+		if strings.Contains(modelRef, "/") {
+			return nil, fmt.Errorf(
+				"[%d] uses unsupported %q format; define models and reference their name",
+				i,
+				"provider/model",
+			)
+		}
+		refs = append(refs, modelRef)
+	}
+	return refs, nil
 }
 
 func parseAllowedUserIDs(value string) ([]int64, error) {

@@ -33,6 +33,8 @@ Notes:
   requirements before any provider call. Current inference is text-first; image-input and
   tool-calling requirement inference are staged for the corresponding canonical request signals. The
   checked-in Compose example uses OpenAI `gpt-5.4` first and Moonshot/Kimi second.
+- `agent.cognition.models` is optional and defines the background-cognition fallback order. If it is
+  omitted, cognition jobs inherit `agent.models`.
 - The checked-in Compose config reads the Telegram allow-list from `Q15_TELEGRAM_ALLOWED_USER_IDS`
   or `Q15_TELEGRAM_ALLOWED_USER_IDS_FILE`, so local user IDs stay out of tracked YAML.
 - Update or rollback by changing the pinned tag and redeploying while preserving the persistent

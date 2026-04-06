@@ -40,9 +40,13 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 		return errors.New("telegram token is required")
 	}
 
-	models := normalizeModelList(rt.Models)
-	if len(models) == 0 {
+	interactiveModelRefs := normalizeModelList(rt.InteractiveModels)
+	if len(interactiveModelRefs) == 0 {
 		return errors.New("at least one model is required")
+	}
+	cognitionModelRefs := normalizeModelList(rt.CognitionModels)
+	if len(cognitionModelRefs) == 0 {
+		cognitionModelRefs = append([]string(nil), interactiveModelRefs...)
 	}
 
 	executionClient, executionInfo, err := connectExecutionService(ctx, &rt.Execution)
@@ -59,7 +63,10 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 	if err != nil {
 		return fmt.Errorf("initialize media store for agent %q: %w", rt.Name, err)
 	}
-	modelAdapter, err := newModelAdapter(rt.Models, mediaStore)
+	modelAdapter, err := newModelAdapter(
+		mergeModelRuntimes(rt.InteractiveModels, rt.CognitionModels),
+		mediaStore,
+	)
 	if err != nil {
 		return err
 	}
@@ -117,7 +124,8 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 		modelAdapter,
 		modelAdapter,
 		toolRegistry,
-		models,
+		interactiveModelRefs,
+		cognitionModelRefs,
 		systemPrompt,
 		store,
 		store,
@@ -570,5 +578,33 @@ func normalizeModelList(models []config.AgentModelRuntime) []string {
 		seen[ref] = struct{}{}
 		out = append(out, ref)
 	}
+	return out
+}
+
+func mergeModelRuntimes(
+	interactiveModels []config.AgentModelRuntime,
+	cognitionModels []config.AgentModelRuntime,
+) []config.AgentModelRuntime {
+	if len(interactiveModels) == 0 && len(cognitionModels) == 0 {
+		return nil
+	}
+
+	out := make([]config.AgentModelRuntime, 0, len(interactiveModels)+len(cognitionModels))
+	seen := make(map[string]struct{}, len(interactiveModels)+len(cognitionModels))
+
+	for _, modelSet := range [][]config.AgentModelRuntime{interactiveModels, cognitionModels} {
+		for _, model := range modelSet {
+			ref := strings.TrimSpace(model.Ref)
+			if ref == "" {
+				continue
+			}
+			if _, ok := seen[ref]; ok {
+				continue
+			}
+			seen[ref] = struct{}{}
+			out = append(out, model)
+		}
+	}
+
 	return out
 }
