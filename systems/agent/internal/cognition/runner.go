@@ -14,6 +14,7 @@ import (
 // ContextLoader provides explicit access to state a cognition job may opt into.
 type ContextLoader interface {
 	LoadCoreMemory(ctx context.Context) (agent.CoreMemory, error)
+	LoadWorkingMemory(ctx context.Context) (agent.WorkingMemory, error)
 	LoadSkillCatalog(ctx context.Context) (agent.SkillCatalog, error)
 	LoadRecentMessages(ctx context.Context, turns int) ([]conversation.Message, error)
 }

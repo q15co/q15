@@ -265,10 +265,17 @@ func renderRuntimeEnvironmentPrompt(
 				info.MemoryDir,
 			),
 			fmt.Sprintf(
-				"- Additional persistent memory layers (tool-fetched, not auto-injected): %s/semantic, %s/working, %s/history, %s/cognition",
+				"- Canonical working-memory file (auto-injected into prompt each turn): %s/working/WORKING_MEMORY.md",
+				info.MemoryDir,
+			),
+			fmt.Sprintf(
+				"- Additional persistent memory layers (tool-fetched, not auto-injected): %s/semantic, %s/history, %s/cognition",
 				info.MemoryDir,
 				info.MemoryDir,
 				info.MemoryDir,
+			),
+			fmt.Sprintf(
+				"- Other files under %s/working are not implicitly prompt-visible; only WORKING_MEMORY.md is auto-injected.",
 				info.MemoryDir,
 			),
 			fmt.Sprintf(
@@ -276,7 +283,7 @@ func renderRuntimeEnvironmentPrompt(
 				info.MemoryDir,
 			),
 			fmt.Sprintf(
-				"- Auxiliary notebook files live under %s/notes/inbox, %s/notes/zettel, and %s/notes/maps using the built-in zettelkasten layout; they are not hidden system cognition state.",
+				"- Auxiliary notebook files live under %s/notes/inbox, %s/notes/zettel, and %s/notes/maps using the built-in zettelkasten layout; they are never implicit prompt-visible working state.",
 				info.MemoryDir,
 				info.MemoryDir,
 				info.MemoryDir,

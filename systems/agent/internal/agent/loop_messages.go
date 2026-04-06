@@ -45,6 +45,21 @@ func injectCoreMemory(systemText string, core CoreMemory) string {
 	))
 }
 
+func injectWorkingMemory(systemText string, working WorkingMemory) string {
+	systemText = strings.TrimSpace(systemText)
+	path := strings.TrimSpace(working.RelativePath)
+	content := strings.TrimSpace(working.Content)
+	if path == "" || content == "" {
+		return systemText
+	}
+
+	return strings.TrimSpace(systemText + "\n\n" + RenderPromptElement(
+		"working_memory",
+		map[string]string{"path": path},
+		content,
+	))
+}
+
 func injectSkillCatalog(systemText string, catalog SkillCatalog) string {
 	systemText = strings.TrimSpace(systemText)
 	if len(catalog.Entries) == 0 && len(catalog.Warnings) == 0 {

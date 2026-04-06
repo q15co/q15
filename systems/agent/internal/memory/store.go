@@ -26,19 +26,23 @@ import (
 const (
 	headStateRelativePath = "history/state/head.json"
 	readmeRelativePath    = "README.md"
+	seedDirPath           = "seeds"
 	coreDirPath           = "core"
 	semanticDirPath       = "semantic"
 	workingDirPath        = "working"
+	workingMemoryFileName = "WORKING_MEMORY.md"
 	cognitionDirPath      = "cognition"
 )
 
-//go:embed core-seeds/AGENT.md core-seeds/USER.md core-seeds/SOUL.md
-var coreSeedFS embed.FS
+const workingMemorySeedPath = seedDirPath + "/" + workingMemoryFileName
+
+//go:embed seeds/*.md
+var seedFS embed.FS
 
 var coreSeedPaths = map[string]string{
-	filepath.Join(coreDirPath, "AGENT.md"): "core-seeds/AGENT.md",
-	filepath.Join(coreDirPath, "USER.md"):  "core-seeds/USER.md",
-	filepath.Join(coreDirPath, "SOUL.md"):  "core-seeds/SOUL.md",
+	filepath.Join(coreDirPath, "AGENT.md"): seedDirPath + "/AGENT.md",
+	filepath.Join(coreDirPath, "USER.md"):  seedDirPath + "/USER.md",
+	filepath.Join(coreDirPath, "SOUL.md"):  seedDirPath + "/SOUL.md",
 }
 
 var coreFrontmatterParser = goldmark.New(
@@ -56,6 +60,7 @@ type Store struct {
 
 var _ agent.ConversationStore = (*Store)(nil)
 var _ agent.CoreMemoryStore = (*Store)(nil)
+var _ agent.WorkingMemoryStore = (*Store)(nil)
 
 // NewStore constructs a memory store rooted at the provided directory.
 func NewStore(rootDir string, agentName string, committer Committer) *Store {
@@ -102,6 +107,9 @@ func (s *Store) Init(ctx context.Context) error {
 		return err
 	}
 	if err := s.ensureCoreMemory(); err != nil {
+		return err
+	}
+	if err := s.ensureWorkingMemory(); err != nil {
 		return err
 	}
 	if err := s.ensureHeadState(); err != nil {
@@ -193,6 +201,36 @@ func (s *Store) LoadCoreMemory(ctx context.Context) (agent.CoreMemory, error) {
 	}, nil
 }
 
+// LoadWorkingMemory loads the canonical prompt-visible working-memory artifact.
+func (s *Store) LoadWorkingMemory(ctx context.Context) (agent.WorkingMemory, error) {
+	_ = ctx
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	path := s.workingMemoryPath()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return agent.WorkingMemory{}, nil
+		}
+		return agent.WorkingMemory{}, fmt.Errorf("read working memory file %q: %w", path, err)
+	}
+
+	relative, err := filepath.Rel(s.rootDir, path)
+	if err != nil {
+		return agent.WorkingMemory{}, fmt.Errorf(
+			"resolve relative working memory path %q: %w",
+			path,
+			err,
+		)
+	}
+	return agent.WorkingMemory{
+		RelativePath: filepath.ToSlash(relative),
+		Content:      strings.TrimSpace(string(raw)),
+	}, nil
+}
+
 // AppendTurn persists one completed conversation turn and commits it to git.
 func (s *Store) AppendTurn(ctx context.Context, messages []conversation.Message) error {
 	if len(messages) == 0 {
@@ -256,7 +294,8 @@ This directory contains q15's persistent agent-state root.
 	- Core self-model files (always injected into the system prompt) are stored in core/*.md (for example AGENT.md, USER.md, SOUL.md).
 	- Agent identity comes from config agent.name; use {{agent_name}} in core files instead of hardcoded names.
 	- Semantic memory is stored under semantic/ for durable extracted knowledge the agent knows; it is not auto-injected.
-	- Working memory is stored under working/ for bounded active state; it is not a general notebook.
+	- The canonical prompt-visible working-memory artifact is working/WORKING_MEMORY.md for bounded active state.
+	- Other files under working/ are not implicitly prompt-visible and notes/ is never working memory.
 	- Episodic conversation turns are stored as canonical JSON files under history/turns/.
 	- Transcript sequence bookkeeping is stored under history/state/head.json.
 	- Cognition subsystem maintenance state is stored under cognition/.
@@ -271,24 +310,21 @@ This directory contains q15's persistent agent-state root.
 
 func (s *Store) ensureCoreMemory() error {
 	for relativePath, seedPath := range coreSeedPaths {
-		rawSeed, err := coreSeedFS.ReadFile(seedPath)
-		if err != nil {
-			return fmt.Errorf("read embedded core seed %q: %w", seedPath, err)
-		}
-		content := strings.TrimSpace(string(rawSeed))
-
-		path := filepath.Join(s.rootDir, relativePath)
-		if _, err := os.Stat(path); err == nil {
-			continue
-		} else if !os.IsNotExist(err) {
-			return fmt.Errorf("stat core memory file %q: %w", path, err)
-		}
-
-		if err := writeTextFileAtomic(path, content+"\n"); err != nil {
-			return fmt.Errorf("initialize core memory file %q: %w", path, err)
+		if err := s.ensureSeedFile(relativePath, seedPath); err != nil {
+			return fmt.Errorf("initialize core memory seed %q: %w", seedPath, err)
 		}
 	}
 
+	return nil
+}
+
+func (s *Store) ensureWorkingMemory() error {
+	if err := s.ensureSeedFile(
+		filepath.Join(workingDirPath, workingMemoryFileName),
+		workingMemorySeedPath,
+	); err != nil {
+		return fmt.Errorf("initialize working memory seed %q: %w", workingMemorySeedPath, err)
+	}
 	return nil
 }
 
@@ -423,6 +459,33 @@ func (s *Store) renderCoreTemplate(raw string) string {
 	return strings.ReplaceAll(raw, "{{agent_name}}", s.agentName)
 }
 
+func readEmbeddedSeed(path string) (string, error) {
+	raw, err := seedFS.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(raw)), nil
+}
+
+func (s *Store) ensureSeedFile(relativePath, seedPath string) error {
+	content, err := readEmbeddedSeed(seedPath)
+	if err != nil {
+		return fmt.Errorf("read embedded seed %q: %w", seedPath, err)
+	}
+
+	path := filepath.Join(s.rootDir, relativePath)
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("stat seeded file %q: %w", path, err)
+	}
+
+	if err := writeTextFileAtomic(path, content+"\n"); err != nil {
+		return fmt.Errorf("write seeded file %q: %w", path, err)
+	}
+	return nil
+}
+
 func normalizeAgentName(name string) string {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -515,6 +578,10 @@ func (s *Store) readHeadState() (headState, error) {
 
 func (s *Store) headStatePath() string {
 	return filepath.Join(s.rootDir, headStateRelativePath)
+}
+
+func (s *Store) workingMemoryPath() string {
+	return filepath.Join(s.rootDir, workingDirPath, workingMemoryFileName)
 }
 
 func (s *Store) syncHeadStateWithHistory() (bool, error) {

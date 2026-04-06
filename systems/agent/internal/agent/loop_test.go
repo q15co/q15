@@ -77,11 +77,12 @@ func (f *failingModelClient) Complete(
 }
 
 type fakeConversationStore struct {
-	loadMessages []conversation.Message
-	coreMemory   CoreMemory
-	skillCatalog SkillCatalog
-	appendCalls  int
-	lastAppend   []conversation.Message
+	loadMessages  []conversation.Message
+	coreMemory    CoreMemory
+	workingMemory WorkingMemory
+	skillCatalog  SkillCatalog
+	appendCalls   int
+	lastAppend    []conversation.Message
 }
 
 func (f *fakeConversationStore) LoadRecentMessages(
@@ -106,6 +107,11 @@ func (f *fakeConversationStore) AppendTurn(
 func (f *fakeConversationStore) LoadCoreMemory(ctx context.Context) (CoreMemory, error) {
 	_ = ctx
 	return f.coreMemory, nil
+}
+
+func (f *fakeConversationStore) LoadWorkingMemory(ctx context.Context) (WorkingMemory, error) {
+	_ = ctx
+	return f.workingMemory, nil
 }
 
 func (f *fakeConversationStore) LoadSkillCatalog(ctx context.Context) (SkillCatalog, error) {
@@ -154,6 +160,7 @@ func TestDefaultSystemPromptUsesStructuredPromptSections(t *testing.T) {
 		"<autonomy_and_persistence>",
 		"<execution_contract>",
 		"<core_memory_contract>",
+		"<working_memory_contract>",
 		"Prefer doing the work over announcing intent",
 		"Do not present intent, plans, or assumptions as completed work",
 	} {
@@ -847,6 +854,73 @@ func TestLoopReply_IncludesCoreMemoryInSystemMessage(t *testing.T) {
 	}
 	if !strings.Contains(system, "# AGENT.md\n- Be precise.") {
 		t.Fatalf("system prompt missing core file body: %q", system)
+	}
+}
+
+func TestLoopReply_IncludesWorkingMemoryInSystemMessageAfterCoreMemory(t *testing.T) {
+	store := &fakeConversationStore{
+		coreMemory: CoreMemory{
+			Files: []CoreMemoryFile{
+				{
+					RelativePath: "core/AGENT.md",
+					Content:      "# AGENT.md\n- Be precise.",
+				},
+			},
+		},
+		workingMemory: WorkingMemory{
+			RelativePath: "working/WORKING_MEMORY.md",
+			Content: strings.Join([]string{
+				"# Working Memory",
+				"",
+				"## Active Tasks",
+				"- Implement canonical working memory",
+			}, "\n"),
+		},
+		skillCatalog: SkillCatalog{
+			Entries: []SkillCatalogEntry{
+				{
+					Name:        "skill-creator",
+					Description: "Create or update skills.",
+				},
+			},
+		},
+	}
+	model := &fakeModelClient{
+		results: []ModelClientResult{assistantResult("ok")},
+	}
+
+	loop := NewLoop(model, nil, []string{"m1"}, DefaultSystemPrompt, store, 3)
+	if _, err := loop.Reply(context.Background(), userTextMessage("hello"), nil); err != nil {
+		t.Fatalf("Reply() error = %v", err)
+	}
+
+	system := messageText(model.callMsgs[0][0])
+	for _, want := range []string{
+		"<core_memory>",
+		"<working_memory path=\"working/WORKING_MEMORY.md\">",
+		"# Working Memory",
+		"Implement canonical working memory",
+		"<skill_catalog>",
+	} {
+		if !strings.Contains(system, want) {
+			t.Fatalf("system prompt missing %q:\n%s", want, system)
+		}
+	}
+
+	coreIdx := strings.Index(system, "<core_memory>")
+	workingIdx := strings.Index(system, "<working_memory path=")
+	skillIdx := strings.Index(system, "<skill_catalog>")
+	if coreIdx == -1 || workingIdx == -1 || skillIdx == -1 {
+		t.Fatalf("missing prompt sections:\n%s", system)
+	}
+	if !(coreIdx < workingIdx && workingIdx < skillIdx) {
+		t.Fatalf(
+			"prompt section order = core:%d working:%d skill:%d\n%s",
+			coreIdx,
+			workingIdx,
+			skillIdx,
+			system,
+		)
 	}
 }
 

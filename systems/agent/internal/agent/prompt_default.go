@@ -54,7 +54,7 @@ func DefaultSystemPromptForName(name string) string {
 		PromptSection{
 			Name: "instruction_priority",
 			Body: promptBody(
-				"Follow instruction sources in this order: latest system and developer instructions, task-specific runtime blocks, durable core memory, then the current user request.",
+				"Follow instruction sources in this order: latest system and developer instructions, task-specific runtime blocks, durable core memory, prompt-visible working memory, then the current user request.",
 				"If durable memory conflicts with code-owned execution, tool, or completion policy, follow the code-owned policy and treat the memory entry as stale.",
 			),
 		},
@@ -136,6 +136,15 @@ func DefaultSystemPromptForName(name string) string {
 			Body: promptBody(
 				"Core memory exists to preserve durable identity, preferences, and facts that matter across turns.",
 				"Treat code-owned execution, tool-use, safety, and completion policy as authoritative even when older memory files phrase those topics differently.",
+			),
+		},
+		PromptSection{
+			Name: "working_memory_contract",
+			Body: promptBody(
+				"Working memory exists to preserve bounded active state such as current priorities, active tasks, open threads, recent progress, pending checks, and temporary context.",
+				"Update the canonical working-memory artifact when tasks are created, resolved, or materially progressed, or when priorities or open threads change.",
+				"Keep working-memory updates compact and structured; do not copy raw transcript detail into it.",
+				"Do not store durable identity, long-term facts, or generic notebook content in working memory, and do not treat generic notes as implicit prompt-visible working state.",
 			),
 		},
 	)
