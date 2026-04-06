@@ -34,6 +34,17 @@ type CoreMemoryStore interface {
 	LoadCoreMemory(ctx context.Context) (CoreMemory, error)
 }
 
+// WorkingMemory is the canonical prompt-visible active-state artifact.
+type WorkingMemory struct {
+	RelativePath string
+	Content      string
+}
+
+// WorkingMemoryStore can provide prompt-visible working memory for each reply.
+type WorkingMemoryStore interface {
+	LoadWorkingMemory(ctx context.Context) (WorkingMemory, error)
+}
+
 // SkillCatalog describes dynamically available skills that may be loaded by
 // the model on demand.
 type SkillCatalog struct {

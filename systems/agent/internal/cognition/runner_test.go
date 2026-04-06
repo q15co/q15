@@ -60,6 +60,10 @@ func (s *spyLoader) LoadCoreMemory(context.Context) (agent.CoreMemory, error) {
 	return agent.CoreMemory{}, nil
 }
 
+func (s *spyLoader) LoadWorkingMemory(context.Context) (agent.WorkingMemory, error) {
+	return agent.WorkingMemory{}, nil
+}
+
 func (s *spyLoader) LoadSkillCatalog(context.Context) (agent.SkillCatalog, error) {
 	return agent.SkillCatalog{}, nil
 }

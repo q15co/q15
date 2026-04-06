@@ -33,6 +33,10 @@ func (s *spyRuntimeStore) LoadCoreMemory(context.Context) (agent.CoreMemory, err
 	return agent.CoreMemory{}, nil
 }
 
+func (s *spyRuntimeStore) LoadWorkingMemory(context.Context) (agent.WorkingMemory, error) {
+	return agent.WorkingMemory{}, nil
+}
+
 func (s *spyRuntimeStore) LoadSkillCatalog(context.Context) (agent.SkillCatalog, error) {
 	return agent.SkillCatalog{}, nil
 }

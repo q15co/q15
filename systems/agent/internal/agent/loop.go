@@ -137,6 +137,17 @@ func (l *Loop) Reply(
 			}
 			systemText = injectCoreMemory(systemText, coreMemory)
 		}
+		if workingStore, ok := l.store.(WorkingMemoryStore); ok {
+			workingMemory, err := workingStore.LoadWorkingMemory(ctx)
+			if err != nil {
+				emitRunEvent(ctx, observer, RunEvent{
+					Type: RunEventRunFailed,
+					Err:  err,
+				})
+				return ReplyResult{}, fmt.Errorf("load working memory: %w", err)
+			}
+			systemText = injectWorkingMemory(systemText, workingMemory)
+		}
 		if skillStore, ok := l.store.(SkillCatalogStore); ok {
 			skillCatalog, err := skillStore.LoadSkillCatalog(ctx)
 			if err != nil {

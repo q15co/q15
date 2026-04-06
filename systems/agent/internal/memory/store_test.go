@@ -49,6 +49,7 @@ func TestStoreInitCreatesScaffold(t *testing.T) {
 		filepath.Join(root, "core", "SOUL.md"),
 		filepath.Join(root, "semantic"),
 		filepath.Join(root, "working"),
+		filepath.Join(root, "working", "WORKING_MEMORY.md"),
 		filepath.Join(root, "history", "turns"),
 		filepath.Join(root, "history", "state", "head.json"),
 		filepath.Join(root, "cognition", "indexer"),
@@ -73,7 +74,8 @@ func TestStoreInitCreatesScaffold(t *testing.T) {
 	for _, want := range []string{
 		"Core self-model files",
 		"Semantic memory is stored under semantic/",
-		"Working memory is stored under working/",
+		"working/WORKING_MEMORY.md",
+		"notes/ is never working memory",
 		"history/state/head.json",
 		"cognition/",
 		"zettelkasten layout",
@@ -138,6 +140,43 @@ func TestStoreLoadCoreMemory(t *testing.T) {
 	}
 	if !foundAgent {
 		t.Fatalf("expected core/AGENT.md in loaded core files: %#v", core.Files)
+	}
+}
+
+func TestStoreLoadWorkingMemory(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "memory")
+	store := NewStore(root, "Jared", &fakeCommitter{})
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	notesPath := filepath.Join(root, "notes", "inbox", "todo.md")
+	if err := os.WriteFile(notesPath, []byte("# Inbox\n- unrelated\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(notes) error = %v", err)
+	}
+
+	working, err := store.LoadWorkingMemory(context.Background())
+	if err != nil {
+		t.Fatalf("LoadWorkingMemory() error = %v", err)
+	}
+	if working.RelativePath != "working/WORKING_MEMORY.md" {
+		t.Fatalf("RelativePath = %q, want %q", working.RelativePath, "working/WORKING_MEMORY.md")
+	}
+	for _, want := range []string{
+		"# Working Memory",
+		"## Current Priorities",
+		"## Active Tasks",
+		"## Open Threads",
+		"## Recent Progress",
+		"## Pending Checks",
+		"## Temporary Context",
+	} {
+		if !strings.Contains(working.Content, want) {
+			t.Fatalf("working memory missing %q:\n%s", want, working.Content)
+		}
+	}
+	if strings.Contains(working.Content, "# Inbox") {
+		t.Fatalf("working memory should not include notes content:\n%s", working.Content)
 	}
 }
 

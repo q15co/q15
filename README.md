@@ -256,7 +256,10 @@ Notes:
 
 - `/memory/core/` stores the agent's always-injected identity, personality, and self-model files.
 - `/memory/semantic/` stores durable extracted knowledge the agent knows; it is not auto-injected.
-- `/memory/working/` is reserved for bounded active state; it is not the general notebook area.
+- `/memory/working/WORKING_MEMORY.md` is the canonical prompt-visible working-memory artifact for
+  bounded active state.
+- Other files under `/memory/working/` are not implicitly prompt-visible, and `/memory/notes/`
+  remains the general notebook area.
 - `/memory/history/` stores the canonical episodic transcript and its sequencing metadata.
 - `/memory/cognition/` is reserved for system-owned control, indexing, and background-maintenance
   state.
