@@ -15,7 +15,7 @@ const (
 	workingMemoryRuntimePath                = "/memory/" + workingMemoryRelativePath
 	workingMemoryScheduleSpec               = "0 4 * * *"
 	workingMemoryRecentTurns                = 16
-	workingMemoryMinDirtyTurns        int64 = 2
+	workingMemoryMinDirtyTurns        int64 = 6
 )
 
 // NewWorkingMemoryConsolidationRegistration returns the built-in working-memory
