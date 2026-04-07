@@ -222,6 +222,30 @@ func TestRoutedModelAdapterPlanSelectionRejectsUnknownModelRef(t *testing.T) {
 	}
 }
 
+func TestCognitionJobsRegistersWorkingMemoryConsolidation(t *testing.T) {
+	jobs := cognitionJobs()
+	if len(jobs) != 1 {
+		t.Fatalf("cognitionJobs len = %d, want 1", len(jobs))
+	}
+
+	job := jobs[0].NewJob()
+	if job == nil {
+		t.Fatal("NewJob() = nil")
+	}
+	if got, want := job.Type(), "working_memory.consolidate"; got != want {
+		t.Fatalf("Type() = %q, want %q", got, want)
+	}
+	if len(jobs[0].Policy.Startup) == 0 {
+		t.Fatal("startup rules = 0, want at least 1")
+	}
+	if len(jobs[0].Policy.Schedule) == 0 {
+		t.Fatal("schedule rules = 0, want at least 1")
+	}
+	if len(jobs[0].Policy.State) == 0 {
+		t.Fatal("state rules = 0, want at least 1")
+	}
+}
+
 func TestMergedModelCatalogSupportsCognitionOnlyModelRefs(t *testing.T) {
 	merged := mergeModelRuntimes(
 		[]config.AgentModelRuntime{

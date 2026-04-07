@@ -12,6 +12,7 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/bus"
 	"github.com/q15co/q15/systems/agent/internal/channel/telegram"
+	"github.com/q15co/q15/systems/agent/internal/cognition"
 	"github.com/q15co/q15/systems/agent/internal/config"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
 	"github.com/q15co/q15/systems/agent/internal/execution"
@@ -120,18 +121,26 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 		memory: memoryStore,
 		skills: skillManager,
 	}
-	entryPoints := newRuntimeEntryPoints(
-		modelAdapter,
-		modelAdapter,
-		toolRegistry,
-		interactiveModelRefs,
-		cognitionModelRefs,
-		systemPrompt,
-		store,
-		store,
-		rt.MemoryRecentTurns,
-	)
+	entryPoints := newRuntimeEntryPoints(runtimeEntryPointsConfig{
+		modelClient:          modelAdapter,
+		planner:              modelAdapter,
+		tools:                toolRegistry,
+		interactiveModelRefs: interactiveModelRefs,
+		cognitionModelRefs:   cognitionModelRefs,
+		interactivePrompt:    systemPrompt,
+		interactiveStore:     store,
+		controllerStore:      store,
+		loader:               store,
+		recentTurns:          rt.MemoryRecentTurns,
+	})
 	botAgent := entryPoints.NewInteractiveAgent()
+	cognitionController, err := entryPoints.NewCognitionController(cognitionJobs()...)
+	if err != nil {
+		return fmt.Errorf("configure cognition controller for agent %q: %w", rt.Name, err)
+	}
+	if cognitionController != nil {
+		store.AddAppendObserver(cognitionController.NotifyStateChange)
+	}
 	messageBus := bus.New(bus.DefaultBufferSize)
 
 	channel, err := telegram.NewChannel(token, func(msg telegram.IncomingMessage) {
@@ -151,10 +160,15 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 	}
 
 	telegramEndpoint := telegram.NewAgentEndpoint(channel)
-	errCh := make(chan error, 1)
+	errCh := make(chan error, 2)
 	go func() {
 		errCh <- runAgentWorker(ctx, messageBus, botAgent, telegramEndpoint)
 	}()
+	if cognitionController != nil {
+		go func() {
+			errCh <- cognitionController.Run(ctx)
+		}()
+	}
 
 	select {
 	case <-ctx.Done():
@@ -164,6 +178,12 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 			return nil
 		}
 		return err
+	}
+}
+
+func cognitionJobs() []cognition.JobRegistration {
+	return []cognition.JobRegistration{
+		cognition.NewWorkingMemoryConsolidationRegistration(),
 	}
 }
 

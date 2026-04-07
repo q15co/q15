@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
+	"github.com/q15co/q15/systems/agent/internal/cognition"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
 )
 
@@ -53,6 +54,8 @@ func TestStoreInitCreatesScaffold(t *testing.T) {
 		filepath.Join(root, "history", "turns"),
 		filepath.Join(root, "history", "state", "head.json"),
 		filepath.Join(root, "cognition", "indexer"),
+		filepath.Join(root, "cognition", "triggers", "jobs"),
+		filepath.Join(root, "cognition", "runs"),
 		filepath.Join(root, "notes", "inbox"),
 		filepath.Join(root, "notes", "zettel"),
 		filepath.Join(root, "notes", "maps"),
@@ -78,6 +81,8 @@ func TestStoreInitCreatesScaffold(t *testing.T) {
 		"notes/ is never working memory",
 		"history/state/head.json",
 		"cognition/",
+		"cognition/triggers/jobs/",
+		"cognition/runs/",
 		"zettelkasten layout",
 	} {
 		if !strings.Contains(string(readme), want) {
@@ -720,6 +725,157 @@ func TestStoreAppendTurnDoesNotBackfillReplayOnlyReasoningWithoutToolReplay(t *t
 	}
 	if got[1].Parts[0].Text != "" {
 		t.Fatalf("reasoning text = %q, want empty", got[1].Parts[0].Text)
+	}
+}
+
+func TestStoreLoadHead(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "memory")
+	store := NewStore(root, "Jared", &fakeCommitter{})
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	lastSeq, updatedAt, err := store.LoadHead(context.Background())
+	if err != nil {
+		t.Fatalf("LoadHead() error = %v", err)
+	}
+	if lastSeq != 0 {
+		t.Fatalf("lastSeq = %d, want 0", lastSeq)
+	}
+	if updatedAt.IsZero() {
+		t.Fatal("updatedAt = zero, want non-zero")
+	}
+
+	if err := store.AppendTurn(context.Background(), []conversation.Message{
+		conversation.UserMessage("hello"),
+		conversation.AssistantMessage(conversation.Text("ok", "")),
+	}); err != nil {
+		t.Fatalf("AppendTurn() error = %v", err)
+	}
+
+	lastSeq, _, err = store.LoadHead(context.Background())
+	if err != nil {
+		t.Fatalf("LoadHead() after append error = %v", err)
+	}
+	if lastSeq != 1 {
+		t.Fatalf("lastSeq after append = %d, want 1", lastSeq)
+	}
+}
+
+func TestStoreJobStateRoundTrip(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "memory")
+	committer := &fakeCommitter{}
+	store := NewStore(root, "Jared", committer)
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	state, err := store.LoadJobState(context.Background(), "working_memory.consolidate")
+	if err != nil {
+		t.Fatalf("LoadJobState() missing error = %v", err)
+	}
+	if state.LastObservedSeq != 0 {
+		t.Fatalf("missing state = %#v, want zero value", state)
+	}
+
+	want := cognition.JobState{
+		LastObservedSeq:     7,
+		LastRunInputSeq:     7,
+		LastSuccessInputSeq: 7,
+		DirtySinceSeq:       8,
+		DirtySinceAt:        time.Date(2026, time.April, 6, 12, 0, 0, 0, time.UTC),
+		LastScheduledFor: map[string]time.Time{
+			"nightly": time.Date(2026, time.April, 6, 0, 0, 0, 0, time.UTC),
+		},
+	}
+	if err := store.StoreJobState(
+		context.Background(),
+		"working_memory.consolidate",
+		want,
+	); err != nil {
+		t.Fatalf("StoreJobState() error = %v", err)
+	}
+	if committer.lastMessage != "memory: update cognition trigger state working_memory_consolidate" {
+		t.Fatalf("commit message = %q", committer.lastMessage)
+	}
+
+	got, err := store.LoadJobState(context.Background(), "working_memory.consolidate")
+	if err != nil {
+		t.Fatalf("LoadJobState() error = %v", err)
+	}
+	if got.LastObservedSeq != want.LastObservedSeq ||
+		got.LastRunInputSeq != want.LastRunInputSeq ||
+		got.DirtySinceSeq != want.DirtySinceSeq {
+		t.Fatalf("loaded state = %#v, want %#v", got, want)
+	}
+	if got.LastScheduledFor["nightly"] != want.LastScheduledFor["nightly"] {
+		t.Fatalf("LastScheduledFor = %#v, want %#v", got.LastScheduledFor, want.LastScheduledFor)
+	}
+
+	commitCalls := committer.commitCalls
+	if err := store.StoreJobState(
+		context.Background(),
+		"working_memory.consolidate",
+		want,
+	); err != nil {
+		t.Fatalf("StoreJobState() second error = %v", err)
+	}
+	if committer.commitCalls != commitCalls {
+		t.Fatalf("commit calls = %d, want unchanged %d", committer.commitCalls, commitCalls)
+	}
+}
+
+func TestStoreAppendRunRecord(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "memory")
+	committer := &fakeCommitter{}
+	store := NewStore(root, "Jared", committer)
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	record := cognition.RunRecord{
+		Type:       "verification.check",
+		Cause:      cognition.RunCause{Kind: cognition.RunCauseSchedule, RuleID: "nightly"},
+		StartedAt:  time.Date(2026, time.April, 6, 1, 2, 3, 456000000, time.UTC),
+		FinishedAt: time.Date(2026, time.April, 6, 1, 2, 5, 0, time.UTC),
+		InputSeq:   9,
+		OutputSeq:  10,
+		Succeeded:  true,
+		Summary:    "ok",
+		ModelRef:   "cognition",
+	}
+	if err := store.AppendRunRecord(context.Background(), record); err != nil {
+		t.Fatalf("AppendRunRecord() error = %v", err)
+	}
+	if committer.lastMessage != "memory: record cognition run verification_check" {
+		t.Fatalf("commit message = %q", committer.lastMessage)
+	}
+
+	matches, err := filepath.Glob(filepath.Join(
+		root,
+		"cognition",
+		"runs",
+		"2026",
+		"04",
+		"06",
+		"010203.456000000-verification_check.json",
+	))
+	if err != nil {
+		t.Fatalf("Glob() error = %v", err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("run records = %#v, want one file", matches)
+	}
+	data, err := os.ReadFile(matches[0])
+	if err != nil {
+		t.Fatalf("ReadFile(run record) error = %v", err)
+	}
+	var got cognition.RunRecord
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("Unmarshal(run record) error = %v", err)
+	}
+	if got.Type != record.Type || got.Cause.RuleID != "nightly" || !got.Succeeded {
+		t.Fatalf("run record = %#v", got)
 	}
 }
 

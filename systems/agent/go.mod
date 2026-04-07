@@ -6,6 +6,7 @@ require (
 	codeberg.org/readeck/go-readability/v2 v2.1.1
 	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.0
 	github.com/mymmrac/telego v1.6.0
+	github.com/netresearch/go-cron v0.13.4
 	github.com/openai/openai-go/v3 v3.22.0
 	github.com/q15co/q15/libs/exec-contract v0.0.0
 	github.com/yuin/goldmark v1.7.16

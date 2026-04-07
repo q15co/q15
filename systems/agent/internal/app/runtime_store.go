@@ -2,8 +2,11 @@ package app
 
 import (
 	"context"
+	"sync"
+	"time"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
+	"github.com/q15co/q15/systems/agent/internal/cognition"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
 	"github.com/q15co/q15/systems/agent/internal/memory"
 	q15skills "github.com/q15co/q15/systems/agent/internal/skills"
@@ -12,12 +15,16 @@ import (
 type runtimeStore struct {
 	memory *memory.Store
 	skills *q15skills.Manager
+
+	mu              sync.Mutex
+	appendObservers []func()
 }
 
 var _ agent.ConversationStore = (*runtimeStore)(nil)
 var _ agent.CoreMemoryStore = (*runtimeStore)(nil)
 var _ agent.WorkingMemoryStore = (*runtimeStore)(nil)
 var _ agent.SkillCatalogStore = (*runtimeStore)(nil)
+var _ cognition.ControllerStore = (*runtimeStore)(nil)
 
 func (s *runtimeStore) LoadRecentMessages(
 	ctx context.Context,
@@ -27,7 +34,19 @@ func (s *runtimeStore) LoadRecentMessages(
 }
 
 func (s *runtimeStore) AppendTurn(ctx context.Context, messages []conversation.Message) error {
-	return s.memory.AppendTurn(ctx, messages)
+	if err := s.memory.AppendTurn(ctx, messages); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	observers := append([]func(){}, s.appendObservers...)
+	s.mu.Unlock()
+	for _, observer := range observers {
+		if observer == nil {
+			continue
+		}
+		observer()
+	}
+	return nil
 }
 
 func (s *runtimeStore) LoadCoreMemory(ctx context.Context) (agent.CoreMemory, error) {
@@ -58,4 +77,36 @@ func (s *runtimeStore) LoadSkillCatalog(ctx context.Context) (agent.SkillCatalog
 		Entries:  entries,
 		Warnings: append([]string(nil), catalog.Warnings...),
 	}, nil
+}
+
+func (s *runtimeStore) LoadHead(ctx context.Context) (int64, time.Time, error) {
+	return s.memory.LoadHead(ctx)
+}
+
+func (s *runtimeStore) LoadJobState(
+	ctx context.Context,
+	jobType string,
+) (cognition.JobState, error) {
+	return s.memory.LoadJobState(ctx, jobType)
+}
+
+func (s *runtimeStore) StoreJobState(
+	ctx context.Context,
+	jobType string,
+	state cognition.JobState,
+) error {
+	return s.memory.StoreJobState(ctx, jobType, state)
+}
+
+func (s *runtimeStore) AppendRunRecord(ctx context.Context, record cognition.RunRecord) error {
+	return s.memory.AppendRunRecord(ctx, record)
+}
+
+func (s *runtimeStore) AddAppendObserver(observer func()) {
+	if observer == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.appendObservers = append(s.appendObservers, observer)
 }
