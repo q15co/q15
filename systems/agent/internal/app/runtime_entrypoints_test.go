@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/cognition"
@@ -41,6 +42,32 @@ func (s *spyRuntimeStore) LoadSkillCatalog(context.Context) (agent.SkillCatalog,
 	return agent.SkillCatalog{}, nil
 }
 
+func (s *spyRuntimeStore) LoadHead(context.Context) (int64, time.Time, error) {
+	return int64(s.appendCalls), time.Now().UTC(), nil
+}
+
+func (s *spyRuntimeStore) LoadJobState(
+	context.Context,
+	string,
+) (cognition.JobState, error) {
+	return cognition.JobState{}, nil
+}
+
+func (s *spyRuntimeStore) StoreJobState(
+	context.Context,
+	string,
+	cognition.JobState,
+) error {
+	return nil
+}
+
+func (s *spyRuntimeStore) AppendRunRecord(
+	context.Context,
+	cognition.RunRecord,
+) error {
+	return nil
+}
+
 type appFakeCognitionJob struct{}
 
 func (appFakeCognitionJob) Type() string {
@@ -66,17 +93,17 @@ func (appFakeCognitionJob) ParseResult(
 func TestRuntimeEntryPointsBuildInteractiveAndCognitionPaths(t *testing.T) {
 	store := &spyRuntimeStore{}
 	model := &fakeModelClient{}
-	entryPoints := newRuntimeEntryPoints(
-		model,
-		modelselection.Passthrough{},
-		nil,
-		[]string{"interactive"},
-		[]string{"cognition"},
-		"Interactive prompt",
-		store,
-		store,
-		3,
-	)
+	entryPoints := newRuntimeEntryPoints(runtimeEntryPointsConfig{
+		modelClient:          model,
+		planner:              modelselection.Passthrough{},
+		interactiveModelRefs: []string{"interactive"},
+		cognitionModelRefs:   []string{"cognition"},
+		interactivePrompt:    "Interactive prompt",
+		interactiveStore:     store,
+		controllerStore:      store,
+		loader:               store,
+		recentTurns:          3,
+	})
 
 	interactive := entryPoints.NewInteractiveAgent()
 	if interactive == nil {
@@ -111,5 +138,13 @@ func TestRuntimeEntryPointsBuildInteractiveAndCognitionPaths(t *testing.T) {
 	}
 	if model.calls[1].model != "cognition" {
 		t.Fatalf("cognition model = %q, want %q", model.calls[1].model, "cognition")
+	}
+
+	controller, err := entryPoints.NewCognitionController()
+	if err != nil {
+		t.Fatalf("NewCognitionController() error = %v", err)
+	}
+	if controller == nil {
+		t.Fatal("NewCognitionController() = nil")
 	}
 }

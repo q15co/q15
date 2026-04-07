@@ -16,37 +16,42 @@ type runtimeEntryPoints struct {
 	cognitionModelRefs   []string
 	interactivePrompt    string
 	interactiveStore     agent.ConversationStore
+	controllerStore      cognition.ControllerStore
 	loader               cognition.ContextLoader
 	recentTurns          int
 }
 
-func newRuntimeEntryPoints(
-	modelClient agent.ModelClient,
-	planner modelselection.Planner,
-	tools agent.ToolRegistry,
-	interactiveModelRefs []string,
-	cognitionModelRefs []string,
-	interactivePrompt string,
-	interactiveStore agent.ConversationStore,
-	loader cognition.ContextLoader,
-	recentTurns int,
-) *runtimeEntryPoints {
-	if planner == nil {
-		planner = modelselection.Passthrough{}
+type runtimeEntryPointsConfig struct {
+	modelClient          agent.ModelClient
+	planner              modelselection.Planner
+	tools                agent.ToolRegistry
+	interactiveModelRefs []string
+	cognitionModelRefs   []string
+	interactivePrompt    string
+	interactiveStore     agent.ConversationStore
+	controllerStore      cognition.ControllerStore
+	loader               cognition.ContextLoader
+	recentTurns          int
+}
+
+func newRuntimeEntryPoints(cfg runtimeEntryPointsConfig) *runtimeEntryPoints {
+	if cfg.planner == nil {
+		cfg.planner = modelselection.Passthrough{}
 	}
-	if len(cognitionModelRefs) == 0 {
-		cognitionModelRefs = interactiveModelRefs
+	if len(cfg.cognitionModelRefs) == 0 {
+		cfg.cognitionModelRefs = cfg.interactiveModelRefs
 	}
 	return &runtimeEntryPoints{
-		modelClient:          modelClient,
-		planner:              planner,
-		tools:                tools,
-		interactiveModelRefs: append([]string(nil), interactiveModelRefs...),
-		cognitionModelRefs:   append([]string(nil), cognitionModelRefs...),
-		interactivePrompt:    strings.TrimSpace(interactivePrompt),
-		interactiveStore:     interactiveStore,
-		loader:               loader,
-		recentTurns:          recentTurns,
+		modelClient:          cfg.modelClient,
+		planner:              cfg.planner,
+		tools:                cfg.tools,
+		interactiveModelRefs: append([]string(nil), cfg.interactiveModelRefs...),
+		cognitionModelRefs:   append([]string(nil), cfg.cognitionModelRefs...),
+		interactivePrompt:    strings.TrimSpace(cfg.interactivePrompt),
+		interactiveStore:     cfg.interactiveStore,
+		controllerStore:      cfg.controllerStore,
+		loader:               cfg.loader,
+		recentTurns:          cfg.recentTurns,
 	}
 }
 
@@ -75,5 +80,19 @@ func (r *runtimeEntryPoints) NewCognitionRunner() *cognition.Runner {
 		r.tools,
 		r.cognitionModelRefs,
 		r.loader,
+	)
+}
+
+func (r *runtimeEntryPoints) NewCognitionController(
+	registrations ...cognition.JobRegistration,
+) (*cognition.Controller, error) {
+	if r == nil {
+		return nil, nil
+	}
+	return cognition.NewController(
+		r.NewCognitionRunner(),
+		r.controllerStore,
+		r.loader,
+		registrations...,
 	)
 }
