@@ -348,9 +348,11 @@ func TestWorkingMemoryConsolidationStateRuleUsesDirtyTailThreshold(t *testing.T)
 
 	registration := NewWorkingMemoryConsolidationRegistration()
 	evaluate := registration.Policy.State[0].Evaluate
+	belowThresholdHead := workingMemoryMinDirtyTurns - 1
+	atThresholdHead := workingMemoryMinDirtyTurns
 
 	shouldRun, reason, err := evaluate(context.Background(), Snapshot{
-		HeadLastSeq: 1,
+		HeadLastSeq: belowThresholdHead,
 	}, JobState{
 		DirtySinceSeq: 1,
 	})
@@ -365,7 +367,7 @@ func TestWorkingMemoryConsolidationStateRuleUsesDirtyTailThreshold(t *testing.T)
 	}
 
 	shouldRun, reason, err = evaluate(context.Background(), Snapshot{
-		HeadLastSeq: 2,
+		HeadLastSeq: atThresholdHead,
 	}, JobState{
 		DirtySinceSeq: 1,
 	})
