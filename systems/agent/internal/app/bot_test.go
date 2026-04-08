@@ -222,18 +222,25 @@ func TestRoutedModelAdapterPlanSelectionRejectsUnknownModelRef(t *testing.T) {
 	}
 }
 
-func TestCognitionJobsRegistersWorkingMemoryConsolidation(t *testing.T) {
+func TestCognitionJobsRegistersBuiltInCognitionJobs(t *testing.T) {
 	jobs := cognitionJobs()
-	if len(jobs) != 1 {
-		t.Fatalf("cognitionJobs len = %d, want 1", len(jobs))
+	if len(jobs) != 2 {
+		t.Fatalf("cognitionJobs len = %d, want 2", len(jobs))
 	}
 
-	job := jobs[0].NewJob()
-	if job == nil {
-		t.Fatal("NewJob() = nil")
+	gotTypes := make([]string, 0, len(jobs))
+	for _, registration := range jobs {
+		job := registration.NewJob()
+		if job == nil {
+			t.Fatal("NewJob() = nil")
+		}
+		gotTypes = append(gotTypes, job.Type())
 	}
-	if got, want := job.Type(), "working_memory.consolidate"; got != want {
-		t.Fatalf("Type() = %q, want %q", got, want)
+	if got, want := gotTypes[0], "working_memory.consolidate"; got != want {
+		t.Fatalf("jobs[0].Type() = %q, want %q", got, want)
+	}
+	if got, want := gotTypes[1], "verification_review"; got != want {
+		t.Fatalf("jobs[1].Type() = %q, want %q", got, want)
 	}
 	if len(jobs[0].Policy.Startup) == 0 {
 		t.Fatal("startup rules = 0, want at least 1")
@@ -243,6 +250,15 @@ func TestCognitionJobsRegistersWorkingMemoryConsolidation(t *testing.T) {
 	}
 	if len(jobs[0].Policy.State) == 0 {
 		t.Fatal("state rules = 0, want at least 1")
+	}
+	if len(jobs[1].Policy.Startup) != 0 {
+		t.Fatalf("verification startup rules = %d, want 0", len(jobs[1].Policy.Startup))
+	}
+	if len(jobs[1].Policy.Schedule) != 0 {
+		t.Fatalf("verification schedule rules = %d, want 0", len(jobs[1].Policy.Schedule))
+	}
+	if len(jobs[1].Policy.State) == 0 {
+		t.Fatal("verification state rules = 0, want at least 1")
 	}
 }
 

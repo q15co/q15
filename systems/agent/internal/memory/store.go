@@ -32,6 +32,7 @@ const (
 	workingDirPath        = "working"
 	workingMemoryFileName = "WORKING_MEMORY.md"
 	cognitionDirPath      = "cognition"
+	cognitionStatePath    = cognitionDirPath + "/state"
 	cognitionIndexerPath  = cognitionDirPath + "/indexer"
 	cognitionRunsPath     = cognitionDirPath + "/runs"
 	cognitionTriggersPath = cognitionDirPath + "/triggers"
@@ -99,6 +100,7 @@ func (s *Store) Init(ctx context.Context) error {
 		filepath.Join(s.rootDir, "notes", "inbox"),
 		filepath.Join(s.rootDir, "notes", "zettel"),
 		filepath.Join(s.rootDir, "notes", "maps"),
+		filepath.Join(s.rootDir, cognitionStatePath),
 		filepath.Join(s.rootDir, cognitionIndexerPath),
 		filepath.Join(s.rootDir, cognitionRunsPath),
 		filepath.Join(s.rootDir, cognitionJobsPath),
@@ -305,6 +307,7 @@ This directory contains q15's persistent agent-state root.
 	- Episodic conversation turns are stored as canonical JSON files under history/turns/.
 	- Transcript sequence bookkeeping is stored under history/state/head.json.
 	- Cognition subsystem maintenance state is stored under cognition/.
+	- Job-owned cognition artifacts are stored under cognition/state/.
 	- Per-job cognition trigger state is stored under cognition/triggers/jobs/.
 	- Append-only cognition run provenance is stored under cognition/runs/.
 	- Auxiliary notebook files are organized under notes/inbox, notes/zettel, and notes/maps as the built-in zettelkasten layout.

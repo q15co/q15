@@ -75,6 +75,20 @@ func (s *spyLoader) LoadRecentMessages(
 	return nil, nil
 }
 
+func (s *spyLoader) LoadCognitionArtifact(
+	context.Context,
+	string,
+) (Artifact, error) {
+	return Artifact{}, nil
+}
+
+func (s *spyLoader) StoreCognitionArtifact(
+	context.Context,
+	Artifact,
+) error {
+	return nil
+}
+
 func (s *spyLoader) AppendTurn(context.Context, []conversation.Message) error {
 	s.appendCalls++
 	return nil
@@ -83,7 +97,7 @@ func (s *spyLoader) AppendTurn(context.Context, []conversation.Message) error {
 type fakeJob struct {
 	jobType string
 	build   func(context.Context, ContextLoader) (Spec, error)
-	parse   func(context.Context, JobOutput) (ParsedResult, error)
+	apply   func(context.Context, ContextLoader, JobOutput) (ParsedResult, error)
 }
 
 func (f fakeJob) Type() string {
@@ -97,20 +111,33 @@ func (f fakeJob) Build(ctx context.Context, loader ContextLoader) (Spec, error) 
 	return Spec{}, nil
 }
 
-func (f fakeJob) ParseResult(ctx context.Context, output JobOutput) (ParsedResult, error) {
-	if f.parse != nil {
-		return f.parse(ctx, output)
+func (f fakeJob) ApplyResult(
+	ctx context.Context,
+	loader ContextLoader,
+	output JobOutput,
+) (ParsedResult, error) {
+	if f.apply != nil {
+		return f.apply(ctx, loader, output)
 	}
 	return ParsedResult{}, nil
 }
 
-type testTool struct{}
+type testTool struct {
+	def agent.ToolDefinition
+	run func(context.Context, string) (string, error)
+}
 
-func (testTool) Definition() agent.ToolDefinition {
+func (t testTool) Definition() agent.ToolDefinition {
+	if t.def.Name != "" {
+		return t.def
+	}
 	return agent.ToolDefinition{Name: "noop"}
 }
 
-func (testTool) Run(context.Context, string) (string, error) {
+func (t testTool) Run(ctx context.Context, arguments string) (string, error) {
+	if t.run != nil {
+		return t.run(ctx, arguments)
+	}
 	return "ok", nil
 }
 
@@ -139,7 +166,7 @@ func TestRunnerRunsWithoutUserTurnAndDoesNotPersistTranscript(t *testing.T) {
 				CompletionContract: "Return `status: ok` when complete.",
 			}, nil
 		},
-		parse: func(_ context.Context, output JobOutput) (ParsedResult, error) {
+		apply: func(_ context.Context, _ ContextLoader, output JobOutput) (ParsedResult, error) {
 			if output.FinalText != "status: ok" {
 				t.Fatalf("output.FinalText = %q, want %q", output.FinalText, "status: ok")
 			}
@@ -176,7 +203,55 @@ func TestRunnerRunsWithoutUserTurnAndDoesNotPersistTranscript(t *testing.T) {
 	}
 }
 
-func TestRunnerRequiresToolCallingWhenJobExposesTools(t *testing.T) {
+func TestRunnerRequiresToolCallingWhenJobRequestsIt(t *testing.T) {
+	model := &fakeModelClient{
+		results: []agent.ModelClientResult{
+			assistantResult("status: ok"),
+		},
+	}
+	planner := &fakePlanner{}
+	registry, err := agent.NewToolRegistry(testTool{})
+	if err != nil {
+		t.Fatalf("NewToolRegistry() error = %v", err)
+	}
+
+	runner := NewRunnerWithPlanner(
+		model,
+		planner,
+		registry,
+		[]string{"m1"},
+		&spyLoader{},
+	)
+	job := fakeJob{
+		jobType: "verification.check",
+		build: func(context.Context, ContextLoader) (Spec, error) {
+			return Spec{
+				Objective:          "Inspect state with tool access available.",
+				CompletionContract: "Return `status: ok` when complete.",
+				ExposeTools:        true,
+				RequireToolCalling: true,
+			}, nil
+		},
+		apply: func(context.Context, ContextLoader, JobOutput) (ParsedResult, error) {
+			return ParsedResult{Summary: "ok"}, nil
+		},
+	}
+
+	if _, err := runner.Run(context.Background(), job, nil); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(planner.requirements) != 1 {
+		t.Fatalf("planned requirements len = %d, want 1", len(planner.requirements))
+	}
+	if !planner.requirements[0].ToolCalling {
+		t.Fatalf("requirements = %#v, want tool_calling", planner.requirements[0])
+	}
+	if len(model.callTools) != 1 || len(model.callTools[0]) != 1 {
+		t.Fatalf("callTools = %#v, want one exposed tool", model.callTools)
+	}
+}
+
+func TestRunnerExposesToolsWithoutRequiringToolCallingByDefault(t *testing.T) {
 	model := &fakeModelClient{
 		results: []agent.ModelClientResult{
 			assistantResult("status: ok"),
@@ -204,7 +279,7 @@ func TestRunnerRequiresToolCallingWhenJobExposesTools(t *testing.T) {
 				ExposeTools:        true,
 			}, nil
 		},
-		parse: func(context.Context, JobOutput) (ParsedResult, error) {
+		apply: func(context.Context, ContextLoader, JobOutput) (ParsedResult, error) {
 			return ParsedResult{Summary: "ok"}, nil
 		},
 	}
@@ -215,8 +290,8 @@ func TestRunnerRequiresToolCallingWhenJobExposesTools(t *testing.T) {
 	if len(planner.requirements) != 1 {
 		t.Fatalf("planned requirements len = %d, want 1", len(planner.requirements))
 	}
-	if !planner.requirements[0].ToolCalling {
-		t.Fatalf("requirements = %#v, want tool_calling", planner.requirements[0])
+	if planner.requirements[0].ToolCalling {
+		t.Fatalf("requirements = %#v, want tool_calling=false", planner.requirements[0])
 	}
 	if len(model.callTools) != 1 || len(model.callTools[0]) != 1 {
 		t.Fatalf("callTools = %#v, want one exposed tool", model.callTools)
@@ -239,7 +314,7 @@ func TestRunnerReportsParseFailures(t *testing.T) {
 				CompletionContract: "Return `status: ok` when complete.",
 			}, nil
 		},
-		parse: func(_ context.Context, output JobOutput) (ParsedResult, error) {
+		apply: func(_ context.Context, _ ContextLoader, output JobOutput) (ParsedResult, error) {
 			if !strings.Contains(output.FinalText, "unexpected") {
 				t.Fatalf("output.FinalText = %q", output.FinalText)
 			}
@@ -248,6 +323,55 @@ func TestRunnerReportsParseFailures(t *testing.T) {
 	}
 
 	if _, err := runner.Run(context.Background(), job, nil); err == nil {
-		t.Fatal("Run() error = nil, want parse failure")
+		t.Fatal("Run() error = nil, want apply failure")
+	}
+}
+
+func TestRunnerForwardsAllowedToolsAndLoaderToApplyResult(t *testing.T) {
+	model := &fakeModelClient{
+		results: []agent.ModelClientResult{
+			assistantResult("verification notes"),
+		},
+	}
+	registry, err := agent.NewToolRegistry(
+		testTool{def: agent.ToolDefinition{Name: "read_file"}},
+		testTool{def: agent.ToolDefinition{Name: "web_fetch"}},
+	)
+	if err != nil {
+		t.Fatalf("NewToolRegistry() error = %v", err)
+	}
+
+	loader := &spyLoader{}
+	runner := NewRunner(model, registry, []string{"m1"}, loader)
+
+	job := fakeJob{
+		jobType: "verification_review",
+		build: func(context.Context, ContextLoader) (Spec, error) {
+			return Spec{
+				Objective:          "Review state with bounded tools.",
+				CompletionContract: "Return notes.",
+				ExposeTools:        true,
+				AllowedTools:       []string{"web_fetch"},
+			}, nil
+		},
+		apply: func(_ context.Context, gotLoader ContextLoader, output JobOutput) (ParsedResult, error) {
+			if gotLoader != loader {
+				t.Fatalf("loader = %#v, want %#v", gotLoader, loader)
+			}
+			if output.FinalText != "verification notes" {
+				t.Fatalf("output.FinalText = %q, want %q", output.FinalText, "verification notes")
+			}
+			return ParsedResult{Summary: "ok"}, nil
+		},
+	}
+
+	if _, err := runner.Run(context.Background(), job, nil); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(model.callTools) != 1 || len(model.callTools[0]) != 1 {
+		t.Fatalf("callTools = %#v, want one filtered tool", model.callTools)
+	}
+	if model.callTools[0][0].Name != "web_fetch" {
+		t.Fatalf("tool name = %q, want web_fetch", model.callTools[0][0].Name)
 	}
 }

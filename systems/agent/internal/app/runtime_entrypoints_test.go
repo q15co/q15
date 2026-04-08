@@ -42,6 +42,20 @@ func (s *spyRuntimeStore) LoadSkillCatalog(context.Context) (agent.SkillCatalog,
 	return agent.SkillCatalog{}, nil
 }
 
+func (s *spyRuntimeStore) LoadCognitionArtifact(
+	context.Context,
+	string,
+) (cognition.Artifact, error) {
+	return cognition.Artifact{}, nil
+}
+
+func (s *spyRuntimeStore) StoreCognitionArtifact(
+	context.Context,
+	cognition.Artifact,
+) error {
+	return nil
+}
+
 func (s *spyRuntimeStore) LoadHead(context.Context) (int64, time.Time, error) {
 	return int64(s.appendCalls), time.Now().UTC(), nil
 }
@@ -81,8 +95,9 @@ func (appFakeCognitionJob) Build(context.Context, cognition.ContextLoader) (cogn
 	}, nil
 }
 
-func (appFakeCognitionJob) ParseResult(
+func (appFakeCognitionJob) ApplyResult(
 	context.Context,
+	cognition.ContextLoader,
 	cognition.JobOutput,
 ) (cognition.ParsedResult, error) {
 	return cognition.ParsedResult{
