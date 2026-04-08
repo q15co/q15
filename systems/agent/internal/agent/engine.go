@@ -24,6 +24,7 @@ type Engine struct {
 type EngineRequest struct {
 	Messages           []conversation.Message
 	UseTools           bool
+	AllowedTools       []string
 	RequireToolCalling bool
 	Observer           RunObserver
 }
@@ -72,8 +73,10 @@ func (e *Engine) Run(ctx context.Context, req EngineRequest) (EngineResult, erro
 	start := len(messages)
 
 	var toolDefs []ToolDefinition
+	var toolRegistry ToolRegistry
 	if req.UseTools && e.tools != nil {
-		toolDefs = e.tools.Definitions()
+		toolRegistry = filterToolRegistry(e.tools, req.AllowedTools)
+		toolDefs = toolRegistry.Definitions()
 	}
 
 	loopDetector := newToolLoopDetector()
@@ -137,7 +140,7 @@ func (e *Engine) Run(ctx context.Context, req EngineRequest) (EngineResult, erro
 				ToolCall: call,
 			})
 
-			toolResult, err := e.runTool(ctx, call)
+			toolResult, err := e.runTool(ctx, toolRegistry, call)
 			output := toolResult.Output
 			if err != nil {
 				output = "tool error: " + err.Error()
@@ -198,14 +201,18 @@ func (e *Engine) Run(ctx context.Context, req EngineRequest) (EngineResult, erro
 	}, stopErr
 }
 
-func (e *Engine) runTool(ctx context.Context, call ToolCall) (ToolResult, error) {
-	if e.tools == nil {
+func (e *Engine) runTool(
+	ctx context.Context,
+	tools ToolRegistry,
+	call ToolCall,
+) (ToolResult, error) {
+	if tools == nil {
 		return ToolResult{}, fmt.Errorf("no tool registry configured for call %q", call.Name)
 	}
 	if strings.TrimSpace(call.ID) == "" {
 		return ToolResult{}, fmt.Errorf("tool call is missing id")
 	}
-	return e.tools.Run(ctx, call)
+	return tools.Run(ctx, call)
 }
 
 func (e *Engine) completeWithObserver(

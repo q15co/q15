@@ -24,6 +24,7 @@ var _ agent.ConversationStore = (*runtimeStore)(nil)
 var _ agent.CoreMemoryStore = (*runtimeStore)(nil)
 var _ agent.WorkingMemoryStore = (*runtimeStore)(nil)
 var _ agent.SkillCatalogStore = (*runtimeStore)(nil)
+var _ cognition.ContextLoader = (*runtimeStore)(nil)
 var _ cognition.ControllerStore = (*runtimeStore)(nil)
 
 func (s *runtimeStore) LoadRecentMessages(
@@ -77,6 +78,20 @@ func (s *runtimeStore) LoadSkillCatalog(ctx context.Context) (agent.SkillCatalog
 		Entries:  entries,
 		Warnings: append([]string(nil), catalog.Warnings...),
 	}, nil
+}
+
+func (s *runtimeStore) LoadCognitionArtifact(
+	ctx context.Context,
+	relativePath string,
+) (cognition.Artifact, error) {
+	return s.memory.LoadCognitionArtifact(ctx, relativePath)
+}
+
+func (s *runtimeStore) StoreCognitionArtifact(
+	ctx context.Context,
+	artifact cognition.Artifact,
+) error {
+	return s.memory.StoreCognitionArtifact(ctx, artifact)
 }
 
 func (s *runtimeStore) LoadHead(ctx context.Context) (int64, time.Time, error) {

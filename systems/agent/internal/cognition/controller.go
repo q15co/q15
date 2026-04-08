@@ -84,18 +84,19 @@ type JobState struct {
 // RunRecord is the append-only persisted provenance record for one cognition
 // run attempt.
 type RunRecord struct {
-	Type            string    `json:"type"`
-	Cause           RunCause  `json:"cause"`
-	StartedAt       time.Time `json:"started_at"`
-	FinishedAt      time.Time `json:"finished_at"`
-	InputSeq        int64     `json:"input_seq,omitempty"`
-	InputUpdatedAt  time.Time `json:"input_updated_at,omitempty"`
-	OutputSeq       int64     `json:"output_seq,omitempty"`
-	OutputUpdatedAt time.Time `json:"output_updated_at,omitempty"`
-	Succeeded       bool      `json:"succeeded"`
-	Summary         string    `json:"summary,omitempty"`
-	ModelRef        string    `json:"model_ref,omitempty"`
-	Error           string    `json:"error,omitempty"`
+	Type            string            `json:"type"`
+	Cause           RunCause          `json:"cause"`
+	StartedAt       time.Time         `json:"started_at"`
+	FinishedAt      time.Time         `json:"finished_at"`
+	InputSeq        int64             `json:"input_seq,omitempty"`
+	InputUpdatedAt  time.Time         `json:"input_updated_at,omitempty"`
+	OutputSeq       int64             `json:"output_seq,omitempty"`
+	OutputUpdatedAt time.Time         `json:"output_updated_at,omitempty"`
+	Succeeded       bool              `json:"succeeded"`
+	Summary         string            `json:"summary,omitempty"`
+	Metadata        map[string]string `json:"metadata,omitempty"`
+	ModelRef        string            `json:"model_ref,omitempty"`
+	Error           string            `json:"error,omitempty"`
 }
 
 // ControllerStore persists controller state and run provenance.
@@ -496,6 +497,7 @@ func (c *Controller) runPending(ctx context.Context, pending pendingRun) error {
 		record.Error = runErr.Error()
 	} else {
 		record.Summary = strings.TrimSpace(result.Summary)
+		record.Metadata = cloneRunRecordMetadata(result.Metadata)
 		record.ModelRef = result.ModelRef
 	}
 	if err := c.store.AppendRunRecord(ctx, record); err != nil {
@@ -505,6 +507,24 @@ func (c *Controller) runPending(ctx context.Context, pending pendingRun) error {
 		c.NotifyStateChange()
 	}
 	return nil
+}
+
+func cloneRunRecordMetadata(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for key, value := range in {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		out[key] = value
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func (c *Controller) latestDue(

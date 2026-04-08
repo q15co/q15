@@ -184,6 +184,7 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 func cognitionJobs() []cognition.JobRegistration {
 	return []cognition.JobRegistration{
 		cognition.NewWorkingMemoryConsolidationRegistration(),
+		cognition.NewVerificationReviewRegistration(),
 	}
 }
 

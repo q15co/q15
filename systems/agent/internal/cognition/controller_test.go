@@ -129,7 +129,7 @@ func TestControllerRunsStartupTriggerOnceAtStartup(t *testing.T) {
 						CompletionContract: "Return `status: ok`.",
 					}, nil
 				},
-				parse: func(context.Context, JobOutput) (ParsedResult, error) {
+				apply: func(context.Context, ContextLoader, JobOutput) (ParsedResult, error) {
 					return ParsedResult{Summary: "startup"}, nil
 				},
 			}
@@ -187,8 +187,14 @@ func TestControllerStateTriggerRunsOncePerHeadAdvance(t *testing.T) {
 						CompletionContract: "Return `status: ok`.",
 					}, nil
 				},
-				parse: func(context.Context, JobOutput) (ParsedResult, error) {
-					return ParsedResult{Summary: "checked"}, nil
+				apply: func(context.Context, ContextLoader, JobOutput) (ParsedResult, error) {
+					return ParsedResult{
+						Summary: "checked",
+						Metadata: map[string]string{
+							"path":    "/memory/cognition/state/verification_review.md",
+							"changed": "true",
+						},
+					}, nil
 				},
 			}
 		},
@@ -219,6 +225,13 @@ func TestControllerStateTriggerRunsOncePerHeadAdvance(t *testing.T) {
 	state := store.state("verification.check")
 	if state.DirtySinceSeq != 0 {
 		t.Fatalf("DirtySinceSeq after first run = %d, want 0", state.DirtySinceSeq)
+	}
+	records := store.runRecords()
+	if got, want := records[0].Metadata["path"], "/memory/cognition/state/verification_review.md"; got != want {
+		t.Fatalf("run metadata[path] = %q, want %q", got, want)
+	}
+	if got, want := records[0].Metadata["changed"], "true"; got != want {
+		t.Fatalf("run metadata[changed] = %q, want %q", got, want)
 	}
 
 	controller.NotifyStateChange()
@@ -262,7 +275,7 @@ func TestControllerRunsOverdueScheduleOnceAtStartup(t *testing.T) {
 						CompletionContract: "Return `status: ok`.",
 					}, nil
 				},
-				parse: func(context.Context, JobOutput) (ParsedResult, error) {
+				apply: func(context.Context, ContextLoader, JobOutput) (ParsedResult, error) {
 					return ParsedResult{Summary: "scheduled"}, nil
 				},
 			}
@@ -323,8 +336,8 @@ func TestControllerFailureUpdatesStateAndRunRecord(t *testing.T) {
 						CompletionContract: "Return `status: ok`.",
 					}, nil
 				},
-				parse: func(context.Context, JobOutput) (ParsedResult, error) {
-					return ParsedResult{}, errors.New("parse failed")
+				apply: func(context.Context, ContextLoader, JobOutput) (ParsedResult, error) {
+					return ParsedResult{}, errors.New("apply failed")
 				},
 			}
 		},
@@ -365,7 +378,7 @@ func TestControllerFailureUpdatesStateAndRunRecord(t *testing.T) {
 		t.Fatalf("Succeeded = true, want false")
 	}
 	if records[0].Error == "" {
-		t.Fatal("Error = empty, want parse failure")
+		t.Fatal("Error = empty, want apply failure")
 	}
 
 	pending, ok, err = controller.nextPendingRun(context.Background(), false, false, true)
@@ -400,7 +413,7 @@ func TestControllerPreservesDirtyStateWhenHeadAdvancesDuringRun(t *testing.T) {
 						CompletionContract: "Return `status: ok`.",
 					}, nil
 				},
-				parse: func(context.Context, JobOutput) (ParsedResult, error) {
+				apply: func(context.Context, ContextLoader, JobOutput) (ParsedResult, error) {
 					store.setHead(2, time.Now().UTC())
 					return ParsedResult{Summary: "ok"}, nil
 				},
@@ -446,7 +459,7 @@ func TestControllerRunsSeriallyWhenSignalsQueue(t *testing.T) {
 	releaseFirst := make(chan struct{})
 
 	var mu sync.Mutex
-	parseCalls := 0
+	applyCalls := 0
 	currentRuns := 0
 	maxRuns := 0
 
@@ -460,14 +473,14 @@ func TestControllerRunsSeriallyWhenSignalsQueue(t *testing.T) {
 						CompletionContract: "Return `status: ok`.",
 					}, nil
 				},
-				parse: func(context.Context, JobOutput) (ParsedResult, error) {
+				apply: func(context.Context, ContextLoader, JobOutput) (ParsedResult, error) {
 					mu.Lock()
-					parseCalls++
+					applyCalls++
 					currentRuns++
 					if currentRuns > maxRuns {
 						maxRuns = currentRuns
 					}
-					first := parseCalls == 1
+					first := applyCalls == 1
 					mu.Unlock()
 
 					if first {
@@ -518,9 +531,9 @@ func TestControllerRunsSeriallyWhenSignalsQueue(t *testing.T) {
 		mu.Unlock()
 		t.Fatalf("max concurrent runs = %d, want 1", maxRuns)
 	}
-	if parseCalls != 1 {
+	if applyCalls != 1 {
 		mu.Unlock()
-		t.Fatalf("parse calls before release = %d, want 1", parseCalls)
+		t.Fatalf("apply calls before release = %d, want 1", applyCalls)
 	}
 	mu.Unlock()
 
@@ -528,7 +541,7 @@ func TestControllerRunsSeriallyWhenSignalsQueue(t *testing.T) {
 	waitFor(t, 2*time.Second, func() bool {
 		mu.Lock()
 		defer mu.Unlock()
-		return parseCalls == 2
+		return applyCalls == 2
 	})
 
 	cancel()

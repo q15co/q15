@@ -24,10 +24,16 @@ func TestRenderPromptUsesDistinctCognitionContract(t *testing.T) {
 
 	for _, want := range []string{
 		"<cognition_mode>",
+		"<instruction_priority>",
 		"<job_objective type=\"working_memory.consolidate\">",
-		"<evidence_rules>",
+		"<grounding_rules>",
 		"<non_user_facing_behavior>",
+		"<verbosity_controls>",
 		"<completion_contract>",
+		"<output_contract>",
+		"<tool_persistence_rules>",
+		"<verification_loop>",
+		"<missing_context_gating>",
 		"<job_context>",
 	} {
 		if !strings.Contains(prompt, want) {

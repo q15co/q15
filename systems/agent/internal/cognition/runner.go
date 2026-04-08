@@ -17,13 +17,22 @@ type ContextLoader interface {
 	LoadWorkingMemory(ctx context.Context) (agent.WorkingMemory, error)
 	LoadSkillCatalog(ctx context.Context) (agent.SkillCatalog, error)
 	LoadRecentMessages(ctx context.Context, turns int) ([]conversation.Message, error)
+	LoadCognitionArtifact(ctx context.Context, relativePath string) (Artifact, error)
+	StoreCognitionArtifact(ctx context.Context, artifact Artifact) error
+}
+
+// Artifact is one job-owned persisted artifact stored under
+// /memory/cognition/.
+type Artifact struct {
+	RelativePath string
+	Content      string
 }
 
 // JobDefinition describes one typed cognition job.
 type JobDefinition interface {
 	Type() string
 	Build(ctx context.Context, loader ContextLoader) (Spec, error)
-	ParseResult(ctx context.Context, output JobOutput) (ParsedResult, error)
+	ApplyResult(ctx context.Context, loader ContextLoader, output JobOutput) (ParsedResult, error)
 }
 
 // JobOutput is the validated raw engine output for one cognition run.
@@ -155,7 +164,8 @@ func (r *Runner) Run(
 	runResult, err := r.engine.Run(ctx, agent.EngineRequest{
 		Messages:           inputMessages,
 		UseTools:           spec.ExposeTools,
-		RequireToolCalling: spec.ExposeTools,
+		AllowedTools:       append([]string(nil), spec.AllowedTools...),
+		RequireToolCalling: spec.RequireToolCalling,
 		Observer:           observer,
 	})
 	if err != nil {
@@ -177,7 +187,7 @@ func (r *Runner) Run(
 		ModelRef:  runResult.ModelRef,
 		Turn:      runResult.Turn,
 	}
-	parsed, err := job.ParseResult(ctx, output)
+	parsed, err := job.ApplyResult(ctx, r.loader, output)
 	if err != nil {
 		notifyRunEvent(ctx, observer, agent.RunEvent{
 			Type:      agent.RunEventRunFailed,
@@ -186,7 +196,7 @@ func (r *Runner) Run(
 			FinalText: runResult.FinalText,
 			Err:       err,
 		})
-		return Result{}, fmt.Errorf("parse cognition result for job %q: %w", jobType, err)
+		return Result{}, fmt.Errorf("apply cognition result for job %q: %w", jobType, err)
 	}
 
 	result := Result{

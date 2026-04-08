@@ -53,6 +53,7 @@ func TestStoreInitCreatesScaffold(t *testing.T) {
 		filepath.Join(root, "working", "WORKING_MEMORY.md"),
 		filepath.Join(root, "history", "turns"),
 		filepath.Join(root, "history", "state", "head.json"),
+		filepath.Join(root, "cognition", "state"),
 		filepath.Join(root, "cognition", "indexer"),
 		filepath.Join(root, "cognition", "triggers", "jobs"),
 		filepath.Join(root, "cognition", "runs"),
@@ -81,6 +82,7 @@ func TestStoreInitCreatesScaffold(t *testing.T) {
 		"notes/ is never working memory",
 		"history/state/head.json",
 		"cognition/",
+		"cognition/state/",
 		"cognition/triggers/jobs/",
 		"cognition/runs/",
 		"zettelkasten layout",
@@ -842,7 +844,11 @@ func TestStoreAppendRunRecord(t *testing.T) {
 		OutputSeq:  10,
 		Succeeded:  true,
 		Summary:    "ok",
-		ModelRef:   "cognition",
+		Metadata: map[string]string{
+			"path":    "/memory/cognition/state/verification_review.md",
+			"changed": "true",
+		},
+		ModelRef: "cognition",
 	}
 	if err := store.AppendRunRecord(context.Background(), record); err != nil {
 		t.Fatalf("AppendRunRecord() error = %v", err)
@@ -876,6 +882,71 @@ func TestStoreAppendRunRecord(t *testing.T) {
 	}
 	if got.Type != record.Type || got.Cause.RuleID != "nightly" || !got.Succeeded {
 		t.Fatalf("run record = %#v", got)
+	}
+	if got.Metadata["path"] != "/memory/cognition/state/verification_review.md" {
+		t.Fatalf("run metadata = %#v", got.Metadata)
+	}
+}
+
+func TestStoreLoadAndStoreCognitionArtifact(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "memory")
+	committer := &fakeCommitter{}
+	store := NewStore(root, "Jared", committer)
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	got, err := store.LoadCognitionArtifact(context.Background(), "state/verification_review.md")
+	if err != nil {
+		t.Fatalf("LoadCognitionArtifact() missing error = %v", err)
+	}
+	if got != (cognition.Artifact{}) {
+		t.Fatalf("missing artifact = %#v, want zero value", got)
+	}
+
+	artifact := cognition.Artifact{
+		RelativePath: "state/verification_review.md",
+		Content:      "# Verification Review\n\n- Check stale assumptions.",
+	}
+	if err := store.StoreCognitionArtifact(context.Background(), artifact); err != nil {
+		t.Fatalf("StoreCognitionArtifact() error = %v", err)
+	}
+	if committer.lastMessage != "memory: update cognition artifact state/verification_review.md" {
+		t.Fatalf("commit message = %q", committer.lastMessage)
+	}
+
+	got, err = store.LoadCognitionArtifact(context.Background(), artifact.RelativePath)
+	if err != nil {
+		t.Fatalf("LoadCognitionArtifact() error = %v", err)
+	}
+	if got.RelativePath != artifact.RelativePath || got.Content != artifact.Content {
+		t.Fatalf("artifact = %#v, want %#v", got, artifact)
+	}
+
+	commitCalls := committer.commitCalls
+	if err := store.StoreCognitionArtifact(context.Background(), artifact); err != nil {
+		t.Fatalf("StoreCognitionArtifact() second error = %v", err)
+	}
+	if committer.commitCalls != commitCalls {
+		t.Fatalf("commit calls = %d, want unchanged %d", committer.commitCalls, commitCalls)
+	}
+}
+
+func TestStoreCognitionArtifactRejectsPathEscape(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "memory")
+	store := NewStore(root, "Jared", &fakeCommitter{})
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	if _, err := store.LoadCognitionArtifact(context.Background(), "../escape.md"); err == nil {
+		t.Fatal("LoadCognitionArtifact() error = nil, want path validation failure")
+	}
+	if err := store.StoreCognitionArtifact(context.Background(), cognition.Artifact{
+		RelativePath: "../escape.md",
+		Content:      "bad",
+	}); err == nil {
+		t.Fatal("StoreCognitionArtifact() error = nil, want path validation failure")
 	}
 }
 
