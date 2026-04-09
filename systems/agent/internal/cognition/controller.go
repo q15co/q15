@@ -66,6 +66,15 @@ type RunCause struct {
 	Reason       string    `json:"reason,omitempty"`
 }
 
+// ConsolidationCheckpoint records the last episodic turn boundary that has
+// been consolidated into working memory.
+type ConsolidationCheckpoint struct {
+	LastConsolidatedTurnID string    `json:"last_consolidated_turn_id,omitempty"`
+	LastConsolidatedSeq    int64     `json:"last_consolidated_seq,omitempty"`
+	LastConsolidatedAt     time.Time `json:"last_consolidated_at,omitempty"`
+	UpdatedAt              time.Time `json:"updated_at,omitempty"`
+}
+
 // JobState tracks persisted trigger/controller state for one job type.
 type JobState struct {
 	LastRunAt           time.Time            `json:"last_run_at,omitempty"`
@@ -104,6 +113,10 @@ type ControllerStore interface {
 	LoadHead(context.Context) (int64, time.Time, error)
 	LoadJobState(context.Context, string) (JobState, error)
 	StoreJobState(context.Context, string, JobState) error
+	StoreConsolidationCheckpoint(
+		context.Context,
+		ConsolidationCheckpoint,
+	) (ConsolidationCheckpoint, error)
 	AppendRunRecord(context.Context, RunRecord) error
 }
 
@@ -461,6 +474,16 @@ func (c *Controller) runPending(ctx context.Context, pending pendingRun) error {
 	}
 
 	result, runErr := c.runner.Run(ctx, pending.job.newJob(), nil)
+	var checkpoint ConsolidationCheckpoint
+	if runErr == nil && shouldAdvanceConsolidationCheckpoint(pending.job.jobType) {
+		checkpoint, runErr = c.store.StoreConsolidationCheckpoint(ctx, ConsolidationCheckpoint{
+			LastConsolidatedSeq: pending.headSeq,
+			LastConsolidatedAt:  pending.headAt,
+		})
+		if runErr != nil {
+			runErr = fmt.Errorf("store consolidation checkpoint: %w", runErr)
+		}
+	}
 	finishedAt := time.Now().UTC()
 
 	headSeq, headAt, err := c.store.LoadHead(ctx)
@@ -498,6 +521,7 @@ func (c *Controller) runPending(ctx context.Context, pending pendingRun) error {
 	} else {
 		record.Summary = strings.TrimSpace(result.Summary)
 		record.Metadata = cloneRunRecordMetadata(result.Metadata)
+		record.Metadata = withConsolidationCheckpointMetadata(record.Metadata, checkpoint)
 		record.ModelRef = result.ModelRef
 	}
 	if err := c.store.AppendRunRecord(ctx, record); err != nil {
@@ -525,6 +549,33 @@ func cloneRunRecordMetadata(in map[string]string) map[string]string {
 		return nil
 	}
 	return out
+}
+
+func withConsolidationCheckpointMetadata(
+	metadata map[string]string,
+	checkpoint ConsolidationCheckpoint,
+) map[string]string {
+	if checkpoint.LastConsolidatedSeq == 0 &&
+		strings.TrimSpace(checkpoint.LastConsolidatedTurnID) == "" &&
+		checkpoint.LastConsolidatedAt.IsZero() {
+		return metadata
+	}
+	if metadata == nil {
+		metadata = make(map[string]string)
+	}
+	metadata["consolidation_checkpoint_seq"] = fmt.Sprintf(
+		"%d",
+		checkpoint.LastConsolidatedSeq,
+	)
+	if turnID := strings.TrimSpace(checkpoint.LastConsolidatedTurnID); turnID != "" {
+		metadata["consolidation_checkpoint_turn_id"] = turnID
+	}
+	if !checkpoint.LastConsolidatedAt.IsZero() {
+		metadata["consolidation_checkpoint_at"] = checkpoint.LastConsolidatedAt.UTC().Format(
+			time.RFC3339Nano,
+		)
+	}
+	return metadata
 }
 
 func (c *Controller) latestDue(
@@ -593,6 +644,10 @@ func shouldEvaluateStateRules(state JobState, headSeq int64) bool {
 		return true
 	}
 	return headSeq > state.LastRunInputSeq
+}
+
+func shouldAdvanceConsolidationCheckpoint(jobType string) bool {
+	return strings.TrimSpace(jobType) == workingMemoryConsolidationJobType
 }
 
 func syncDirtyState(state JobState, headSeq int64, headAt time.Time) (JobState, bool) {

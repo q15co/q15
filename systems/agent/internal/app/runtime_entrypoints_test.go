@@ -2,12 +2,14 @@ package app
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/cognition"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
+	"github.com/q15co/q15/systems/agent/internal/memory"
 	"github.com/q15co/q15/systems/agent/internal/modelselection"
 )
 
@@ -73,6 +75,13 @@ func (s *spyRuntimeStore) StoreJobState(
 	cognition.JobState,
 ) error {
 	return nil
+}
+
+func (s *spyRuntimeStore) StoreConsolidationCheckpoint(
+	context.Context,
+	cognition.ConsolidationCheckpoint,
+) (cognition.ConsolidationCheckpoint, error) {
+	return cognition.ConsolidationCheckpoint{}, nil
 }
 
 func (s *spyRuntimeStore) AppendRunRecord(
@@ -162,4 +171,88 @@ func TestRuntimeEntryPointsBuildInteractiveAndCognitionPaths(t *testing.T) {
 	if controller == nil {
 		t.Fatal("NewCognitionController() = nil")
 	}
+}
+
+func TestRuntimeEntryPointsInteractiveReplayUsesCheckpointAwareHistory(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "memory")
+	mem := memory.NewStore(root, "Jared", &fakeMemoryCommitter{})
+	if err := mem.Init(context.Background()); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	appendTurn := func(userText, assistantText string) {
+		t.Helper()
+		if err := mem.AppendTurn(context.Background(), []conversation.Message{
+			conversation.UserMessage(userText),
+			conversation.AssistantMessage(conversation.Text(assistantText, "")),
+		}); err != nil {
+			t.Fatalf("AppendTurn(%q) error = %v", userText, err)
+		}
+	}
+
+	appendTurn("one", "first")
+	appendTurn("two", "second")
+	appendTurn("three", "third")
+
+	if _, err := mem.StoreConsolidationCheckpoint(context.Background(), cognition.ConsolidationCheckpoint{
+		LastConsolidatedSeq: 2,
+	}); err != nil {
+		t.Fatalf("StoreConsolidationCheckpoint() error = %v", err)
+	}
+
+	store := &runtimeStore{memory: mem}
+	model := &fakeModelClient{}
+	entryPoints := newRuntimeEntryPoints(runtimeEntryPointsConfig{
+		modelClient:          model,
+		planner:              modelselection.Passthrough{},
+		interactiveModelRefs: []string{"interactive"},
+		cognitionModelRefs:   []string{"cognition"},
+		interactivePrompt:    "Interactive prompt",
+		interactiveStore:     store,
+		controllerStore:      store,
+		loader:               store,
+		recentTurns:          6,
+	})
+
+	interactive := entryPoints.NewInteractiveAgent()
+	if interactive == nil {
+		t.Fatal("NewInteractiveAgent() = nil")
+	}
+	if _, err := interactive.Reply(
+		context.Background(),
+		conversation.UserMessage("new-question"),
+		nil,
+	); err != nil {
+		t.Fatalf("Reply() error = %v", err)
+	}
+
+	if len(model.calls) != 1 {
+		t.Fatalf("model calls = %d, want 1", len(model.calls))
+	}
+	gotInput := model.calls[0].messages
+	if len(gotInput) != 4 {
+		t.Fatalf("model input len = %d, want 4", len(gotInput))
+	}
+	if gotInput[0].Role != conversation.SystemRole {
+		t.Fatalf("model input[0].Role = %q, want system", gotInput[0].Role)
+	}
+	if got := conversation.TextValue(gotInput[1]); got != "three" {
+		t.Fatalf("model input[1] = %q, want checkpoint-relative replay", got)
+	}
+	if got := conversation.TextValue(gotInput[2]); got != "third" {
+		t.Fatalf("model input[2] = %q, want checkpoint-relative replay", got)
+	}
+	if got := conversation.TextValue(gotInput[3]); got != "new-question" {
+		t.Fatalf("model input[3] = %q, want current user input", got)
+	}
+}
+
+type fakeMemoryCommitter struct{}
+
+func (f *fakeMemoryCommitter) EnsureRepo(context.Context, string) error {
+	return nil
+}
+
+func (f *fakeMemoryCommitter) CommitAll(context.Context, string, string) (string, error) {
+	return "sha-test", nil
 }

@@ -24,19 +24,20 @@ import (
 )
 
 const (
-	headStateRelativePath = "history/state/head.json"
-	readmeRelativePath    = "README.md"
-	seedDirPath           = "seeds"
-	coreDirPath           = "core"
-	semanticDirPath       = "semantic"
-	workingDirPath        = "working"
-	workingMemoryFileName = "WORKING_MEMORY.md"
-	cognitionDirPath      = "cognition"
-	cognitionStatePath    = cognitionDirPath + "/state"
-	cognitionIndexerPath  = cognitionDirPath + "/indexer"
-	cognitionRunsPath     = cognitionDirPath + "/runs"
-	cognitionTriggersPath = cognitionDirPath + "/triggers"
-	cognitionJobsPath     = cognitionTriggersPath + "/jobs"
+	headStateRelativePath               = "history/state/head.json"
+	consolidationCheckpointRelativePath = "history/state/consolidation_checkpoint.json"
+	readmeRelativePath                  = "README.md"
+	seedDirPath                         = "seeds"
+	coreDirPath                         = "core"
+	semanticDirPath                     = "semantic"
+	workingDirPath                      = "working"
+	workingMemoryFileName               = "WORKING_MEMORY.md"
+	cognitionDirPath                    = "cognition"
+	cognitionStatePath                  = cognitionDirPath + "/state"
+	cognitionIndexerPath                = cognitionDirPath + "/indexer"
+	cognitionRunsPath                   = cognitionDirPath + "/runs"
+	cognitionTriggersPath               = cognitionDirPath + "/triggers"
+	cognitionJobsPath                   = cognitionTriggersPath + "/jobs"
 )
 
 const workingMemorySeedPath = seedDirPath + "/" + workingMemoryFileName
@@ -123,6 +124,9 @@ func (s *Store) Init(ctx context.Context) error {
 	if err := s.ensureHeadState(); err != nil {
 		return err
 	}
+	if err := s.ensureConsolidationCheckpoint(); err != nil {
+		return err
+	}
 
 	upgrade, err := s.upgradeHistory()
 	if err != nil {
@@ -159,7 +163,8 @@ func (s *Store) Init(ctx context.Context) error {
 	return nil
 }
 
-// LoadRecentMessages loads the most recent persisted conversation turns.
+// LoadRecentMessages loads the bounded unconsolidated replay slice used for
+// prompt-visible episodic replay.
 func (s *Store) LoadRecentMessages(ctx context.Context, turns int) ([]conversation.Message, error) {
 	_ = ctx
 	if turns <= 0 {
@@ -169,25 +174,47 @@ func (s *Store) LoadRecentMessages(ctx context.Context, turns int) ([]conversati
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	paths, err := s.listTurnPaths()
+	entries, err := s.listTurnEntries()
 	if err != nil {
 		return nil, err
 	}
-	if len(paths) == 0 {
+	if len(entries) == 0 {
 		return nil, nil
 	}
 
-	start := 0
-	if len(paths) > turns {
-		start = len(paths) - turns
+	checkpoint, err := s.readConsolidationCheckpoint()
+	if err != nil {
+		return nil, err
 	}
 
-	out := make([]conversation.Message, 0, turns*2)
-	for _, path := range paths[start:] {
-		turn, err := s.readTurn(path)
+	var selected []turnPathEntry
+	if checkpoint.LastConsolidatedSeq <= 0 {
+		start := max(0, len(entries)-turns)
+		selected = entries[start:]
+	} else {
+		start := sort.Search(len(entries), func(i int) bool {
+			return entries[i].Seq > checkpoint.LastConsolidatedSeq
+		})
+		if start == len(entries) {
+			return nil, nil
+		}
+		selected = entries[start:]
+		if len(selected) > turns {
+			selected = selected[len(selected)-turns:]
+		}
+	}
+
+	records := make([]turnRecord, 0, len(selected))
+	for _, entry := range selected {
+		turn, err := s.readTurn(entry.Path)
 		if err != nil {
 			return nil, err
 		}
+		records = append(records, turn)
+	}
+
+	out := make([]conversation.Message, 0, len(records)*2)
+	for _, turn := range records {
 		out = append(out, copyMessages(turn.Messages)...)
 	}
 	return out, nil
@@ -306,6 +333,7 @@ This directory contains q15's persistent agent-state root.
 	- Other files under working/ are not implicitly prompt-visible and notes/ is never working memory.
 	- Episodic conversation turns are stored as canonical JSON files under history/turns/.
 	- Transcript sequence bookkeeping is stored under history/state/head.json.
+	- Replay checkpoints for consolidated episodic history are stored under history/state/consolidation_checkpoint.json.
 	- Cognition subsystem maintenance state is stored under cognition/.
 	- Job-owned cognition artifacts are stored under cognition/state/.
 	- Per-job cognition trigger state is stored under cognition/triggers/jobs/.
@@ -353,6 +381,23 @@ func (s *Store) ensureHeadState() error {
 	}
 	if err := writeJSONFileAtomic(path, head); err != nil {
 		return fmt.Errorf("initialize memory head state: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) ensureConsolidationCheckpoint() error {
+	path := s.consolidationCheckpointPath()
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("stat consolidation checkpoint: %w", err)
+	}
+
+	checkpoint := consolidationCheckpointState{
+		UpdatedAt: time.Now().UTC(),
+	}
+	if err := writeJSONFileAtomic(path, checkpoint); err != nil {
+		return fmt.Errorf("initialize consolidation checkpoint: %w", err)
 	}
 	return nil
 }
@@ -555,6 +600,37 @@ func (s *Store) listTurnPaths() ([]string, error) {
 	return entries, nil
 }
 
+func (s *Store) listTurnEntries() ([]turnPathEntry, error) {
+	paths, err := s.listTurnPaths()
+	if err != nil {
+		return nil, err
+	}
+
+	entries := make([]turnPathEntry, 0, len(paths))
+	for _, path := range paths {
+		seq, err := turnSeqFromPath(path)
+		if err != nil {
+			record, err := s.readTurn(path)
+			if err != nil {
+				return nil, err
+			}
+			seq = record.Seq
+		}
+		entries = append(entries, turnPathEntry{
+			Path: path,
+			Seq:  seq,
+		})
+	}
+
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].Seq == entries[j].Seq {
+			return entries[i].Path < entries[j].Path
+		}
+		return entries[i].Seq < entries[j].Seq
+	})
+	return entries, nil
+}
+
 func (s *Store) readTurn(path string) (turnRecord, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -587,8 +663,31 @@ func (s *Store) readHeadState() (headState, error) {
 	return head, nil
 }
 
+func (s *Store) readConsolidationCheckpoint() (consolidationCheckpointState, error) {
+	data, err := os.ReadFile(s.consolidationCheckpointPath())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return consolidationCheckpointState{}, nil
+		}
+		return consolidationCheckpointState{}, fmt.Errorf("read consolidation checkpoint: %w", err)
+	}
+
+	var checkpoint consolidationCheckpointState
+	if err := json.Unmarshal(data, &checkpoint); err != nil {
+		return consolidationCheckpointState{}, fmt.Errorf(
+			"decode consolidation checkpoint: %w",
+			err,
+		)
+	}
+	return checkpoint, nil
+}
+
 func (s *Store) headStatePath() string {
 	return filepath.Join(s.rootDir, headStateRelativePath)
+}
+
+func (s *Store) consolidationCheckpointPath() string {
+	return filepath.Join(s.rootDir, consolidationCheckpointRelativePath)
 }
 
 func (s *Store) workingMemoryPath() string {
@@ -596,20 +695,13 @@ func (s *Store) workingMemoryPath() string {
 }
 
 func (s *Store) syncHeadStateWithHistory() (bool, error) {
-	paths, err := s.listTurnPaths()
+	entries, err := s.listTurnEntries()
 	if err != nil {
 		return false, err
 	}
-
-	var maxSeq int64
-	for _, path := range paths {
-		record, err := s.readTurn(path)
-		if err != nil {
-			return false, err
-		}
-		if record.Seq > maxSeq {
-			maxSeq = record.Seq
-		}
+	maxSeq := int64(0)
+	if len(entries) > 0 {
+		maxSeq = entries[len(entries)-1].Seq
 	}
 
 	head, err := s.readHeadState()
@@ -638,6 +730,22 @@ func (s *Store) turnPath(ts time.Time, seq int64) string {
 		ts.Format("02"),
 		fmt.Sprintf("%020d.json", seq),
 	)
+}
+
+func turnSeqFromPath(path string) (int64, error) {
+	base := filepath.Base(path)
+	if !strings.EqualFold(filepath.Ext(base), ".json") {
+		return 0, fmt.Errorf("turn path %q must end with .json", path)
+	}
+	name := strings.TrimSuffix(base, filepath.Ext(base))
+	seq, err := strconv.ParseInt(name, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse turn seq from path %q: %w", path, err)
+	}
+	if seq < 0 {
+		return 0, fmt.Errorf("turn path %q has negative seq %d", path, seq)
+	}
+	return seq, nil
 }
 
 func copyMessages(in []conversation.Message) []conversation.Message {

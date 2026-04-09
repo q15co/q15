@@ -1,6 +1,7 @@
 package cognition
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -32,6 +33,19 @@ func renderTranscriptArtifact(messages []conversation.Message) string {
 		return "No transcript messages were loaded."
 	}
 	return strings.Join(renderedMessages, "\n\n")
+}
+
+func renderTranscriptScope(capTurns int, loadedMessages int) string {
+	if loadedMessages == 0 {
+		return "No transcript messages were loaded for this run."
+	}
+	return renderPromptLines(
+		fmt.Sprintf(
+			"A bounded replay slice of episodic history, selected by checkpoint-aware replay policy and capped at %d turns, is included below as a transcript artifact.",
+			capTurns,
+		),
+		"Treat it as historical evidence for unconsolidated or still-relevant context, not as the full transcript.",
+	)
 }
 
 func renderTranscriptMessage(msg conversation.Message) string {

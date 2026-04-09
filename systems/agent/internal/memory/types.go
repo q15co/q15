@@ -21,3 +21,15 @@ type headState struct {
 	LastSeq   int64     `json:"last_seq"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
+
+type consolidationCheckpointState struct {
+	LastConsolidatedTurnID string    `json:"last_consolidated_turn_id,omitempty"`
+	LastConsolidatedSeq    int64     `json:"last_consolidated_seq,omitempty"`
+	LastConsolidatedAt     time.Time `json:"last_consolidated_at,omitempty"`
+	UpdatedAt              time.Time `json:"updated_at,omitempty"`
+}
+
+type turnPathEntry struct {
+	Path string
+	Seq  int64
+}

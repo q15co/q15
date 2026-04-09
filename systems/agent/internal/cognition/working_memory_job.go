@@ -72,13 +72,7 @@ func (workingMemoryConsolidationJob) Build(
 		workingContent = "# Working Memory\n\n(working memory is currently empty)\n"
 	}
 
-	transcriptStatus := fmt.Sprintf(
-		"The last %d turns of transcript history are included below as a transcript artifact.",
-		workingMemoryRecentTurns,
-	)
-	if len(recentMessages) == 0 {
-		transcriptStatus = "No recent transcript turns were loaded for this run."
-	}
+	transcriptStatus := renderTranscriptScope(workingMemoryRecentTurns, len(recentMessages))
 	transcriptArtifact := renderTranscriptArtifact(recentMessages)
 
 	return Spec{

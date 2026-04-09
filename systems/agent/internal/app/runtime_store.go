@@ -113,6 +113,13 @@ func (s *runtimeStore) StoreJobState(
 	return s.memory.StoreJobState(ctx, jobType, state)
 }
 
+func (s *runtimeStore) StoreConsolidationCheckpoint(
+	ctx context.Context,
+	checkpoint cognition.ConsolidationCheckpoint,
+) (cognition.ConsolidationCheckpoint, error) {
+	return s.memory.StoreConsolidationCheckpoint(ctx, checkpoint)
+}
+
 func (s *runtimeStore) AppendRunRecord(ctx context.Context, record cognition.RunRecord) error {
 	return s.memory.AppendRunRecord(ctx, record)
 }
