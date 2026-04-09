@@ -86,13 +86,10 @@ func (verificationReviewJob) Build(
 		priorReviewAttrs["present"] = "true"
 	}
 
-	transcriptStatus := fmt.Sprintf(
-		"The last %d turns of transcript history are included below as a transcript artifact.",
+	transcriptStatus := renderTranscriptScope(
 		verificationReviewRecentTurns,
+		len(recentMessages),
 	)
-	if len(recentMessages) == 0 {
-		transcriptStatus = "No recent transcript turns were loaded for this verification run."
-	}
 	transcriptArtifact := renderTranscriptArtifact(recentMessages)
 
 	return Spec{

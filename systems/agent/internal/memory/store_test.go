@@ -53,6 +53,7 @@ func TestStoreInitCreatesScaffold(t *testing.T) {
 		filepath.Join(root, "working", "WORKING_MEMORY.md"),
 		filepath.Join(root, "history", "turns"),
 		filepath.Join(root, "history", "state", "head.json"),
+		filepath.Join(root, "history", "state", "consolidation_checkpoint.json"),
 		filepath.Join(root, "cognition", "state"),
 		filepath.Join(root, "cognition", "indexer"),
 		filepath.Join(root, "cognition", "triggers", "jobs"),
@@ -81,6 +82,7 @@ func TestStoreInitCreatesScaffold(t *testing.T) {
 		"working/WORKING_MEMORY.md",
 		"notes/ is never working memory",
 		"history/state/head.json",
+		"history/state/consolidation_checkpoint.json",
 		"cognition/",
 		"cognition/state/",
 		"cognition/triggers/jobs/",
@@ -217,6 +219,174 @@ func TestStoreAppendAndLoadRecentMessages(t *testing.T) {
 	}
 	if conversation.TextValue(got[0]) != "two" || conversation.TextValue(got[1]) != "second" {
 		t.Fatalf("LoadRecentMessages contents = %#v, want latest turn only", got)
+	}
+}
+
+func TestStoreLoadRecentMessagesAfterConsolidationCheckpoint(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "memory")
+	store := NewStore(root, "Jared", &fakeCommitter{})
+
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	for _, turn := range []struct {
+		user      string
+		assistant string
+	}{
+		{user: "one", assistant: "first"},
+		{user: "two", assistant: "second"},
+		{user: "three", assistant: "third"},
+	} {
+		if err := store.AppendTurn(context.Background(), []conversation.Message{
+			conversation.UserMessage(turn.user),
+			conversation.AssistantMessage(conversation.Text(turn.assistant, "")),
+		}); err != nil {
+			t.Fatalf("AppendTurn(%q) error = %v", turn.user, err)
+		}
+	}
+
+	checkpoint, err := store.StoreConsolidationCheckpoint(
+		context.Background(),
+		cognition.ConsolidationCheckpoint{LastConsolidatedSeq: 2},
+	)
+	if err != nil {
+		t.Fatalf("StoreConsolidationCheckpoint() error = %v", err)
+	}
+	if checkpoint.LastConsolidatedTurnID != "turn-00000000000000000002" {
+		t.Fatalf(
+			"checkpoint.LastConsolidatedTurnID = %q, want %q",
+			checkpoint.LastConsolidatedTurnID,
+			"turn-00000000000000000002",
+		)
+	}
+
+	got, err := store.LoadRecentMessages(context.Background(), 6)
+	if err != nil {
+		t.Fatalf("LoadRecentMessages() error = %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("LoadRecentMessages len = %d, want 2", len(got))
+	}
+	if conversation.TextValue(got[0]) != "three" || conversation.TextValue(got[1]) != "third" {
+		t.Fatalf("LoadRecentMessages contents = %#v, want checkpoint-relative replay", got)
+	}
+}
+
+func TestStoreLoadRecentMessagesAfterConsolidationCheckpointRespectsTurnCap(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "memory")
+	store := NewStore(root, "Jared", &fakeCommitter{})
+
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	for _, turn := range []struct {
+		user      string
+		assistant string
+	}{
+		{user: "one", assistant: "first"},
+		{user: "two", assistant: "second"},
+		{user: "three", assistant: "third"},
+	} {
+		if err := store.AppendTurn(context.Background(), []conversation.Message{
+			conversation.UserMessage(turn.user),
+			conversation.AssistantMessage(conversation.Text(turn.assistant, "")),
+		}); err != nil {
+			t.Fatalf("AppendTurn(%q) error = %v", turn.user, err)
+		}
+	}
+
+	if _, err := store.StoreConsolidationCheckpoint(
+		context.Background(),
+		cognition.ConsolidationCheckpoint{LastConsolidatedSeq: 1},
+	); err != nil {
+		t.Fatalf("StoreConsolidationCheckpoint() error = %v", err)
+	}
+
+	got, err := store.LoadRecentMessages(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("LoadRecentMessages() error = %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("LoadRecentMessages len = %d, want 2", len(got))
+	}
+	if conversation.TextValue(got[0]) != "three" || conversation.TextValue(got[1]) != "third" {
+		t.Fatalf("LoadRecentMessages contents = %#v, want newest unconsolidated turn", got)
+	}
+}
+
+func TestStoreLoadRecentMessagesAfterConsolidationCheckpointReturnsNoneAtHead(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "memory")
+	store := NewStore(root, "Jared", &fakeCommitter{})
+
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	for _, turn := range []struct {
+		user      string
+		assistant string
+	}{
+		{user: "one", assistant: "first"},
+		{user: "two", assistant: "second"},
+	} {
+		if err := store.AppendTurn(context.Background(), []conversation.Message{
+			conversation.UserMessage(turn.user),
+			conversation.AssistantMessage(conversation.Text(turn.assistant, "")),
+		}); err != nil {
+			t.Fatalf("AppendTurn(%q) error = %v", turn.user, err)
+		}
+	}
+
+	if _, err := store.StoreConsolidationCheckpoint(
+		context.Background(),
+		cognition.ConsolidationCheckpoint{LastConsolidatedSeq: 2},
+	); err != nil {
+		t.Fatalf("StoreConsolidationCheckpoint() error = %v", err)
+	}
+
+	got, err := store.LoadRecentMessages(context.Background(), 6)
+	if err != nil {
+		t.Fatalf("LoadRecentMessages() error = %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("LoadRecentMessages len = %d, want 0", len(got))
+	}
+}
+
+func TestStoreLoadRecentMessagesSupportsNonCanonicalTurnFilenames(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "memory")
+	store := NewStore(root, "Jared", &fakeCommitter{})
+
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	path := filepath.Join(root, "history", "turns", "2026", "04", "08", "legacy-turn.json")
+	record := turnRecord{
+		SchemaVersion: conversation.SchemaVersion,
+		ID:            "turn-00000000000000000005",
+		Seq:           5,
+		CreatedAt:     time.Date(2026, time.April, 8, 12, 0, 0, 0, time.UTC),
+		Messages: []conversation.Message{
+			conversation.UserMessage("legacy"),
+			conversation.AssistantMessage(conversation.Text("replayed", "")),
+		},
+	}
+	if err := writeJSONFileAtomic(path, record); err != nil {
+		t.Fatalf("writeJSONFileAtomic() error = %v", err)
+	}
+
+	got, err := store.LoadRecentMessages(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("LoadRecentMessages() error = %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("LoadRecentMessages len = %d, want 2", len(got))
+	}
+	if conversation.TextValue(got[0]) != "legacy" || conversation.TextValue(got[1]) != "replayed" {
+		t.Fatalf("LoadRecentMessages contents = %#v, want legacy turn replay", got)
 	}
 }
 
@@ -761,6 +931,85 @@ func TestStoreLoadHead(t *testing.T) {
 	}
 	if lastSeq != 1 {
 		t.Fatalf("lastSeq after append = %d, want 1", lastSeq)
+	}
+}
+
+func TestStoreStoreConsolidationCheckpoint(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "memory")
+	committer := &fakeCommitter{}
+	store := NewStore(root, "Jared", committer)
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	if err := store.AppendTurn(context.Background(), []conversation.Message{
+		conversation.UserMessage("hello"),
+		conversation.AssistantMessage(conversation.Text("ok", "")),
+	}); err != nil {
+		t.Fatalf("AppendTurn() error = %v", err)
+	}
+
+	turn, ok, err := store.findTurnBySeq(1)
+	if err != nil {
+		t.Fatalf("findTurnBySeq() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("findTurnBySeq() ok = false, want true")
+	}
+
+	checkpoint, err := store.StoreConsolidationCheckpoint(
+		context.Background(),
+		cognition.ConsolidationCheckpoint{LastConsolidatedSeq: 1},
+	)
+	if err != nil {
+		t.Fatalf("StoreConsolidationCheckpoint() error = %v", err)
+	}
+	if committer.lastMessage != "memory: update consolidation checkpoint" {
+		t.Fatalf("commit message = %q", committer.lastMessage)
+	}
+	if checkpoint.LastConsolidatedSeq != 1 {
+		t.Fatalf("checkpoint.LastConsolidatedSeq = %d, want 1", checkpoint.LastConsolidatedSeq)
+	}
+	if checkpoint.LastConsolidatedTurnID != turn.ID {
+		t.Fatalf(
+			"checkpoint.LastConsolidatedTurnID = %q, want %q",
+			checkpoint.LastConsolidatedTurnID,
+			turn.ID,
+		)
+	}
+	if !checkpoint.LastConsolidatedAt.Equal(turn.CreatedAt) {
+		t.Fatalf(
+			"checkpoint.LastConsolidatedAt = %s, want %s",
+			checkpoint.LastConsolidatedAt,
+			turn.CreatedAt,
+		)
+	}
+	if checkpoint.UpdatedAt.IsZero() {
+		t.Fatal("checkpoint.UpdatedAt = zero, want non-zero")
+	}
+
+	stored, err := store.readConsolidationCheckpoint()
+	if err != nil {
+		t.Fatalf("readConsolidationCheckpoint() error = %v", err)
+	}
+	if stored.LastConsolidatedSeq != checkpoint.LastConsolidatedSeq ||
+		stored.LastConsolidatedTurnID != checkpoint.LastConsolidatedTurnID {
+		t.Fatalf("stored checkpoint = %#v, want %#v", stored, checkpoint)
+	}
+
+	commitCalls := committer.commitCalls
+	checkpoint, err = store.StoreConsolidationCheckpoint(
+		context.Background(),
+		cognition.ConsolidationCheckpoint{LastConsolidatedSeq: 1},
+	)
+	if err != nil {
+		t.Fatalf("StoreConsolidationCheckpoint() second error = %v", err)
+	}
+	if committer.commitCalls != commitCalls {
+		t.Fatalf("commit calls = %d, want unchanged %d", committer.commitCalls, commitCalls)
+	}
+	if checkpoint.UpdatedAt.IsZero() {
+		t.Fatal("checkpoint.UpdatedAt after no-op = zero, want existing timestamp")
 	}
 }
 

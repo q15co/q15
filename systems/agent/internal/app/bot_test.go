@@ -18,17 +18,21 @@ type fakeModelClient struct {
 }
 
 type fakeModelCall struct {
-	model string
-	tools []agent.ToolDefinition
+	model    string
+	tools    []agent.ToolDefinition
+	messages []conversation.Message
 }
 
 func (f *fakeModelClient) Complete(
 	_ context.Context,
 	model string,
-	_ []conversation.Message,
+	messages []conversation.Message,
 	tools []agent.ToolDefinition,
 ) (agent.ModelClientResult, error) {
-	call := fakeModelCall{model: model}
+	call := fakeModelCall{
+		model:    model,
+		messages: conversation.CloneMessages(messages),
+	}
 	if len(tools) > 0 {
 		call.tools = append([]agent.ToolDefinition(nil), tools...)
 	}

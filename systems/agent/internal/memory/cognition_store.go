@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -96,6 +97,59 @@ func (s *Store) LoadHead(ctx context.Context) (int64, time.Time, error) {
 		return 0, time.Time{}, err
 	}
 	return head.LastSeq, head.UpdatedAt, nil
+}
+
+// StoreConsolidationCheckpoint persists the last successful working-memory
+// consolidation boundary used by checkpoint-aware transcript replay.
+func (s *Store) StoreConsolidationCheckpoint(
+	ctx context.Context,
+	checkpoint cognition.ConsolidationCheckpoint,
+) (cognition.ConsolidationCheckpoint, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	state := consolidationCheckpointStateFromCognition(checkpoint)
+
+	if state.LastConsolidatedSeq > 0 {
+		turn, ok, err := s.findTurnBySeq(state.LastConsolidatedSeq)
+		if err != nil {
+			return cognition.ConsolidationCheckpoint{}, err
+		}
+		if !ok {
+			return cognition.ConsolidationCheckpoint{}, fmt.Errorf(
+				"consolidation checkpoint seq %d not found in turn history",
+				state.LastConsolidatedSeq,
+			)
+		}
+		state.LastConsolidatedTurnID = strings.TrimSpace(turn.ID)
+		state.LastConsolidatedAt = turn.CreatedAt.UTC()
+	} else {
+		state.LastConsolidatedTurnID = ""
+		state.LastConsolidatedAt = time.Time{}
+	}
+
+	existing, err := s.readConsolidationCheckpoint()
+	if err != nil {
+		return cognition.ConsolidationCheckpoint{}, err
+	}
+	if sameConsolidationCheckpoint(existing, state) {
+		return consolidationCheckpointStateToCognition(existing), nil
+	}
+
+	state.UpdatedAt = time.Now().UTC()
+	if err := writeJSONFileAtomic(s.consolidationCheckpointPath(), state); err != nil {
+		return cognition.ConsolidationCheckpoint{}, fmt.Errorf(
+			"write consolidation checkpoint: %w",
+			err,
+		)
+	}
+	if _, err := s.committer.CommitAll(ctx, s.rootDir, "memory: update consolidation checkpoint"); err != nil {
+		return cognition.ConsolidationCheckpoint{}, fmt.Errorf(
+			"commit consolidation checkpoint: %w",
+			err,
+		)
+	}
+	return consolidationCheckpointStateToCognition(state), nil
 }
 
 // LoadJobState loads persisted cognition trigger state for one job type.
@@ -233,6 +287,59 @@ func normalizeScheduleMap(in map[string]time.Time) map[string]time.Time {
 		return nil
 	}
 	return out
+}
+
+func sameConsolidationCheckpoint(
+	left consolidationCheckpointState,
+	right consolidationCheckpointState,
+) bool {
+	return left.LastConsolidatedSeq == right.LastConsolidatedSeq &&
+		strings.TrimSpace(
+			left.LastConsolidatedTurnID,
+		) == strings.TrimSpace(
+			right.LastConsolidatedTurnID,
+		) &&
+		left.LastConsolidatedAt.UTC().Equal(right.LastConsolidatedAt.UTC())
+}
+
+func (s *Store) findTurnBySeq(seq int64) (turnRecord, bool, error) {
+	entries, err := s.listTurnEntries()
+	if err != nil {
+		return turnRecord{}, false, err
+	}
+	index := sort.Search(len(entries), func(i int) bool {
+		return entries[i].Seq >= seq
+	})
+	if index == len(entries) || entries[index].Seq != seq {
+		return turnRecord{}, false, nil
+	}
+	record, err := s.readTurn(entries[index].Path)
+	if err != nil {
+		return turnRecord{}, false, err
+	}
+	return record, true, nil
+}
+
+func consolidationCheckpointStateFromCognition(
+	checkpoint cognition.ConsolidationCheckpoint,
+) consolidationCheckpointState {
+	return consolidationCheckpointState{
+		LastConsolidatedTurnID: strings.TrimSpace(checkpoint.LastConsolidatedTurnID),
+		LastConsolidatedSeq:    max(0, checkpoint.LastConsolidatedSeq),
+		LastConsolidatedAt:     checkpoint.LastConsolidatedAt.UTC(),
+		UpdatedAt:              checkpoint.UpdatedAt.UTC(),
+	}
+}
+
+func consolidationCheckpointStateToCognition(
+	checkpoint consolidationCheckpointState,
+) cognition.ConsolidationCheckpoint {
+	return cognition.ConsolidationCheckpoint{
+		LastConsolidatedTurnID: strings.TrimSpace(checkpoint.LastConsolidatedTurnID),
+		LastConsolidatedSeq:    max(0, checkpoint.LastConsolidatedSeq),
+		LastConsolidatedAt:     checkpoint.LastConsolidatedAt.UTC(),
+		UpdatedAt:              checkpoint.UpdatedAt.UTC(),
+	}
 }
 
 func sanitizeCognitionName(name string) string {
