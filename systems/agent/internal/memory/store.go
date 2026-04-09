@@ -187,7 +187,7 @@ func (s *Store) LoadRecentMessages(ctx context.Context, turns int) ([]conversati
 		return nil, err
 	}
 
-	selected := entries
+	var selected []turnPathEntry
 	if checkpoint.LastConsolidatedSeq <= 0 {
 		start := max(0, len(entries)-turns)
 		selected = entries[start:]
