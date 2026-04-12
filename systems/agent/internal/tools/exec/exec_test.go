@@ -29,8 +29,8 @@ func (f *fakeExecClient) GetRuntimeInfo(
 }
 
 func (f *fakeExecClient) StartSession(
-	context.Context,
-	*execpb.StartSessionRequest,
+	_ context.Context,
+	_ *execpb.StartSessionRequest,
 ) (*execpb.StartSessionResponse, error) {
 	if f.startResp != nil {
 		return f.startResp, nil

@@ -5,6 +5,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/q15co/q15/libs/exec-contract/execpb"
 	"github.com/q15co/q15/systems/agent/internal/agent"
@@ -14,6 +15,12 @@ import (
 )
 
 func TestComposeSystemPromptIncludesRuntimeAndExecGuidance(t *testing.T) {
+	oldLocal := time.Local
+	time.Local = time.FixedZone("UTC+2", 2*60*60)
+	defer func() {
+		time.Local = oldLocal
+	}()
+
 	info := runtimeEnvironmentInfo{
 		WorkspaceDir:        "/workspace",
 		MemoryDir:           "/memory",
@@ -42,6 +49,9 @@ func TestComposeSystemPromptIncludesRuntimeAndExecGuidance(t *testing.T) {
 
 	for _, want := range []string{
 		"<runtime_environment>",
+		"- Runtime local timezone for user-facing dates and times: UTC+2 (UTC+02:00).",
+		"- Unless the user explicitly asks for another timezone, interpret and present dates and times in this runtime local timezone rather than UTC.",
+		"- Prompt-visible <message_meta .../> tags use this same runtime local timezone for their local weekday and timestamp fields.",
 		"- Workspace: /workspace",
 		"- Persistent memory repo: /memory",
 		"- Core self-model files (auto-injected into prompt each turn): /memory/core/*.md (seeded with AGENT.md, USER.md, SOUL.md)",

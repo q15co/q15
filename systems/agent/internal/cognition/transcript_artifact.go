@@ -49,7 +49,12 @@ func renderTranscriptScope(capTurns int, loadedMessages int) string {
 }
 
 func renderTranscriptMessage(msg conversation.Message) string {
-	renderedParts := make([]string, 0, len(msg.Parts))
+	renderedParts := make([]string, 0, len(msg.Parts)+1)
+	if msg.Role == conversation.UserRole {
+		if tag := conversation.RenderUserMessageMetadataTag(msg); strings.TrimSpace(tag) != "" {
+			renderedParts = append(renderedParts, tag)
+		}
+	}
 	for i, part := range msg.Parts {
 		body, attrs := renderTranscriptPart(part)
 		if strings.TrimSpace(body) == "" {

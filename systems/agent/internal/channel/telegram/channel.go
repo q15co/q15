@@ -25,6 +25,7 @@ type IncomingMessage struct {
 	ChatID    string
 	UserID    string
 	MessageID string
+	SentAt    time.Time
 	Text      string
 	Media     []string
 }
@@ -129,6 +130,7 @@ func (c *Channel) handleMessage(ctx context.Context, message *telego.Message) er
 	msg := IncomingMessage{
 		ChatID:    strconv.FormatInt(message.Chat.ID, 10),
 		MessageID: strconv.Itoa(message.MessageID),
+		SentAt:    time.Unix(message.Date, 0).In(time.Local),
 		Text:      text,
 	}
 	if message.From != nil {

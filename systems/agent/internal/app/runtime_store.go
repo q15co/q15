@@ -34,6 +34,12 @@ func (s *runtimeStore) LoadRecentMessages(
 	return s.memory.LoadRecentMessages(ctx, turns)
 }
 
+func (s *runtimeStore) LoadLastUserTimestamp(
+	ctx context.Context,
+) (time.Time, bool, error) {
+	return s.memory.LoadLastUserTimestamp(ctx)
+}
+
 func (s *runtimeStore) AppendTurn(ctx context.Context, messages []conversation.Message) error {
 	if err := s.memory.AppendTurn(ctx, messages); err != nil {
 		return err
@@ -96,6 +102,12 @@ func (s *runtimeStore) StoreCognitionArtifact(
 
 func (s *runtimeStore) LoadHead(ctx context.Context) (int64, time.Time, error) {
 	return s.memory.LoadHead(ctx)
+}
+
+func (s *runtimeStore) LoadConsolidationCheckpoint(
+	ctx context.Context,
+) (cognition.ConsolidationCheckpoint, error) {
+	return s.memory.LoadConsolidationCheckpoint(ctx)
 }
 
 func (s *runtimeStore) LoadJobState(

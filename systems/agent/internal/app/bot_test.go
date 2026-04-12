@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/bus"
@@ -370,10 +371,12 @@ func TestRoutedModelAdapterPlanSelectionReturnsEmptyPlanWhenNoCandidatesMatch(t 
 }
 
 func TestTelegramInboundMessagePreservesMediaRefs(t *testing.T) {
+	sentAt := time.Date(2026, time.April, 12, 10, 11, 12, 0, time.FixedZone("UTC+2", 2*60*60))
 	got := telegramInboundMessage(telegram.IncomingMessage{
 		ChatID:    "chat-1",
 		UserID:    "user-1",
 		MessageID: "msg-1",
+		SentAt:    sentAt,
 		Text:      "describe this",
 		Media:     []string{"media://sha256/abc"},
 	})
@@ -383,6 +386,9 @@ func TestTelegramInboundMessagePreservesMediaRefs(t *testing.T) {
 	}
 	if got.ChatID != "chat-1" || got.UserID != "user-1" || got.MessageID != "msg-1" {
 		t.Fatalf("inbound = %#v", got)
+	}
+	if !got.SentAt.Equal(sentAt) {
+		t.Fatalf("SentAt = %s, want %s", got.SentAt, sentAt)
 	}
 	if got.Text != "describe this" {
 		t.Fatalf("Text = %q, want describe this", got.Text)

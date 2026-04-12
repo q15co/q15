@@ -99,6 +99,23 @@ func (s *Store) LoadHead(ctx context.Context) (int64, time.Time, error) {
 	return head.LastSeq, head.UpdatedAt, nil
 }
 
+// LoadConsolidationCheckpoint returns the current persisted working-memory
+// consolidation checkpoint.
+func (s *Store) LoadConsolidationCheckpoint(
+	ctx context.Context,
+) (cognition.ConsolidationCheckpoint, error) {
+	_ = ctx
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	checkpoint, err := s.readConsolidationCheckpoint()
+	if err != nil {
+		return cognition.ConsolidationCheckpoint{}, err
+	}
+	return consolidationCheckpointStateToCognition(checkpoint), nil
+}
+
 // StoreConsolidationCheckpoint persists the last successful working-memory
 // consolidation boundary used by checkpoint-aware transcript replay.
 func (s *Store) StoreConsolidationCheckpoint(

@@ -32,6 +32,29 @@ stack may attach an empty persistent volume or empty host directory at `/workspa
 initial state is valid, and operators may populate it later through normal agent work or manual
 setup.
 
+## Prompt-Visible Temporal Metadata
+
+Interactive user turns may carry runtime-injected temporal metadata at the start of the
+prompt-visible user message:
+
+```text
+<message_meta day_of_week_local="Wednesday" timestamp_local="20260401T184700+0200" since_prev_user_message="3m42s"/>
+```
+
+- The tag describes that same user message only; it is not user-authored content.
+- `day_of_week_local` makes the local calendar context explicit without asking the model to derive
+  the weekday from the timestamp.
+- `timestamp_local` uses the runtime host's local timezone with a numeric offset and carries the
+  full local date and time.
+- When user-facing time references are tied to the conversation, the agent should prefer that same
+  runtime local timezone over UTC unless the user explicitly asks for another timezone.
+- Explicit field names are used intentionally instead of abbreviations like `ts` or `gap` so the
+  model reads the timing semantics without guesswork.
+- The shipped Compose and Kubernetes manifests set container `TZ`, and q15 uses the container's
+  local timezone for prompt-visible timestamps.
+- The shipped `q15-agent` and `q15-exec` images also include timezone data so shell tools can
+  resolve named zones such as `Europe/Berlin` correctly.
+
 ## Development Setup
 
 The standard contributor and agent workflow is:

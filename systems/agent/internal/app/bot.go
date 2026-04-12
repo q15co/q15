@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/q15co/q15/libs/exec-contract/execpb"
 	"github.com/q15co/q15/systems/agent/internal/agent"
@@ -194,6 +195,7 @@ func telegramInboundMessage(msg telegram.IncomingMessage) bus.InboundMessage {
 		ChatID:    msg.ChatID,
 		UserID:    msg.UserID,
 		MessageID: msg.MessageID,
+		SentAt:    msg.SentAt,
 		Text:      msg.Text,
 		Media:     append([]string(nil), msg.Media...),
 	}
@@ -256,6 +258,7 @@ func renderRuntimeEnvironmentPrompt(
 	info runtimeEnvironmentInfo,
 ) string {
 	var lines []string
+	nowLocal := time.Now().In(time.Local)
 	agentName = strings.TrimSpace(agentName)
 	if agentName != "" {
 		lines = append(
@@ -264,6 +267,15 @@ func renderRuntimeEnvironmentPrompt(
 			"- If memory files mention a different agent name, treat that as stale and update those files.",
 		)
 	}
+	lines = append(
+		lines,
+		fmt.Sprintf(
+			"- Runtime local timezone for user-facing dates and times: %s.",
+			describeRuntimeLocalTimezone(nowLocal),
+		),
+		"- Unless the user explicitly asks for another timezone, interpret and present dates and times in this runtime local timezone rather than UTC.",
+		"- Prompt-visible <message_meta .../> tags use this same runtime local timezone for their local weekday and timestamp fields.",
+	)
 	if info.WorkspaceDir != "" {
 		lines = append(
 			lines,
@@ -378,6 +390,36 @@ func renderRuntimeEnvironmentPrompt(
 	}
 
 	return agent.RenderPromptElement("runtime_environment", nil, strings.Join(lines, "\n"))
+}
+
+func describeRuntimeLocalTimezone(now time.Time) string {
+	locationName := strings.TrimSpace(now.Location().String())
+	zoneName, offsetSeconds := now.Zone()
+	offsetText := formatUTCOffset(offsetSeconds)
+	switch {
+	case locationName != "" &&
+		!strings.EqualFold(locationName, "Local") &&
+		zoneName != "" &&
+		zoneName != locationName:
+		return fmt.Sprintf("%s (%s, %s)", locationName, zoneName, offsetText)
+	case locationName != "" && !strings.EqualFold(locationName, "Local"):
+		return fmt.Sprintf("%s (%s)", locationName, offsetText)
+	case zoneName != "":
+		return fmt.Sprintf("%s (%s)", zoneName, offsetText)
+	default:
+		return offsetText
+	}
+}
+
+func formatUTCOffset(offsetSeconds int) string {
+	sign := "+"
+	if offsetSeconds < 0 {
+		sign = "-"
+		offsetSeconds = -offsetSeconds
+	}
+	hours := offsetSeconds / 3600
+	minutes := (offsetSeconds % 3600) / 60
+	return fmt.Sprintf("UTC%s%02d:%02d", sign, hours, minutes)
 }
 
 func renderToolAdvicePrompt(toolDefs []agent.ToolDefinition) string {

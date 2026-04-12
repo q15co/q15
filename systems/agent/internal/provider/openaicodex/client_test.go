@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/q15co/q15/systems/agent/internal/agent"
@@ -221,6 +222,85 @@ func TestMapMessagesBuildsMultipartUserInputForImageInput(t *testing.T) {
 			t.Fatalf("serialized input missing %q: %s", want, body)
 		}
 	}
+}
+
+func TestMapMessagesPrependsExplicitUserTemporalMetadataTag(t *testing.T) {
+	location := time.FixedZone("UTC+2", 2*60*60)
+	metadata := &conversation.UserTemporalMetadata{
+		TimeLocal:            time.Date(2026, time.April, 12, 10, 11, 12, 0, location),
+		SincePrevUserMessage: conversation.NewDuration(3*time.Minute + 42*time.Second),
+	}
+
+	t.Run("text only", func(t *testing.T) {
+		input, _, err := mapMessages([]conversation.Message{{
+			Role:         conversation.UserRole,
+			Parts:        []conversation.Part{conversation.Text("hello", "")},
+			UserTemporal: metadata,
+		}}, nil)
+		if err != nil {
+			t.Fatalf("mapMessages() error = %v", err)
+		}
+
+		body := marshalInputItemToString(t, input[0])
+		for _, want := range []string{
+			`message_meta day_of_week_local=\"Sunday\" timestamp_local=\"20260412T101112+0200\" since_prev_user_message=\"3m42s\"/`,
+			`\n\nhello`,
+		} {
+			if !strings.Contains(body, want) {
+				t.Fatalf("serialized input missing metadata prefix %q: %s", want, body)
+			}
+		}
+	})
+
+	t.Run("text and image", func(t *testing.T) {
+		store, ref, _ := mustStoreTestImage(t)
+		input, _, err := mapMessages([]conversation.Message{{
+			Role: conversation.UserRole,
+			Parts: []conversation.Part{
+				conversation.Text("describe this", ""),
+				conversation.Image(ref, ""),
+			},
+			UserTemporal: metadata,
+		}}, store)
+		if err != nil {
+			t.Fatalf("mapMessages() error = %v", err)
+		}
+
+		body := marshalInputItemToString(t, input[0])
+		for _, want := range []string{
+			`message_meta day_of_week_local=\"Sunday\" timestamp_local=\"20260412T101112+0200\" since_prev_user_message=\"3m42s\"/`,
+			`"text":"describe this"`,
+			`"type":"input_image"`,
+		} {
+			if !strings.Contains(body, want) {
+				t.Fatalf("serialized input missing %q: %s", want, body)
+			}
+		}
+	})
+
+	t.Run("image only", func(t *testing.T) {
+		store, ref, _ := mustStoreTestImage(t)
+		input, _, err := mapMessages([]conversation.Message{{
+			Role: conversation.UserRole,
+			Parts: []conversation.Part{
+				conversation.Image(ref, ""),
+			},
+			UserTemporal: metadata,
+		}}, store)
+		if err != nil {
+			t.Fatalf("mapMessages() error = %v", err)
+		}
+
+		body := marshalInputItemToString(t, input[0])
+		for _, want := range []string{
+			`message_meta day_of_week_local=\"Sunday\" timestamp_local=\"20260412T101112+0200\" since_prev_user_message=\"3m42s\"/`,
+			`"type":"input_image"`,
+		} {
+			if !strings.Contains(body, want) {
+				t.Fatalf("serialized input missing %q: %s", want, body)
+			}
+		}
+	})
 }
 
 func TestMapMessagesRejectsInvalidImageInput(t *testing.T) {

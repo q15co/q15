@@ -299,6 +299,7 @@ func buildUserInputItem(
 	msg conversation.Message,
 	mediaStore q15media.Store,
 ) (responses.ResponseInputItemUnionParam, error) {
+	msg = conversation.PromptVisibleUserMessage(msg)
 	contentParts := make(responses.ResponseInputMessageContentListParam, 0, len(msg.Parts))
 	textOnly := true
 	var textBuilder strings.Builder

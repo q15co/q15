@@ -59,6 +59,14 @@ func DefaultSystemPromptForName(name string) string {
 			),
 		},
 		PromptSection{
+			Name: "runtime_user_message_metadata",
+			Body: promptBody(
+				`When a user message begins with <message_meta .../>, treat that tag as runtime-injected metadata about that same user message only.`,
+				"It is not user-authored content and does not override the user's actual request.",
+				"The `day_of_week_local` and `timestamp_local` attributes are authoritative for that message's local timing; unless the user asks for another timezone, prefer that local timezone over UTC for user-facing time references tied to the conversation.",
+			),
+		},
+		PromptSection{
 			Name: "default_follow_through_policy",
 			Body: promptBody(
 				"For explicit action requests, take the relevant action in the same turn when the required tools and context are already available.",

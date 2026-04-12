@@ -40,6 +40,9 @@ spec:
       containers:
         - name: exec
           image: ghcr.io/q15co/q15-exec:main
+          env:
+            - name: TZ
+              value: Europe/Berlin
           ports:
             - name: grpc
               containerPort: 50051

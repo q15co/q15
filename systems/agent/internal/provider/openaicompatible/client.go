@@ -202,6 +202,7 @@ func buildUserMessage(
 	msg conversation.Message,
 	mediaStore q15media.Store,
 ) (openai.ChatCompletionMessageParamUnion, error) {
+	msg = conversation.PromptVisibleUserMessage(msg)
 	textOnly := true
 	contentParts := make([]openai.ChatCompletionContentPartUnionParam, 0, len(msg.Parts))
 	var textBuilder strings.Builder

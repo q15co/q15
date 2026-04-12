@@ -339,6 +339,7 @@ func TestHandleMessage_IncludesMessageID(t *testing.T) {
 
 	err := ch.handleMessage(context.Background(), &telego.Message{
 		MessageID: 42,
+		Date:      1_775_989_872,
 		Text:      "hello",
 		Chat: telego.Chat{
 			ID: 123,
@@ -359,6 +360,9 @@ func TestHandleMessage_IncludesMessageID(t *testing.T) {
 	}
 	if got.UserID != "7" {
 		t.Fatalf("UserID = %q, want %q", got.UserID, "7")
+	}
+	if want := time.Unix(1_775_989_872, 0).In(time.Local); !got.SentAt.Equal(want) {
+		t.Fatalf("SentAt = %s, want %s", got.SentAt, want)
 	}
 }
 

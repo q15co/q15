@@ -18,6 +18,7 @@ FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     git \
+    tzdata \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /out/q15-agent /usr/local/bin/q15-agent

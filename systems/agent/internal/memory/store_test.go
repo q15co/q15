@@ -222,6 +222,86 @@ func TestStoreAppendAndLoadRecentMessages(t *testing.T) {
 	}
 }
 
+func TestStoreAppendAndLoadRecentMessagesPreservesUserTemporalMetadata(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "memory")
+	store := NewStore(root, "Jared", &fakeCommitter{})
+
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	timestamp := time.Date(2026, time.April, 12, 10, 11, 12, 0, time.FixedZone("UTC+2", 2*60*60))
+	if err := store.AppendTurn(context.Background(), []conversation.Message{
+		{
+			Role:  conversation.UserRole,
+			Parts: []conversation.Part{conversation.Text("one", "")},
+			UserTemporal: &conversation.UserTemporalMetadata{
+				TimeLocal:            timestamp,
+				SincePrevUserMessage: conversation.NewDuration(3*time.Minute + 42*time.Second),
+			},
+		},
+		conversation.AssistantMessage(conversation.Text("first", "")),
+	}); err != nil {
+		t.Fatalf("AppendTurn() error = %v", err)
+	}
+
+	got, err := store.LoadRecentMessages(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("LoadRecentMessages() error = %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("LoadRecentMessages len = %d, want 2", len(got))
+	}
+	if stored, ok := conversation.UserMessageTimeLocal(got[0]); !ok || !stored.Equal(timestamp) {
+		t.Fatalf("stored timestamp = %v, %t, want %v", stored, ok, timestamp)
+	}
+	if gap, ok := conversation.SincePrevUserMessage(got[0]); !ok ||
+		gap != 3*time.Minute+42*time.Second {
+		t.Fatalf("stored gap = %s, %t, want 3m42s", gap, ok)
+	}
+}
+
+func TestStoreLoadLastUserTimestampIgnoresTurnsWithoutMessageMetadata(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "memory")
+	store := NewStore(root, "Jared", &fakeCommitter{})
+
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	if err := store.AppendTurn(context.Background(), []conversation.Message{
+		conversation.UserMessage("legacy"),
+		conversation.AssistantMessage(conversation.Text("first", "")),
+	}); err != nil {
+		t.Fatalf("AppendTurn(legacy) error = %v", err)
+	}
+
+	timestamp := time.Date(2026, time.April, 12, 10, 11, 12, 0, time.FixedZone("UTC+2", 2*60*60))
+	if err := store.AppendTurn(context.Background(), []conversation.Message{
+		{
+			Role:  conversation.UserRole,
+			Parts: []conversation.Part{conversation.Text("current", "")},
+			UserTemporal: &conversation.UserTemporalMetadata{
+				TimeLocal: timestamp,
+			},
+		},
+		conversation.AssistantMessage(conversation.Text("second", "")),
+	}); err != nil {
+		t.Fatalf("AppendTurn(current) error = %v", err)
+	}
+
+	got, ok, err := store.LoadLastUserTimestamp(context.Background())
+	if err != nil {
+		t.Fatalf("LoadLastUserTimestamp() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("LoadLastUserTimestamp() ok = false, want true")
+	}
+	if !got.Equal(timestamp) {
+		t.Fatalf("LoadLastUserTimestamp() = %s, want %s", got, timestamp)
+	}
+}
+
 func TestStoreLoadRecentMessagesAfterConsolidationCheckpoint(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "memory")
 	store := NewStore(root, "Jared", &fakeCommitter{})
@@ -995,6 +1075,15 @@ func TestStoreStoreConsolidationCheckpoint(t *testing.T) {
 	if stored.LastConsolidatedSeq != checkpoint.LastConsolidatedSeq ||
 		stored.LastConsolidatedTurnID != checkpoint.LastConsolidatedTurnID {
 		t.Fatalf("stored checkpoint = %#v, want %#v", stored, checkpoint)
+	}
+	loaded, err := store.LoadConsolidationCheckpoint(context.Background())
+	if err != nil {
+		t.Fatalf("LoadConsolidationCheckpoint() error = %v", err)
+	}
+	if loaded.LastConsolidatedSeq != checkpoint.LastConsolidatedSeq ||
+		loaded.LastConsolidatedTurnID != checkpoint.LastConsolidatedTurnID ||
+		!loaded.LastConsolidatedAt.Equal(checkpoint.LastConsolidatedAt) {
+		t.Fatalf("loaded checkpoint = %#v, want %#v", loaded, checkpoint)
 	}
 
 	commitCalls := committer.commitCalls

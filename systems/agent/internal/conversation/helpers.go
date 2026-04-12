@@ -2,7 +2,10 @@ package conversation
 
 import (
 	"encoding/json"
+	"html"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // CloneMessages deep-copies canonical messages.
@@ -14,8 +17,9 @@ func CloneMessages(in []Message) []Message {
 	out := make([]Message, len(in))
 	for i, msg := range in {
 		out[i] = Message{
-			Role:  msg.Role,
-			Parts: CloneParts(msg.Parts),
+			Role:         msg.Role,
+			Parts:        CloneParts(msg.Parts),
+			UserTemporal: cloneUserTemporalMetadata(msg.UserTemporal),
 		}
 	}
 	return out
@@ -70,6 +74,7 @@ func NormalizeMessages(in []Message) []Message {
 // NormalizeMessage normalizes one message in-place.
 func NormalizeMessage(msg Message) Message {
 	msg.Parts = NormalizeParts(msg.Parts)
+	msg.UserTemporal = normalizeUserTemporalMetadata(msg.Role, msg.UserTemporal)
 	return msg
 }
 
@@ -191,4 +196,149 @@ func HasImageParts(messages []Message) bool {
 		}
 	}
 	return false
+}
+
+// RenderUserMessageMetadataTag renders the canonical prompt-visible metadata
+// tag for one user message when temporal metadata is available.
+func RenderUserMessageMetadataTag(msg Message) string {
+	msg = NormalizeMessage(msg)
+	timeLocal, ok := UserMessageTimeLocal(msg)
+	if !ok {
+		return ""
+	}
+
+	var out strings.Builder
+	out.WriteString(`<message_meta day_of_week_local="`)
+	out.WriteString(html.EscapeString(timeLocal.Weekday().String()))
+	out.WriteString(`" timestamp_local="`)
+	out.WriteString(html.EscapeString(timeLocal.Format("20060102T150405-0700")))
+	out.WriteString(`" since_prev_user_message="`)
+	if gap, ok := SincePrevUserMessage(msg); ok {
+		out.WriteString(html.EscapeString(formatCompactDuration(gap)))
+	} else {
+		out.WriteString("none")
+	}
+	out.WriteString(`"/>`)
+	return out.String()
+}
+
+// PromptVisibleUserMessage returns a transient prompt-visible user message with
+// the metadata tag injected as the leading text part.
+func PromptVisibleUserMessage(msg Message) Message {
+	msg = NormalizeMessage(msg)
+	tag := RenderUserMessageMetadataTag(msg)
+	if msg.Role != UserRole || tag == "" {
+		return msg
+	}
+
+	parts := make([]Part, 0, len(msg.Parts)+1)
+	prefix := tag
+	if messageHasTextPart(msg) {
+		prefix += "\n\n"
+	}
+	parts = append(parts, Text(prefix, ""))
+	parts = append(parts, CloneParts(msg.Parts)...)
+	msg.Parts = parts
+	return msg
+}
+
+func cloneUserTemporalMetadata(
+	in *UserTemporalMetadata,
+) *UserTemporalMetadata {
+	if in == nil {
+		return nil
+	}
+
+	out := &UserTemporalMetadata{
+		TimeLocal: normalizeMessageTimeLocal(in.TimeLocal),
+	}
+	if in.SincePrevUserMessage != nil {
+		duration := *in.SincePrevUserMessage
+		if duration < 0 {
+			duration = 0
+		}
+		out.SincePrevUserMessage = &duration
+	}
+	if out.TimeLocal.IsZero() {
+		return nil
+	}
+	return out
+}
+
+func normalizeUserTemporalMetadata(
+	role Role,
+	in *UserTemporalMetadata,
+) *UserTemporalMetadata {
+	if role != UserRole || in == nil {
+		return nil
+	}
+
+	out := cloneUserTemporalMetadata(in)
+	if out == nil {
+		return nil
+	}
+	return out
+}
+
+func normalizeMessageTimeLocal(value time.Time) time.Time {
+	if value.IsZero() {
+		return time.Time{}
+	}
+	return time.Unix(value.Unix(), 0).In(value.Location())
+}
+
+func messageHasTextPart(msg Message) bool {
+	for _, part := range msg.Parts {
+		if NormalizePart(part).Type == TextPartType {
+			return true
+		}
+	}
+	return false
+}
+
+func formatCompactDuration(value time.Duration) string {
+	if value < 0 {
+		value = 0
+	}
+
+	totalSeconds := int64(value / time.Second)
+	if totalSeconds <= 0 {
+		return "0s"
+	}
+
+	type durationUnit struct {
+		suffix  string
+		seconds int64
+	}
+
+	units := []durationUnit{
+		{suffix: "w", seconds: 7 * 24 * 60 * 60},
+		{suffix: "d", seconds: 24 * 60 * 60},
+		{suffix: "h", seconds: 60 * 60},
+		{suffix: "m", seconds: 60},
+		{suffix: "s", seconds: 1},
+	}
+
+	parts := make([]string, 0, 2)
+	remaining := totalSeconds
+	for _, unit := range units {
+		if remaining < unit.seconds && len(parts) > 0 {
+			continue
+		}
+		if remaining < unit.seconds {
+			continue
+		}
+
+		count := remaining / unit.seconds
+		remaining %= unit.seconds
+		parts = append(parts, strconv.FormatInt(count, 10)+unit.suffix)
+		if len(parts) == 2 {
+			break
+		}
+	}
+
+	if len(parts) == 0 {
+		return "0s"
+	}
+	return strings.Join(parts, "")
 }

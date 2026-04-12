@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"time"
 
 	"github.com/q15co/q15/systems/agent/internal/conversation"
 )
@@ -10,6 +11,7 @@ import (
 // between replies.
 type ConversationStore interface {
 	LoadRecentMessages(ctx context.Context, turns int) ([]conversation.Message, error)
+	LoadLastUserTimestamp(ctx context.Context) (time.Time, bool, error)
 	AppendTurn(ctx context.Context, messages []conversation.Message) error
 }
 

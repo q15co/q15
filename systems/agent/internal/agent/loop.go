@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/q15co/q15/systems/agent/internal/conversation"
 	"github.com/q15co/q15/systems/agent/internal/modelselection"
@@ -119,6 +120,24 @@ func (l *Loop) Reply(
 	if err != nil {
 		return ReplyResult{}, err
 	}
+	lastUserTimestamp := time.Time{}
+	hasLastUserTimestamp := false
+	if l.store != nil {
+		lastUserTimestamp, hasLastUserTimestamp, err = l.store.LoadLastUserTimestamp(ctx)
+		if err != nil {
+			emitRunEvent(ctx, observer, RunEvent{
+				Type: RunEventRunFailed,
+				Err:  err,
+			})
+			return ReplyResult{}, fmt.Errorf("load last user timestamp: %w", err)
+		}
+	}
+	userMessage = withUserTemporalMetadata(
+		userMessage,
+		time.Now().In(time.Local),
+		lastUserTimestamp,
+		hasLastUserTimestamp,
+	)
 
 	emitRunEvent(ctx, observer, RunEvent{
 		Type: RunEventRunStarted,

@@ -2,7 +2,9 @@ package conversation
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestNormalizeMessagesDropsEmptyAndNormalizesFields(t *testing.T) {
@@ -172,6 +174,140 @@ func TestMessageJSONRoundTripPreservesImagePart(t *testing.T) {
 	}
 	if got.Parts[1].Type != ImagePartType || got.Parts[1].MediaRef != "media://sha256/abc" {
 		t.Fatalf("image part = %#v", got.Parts[1])
+	}
+}
+
+func TestMessageJSONRoundTripPreservesUserTemporalMetadata(t *testing.T) {
+	input := Message{
+		Role: UserRole,
+		Parts: []Part{
+			Text("hello", ""),
+		},
+		UserTemporal: &UserTemporalMetadata{
+			TimeLocal: time.Date(
+				2026,
+				time.April,
+				12,
+				10,
+				11,
+				12,
+				0,
+				time.FixedZone("UTC+2", 2*60*60),
+			),
+			SincePrevUserMessage: NewDuration(3*time.Minute + 42*time.Second),
+		},
+	}
+
+	data, err := json.Marshal(input)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+
+	var got Message
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+
+	if timestamp, ok := UserMessageTimeLocal(got); !ok ||
+		!timestamp.Equal(input.UserTemporal.TimeLocal) {
+		t.Fatalf("timestamp = %v, %t, want %v", timestamp, ok, input.UserTemporal.TimeLocal)
+	}
+	if gap, ok := SincePrevUserMessage(got); !ok || gap != 3*time.Minute+42*time.Second {
+		t.Fatalf("gap = %s, %t, want 3m42s", gap, ok)
+	}
+}
+
+func TestRenderUserMessageMetadataTagUsesExplicitFieldNames(t *testing.T) {
+	msg := Message{
+		Role: UserRole,
+		Parts: []Part{
+			Text("hello", ""),
+		},
+		UserTemporal: &UserTemporalMetadata{
+			TimeLocal: time.Date(
+				2026,
+				time.April,
+				12,
+				10,
+				11,
+				12,
+				0,
+				time.FixedZone("UTC+2", 2*60*60),
+			),
+			SincePrevUserMessage: NewDuration(3*time.Minute + 42*time.Second),
+		},
+	}
+
+	got := RenderUserMessageMetadataTag(msg)
+	want := `<message_meta day_of_week_local="Sunday" timestamp_local="20260412T101112+0200" since_prev_user_message="3m42s"/>`
+	if got != want {
+		t.Fatalf("RenderUserMessageMetadataTag() = %q, want %q", got, want)
+	}
+}
+
+func TestRenderUserMessageMetadataTagUsesNoneWithoutPriorMessage(t *testing.T) {
+	msg := Message{
+		Role: UserRole,
+		Parts: []Part{
+			Text("hello", ""),
+		},
+		UserTemporal: &UserTemporalMetadata{
+			TimeLocal: time.Date(
+				2026,
+				time.April,
+				12,
+				10,
+				11,
+				12,
+				0,
+				time.FixedZone("UTC+2", 2*60*60),
+			),
+		},
+	}
+
+	got := RenderUserMessageMetadataTag(msg)
+	if !strings.Contains(got, `day_of_week_local="Sunday"`) {
+		t.Fatalf("RenderUserMessageMetadataTag() = %q, want weekday", got)
+	}
+	if !strings.Contains(got, `timestamp_local="20260412T101112+0200"`) {
+		t.Fatalf("RenderUserMessageMetadataTag() = %q, want timestamp", got)
+	}
+	if strings.Contains(got, `date_local=`) {
+		t.Fatalf("RenderUserMessageMetadataTag() = %q, want no date_local", got)
+	}
+	if !strings.Contains(got, `since_prev_user_message="none"`) {
+		t.Fatalf("RenderUserMessageMetadataTag() = %q, want none gap", got)
+	}
+}
+
+func TestPromptVisibleUserMessagePrependsMetadataTag(t *testing.T) {
+	msg := PromptVisibleUserMessage(Message{
+		Role: UserRole,
+		Parts: []Part{
+			Text("hello", ""),
+			Image("media://sha256/abc", ""),
+		},
+		UserTemporal: &UserTemporalMetadata{
+			TimeLocal: time.Date(
+				2026,
+				time.April,
+				12,
+				10,
+				11,
+				12,
+				0,
+				time.FixedZone("UTC+2", 2*60*60),
+			),
+			SincePrevUserMessage: NewDuration(42 * time.Second),
+		},
+	})
+
+	if len(msg.Parts) != 3 {
+		t.Fatalf("parts len = %d, want 3", len(msg.Parts))
+	}
+	if got := msg.Parts[0].Text; !strings.Contains(got, `<message_meta`) ||
+		!strings.Contains(got, "\n\n") {
+		t.Fatalf("parts[0].Text = %q, want metadata prefix with separator", got)
 	}
 }
 

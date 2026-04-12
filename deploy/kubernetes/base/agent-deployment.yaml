@@ -24,6 +24,8 @@ spec:
               value: updatemaxprocs=0
             - name: GOMAXPROCS
               value: "1"
+            - name: TZ
+              value: Europe/Berlin
           envFrom:
             - secretRef:
                 name: q15-agent-env
