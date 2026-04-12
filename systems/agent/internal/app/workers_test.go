@@ -220,13 +220,19 @@ func TestRunAgentWorker_FinishesSessionAndForwardsEvents(t *testing.T) {
 }
 
 func TestUserMessageFromInboundBuildsOrderedTextAndImageParts(t *testing.T) {
+	sentAt := time.Date(2026, time.April, 12, 10, 11, 12, 0, time.FixedZone("UTC+2", 2*60*60))
 	got := userMessageFromInbound(bus.InboundMessage{
-		Text:  "hello",
-		Media: []string{"media://sha256/abc"},
+		SentAt: sentAt,
+		Text:   "hello",
+		Media:  []string{"media://sha256/abc"},
 	})
 
 	if got.Role != conversation.UserRole {
 		t.Fatalf("role = %q, want user", got.Role)
+	}
+	if stored, ok := conversation.UserMessageTimeLocal(got); !ok ||
+		!stored.Equal(sentAt.In(time.Local)) {
+		t.Fatalf("stored user timestamp = %v, %t, want %v", stored, ok, sentAt.In(time.Local))
 	}
 	if len(got.Parts) != 2 {
 		t.Fatalf("parts len = %d, want 2", len(got.Parts))
@@ -237,6 +243,20 @@ func TestUserMessageFromInboundBuildsOrderedTextAndImageParts(t *testing.T) {
 	if got.Parts[1].Type != conversation.ImagePartType ||
 		got.Parts[1].MediaRef != "media://sha256/abc" {
 		t.Fatalf("parts[1] = %#v", got.Parts[1])
+	}
+}
+
+func TestUserMessageFromInboundDefaultsMissingSentAt(t *testing.T) {
+	got := userMessageFromInbound(bus.InboundMessage{
+		Text: "hello",
+	})
+
+	stored, ok := conversation.UserMessageTimeLocal(got)
+	if !ok {
+		t.Fatalf("stored user timestamp missing: %#v", got.UserTemporal)
+	}
+	if stored.IsZero() {
+		t.Fatal("stored user timestamp = zero, want non-zero")
 	}
 }
 

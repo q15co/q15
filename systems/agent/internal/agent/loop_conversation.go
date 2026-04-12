@@ -3,6 +3,7 @@ package agent
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/q15co/q15/systems/agent/internal/conversation"
 )
@@ -81,4 +82,34 @@ func resultToolCalls(messages []conversation.Message) []ToolCall {
 
 func finalAnswer(messages []conversation.Message) string {
 	return conversation.FinalAnswer(messages)
+}
+
+func withUserTemporalMetadata(
+	msg conversation.Message,
+	now time.Time,
+	lastUserTimestamp time.Time,
+	hasLastUserTimestamp bool,
+) conversation.Message {
+	msg = conversation.NormalizeMessage(msg)
+	if msg.Role != conversation.UserRole {
+		return msg
+	}
+
+	timestamp := now.In(time.Local)
+	if stored, ok := conversation.UserMessageTimeLocal(msg); ok {
+		timestamp = stored
+	}
+
+	meta := &conversation.UserTemporalMetadata{
+		TimeLocal: timestamp,
+	}
+	if hasLastUserTimestamp {
+		gap := timestamp.Sub(lastUserTimestamp)
+		if gap < 0 {
+			gap = 0
+		}
+		meta.SincePrevUserMessage = conversation.NewDuration(gap)
+	}
+	msg.UserTemporal = meta
+	return conversation.NormalizeMessage(msg)
 }

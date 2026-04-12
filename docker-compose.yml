@@ -29,6 +29,8 @@ services:
     init: true
     depends_on:
       - q15-proxy
+    environment:
+      TZ: Europe/Berlin
     volumes:
       - type: bind
         source: .
@@ -59,6 +61,7 @@ services:
       HOME: /root
       GODEBUG: updatemaxprocs=0
       GOMAXPROCS: "1"
+      TZ: Europe/Berlin
       MOONSHOT_API_KEY_FILE: /run/secrets/moonshot_api_key
       ZAI_API_KEY_FILE: /run/secrets/zai_api_key
       Q15_TELEGRAM_TOKEN_FILE: /run/secrets/q15_telegram_token

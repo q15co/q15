@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
@@ -92,6 +93,16 @@ func (s *spyLoader) LoadRecentMessages(
 	int,
 ) ([]conversation.Message, error) {
 	return nil, nil
+}
+
+func (s *spyLoader) LoadHead(context.Context) (int64, time.Time, error) {
+	return 0, time.Time{}, nil
+}
+
+func (s *spyLoader) LoadConsolidationCheckpoint(
+	context.Context,
+) (ConsolidationCheckpoint, error) {
+	return ConsolidationCheckpoint{}, nil
 }
 
 func (s *spyLoader) LoadCognitionArtifact(

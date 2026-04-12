@@ -4,6 +4,7 @@ package bus
 import (
 	"context"
 	"fmt"
+	"time"
 )
 
 const (
@@ -19,6 +20,7 @@ type InboundMessage struct {
 	ChatID    string
 	UserID    string
 	MessageID string
+	SentAt    time.Time
 	Text      string
 	Media     []string
 }

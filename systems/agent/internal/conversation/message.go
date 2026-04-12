@@ -5,6 +5,7 @@ package conversation
 import (
 	"encoding/json"
 	"strings"
+	"time"
 )
 
 // SchemaVersion is the current persisted transcript schema version. New writes
@@ -49,14 +50,71 @@ const (
 	TextDispositionFinal      TextDisposition = "final"
 )
 
+// Duration stores a canonical runtime duration while keeping JSON stable and
+// human-inspectable in persisted transcript records.
+type Duration time.Duration
+
+// NewDuration returns a pointer wrapper for one duration.
+func NewDuration(value time.Duration) *Duration {
+	duration := Duration(value)
+	return &duration
+}
+
+// Duration returns the wrapped time.Duration value.
+func (d Duration) Duration() time.Duration {
+	return time.Duration(d)
+}
+
+// String returns the wrapped duration using the standard Go duration format.
+func (d Duration) String() string {
+	return d.Duration().String()
+}
+
+// MarshalJSON stores the wrapped duration as a standard Go duration string.
+func (d Duration) MarshalJSON() ([]byte, error) {
+	return json.Marshal(d.String())
+}
+
+// UnmarshalJSON accepts either a standard Go duration string or legacy integer
+// nanoseconds.
+func (d *Duration) UnmarshalJSON(data []byte) error {
+	if strings.TrimSpace(string(data)) == "null" {
+		return nil
+	}
+
+	var text string
+	if err := json.Unmarshal(data, &text); err == nil {
+		parsed, err := time.ParseDuration(strings.TrimSpace(text))
+		if err != nil {
+			return err
+		}
+		*d = Duration(parsed)
+		return nil
+	}
+
+	var nanos int64
+	if err := json.Unmarshal(data, &nanos); err != nil {
+		return err
+	}
+	*d = Duration(time.Duration(nanos))
+	return nil
+}
+
+// UserTemporalMetadata stores canonical temporal context for one user message.
+type UserTemporalMetadata struct {
+	TimeLocal            time.Time `json:"time_local"`
+	SincePrevUserMessage *Duration `json:"since_prev_user_message,omitempty"`
+}
+
 // Message is one canonical conversation message.
 //
 // This is the canonical persisted and replayable transcript shape. Providers,
 // the loop, and stores should map to and from this model rather than
 // reintroducing alternative message types as sources of truth.
 type Message struct {
-	Role  Role   `json:"role"`
-	Parts []Part `json:"parts,omitempty"`
+	Role         Role                  `json:"role"`
+	Parts        []Part                `json:"parts,omitempty"`
+	UserTemporal *UserTemporalMetadata `json:"user_temporal,omitempty"`
 }
 
 // Part is one canonical transcript part. Only fields relevant to the current
@@ -157,6 +215,25 @@ func AssistantMessage(parts ...Part) Message {
 // ToolResultMessage creates a tool-role message with one tool-result part.
 func ToolResultMessage(toolCallID, content string, isError bool) Message {
 	return Message{Role: ToolRole, Parts: []Part{ToolResult(toolCallID, content, isError)}}
+}
+
+// UserMessageTimeLocal returns the stored local-time timestamp for one user
+// message when available.
+func UserMessageTimeLocal(msg Message) (time.Time, bool) {
+	if msg.Role != UserRole || msg.UserTemporal == nil || msg.UserTemporal.TimeLocal.IsZero() {
+		return time.Time{}, false
+	}
+	return msg.UserTemporal.TimeLocal, true
+}
+
+// SincePrevUserMessage returns the stored gap to the prior persisted user
+// message when available.
+func SincePrevUserMessage(msg Message) (time.Duration, bool) {
+	if msg.Role != UserRole || msg.UserTemporal == nil ||
+		msg.UserTemporal.SincePrevUserMessage == nil {
+		return 0, false
+	}
+	return msg.UserTemporal.SincePrevUserMessage.Duration(), true
 }
 
 func normalizeDisposition(disposition TextDisposition) TextDisposition {

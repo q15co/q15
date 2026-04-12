@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/q15co/q15/systems/agent/internal/conversation"
 	"github.com/q15co/q15/systems/agent/internal/modelselection"
@@ -77,12 +78,14 @@ func (f *failingModelClient) Complete(
 }
 
 type fakeConversationStore struct {
-	loadMessages  []conversation.Message
-	coreMemory    CoreMemory
-	workingMemory WorkingMemory
-	skillCatalog  SkillCatalog
-	appendCalls   int
-	lastAppend    []conversation.Message
+	loadMessages         []conversation.Message
+	coreMemory           CoreMemory
+	workingMemory        WorkingMemory
+	skillCatalog         SkillCatalog
+	lastUserTimestamp    time.Time
+	hasLastUserTimestamp bool
+	appendCalls          int
+	lastAppend           []conversation.Message
 }
 
 func (f *fakeConversationStore) LoadRecentMessages(
@@ -101,7 +104,19 @@ func (f *fakeConversationStore) AppendTurn(
 	_ = ctx
 	f.appendCalls++
 	f.lastAppend = copyMessages(messages)
+	for _, msg := range messages {
+		if timestamp, ok := conversation.UserMessageTimeLocal(msg); ok {
+			f.lastUserTimestamp = timestamp
+			f.hasLastUserTimestamp = true
+		}
+	}
 	return nil
+}
+
+func (f *fakeConversationStore) LoadLastUserTimestamp(
+	context.Context,
+) (time.Time, bool, error) {
+	return f.lastUserTimestamp, f.hasLastUserTimestamp, nil
 }
 
 func (f *fakeConversationStore) LoadCoreMemory(ctx context.Context) (CoreMemory, error) {
@@ -247,6 +262,46 @@ func TestLoopReply_LoadsRecentAndPersistsTurn(t *testing.T) {
 	if store.lastAppend[1].Role != conversation.AssistantRole ||
 		messageText(store.lastAppend[1]) != "new-answer" {
 		t.Fatalf("persisted assistant message = %#v", store.lastAppend[1])
+	}
+}
+
+func TestLoopReply_ComputesUserTemporalMetadataFromLastUserTimestamp(t *testing.T) {
+	location := time.FixedZone("UTC+2", 2*60*60)
+	lastTimestamp := time.Date(2026, time.April, 12, 9, 0, 0, 0, location)
+	currentTimestamp := lastTimestamp.Add(3*time.Minute + 42*time.Second)
+
+	store := &fakeConversationStore{
+		lastUserTimestamp:    lastTimestamp,
+		hasLastUserTimestamp: true,
+	}
+	model := &fakeModelClient{
+		results: []ModelClientResult{assistantResult("new-answer")},
+	}
+
+	loop := NewLoop(model, nil, []string{"m1"}, DefaultSystemPrompt, store, 5)
+	userMessage := conversation.Message{
+		Role:  conversation.UserRole,
+		Parts: []conversation.Part{conversation.Text("new-question", "")},
+		UserTemporal: &conversation.UserTemporalMetadata{
+			TimeLocal: currentTimestamp,
+		},
+	}
+
+	if _, err := loop.Reply(context.Background(), userMessage, nil); err != nil {
+		t.Fatalf("Reply() error = %v", err)
+	}
+
+	persistedUser := store.lastAppend[0]
+	if got, ok := conversation.UserMessageTimeLocal(persistedUser); !ok ||
+		!got.Equal(currentTimestamp) {
+		t.Fatalf("persisted user timestamp = %v, %t, want %v", got, ok, currentTimestamp)
+	}
+	gap, ok := conversation.SincePrevUserMessage(persistedUser)
+	if !ok {
+		t.Fatalf("persisted user gap missing: %#v", persistedUser.UserTemporal)
+	}
+	if want := 3*time.Minute + 42*time.Second; gap != want {
+		t.Fatalf("persisted user gap = %s, want %s", gap, want)
 	}
 }
 

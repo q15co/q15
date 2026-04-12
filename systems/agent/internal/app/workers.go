@@ -88,7 +88,20 @@ func userMessageFromInbound(in bus.InboundMessage) conversation.Message {
 		}
 		parts = append(parts, conversation.Image(ref, ""))
 	}
-	return conversation.UserMessageParts(parts...)
+
+	sentAt := in.SentAt
+	if sentAt.IsZero() {
+		sentAt = time.Now().In(time.Local)
+	}
+	sentAt = sentAt.In(time.Local)
+
+	return conversation.Message{
+		Role:  conversation.UserRole,
+		Parts: conversation.CloneParts(parts),
+		UserTemporal: &conversation.UserTemporalMetadata{
+			TimeLocal: sentAt,
+		},
+	}
 }
 
 func buildEndpointRegistry(

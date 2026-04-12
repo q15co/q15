@@ -17,6 +17,8 @@ type ContextLoader interface {
 	LoadWorkingMemory(ctx context.Context) (agent.WorkingMemory, error)
 	LoadSkillCatalog(ctx context.Context) (agent.SkillCatalog, error)
 	LoadRecentMessages(ctx context.Context, turns int) ([]conversation.Message, error)
+	LoadHead(ctx context.Context) (int64, time.Time, error)
+	LoadConsolidationCheckpoint(ctx context.Context) (ConsolidationCheckpoint, error)
 	LoadCognitionArtifact(ctx context.Context, relativePath string) (Artifact, error)
 	StoreCognitionArtifact(ctx context.Context, artifact Artifact) error
 }

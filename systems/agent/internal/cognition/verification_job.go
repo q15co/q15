@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
 )
@@ -13,6 +14,8 @@ const (
 	verificationReviewJobType                    = "verification_review"
 	verificationReviewArtifactRelativePath       = "state/verification_review.md"
 	verificationReviewArtifactRuntimePath        = "/memory/cognition/" + verificationReviewArtifactRelativePath
+	verificationHeadRuntimePath                  = "/memory/history/state/head.json"
+	verificationCheckpointRuntimePath            = "/memory/history/state/consolidation_checkpoint.json"
 	verificationReviewRecentTurns                = workingMemoryRecentTurns
 	verificationReviewMinDirtyTurns        int64 = workingMemoryMinDirtyTurns
 )
@@ -61,6 +64,14 @@ func (verificationReviewJob) Build(
 	if err != nil {
 		return Spec{}, fmt.Errorf("load working memory: %w", err)
 	}
+	headSeq, headUpdatedAt, err := loader.LoadHead(ctx)
+	if err != nil {
+		return Spec{}, fmt.Errorf("load transcript head state: %w", err)
+	}
+	checkpoint, err := loader.LoadConsolidationCheckpoint(ctx)
+	if err != nil {
+		return Spec{}, fmt.Errorf("load consolidation checkpoint: %w", err)
+	}
 	recentMessages, err := loader.LoadRecentMessages(ctx, verificationReviewRecentTurns)
 	if err != nil {
 		return Spec{}, fmt.Errorf("load recent messages: %w", err)
@@ -76,6 +87,8 @@ func (verificationReviewJob) Build(
 		workingContent = "# Working Memory\n\n(working memory is currently empty)\n"
 	}
 
+	headStateContent := renderVerificationHeadState(headSeq, headUpdatedAt)
+	checkpointContent := renderVerificationCheckpointState(checkpoint)
 	coreMemoryContent := renderVerificationCoreMemory(core)
 	priorReviewContent := strings.TrimSpace(priorArtifact.Content)
 	priorReviewAttrs := map[string]string{"path": verificationReviewArtifactRuntimePath}
@@ -96,7 +109,7 @@ func (verificationReviewJob) Build(
 		Objective: renderPromptLines(
 			"This is a background verification job, not a user-facing reply.",
 			"Critically review the agent's current state for stale assumptions, weak inferences, unsupported claims, and factual uncertainty.",
-			"Use working memory, core memory, prior verification notes, and recent transcript context as your primary evidence.",
+			"Use working memory, core memory, authoritative runtime checkpoint state, prior verification notes, and recent transcript context as your primary evidence.",
 			"When needed, use read-only tools to inspect files or gather external evidence; web_search is optional and may be unavailable.",
 			"Prefer clear confidence notes, corrections, and uncertainty markers over broad summaries.",
 		),
@@ -120,6 +133,16 @@ func (verificationReviewJob) Build(
 				Body:       workingContent,
 			},
 			{
+				Name:       "transcript_head_state",
+				Attributes: map[string]string{"path": verificationHeadRuntimePath},
+				Body:       headStateContent,
+			},
+			{
+				Name:       "consolidation_checkpoint_state",
+				Attributes: map[string]string{"path": verificationCheckpointRuntimePath},
+				Body:       checkpointContent,
+			},
+			{
 				Name: "core_memory_snapshot",
 				Body: coreMemoryContent,
 			},
@@ -134,6 +157,8 @@ func (verificationReviewJob) Build(
 					"- Challenge stale assumptions instead of restating them.",
 					"- Distinguish confirmed facts from likely inferences and unresolved uncertainty.",
 					"- Focus on what could improve the agent's future reasoning or memory quality.",
+					"- Treat transcript_head_state and consolidation_checkpoint_state as authoritative runtime evidence about transcript/consolidation position.",
+					"- Base claims about sequence state, checkpoint presence, or backlog on those runtime sections or explicit read_file results, not on guesses from prior artifacts.",
 					"- Use read_file for local evidence, web_fetch for known URLs, and web_search only when external verification is materially useful.",
 					"- Avoid repeating transcript content unless it is needed as evidence or context.",
 				),
@@ -141,7 +166,7 @@ func (verificationReviewJob) Build(
 			{
 				Name: "verification_execution_order",
 				Body: renderPromptLines(
-					"1. Inspect working memory, core memory, prior review notes, and the transcript artifact.",
+					"1. Inspect working memory, transcript_head_state, consolidation_checkpoint_state, core memory, prior review notes, and the transcript artifact.",
 					"2. Identify the highest-impact claims, assumptions, or stale entries that could affect future reasoning.",
 					"3. Use read-only tools only when they are likely to materially improve correctness or resolve important uncertainty.",
 					"4. Separate confirmed facts, inferences, unsupported claims, and open uncertainty in the review artifact.",
@@ -277,6 +302,39 @@ func renderVerificationCoreMemory(core agent.CoreMemory) string {
 		return "No core memory files were loaded."
 	}
 	return strings.Join(files, "\n\n")
+}
+
+func renderVerificationHeadState(lastSeq int64, updatedAt time.Time) string {
+	return renderPromptLines(
+		fmt.Sprintf("last_seq: %d", max(0, lastSeq)),
+		fmt.Sprintf("updated_at: %s", formatVerificationTime(updatedAt)),
+	)
+}
+
+func renderVerificationCheckpointState(
+	checkpoint ConsolidationCheckpoint,
+) string {
+	turnID := strings.TrimSpace(checkpoint.LastConsolidatedTurnID)
+	if turnID == "" {
+		turnID = "none"
+	}
+
+	return renderPromptLines(
+		fmt.Sprintf("last_consolidated_seq: %d", max(0, checkpoint.LastConsolidatedSeq)),
+		fmt.Sprintf("last_consolidated_turn_id: %s", turnID),
+		fmt.Sprintf(
+			"last_consolidated_at: %s",
+			formatVerificationTime(checkpoint.LastConsolidatedAt),
+		),
+		fmt.Sprintf("updated_at: %s", formatVerificationTime(checkpoint.UpdatedAt)),
+	)
+}
+
+func formatVerificationTime(value time.Time) string {
+	if value.IsZero() {
+		return "none"
+	}
+	return value.UTC().Format(time.RFC3339Nano)
 }
 
 func verificationReviewBaseline(spec Spec) (string, bool) {

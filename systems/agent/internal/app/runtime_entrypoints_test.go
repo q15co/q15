@@ -24,6 +24,12 @@ func (s *spyRuntimeStore) LoadRecentMessages(
 	return nil, nil
 }
 
+func (s *spyRuntimeStore) LoadLastUserTimestamp(
+	context.Context,
+) (time.Time, bool, error) {
+	return time.Time{}, false, nil
+}
+
 func (s *spyRuntimeStore) AppendTurn(
 	context.Context,
 	[]conversation.Message,
@@ -60,6 +66,12 @@ func (s *spyRuntimeStore) StoreCognitionArtifact(
 
 func (s *spyRuntimeStore) LoadHead(context.Context) (int64, time.Time, error) {
 	return int64(s.appendCalls), time.Now().UTC(), nil
+}
+
+func (s *spyRuntimeStore) LoadConsolidationCheckpoint(
+	context.Context,
+) (cognition.ConsolidationCheckpoint, error) {
+	return cognition.ConsolidationCheckpoint{}, nil
 }
 
 func (s *spyRuntimeStore) LoadJobState(

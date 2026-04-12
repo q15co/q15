@@ -220,6 +220,34 @@ func (s *Store) LoadRecentMessages(ctx context.Context, turns int) ([]conversati
 	return out, nil
 }
 
+// LoadLastUserTimestamp returns the most recent persisted user-message
+// timestamp carried in canonical message metadata.
+func (s *Store) LoadLastUserTimestamp(
+	ctx context.Context,
+) (time.Time, bool, error) {
+	_ = ctx
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entries, err := s.listTurnEntries()
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	for i := len(entries) - 1; i >= 0; i-- {
+		turn, err := s.readTurn(entries[i].Path)
+		if err != nil {
+			return time.Time{}, false, err
+		}
+		for j := len(turn.Messages) - 1; j >= 0; j-- {
+			if timestamp, ok := conversation.UserMessageTimeLocal(turn.Messages[j]); ok {
+				return timestamp, true, nil
+			}
+		}
+	}
+	return time.Time{}, false, nil
+}
+
 // LoadCoreMemory loads the current core self-model files for prompt injection.
 func (s *Store) LoadCoreMemory(ctx context.Context) (agent.CoreMemory, error) {
 	_ = ctx
