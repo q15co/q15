@@ -42,6 +42,7 @@ func TestMapMessagesBuildsAssistantReplayWithReasoningAndTools(t *testing.T) {
 		`"reasoning_opaque":"opaque-token"`,
 		`"tool_calls":[`,
 		`"name":"shell"`,
+		`"arguments":"{\"cmd\":\"pwd\"}"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("serialized replay missing %q: %s", want, body)
@@ -106,6 +107,7 @@ func TestMapMessagesCoalescesContiguousAssistantMessagesForToolReplay(t *testing
 	body := string(data)
 	for _, want := range []string{
 		`"role":"assistant"`,
+		`"content":null`,
 		`"reasoning_content":"portable summary"`,
 		`"tool_calls":[`,
 		`"name":"shell"`,
@@ -144,9 +146,11 @@ func TestMapMessagesSynthesizesReasoningContentForOpaqueToolReplay(t *testing.T)
 	body := string(data)
 	for _, want := range []string{
 		`"role":"assistant"`,
+		`"content":null`,
 		`"reasoning_content":"` + synthesizedReasoningContent + `"`,
 		`"tool_calls":[`,
 		`"name":"shell"`,
+		`"arguments":"{\"cmd\":\"pwd\"}"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("serialized replay missing %q: %s", want, body)
@@ -174,9 +178,11 @@ func TestMapMessagesSynthesizesReasoningContentForToolReplayWithoutReasoningPart
 	body := string(data)
 	for _, want := range []string{
 		`"role":"assistant"`,
+		`"content":null`,
 		`"reasoning_content":"` + synthesizedReasoningContent + `"`,
 		`"tool_calls":[`,
 		`"name":"shell"`,
+		`"arguments":"{\"cmd\":\"pwd\"}"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("serialized replay missing %q: %s", want, body)
@@ -324,6 +330,159 @@ func TestMapMessagesAddsVisionFollowupForToolProducedImage(t *testing.T) {
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("followup missing %q: %s", want, body)
+		}
+	}
+}
+
+func TestMapMessagesCollapsesSystemMessagesAndAddsBootstrapUserForSystemOnlyRequests(t *testing.T) {
+	messages, err := mapMessages([]conversation.Message{
+		conversation.SystemMessage("cognition prompt"),
+		conversation.SystemMessage("provider profile"),
+	}, nil)
+	if err != nil {
+		t.Fatalf("mapMessages() error = %v", err)
+	}
+	if len(messages) != 2 {
+		t.Fatalf("messages len = %d, want 2", len(messages))
+	}
+
+	systemJSON, err := json.Marshal(messages[0])
+	if err != nil {
+		t.Fatalf("json.Marshal(system message) error = %v", err)
+	}
+	systemBody := string(systemJSON)
+	for _, want := range []string{
+		`"role":"system"`,
+		`"content":"cognition prompt\n\nprovider profile"`,
+	} {
+		if !strings.Contains(systemBody, want) {
+			t.Fatalf("system message missing %q: %s", want, systemBody)
+		}
+	}
+
+	userJSON, err := json.Marshal(messages[1])
+	if err != nil {
+		t.Fatalf("json.Marshal(user message) error = %v", err)
+	}
+	userBody := string(userJSON)
+	for _, want := range []string{
+		`"role":"user"`,
+		systemOnlyFollowupText,
+	} {
+		if !strings.Contains(userBody, want) {
+			t.Fatalf("bootstrap message missing %q: %s", want, userBody)
+		}
+	}
+}
+
+func TestMapMessagesCollapsesSystemMessagesAndPreservesNonSystemOrder(t *testing.T) {
+	messages, err := mapMessages([]conversation.Message{
+		conversation.SystemMessage("base"),
+		conversation.UserMessage("hello"),
+		conversation.SystemMessage("steering"),
+	}, nil)
+	if err != nil {
+		t.Fatalf("mapMessages() error = %v", err)
+	}
+	if len(messages) != 2 {
+		t.Fatalf("messages len = %d, want 2", len(messages))
+	}
+
+	firstJSON, err := json.Marshal(messages[0])
+	if err != nil {
+		t.Fatalf("json.Marshal(first message) error = %v", err)
+	}
+	firstBody := string(firstJSON)
+	for _, want := range []string{
+		`"role":"system"`,
+		`"content":"base\n\nsteering"`,
+	} {
+		if !strings.Contains(firstBody, want) {
+			t.Fatalf("first message missing %q: %s", want, firstBody)
+		}
+	}
+
+	secondJSON, err := json.Marshal(messages[1])
+	if err != nil {
+		t.Fatalf("json.Marshal(second message) error = %v", err)
+	}
+	secondBody := string(secondJSON)
+	if !strings.Contains(secondBody, `"role":"user"`) ||
+		!strings.Contains(secondBody, `"content":"hello"`) {
+		t.Fatalf("second message = %s, want unchanged user message", secondBody)
+	}
+	if strings.Contains(secondBody, systemOnlyFollowupText) {
+		t.Fatalf("second message unexpectedly included bootstrap text: %s", secondBody)
+	}
+}
+
+func TestMapMessagesAddsBootstrapUserBeforeAssistantToolReplayWhenNoUserExists(t *testing.T) {
+	messages, err := mapMessages([]conversation.Message{
+		conversation.SystemMessage("cognition prompt"),
+		conversation.AssistantMessage(
+			conversation.ToolCall(
+				"call-1",
+				"read_file",
+				`{"path":"/memory/working/WORKING_MEMORY.md"}`,
+			),
+		),
+		conversation.ToolResultMessage("call-1", "file contents", false),
+	}, nil)
+	if err != nil {
+		t.Fatalf("mapMessages() error = %v", err)
+	}
+	if len(messages) != 4 {
+		t.Fatalf("messages len = %d, want 4", len(messages))
+	}
+
+	systemJSON, err := json.Marshal(messages[0])
+	if err != nil {
+		t.Fatalf("json.Marshal(system message) error = %v", err)
+	}
+	if body := string(systemJSON); !strings.Contains(body, `"role":"system"`) {
+		t.Fatalf("system message = %s, want system role", body)
+	}
+
+	userJSON, err := json.Marshal(messages[1])
+	if err != nil {
+		t.Fatalf("json.Marshal(user message) error = %v", err)
+	}
+	userBody := string(userJSON)
+	for _, want := range []string{
+		`"role":"user"`,
+		systemOnlyFollowupText,
+	} {
+		if !strings.Contains(userBody, want) {
+			t.Fatalf("bootstrap message missing %q: %s", want, userBody)
+		}
+	}
+
+	assistantJSON, err := json.Marshal(messages[2])
+	if err != nil {
+		t.Fatalf("json.Marshal(assistant message) error = %v", err)
+	}
+	assistantBody := string(assistantJSON)
+	for _, want := range []string{
+		`"role":"assistant"`,
+		`"tool_calls":[`,
+		`"arguments":"{\"path\":\"/memory/working/WORKING_MEMORY.md\"}"`,
+	} {
+		if !strings.Contains(assistantBody, want) {
+			t.Fatalf("assistant replay missing %q: %s", want, assistantBody)
+		}
+	}
+
+	toolJSON, err := json.Marshal(messages[3])
+	if err != nil {
+		t.Fatalf("json.Marshal(tool message) error = %v", err)
+	}
+	toolBody := string(toolJSON)
+	for _, want := range []string{
+		`"role":"tool"`,
+		`"tool_call_id":"call-1"`,
+	} {
+		if !strings.Contains(toolBody, want) {
+			t.Fatalf("tool replay missing %q: %s", want, toolBody)
 		}
 	}
 }

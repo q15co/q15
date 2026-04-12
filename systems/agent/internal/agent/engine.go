@@ -254,7 +254,7 @@ func (e *Engine) completeWithObserver(
 		}
 	}
 
-	var lastErr error
+	attemptFailures := make([]ModelAttemptFailure, 0, len(plan.EligibleRefs))
 	lastModelRef := ""
 	for attempt, modelRef := range plan.EligibleRefs {
 		lastModelRef = modelRef
@@ -286,15 +286,17 @@ func (e *Engine) completeWithObserver(
 			len(plan.EligibleRefs),
 			err,
 		)
-		lastErr = err
+		attemptFailures = append(attemptFailures, ModelAttemptFailure{
+			ModelRef: modelRef,
+			Err:      err,
+		})
 	}
 
-	if lastErr == nil {
+	if len(attemptFailures) == 0 {
 		return "", ModelClientResult{}, fmt.Errorf("no models configured")
 	}
-	return lastModelRef, ModelClientResult{}, fmt.Errorf(
-		"all models failed (%v): %w",
-		plan.EligibleRefs,
-		lastErr,
-	)
+	return lastModelRef, ModelClientResult{}, &ModelFallbackError{
+		EligibleRefs:    append([]string(nil), plan.EligibleRefs...),
+		AttemptFailures: attemptFailures,
+	}
 }

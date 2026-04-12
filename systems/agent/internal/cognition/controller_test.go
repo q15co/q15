@@ -434,6 +434,81 @@ func TestControllerFailureUpdatesStateAndRunRecord(t *testing.T) {
 	}
 }
 
+func TestControllerPersistsOrderedAttemptFailuresForModelFallback(t *testing.T) {
+	store := newFakeControllerStore()
+	store.setHead(1, time.Now().UTC())
+
+	model := &fakeModelClient{
+		errors: []error{
+			errors.New("openai failed"),
+			errors.New("glm failed"),
+		},
+	}
+	controller, err := NewController(
+		NewRunner(model, nil, []string{"gpt-5.4", "glm-5-turbo"}, &spyLoader{}),
+		store,
+		&spyLoader{},
+		JobRegistration{
+			NewJob: func() JobDefinition {
+				return fakeJob{
+					jobType: "verification.check",
+					build: func(context.Context, ContextLoader) (Spec, error) {
+						return Spec{
+							Objective:          "Fail across model fallback.",
+							CompletionContract: "Return `status: ok`.",
+						}, nil
+					},
+				}
+			},
+			Policy: TriggerPolicy{
+				State: []StateRule{{
+					ID: "dirty",
+					Evaluate: func(_ context.Context, _ Snapshot, state JobState) (bool, string, error) {
+						return state.DirtySinceSeq > 0, "dirty", nil
+					},
+				}},
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewController() error = %v", err)
+	}
+	controller.started = time.Now().UTC()
+
+	pending, ok, err := controller.nextPendingRun(context.Background(), false, false, true)
+	if err != nil {
+		t.Fatalf("nextPendingRun() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("nextPendingRun() ok = false, want true")
+	}
+	if err := controller.runPending(context.Background(), pending); err != nil {
+		t.Fatalf("runPending() error = %v", err)
+	}
+
+	records := store.runRecords()
+	if len(records) != 1 {
+		t.Fatalf("run records len = %d, want 1", len(records))
+	}
+	if records[0].Succeeded {
+		t.Fatalf("Succeeded = true, want false")
+	}
+	if got, want := len(records[0].AttemptFailures), 2; got != want {
+		t.Fatalf("attempt failures len = %d, want %d", got, want)
+	}
+	if got := records[0].AttemptFailures[0]; got.ModelRef != "gpt-5.4" ||
+		got.Error != "openai failed" {
+		t.Fatalf("attempt[0] = %#v", got)
+	}
+	if got := records[0].AttemptFailures[1]; got.ModelRef != "glm-5-turbo" ||
+		got.Error != "glm failed" {
+		t.Fatalf("attempt[1] = %#v", got)
+	}
+	if got := model.callModels; len(got) != 2 || got[0] != "gpt-5.4" || got[1] != "glm-5-turbo" {
+		t.Fatalf("model calls = %#v, want ordered fallback attempts", got)
+	}
+}
+
 func TestControllerPreservesDirtyStateWhenHeadAdvancesDuringRun(t *testing.T) {
 	store := newFakeControllerStore()
 	initialHeadAt := time.Now().UTC()

@@ -32,6 +32,8 @@ const synthesizedReasoningContent = "Portable reasoning summary unavailable for 
 
 const toolImageFollowupText = "Use the attached image output from the previous tool result when continuing."
 
+const systemOnlyFollowupText = "Use the system instructions above as the full task definition and complete them directly."
+
 // NewClient constructs a Chat Completions-compatible model client.
 func NewClient(baseURL string, apiKey string, mediaStore q15media.Store) (*Client, error) {
 	baseURL = strings.TrimSpace(baseURL)
@@ -102,8 +104,11 @@ func mapMessages(
 	messages []conversation.Message,
 	mediaStore q15media.Store,
 ) ([]openai.ChatCompletionMessageParamUnion, error) {
-	out := make([]openai.ChatCompletionMessageParamUnion, 0, len(messages))
+	out := make([]openai.ChatCompletionMessageParamUnion, 0, len(messages)+1)
+	nonSystemMessages := make([]openai.ChatCompletionMessageParamUnion, 0, len(messages))
+	systemTexts := make([]string, 0, 1)
 	droppedReplayParts := 0
+	hasUserMessage := false
 
 	for i := 0; i < len(messages); i++ {
 		msg := messages[i]
@@ -113,20 +118,22 @@ func mapMessages(
 			if err != nil {
 				return nil, fmt.Errorf("message %d: %w", i, err)
 			}
-			out = append(out, openai.SystemMessage(text))
+			if trimmed := strings.TrimSpace(text); trimmed != "" {
+				systemTexts = append(systemTexts, trimmed)
+			}
 		case conversation.UserRole:
 			userMessage, err := buildUserMessage(msg, mediaStore)
 			if err != nil {
 				return nil, fmt.Errorf("message %d: %w", i, err)
 			}
-			out = append(out, userMessage)
+			hasUserMessage = true
+			nonSystemMessages = append(nonSystemMessages, userMessage)
 		case conversation.AssistantRole:
 			group := []conversation.Message{msg}
 			for i+1 < len(messages) && messages[i+1].Role == conversation.AssistantRole {
 				i++
 				group = append(group, messages[i])
 			}
-
 			raw, ok, dropped, err := buildAssistantReplayMessage(group)
 			if err != nil {
 				return nil, fmt.Errorf("message %d: %w", i, err)
@@ -135,7 +142,10 @@ func mapMessages(
 			if !ok {
 				continue
 			}
-			out = append(out, param.Override[openai.ChatCompletionMessageParamUnion](raw))
+			nonSystemMessages = append(
+				nonSystemMessages,
+				param.Override[openai.ChatCompletionMessageParamUnion](raw),
+			)
 		case conversation.ToolRole:
 			toolParts := 0
 			imageParts := make([]conversation.Part, 0, len(msg.Parts))
@@ -147,7 +157,10 @@ func mapMessages(
 					if strings.TrimSpace(part.ToolCallID) == "" {
 						return nil, fmt.Errorf("message %d: tool result missing tool call id", i)
 					}
-					out = append(out, openai.ToolMessage(part.Content, part.ToolCallID))
+					nonSystemMessages = append(
+						nonSystemMessages,
+						openai.ToolMessage(part.Content, part.ToolCallID),
+					)
 				case conversation.ImagePartType:
 					imageParts = append(imageParts, part)
 				}
@@ -160,12 +173,20 @@ func mapMessages(
 				if err != nil {
 					return nil, fmt.Errorf("message %d: %w", i, err)
 				}
-				out = append(out, followup)
+				nonSystemMessages = append(nonSystemMessages, followup)
 			}
 		default:
 			return nil, fmt.Errorf("message %d: unsupported role %q", i, msg.Role)
 		}
 	}
+
+	if len(systemTexts) > 0 {
+		out = append(out, openai.SystemMessage(strings.Join(systemTexts, "\n\n")))
+	}
+	if len(systemTexts) > 0 && !hasUserMessage {
+		out = append(out, openai.UserMessage(systemOnlyFollowupText))
+	}
+	out = append(out, nonSystemMessages...)
 
 	if droppedReplayParts > 0 {
 		log.Printf(
@@ -388,12 +409,16 @@ func buildAssistantReplayMessage(
 					droppedReplayParts++
 				}
 			case conversation.ToolCallPartType:
+				arguments, err := normalizeToolCallArguments(part.Arguments)
+				if err != nil {
+					return nil, false, droppedReplayParts, err
+				}
 				toolCalls = append(toolCalls, map[string]any{
 					"id":   part.ID,
 					"type": "function",
 					"function": map[string]any{
 						"name":      part.Name,
-						"arguments": conversation.NormalizePart(part).Arguments,
+						"arguments": arguments,
 					},
 				})
 			}
@@ -409,9 +434,12 @@ func buildAssistantReplayMessage(
 		return nil, false, droppedReplayParts, nil
 	}
 
-	payload := map[string]any{
-		"role":    "assistant",
-		"content": strings.TrimSpace(text),
+	payload := map[string]any{"role": "assistant"}
+	trimmedText := strings.TrimSpace(text)
+	if len(toolCalls) > 0 && trimmedText == "" {
+		payload["content"] = nil
+	} else {
+		payload["content"] = trimmedText
 	}
 	if reasoningText != "" {
 		payload["reasoning_content"] = reasoningText
@@ -430,6 +458,17 @@ func buildAssistantReplayMessage(
 		)
 	}
 	return raw, true, droppedReplayParts, nil
+}
+
+func normalizeToolCallArguments(arguments string) (string, error) {
+	arguments = strings.TrimSpace(arguments)
+	if arguments == "" {
+		arguments = "{}"
+	}
+	if !json.Valid([]byte(arguments)) {
+		return "", fmt.Errorf("decode tool call arguments: invalid JSON")
+	}
+	return arguments, nil
 }
 
 func extractCompatibleReasoningOpaque(replay map[string]json.RawMessage) string {

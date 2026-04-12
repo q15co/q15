@@ -2,9 +2,12 @@ package cognition
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/q15co/q15/systems/agent/internal/agent"
 )
 
 // RunCause values identify the trigger class that launched a cognition job.
@@ -90,6 +93,12 @@ type JobState struct {
 	LastScheduledFor    map[string]time.Time `json:"last_scheduled_for,omitempty"`
 }
 
+// AttemptFailure records one failed model attempt within a cognition run.
+type AttemptFailure struct {
+	ModelRef string `json:"model_ref,omitempty"`
+	Error    string `json:"error,omitempty"`
+}
+
 // RunRecord is the append-only persisted provenance record for one cognition
 // run attempt.
 type RunRecord struct {
@@ -105,6 +114,7 @@ type RunRecord struct {
 	Summary         string            `json:"summary,omitempty"`
 	Metadata        map[string]string `json:"metadata,omitempty"`
 	ModelRef        string            `json:"model_ref,omitempty"`
+	AttemptFailures []AttemptFailure  `json:"attempt_failures,omitempty"`
 	Error           string            `json:"error,omitempty"`
 }
 
@@ -518,6 +528,7 @@ func (c *Controller) runPending(ctx context.Context, pending pendingRun) error {
 	}
 	if runErr != nil {
 		record.Error = runErr.Error()
+		record.AttemptFailures = attemptFailuresFromError(runErr)
 	} else {
 		record.Summary = strings.TrimSpace(result.Summary)
 		record.Metadata = cloneRunRecordMetadata(result.Metadata)
@@ -531,6 +542,29 @@ func (c *Controller) runPending(ctx context.Context, pending pendingRun) error {
 		c.NotifyStateChange()
 	}
 	return nil
+}
+
+func attemptFailuresFromError(err error) []AttemptFailure {
+	var fallbackErr *agent.ModelFallbackError
+	if !errors.As(err, &fallbackErr) || fallbackErr == nil {
+		return nil
+	}
+
+	out := make([]AttemptFailure, 0, len(fallbackErr.AttemptFailures))
+	for _, failure := range fallbackErr.AttemptFailures {
+		modelRef := strings.TrimSpace(failure.ModelRef)
+		if modelRef == "" || failure.Err == nil {
+			continue
+		}
+		out = append(out, AttemptFailure{
+			ModelRef: modelRef,
+			Error:    failure.Err.Error(),
+		})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func cloneRunRecordMetadata(in map[string]string) map[string]string {

@@ -1098,6 +1098,10 @@ func TestStoreAppendRunRecord(t *testing.T) {
 			"changed": "true",
 		},
 		ModelRef: "cognition",
+		AttemptFailures: []cognition.AttemptFailure{
+			{ModelRef: "gpt-5.4", Error: "openai failed"},
+			{ModelRef: "glm-5-turbo", Error: "glm failed"},
+		},
 	}
 	if err := store.AppendRunRecord(context.Background(), record); err != nil {
 		t.Fatalf("AppendRunRecord() error = %v", err)
@@ -1134,6 +1138,13 @@ func TestStoreAppendRunRecord(t *testing.T) {
 	}
 	if got.Metadata["path"] != "/memory/cognition/state/verification_review.md" {
 		t.Fatalf("run metadata = %#v", got.Metadata)
+	}
+	if len(got.AttemptFailures) != 2 {
+		t.Fatalf("attempt failures = %#v, want two entries", got.AttemptFailures)
+	}
+	if got.AttemptFailures[0].ModelRef != "gpt-5.4" ||
+		got.AttemptFailures[1].ModelRef != "glm-5-turbo" {
+		t.Fatalf("attempt failures = %#v", got.AttemptFailures)
 	}
 }
 
