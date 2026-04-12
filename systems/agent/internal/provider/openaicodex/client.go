@@ -26,6 +26,7 @@ const (
 
 	openAIResponsesReplayKey = "openai_responses"
 	toolImageFollowupText    = "Use the attached image output from the previous tool result when continuing."
+	systemOnlyInputText      = "Use the system instructions above as the full task definition and complete them directly."
 )
 
 type tokenSource func(context.Context) (token string, accountID string, err error)
@@ -110,16 +111,22 @@ func (c *Client) Complete(
 		}
 	}
 	if err := stream.Err(); err != nil {
-		return agent.ModelClientResult{}, fmt.Errorf("responses api: %w", err)
+		return agent.ModelClientResult{}, fmt.Errorf(
+			"responses api: %s",
+			formatResponsesAPIError(resp, streamEventErr, err.Error()),
+		)
 	}
 	if resp == nil {
-		if streamEventErr != "" {
-			return agent.ModelClientResult{}, fmt.Errorf("responses api: %s", streamEventErr)
-		}
-		return agent.ModelClientResult{}, fmt.Errorf("responses api: stream ended without response")
+		return agent.ModelClientResult{}, fmt.Errorf(
+			"responses api: %s",
+			formatResponsesAPIError(nil, streamEventErr, "stream ended without response"),
+		)
 	}
 	if err := validateFinalResponse(resp); err != nil {
-		return agent.ModelClientResult{}, fmt.Errorf("responses api: %w", err)
+		return agent.ModelClientResult{}, fmt.Errorf(
+			"responses api: %s",
+			formatResponsesAPIError(resp, streamEventErr, err.Error()),
+		)
 	}
 
 	result := parseResponse(resp)
@@ -141,6 +148,12 @@ func buildRequestParams(
 		instructions = agent.DefaultSystemPrompt
 	}
 	instructions = appendPromptProfileInstructions(instructions)
+	if len(input) == 0 {
+		input = append(input, responses.ResponseInputItemParamOfMessage(
+			systemOnlyInputText,
+			responses.EasyInputMessageRoleUser,
+		))
+	}
 
 	params := responses.ResponseNewParams{
 		Model: model,
@@ -839,4 +852,49 @@ func responseFailureDetail(resp *responses.Response) string {
 		return code
 	}
 	return "unknown error"
+}
+
+func formatResponsesAPIError(
+	resp *responses.Response,
+	streamEventErr string,
+	fallback string,
+) string {
+	parts := make([]string, 0, 5)
+	if resp != nil {
+		if responseID := strings.TrimSpace(resp.ID); responseID != "" {
+			parts = append(parts, fmt.Sprintf("response_id=%q", responseID))
+		}
+		if status := strings.TrimSpace(string(resp.Status)); status != "" {
+			parts = append(parts, fmt.Sprintf("status=%q", status))
+		}
+	}
+
+	responseErr := ""
+	if resp != nil {
+		switch resp.Status {
+		case responses.ResponseStatusFailed, responses.ResponseStatusCancelled:
+			responseErr = strings.TrimSpace(responseFailureDetail(resp))
+			if responseErr == "unknown error" {
+				responseErr = ""
+			}
+		}
+	}
+	if responseErr != "" {
+		parts = append(parts, fmt.Sprintf("response_error=%q", responseErr))
+	}
+
+	streamEventErr = strings.TrimSpace(streamEventErr)
+	if streamEventErr != "" {
+		parts = append(parts, fmt.Sprintf("stream_error=%q", streamEventErr))
+	}
+
+	fallback = strings.TrimSpace(fallback)
+	if fallback != "" && fallback != responseErr && fallback != streamEventErr {
+		parts = append(parts, fmt.Sprintf("detail=%q", fallback))
+	}
+
+	if len(parts) == 0 {
+		return "unknown error"
+	}
+	return strings.Join(parts, " ")
 }

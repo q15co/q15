@@ -11,24 +11,43 @@ import (
 )
 
 type fakeModelClient struct {
-	results   []agent.ModelClientResult
-	callMsgs  [][]conversation.Message
-	callTools [][]agent.ToolDefinition
+	results    []agent.ModelClientResult
+	errors     []error
+	callMsgs   [][]conversation.Message
+	callModels []string
+	callTools  [][]agent.ToolDefinition
+	complete   func(
+		context.Context,
+		string,
+		[]conversation.Message,
+		[]agent.ToolDefinition,
+	) (agent.ModelClientResult, error)
 }
 
 func (f *fakeModelClient) Complete(
-	_ context.Context,
-	_ string,
+	ctx context.Context,
+	model string,
 	messages []conversation.Message,
 	tools []agent.ToolDefinition,
 ) (agent.ModelClientResult, error) {
 	f.callMsgs = append(f.callMsgs, conversation.CloneMessages(messages))
+	f.callModels = append(f.callModels, model)
 	if len(tools) > 0 {
 		copied := make([]agent.ToolDefinition, len(tools))
 		copy(copied, tools)
 		f.callTools = append(f.callTools, copied)
 	} else {
 		f.callTools = append(f.callTools, nil)
+	}
+	if f.complete != nil {
+		return f.complete(ctx, model, messages, tools)
+	}
+	if len(f.errors) > 0 {
+		err := f.errors[0]
+		f.errors = f.errors[1:]
+		if err != nil {
+			return agent.ModelClientResult{}, err
+		}
 	}
 	if len(f.results) == 0 {
 		return agent.ModelClientResult{}, nil

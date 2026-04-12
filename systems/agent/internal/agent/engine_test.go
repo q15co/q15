@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -247,5 +248,62 @@ func TestEngineRun_DisallowedToolCallReturnsUnsupportedToolResult(t *testing.T) 
 	}
 	if !foundToolError {
 		t.Fatalf("result.Messages = %#v, want unsupported tool result", result.Messages)
+	}
+}
+
+func TestEngineRun_PreservesOrderedModelAttemptFailures(t *testing.T) {
+	err1 := errors.New("first failure")
+	err2 := errors.New("second failure")
+	model := &fakeModelClient{
+		complete: func(
+			_ context.Context,
+			model string,
+			_ []conversation.Message,
+			_ []ToolDefinition,
+		) (ModelClientResult, error) {
+			switch model {
+			case "m1":
+				return ModelClientResult{}, err1
+			case "m2":
+				return ModelClientResult{}, err2
+			default:
+				t.Fatalf("unexpected model %q", model)
+				return ModelClientResult{}, nil
+			}
+		},
+	}
+
+	engine := NewEngine(model, nil, []string{"m1", "m2"})
+	_, err := engine.Run(context.Background(), EngineRequest{
+		Messages: []conversation.Message{
+			conversation.SystemMessage("prompt"),
+			conversation.UserMessage("hello"),
+		},
+	})
+	if err == nil {
+		t.Fatal("Run() error = nil, want fallback failure")
+	}
+
+	var fallbackErr *ModelFallbackError
+	if !errors.As(err, &fallbackErr) {
+		t.Fatalf("Run() error = %v, want ModelFallbackError", err)
+	}
+	if got, want := len(fallbackErr.AttemptFailures), 2; got != want {
+		t.Fatalf("attempt failures len = %d, want %d", got, want)
+	}
+	if fallbackErr.AttemptFailures[0].ModelRef != "m1" ||
+		fallbackErr.AttemptFailures[0].Err != err1 {
+		t.Fatalf("attempt[0] = %#v", fallbackErr.AttemptFailures[0])
+	}
+	if fallbackErr.AttemptFailures[1].ModelRef != "m2" ||
+		fallbackErr.AttemptFailures[1].Err != err2 {
+		t.Fatalf("attempt[1] = %#v", fallbackErr.AttemptFailures[1])
+	}
+	if !strings.Contains(err.Error(), "m1: first failure") ||
+		!strings.Contains(err.Error(), "m2: second failure") {
+		t.Fatalf("error = %q, want both ordered model failures", err.Error())
+	}
+	if unwrapped := errors.Unwrap(fallbackErr); unwrapped != err2 {
+		t.Fatalf("Unwrap() = %#v, want %#v", unwrapped, err2)
 	}
 }

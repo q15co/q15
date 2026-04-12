@@ -431,6 +431,46 @@ func TestBuildRequestParamsUsesDefaultInstructionsWhenMissingSystemMessage(t *te
 	}
 }
 
+func TestBuildRequestParamsIncludesBootstrapInputForSystemOnlyCognitionRequests(t *testing.T) {
+	params, err := buildRequestParams(
+		"gpt-5.4",
+		[]conversation.Message{
+			conversation.SystemMessage("cognition prompt"),
+		},
+		nil,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("buildRequestParams() error = %v", err)
+	}
+
+	body := marshalParamsToMap(t, params)
+	instructions, ok := body["instructions"].(string)
+	if !ok {
+		t.Fatalf("instructions = %#v, want string", body["instructions"])
+	}
+	if !strings.Contains(instructions, "cognition prompt") {
+		t.Fatalf("instructions missing cognition prompt:\n%s", instructions)
+	}
+	input, ok := body["input"].([]any)
+	if !ok {
+		t.Fatalf("input = %#v, want array", body["input"])
+	}
+	if len(input) != 1 {
+		t.Fatalf("input len = %d, want 1", len(input))
+	}
+	item, ok := input[0].(map[string]any)
+	if !ok {
+		t.Fatalf("input[0] = %#v, want object", input[0])
+	}
+	if got := item["role"]; got != "user" {
+		t.Fatalf("input[0].role = %#v, want %q", got, "user")
+	}
+	if got := item["content"]; got != systemOnlyInputText {
+		t.Fatalf("input[0].content = %#v, want %q", got, systemOnlyInputText)
+	}
+}
+
 func TestAppendPromptProfileInstructionsAddsCodexProfile(t *testing.T) {
 	got := appendPromptProfileInstructions("base")
 	for _, want := range []string{
@@ -517,6 +557,67 @@ func TestValidateFinalResponse(t *testing.T) {
 			}
 			if err != nil {
 				t.Fatalf("validateFinalResponse() error = %v, want nil", err)
+			}
+		})
+	}
+}
+
+func TestFormatResponsesAPIError(t *testing.T) {
+	tests := []struct {
+		name           string
+		resp           *responses.Response
+		streamEventErr string
+		fallback       string
+		wantContains   []string
+	}{
+		{
+			name: "failed response includes response and stream details",
+			resp: &responses.Response{
+				ID:     "resp_123",
+				Status: responses.ResponseStatusFailed,
+				Error: responses.ResponseError{
+					Message: "boom",
+				},
+			},
+			streamEventErr: "event failure",
+			fallback:       "response failed: boom",
+			wantContains: []string{
+				`response_id="resp_123"`,
+				`status="failed"`,
+				`response_error="boom"`,
+				`stream_error="event failure"`,
+				`detail="response failed: boom"`,
+			},
+		},
+		{
+			name: "generic status falls back after stream error",
+			resp: &responses.Response{
+				Status: responses.ResponseStatusQueued,
+			},
+			streamEventErr: "temporary issue",
+			fallback:       "response not finalized (status=queued)",
+			wantContains: []string{
+				`status="queued"`,
+				`stream_error="temporary issue"`,
+				`detail="response not finalized (status=queued)"`,
+			},
+		},
+		{
+			name:     "nil response uses fallback detail",
+			fallback: "stream ended without response",
+			wantContains: []string{
+				`detail="stream ended without response"`,
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := formatResponsesAPIError(tc.resp, tc.streamEventErr, tc.fallback)
+			for _, want := range tc.wantContains {
+				if !strings.Contains(got, want) {
+					t.Fatalf("formatResponsesAPIError() missing %q: %s", want, got)
+				}
 			}
 		})
 	}
