@@ -249,6 +249,10 @@ func (e *Engine) completeWithObserver(
 
 	var lastErr error
 	lastModelRef := ""
+	var modelErrors []struct {
+		ref string
+		err error
+	}
 	for attempt, modelRef := range plan.EligibleRefs {
 		lastModelRef = modelRef
 		emitRunEvent(ctx, observer, RunEvent{
@@ -280,10 +284,27 @@ func (e *Engine) completeWithObserver(
 			err,
 		)
 		lastErr = err
+		modelErrors = append(modelErrors, struct {
+			ref string
+			err error
+		}{modelRef, err})
 	}
 
 	if lastErr == nil {
 		return "", ModelClientResult{}, fmt.Errorf("no models configured")
+	}
+
+	if len(modelErrors) > 1 {
+		var parts []string
+		for _, me := range modelErrors {
+			parts = append(parts, fmt.Sprintf("  %s: %v", me.ref, me.err))
+		}
+		return lastModelRef, ModelClientResult{}, fmt.Errorf(
+			"all models failed (%v): %w\nper-model errors:\n%s",
+			plan.EligibleRefs,
+			lastErr,
+			strings.Join(parts, "\n"),
+		)
 	}
 	return lastModelRef, ModelClientResult{}, fmt.Errorf(
 		"all models failed (%v): %w",

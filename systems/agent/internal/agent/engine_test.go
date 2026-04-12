@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/q15co/q15/systems/agent/internal/conversation"
@@ -85,6 +87,76 @@ func TestEngineRun_RequiresToolCallingWhenRequested(t *testing.T) {
 	}
 	if len(gotTools) != 1 || gotTools[0].Name != "echo" {
 		t.Fatalf("gotTools = %#v, want one echo tool", gotTools)
+	}
+}
+
+func TestEngineRun_AllModelsFailed_ReportsPerModelErrors(t *testing.T) {
+	model := &fakeModelClient{
+		complete: func(
+			_ context.Context,
+			model string,
+			_ []conversation.Message,
+			_ []ToolDefinition,
+		) (ModelClientResult, error) {
+			if model == "gpt-5.4" {
+				return ModelClientResult{}, errors.New("responses API error: internal server error")
+			}
+			return ModelClientResult{}, errors.New("messages parameter is illegal (code 1214)")
+		},
+	}
+
+	engine := NewEngine(model, nil, []string{"gpt-5.4", "glm-5-turbo"})
+	_, err := engine.Run(context.Background(), EngineRequest{
+		Messages: []conversation.Message{
+			conversation.SystemMessage("prompt"),
+			conversation.UserMessage("hello"),
+		},
+	})
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+	errMsg := err.Error()
+	if !strings.Contains(errMsg, "per-model errors:") {
+		t.Fatalf("error should contain 'per-model errors:', got: %s", errMsg)
+	}
+	if !strings.Contains(errMsg, "gpt-5.4:") {
+		t.Fatalf("error should mention gpt-5.4, got: %s", errMsg)
+	}
+	if !strings.Contains(errMsg, "glm-5-turbo:") {
+		t.Fatalf("error should mention glm-5-turbo, got: %s", errMsg)
+	}
+	// lastErr should still be unwrappable
+	if !strings.Contains(errMsg, "all models failed") {
+		t.Fatalf("error should contain 'all models failed', got: %s", errMsg)
+	}
+}
+
+func TestEngineRun_SingleModelFailed_NoPerModelSection(t *testing.T) {
+	model := &fakeModelClient{
+		results: []ModelClientResult{},
+		complete: func(
+			_ context.Context,
+			_ string,
+			_ []conversation.Message,
+			_ []ToolDefinition,
+		) (ModelClientResult, error) {
+			return ModelClientResult{}, errors.New("connection refused")
+		},
+	}
+
+	engine := NewEngine(model, nil, []string{"only-model"})
+	_, err := engine.Run(context.Background(), EngineRequest{
+		Messages: []conversation.Message{
+			conversation.SystemMessage("prompt"),
+			conversation.UserMessage("hello"),
+		},
+	})
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+	errMsg := err.Error()
+	if strings.Contains(errMsg, "per-model errors:") {
+		t.Fatalf("single model failure should not include per-model section, got: %s", errMsg)
 	}
 }
 
