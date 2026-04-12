@@ -496,6 +496,19 @@ The intended workflow is:
 1. A separate deployment repo pins those images and owns environment-specific overlays.
 1. The deployment repo rolls out the updated pod set.
 
+## Reference Projects
+
+Agent harnesses and runtimes studied during development. Accuracy figures are from
+[Terminal-Bench 2.0](https://www.tbench.ai/leaderboard/terminal-bench/2.0) where noted.
+
+- [Pilot](https://github.com/qf-studio/pilot) - Go-based autonomous coding agent (82.9% on Opus 4.6, +24.9pp over Claude Code baseline). Notable patterns: task complexity classification with model routing, intent-aware message handling, quality gates with retry, cross-project pattern memory, confidence-decaying knowledge store, and an executor backend abstraction over Claude Code/OpenCode.
+- [ForgeCode](https://github.com/antinomyhq/forgecode) - Rust-based terminal coding agent (81.8% on Opus 4.6, +23.8pp over Claude Code baseline). Notable patterns: agent persona system, semantic codebase search, skills and custom commands, workspace indexing, and a provider-agnostic architecture supporting 300+ models.
+- [Terminus-KIRA](https://github.com/krafton-ai/KIRA) - Python agent harness (74.8% on Gemini 3.1 Pro, +11.8pp over Terminus 2 baseline). Minimal but effective: native tool calling over ICL parsing, marker-based command polling for early completion, multi-perspective completion verification checklist, and output limiting to prevent context bloat.
+- [Droid](https://github.com/Factory-AI/factory) - Go/TS agent-native development platform (77.3% on GPT-5.3-Codex). Notable patterns: multi-surface agent (CLI, Web, Slack, IDE), GitHub Actions integration for automated code review, and SDK-based extensibility.
+- [Mux](https://github.com/coder/mux) - Go-based parallel agent execution environment (74.6% on GPT-5.3-Codex). Notable patterns: isolated parallel agent execution with git worktrees, opportunistic context compaction, plan/exec modes, and a desktop app for managing multiple concurrent agent sessions.
+- [SageAgent](https://arxiv.org/abs/2602.16891) - Self-programming agent generation engine (78.4% on GPT-5.3-Codex). Notable patterns: self-generated agent topology, dynamic toolset synthesis, and hierarchical graph-based memory for software engineering tasks.
+- [MemPalace](https://github.com/MemPalace/mempalace) - Local AI memory system (96.6% R@5 on LongMemEval, raw mode). Notable patterns: raw verbatim conversation storage over LLM-based extraction, spatial memory organization (wings/halls/rooms), and semantic search via ChromaDB. Relevant to q15's memory consolidation and context window management design.
+
 ## Self-Hosted Updates And Rollbacks
 
 For Compose and Kubernetes alike:
