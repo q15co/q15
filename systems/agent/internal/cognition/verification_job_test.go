@@ -182,8 +182,8 @@ func TestVerificationReviewBuildLoadsStateAndConfiguresReadOnlyTools(t *testing.
 			conversation.AssistantMessage(conversation.Text("I think it is correct.", "")),
 		},
 		artifacts: map[string]Artifact{
-			verificationReviewArtifactRelativePath: {
-				RelativePath: verificationReviewArtifactRelativePath,
+			VerificationReviewPath: {
+				RelativePath: VerificationReviewPath,
 				Content:      "# Prior Review\n\n- Previously unverified claim.",
 			},
 		},
@@ -214,7 +214,7 @@ func TestVerificationReviewBuildLoadsStateAndConfiguresReadOnlyTools(t *testing.
 		t.Fatalf("renderPrompt() error = %v", err)
 	}
 	for _, want := range []string{
-		verificationReviewArtifactRuntimePath,
+		VerificationReviewRuntimePath,
 		workingMemoryRuntimePath,
 		verificationHeadRuntimePath,
 		verificationCheckpointRuntimePath,
@@ -228,7 +228,7 @@ func TestVerificationReviewBuildLoadsStateAndConfiguresReadOnlyTools(t *testing.
 		"<message index=\"2\" role=\"assistant\">",
 		`<message_meta day_of_week_local="Sunday" timestamp_local="20260412T101112+0200" since_prev_user_message="3m42s"/>`,
 		"<transcript_guard>",
-		"Produce the full verification review artifact as your final response; the framework will persist it to /memory/cognition/state/verification_review.md.",
+		"Produce the full verification review artifact as your final response; the framework will persist it to " + VerificationReviewRuntimePath + ".",
 		"Return a markdown review artifact that stays internal and evidence-driven; prefer the section order Review Target, Assessment Summary, Issues Identified, Recommendations, Unresolved Items.",
 		"Use read_file, web_fetch, or web_search only when they are materially useful for gathering evidence.",
 		"Do not call mutating tools or attempt to edit any files directly.",
@@ -296,7 +296,7 @@ func TestVerificationReviewApplyResultStoresOpaqueArtifact(t *testing.T) {
 				PromptSections: []agent.PromptSection{{
 					Name: "verification_review_target",
 					Attributes: map[string]string{
-						"path":    verificationReviewArtifactRuntimePath,
+						"path":    VerificationReviewRuntimePath,
 						"present": "false",
 					},
 					Body: "(verification review artifact does not exist yet)",
@@ -311,7 +311,7 @@ func TestVerificationReviewApplyResultStoresOpaqueArtifact(t *testing.T) {
 	if got, want := result.Summary, compactVerificationReviewText(finalText); got != want {
 		t.Fatalf("result.Summary = %q, want %q", got, want)
 	}
-	if got, want := result.Metadata["path"], verificationReviewArtifactRuntimePath; got != want {
+	if got, want := result.Metadata["path"], VerificationReviewRuntimePath; got != want {
 		t.Fatalf("result.Metadata[path] = %q, want %q", got, want)
 	}
 	if got, want := result.Metadata["changed"], "true"; got != want {
@@ -323,7 +323,7 @@ func TestVerificationReviewApplyResultStoresOpaqueArtifact(t *testing.T) {
 	if len(loader.storeCalls) != 1 {
 		t.Fatalf("storeCalls len = %d, want 1", len(loader.storeCalls))
 	}
-	if got, want := loader.storeCalls[0].RelativePath, verificationReviewArtifactRelativePath; got != want {
+	if got, want := loader.storeCalls[0].RelativePath, VerificationReviewPath; got != want {
 		t.Fatalf("storeCalls[0].RelativePath = %q, want %q", got, want)
 	}
 	if got, want := loader.storeCalls[0].Content, finalText+"\n"; got != want {
@@ -347,7 +347,7 @@ func TestVerificationReviewApplyResultDetectsUnchangedArtifact(t *testing.T) {
 				PromptSections: []agent.PromptSection{{
 					Name: "verification_review_target",
 					Attributes: map[string]string{
-						"path":    verificationReviewArtifactRuntimePath,
+						"path":    VerificationReviewRuntimePath,
 						"present": "true",
 					},
 					Body: finalText,
@@ -432,7 +432,7 @@ func TestRunnerRunsVerificationReviewAndStoresArtifactWithoutToolCalls(t *testin
 	if got, want := result.Summary, compactVerificationReviewText(newContent); got != want {
 		t.Fatalf("result.Summary = %q, want %q", got, want)
 	}
-	if got, want := result.Metadata["path"], verificationReviewArtifactRuntimePath; got != want {
+	if got, want := result.Metadata["path"], VerificationReviewRuntimePath; got != want {
 		t.Fatalf("result.Metadata[path] = %q, want %q", got, want)
 	}
 	if got, want := result.Metadata["changed"], "true"; got != want {

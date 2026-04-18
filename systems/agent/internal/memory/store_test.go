@@ -1183,7 +1183,7 @@ func TestStoreAppendRunRecord(t *testing.T) {
 		Succeeded:  true,
 		Summary:    "ok",
 		Metadata: map[string]string{
-			"path":    "/memory/cognition/state/verification_review.md",
+			"path":    cognition.VerificationReviewRuntimePath,
 			"changed": "true",
 		},
 		ModelRef: "cognition",
@@ -1225,7 +1225,7 @@ func TestStoreAppendRunRecord(t *testing.T) {
 	if got.Type != record.Type || got.Cause.RuleID != "nightly" || !got.Succeeded {
 		t.Fatalf("run record = %#v", got)
 	}
-	if got.Metadata["path"] != "/memory/cognition/state/verification_review.md" {
+	if got.Metadata["path"] != cognition.VerificationReviewRuntimePath {
 		t.Fatalf("run metadata = %#v", got.Metadata)
 	}
 	if len(got.AttemptFailures) != 2 {
@@ -1245,7 +1245,7 @@ func TestStoreLoadAndStoreCognitionArtifact(t *testing.T) {
 		t.Fatalf("Init() error = %v", err)
 	}
 
-	got, err := store.LoadCognitionArtifact(context.Background(), "state/verification_review.md")
+	got, err := store.LoadCognitionArtifact(context.Background(), cognition.VerificationReviewPath)
 	if err != nil {
 		t.Fatalf("LoadCognitionArtifact() missing error = %v", err)
 	}
@@ -1254,13 +1254,13 @@ func TestStoreLoadAndStoreCognitionArtifact(t *testing.T) {
 	}
 
 	artifact := cognition.Artifact{
-		RelativePath: "state/verification_review.md",
+		RelativePath: cognition.VerificationReviewPath,
 		Content:      "# Verification Review\n\n- Check stale assumptions.",
 	}
 	if err := store.StoreCognitionArtifact(context.Background(), artifact); err != nil {
 		t.Fatalf("StoreCognitionArtifact() error = %v", err)
 	}
-	if committer.lastMessage != "memory: update cognition artifact state/verification_review.md" {
+	if committer.lastMessage != "memory: update cognition artifact "+cognition.VerificationReviewPath {
 		t.Fatalf("commit message = %q", committer.lastMessage)
 	}
 

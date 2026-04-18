@@ -226,7 +226,7 @@ func TestControllerStateTriggerRunsOncePerHeadAdvance(t *testing.T) {
 					return ParsedResult{
 						Summary: "checked",
 						Metadata: map[string]string{
-							"path":    "/memory/cognition/state/verification_review.md",
+							"path":    VerificationReviewRuntimePath,
 							"changed": "true",
 						},
 					}, nil
@@ -262,7 +262,7 @@ func TestControllerStateTriggerRunsOncePerHeadAdvance(t *testing.T) {
 		t.Fatalf("DirtySinceSeq after first run = %d, want 0", state.DirtySinceSeq)
 	}
 	records := store.runRecords()
-	if got, want := records[0].Metadata["path"], "/memory/cognition/state/verification_review.md"; got != want {
+	if got, want := records[0].Metadata["path"], VerificationReviewRuntimePath; got != want {
 		t.Fatalf("run metadata[path] = %q, want %q", got, want)
 	}
 	if got, want := records[0].Metadata["changed"], "true"; got != want {
