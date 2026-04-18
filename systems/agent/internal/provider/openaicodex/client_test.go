@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -16,7 +17,7 @@ import (
 )
 
 func TestMapMessagesAndTools(t *testing.T) {
-	input, instructions, err := mapMessages([]conversation.Message{
+	input, err := mapMessages([]conversation.Message{
 		conversation.SystemMessage("sys"),
 		conversation.UserMessage("hello"),
 		conversation.AssistantMessage(
@@ -33,24 +34,27 @@ func TestMapMessagesAndTools(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mapMessages error = %v", err)
 	}
-	if instructions != "sys" {
-		t.Fatalf("instructions = %q, want %q", instructions, "sys")
-	}
-	if len(input) != 5 {
-		t.Fatalf("input len = %d, want 5", len(input))
+	if len(input) != 6 {
+		t.Fatalf("input len = %d, want 6", len(input))
 	}
 
-	if got := input[0].OfMessage; got == nil || got.Role != responses.EasyInputMessageRoleUser {
-		t.Fatalf("input[0] should be user message: %#v", input[0])
+	if got := input[0].OfMessage; got == nil || got.Role != responses.EasyInputMessageRoleSystem {
+		t.Fatalf("input[0] should be system message: %#v", input[0])
+	}
+	if body := marshalInputItemToString(t, input[0]); !strings.Contains(body, `"content":"sys"`) {
+		t.Fatalf("input[0] missing system content: %s", body)
+	}
+	if got := input[1].OfMessage; got == nil || got.Role != responses.EasyInputMessageRoleUser {
+		t.Fatalf("input[1] should be user message: %#v", input[1])
 	}
 
-	reasoningJSON := marshalInputItemToString(t, input[1])
+	reasoningJSON := marshalInputItemToString(t, input[2])
 	if !strings.Contains(reasoningJSON, `"type":"reasoning"`) ||
 		!strings.Contains(reasoningJSON, `"encrypted_content":"abc"`) {
-		t.Fatalf("input[1] should be reasoning replay item: %s", reasoningJSON)
+		t.Fatalf("input[2] should be reasoning replay item: %s", reasoningJSON)
 	}
 
-	assistantJSON := marshalInputItemToString(t, input[2])
+	assistantJSON := marshalInputItemToString(t, input[3])
 	for _, want := range []string{
 		`"type":"message"`,
 		`"role":"assistant"`,
@@ -62,11 +66,11 @@ func TestMapMessagesAndTools(t *testing.T) {
 		}
 	}
 
-	if got := input[3].OfFunctionCall; got == nil || got.CallID != "call-1" {
-		t.Fatalf("input[3] should be function call with call-1: %#v", input[3])
+	if got := input[4].OfFunctionCall; got == nil || got.CallID != "call-1" {
+		t.Fatalf("input[4] should be function call with call-1: %#v", input[4])
 	}
-	if got := input[4].OfFunctionCallOutput; got == nil || got.CallID != "call-1" {
-		t.Fatalf("input[4] should be function call output with call-1: %#v", input[4])
+	if got := input[5].OfFunctionCallOutput; got == nil || got.CallID != "call-1" {
+		t.Fatalf("input[5] should be function call output with call-1: %#v", input[5])
 	}
 
 	tools := mapTools([]agent.ToolDefinition{
@@ -93,8 +97,8 @@ func TestMapMessagesAndTools(t *testing.T) {
 	}
 }
 
-func TestMapMessagesConcatenatesSystemInstructions(t *testing.T) {
-	_, instructions, err := mapMessages([]conversation.Message{
+func TestMapMessagesPreservesSeparateSystemMessages(t *testing.T) {
+	input, err := mapMessages([]conversation.Message{
 		conversation.SystemMessage("base"),
 		conversation.UserMessage("hello"),
 		conversation.SystemMessage("steering"),
@@ -102,13 +106,25 @@ func TestMapMessagesConcatenatesSystemInstructions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mapMessages() error = %v", err)
 	}
-	if instructions != "base\n\nsteering" {
-		t.Fatalf("instructions = %q, want %q", instructions, "base\n\nsteering")
+	if len(input) != 3 {
+		t.Fatalf("input len = %d, want 3", len(input))
+	}
+	if body := marshalInputItemToString(t, input[0]); !strings.Contains(body, `"role":"system"`) ||
+		!strings.Contains(body, `"content":"base"`) {
+		t.Fatalf("input[0] = %s, want base system message", body)
+	}
+	if body := marshalInputItemToString(t, input[1]); !strings.Contains(body, `"role":"user"`) ||
+		!strings.Contains(body, `"content":"hello"`) {
+		t.Fatalf("input[1] = %s, want unchanged user message", body)
+	}
+	if body := marshalInputItemToString(t, input[2]); !strings.Contains(body, `"role":"system"`) ||
+		!strings.Contains(body, `"content":"steering"`) {
+		t.Fatalf("input[2] = %s, want steering system message", body)
 	}
 }
 
 func TestMapMessagesPreservesAssistantDispositionOnReplay(t *testing.T) {
-	input, _, err := mapMessages([]conversation.Message{
+	input, err := mapMessages([]conversation.Message{
 		conversation.AssistantMessage(
 			conversation.Text("resumed assistant message", conversation.TextDispositionCommentary),
 		),
@@ -196,7 +212,7 @@ func TestParseResponseContentToolCallsReasoningAndPhase(t *testing.T) {
 func TestMapMessagesBuildsMultipartUserInputForImageInput(t *testing.T) {
 	store, ref, rawImage := mustStoreTestImage(t)
 
-	input, _, err := mapMessages([]conversation.Message{
+	input, err := mapMessages([]conversation.Message{
 		conversation.UserMessageParts(
 			conversation.Text("describe this screenshot", ""),
 			conversation.Image(ref, ""),
@@ -232,7 +248,7 @@ func TestMapMessagesPrependsExplicitUserTemporalMetadataTag(t *testing.T) {
 	}
 
 	t.Run("text only", func(t *testing.T) {
-		input, _, err := mapMessages([]conversation.Message{{
+		input, err := mapMessages([]conversation.Message{{
 			Role:         conversation.UserRole,
 			Parts:        []conversation.Part{conversation.Text("hello", "")},
 			UserTemporal: metadata,
@@ -254,7 +270,7 @@ func TestMapMessagesPrependsExplicitUserTemporalMetadataTag(t *testing.T) {
 
 	t.Run("text and image", func(t *testing.T) {
 		store, ref, _ := mustStoreTestImage(t)
-		input, _, err := mapMessages([]conversation.Message{{
+		input, err := mapMessages([]conversation.Message{{
 			Role: conversation.UserRole,
 			Parts: []conversation.Part{
 				conversation.Text("describe this", ""),
@@ -280,7 +296,7 @@ func TestMapMessagesPrependsExplicitUserTemporalMetadataTag(t *testing.T) {
 
 	t.Run("image only", func(t *testing.T) {
 		store, ref, _ := mustStoreTestImage(t)
-		input, _, err := mapMessages([]conversation.Message{{
+		input, err := mapMessages([]conversation.Message{{
 			Role: conversation.UserRole,
 			Parts: []conversation.Part{
 				conversation.Image(ref, ""),
@@ -309,7 +325,7 @@ func TestMapMessagesRejectsInvalidImageInput(t *testing.T) {
 		t.Fatalf("NewFileStore() error = %v", err)
 	}
 
-	_, _, err = mapMessages([]conversation.Message{
+	_, err = mapMessages([]conversation.Message{
 		conversation.UserMessageParts(conversation.Image("media://sha256/not-real", "")),
 	}, store)
 	if err == nil || !strings.Contains(err.Error(), "resolve image input") {
@@ -320,7 +336,7 @@ func TestMapMessagesRejectsInvalidImageInput(t *testing.T) {
 func TestMapMessagesAddsVisionFollowupForToolProducedImage(t *testing.T) {
 	store, ref, _ := mustStoreTestImage(t)
 
-	input, _, err := mapMessages([]conversation.Message{
+	input, err := mapMessages([]conversation.Message{
 		{
 			Role: conversation.ToolRole,
 			Parts: []conversation.Part{
@@ -443,13 +459,27 @@ func TestBuildRequestParamsSetsToolChoiceParallelCallsAndReasoningConfig(t *test
 		t.Fatalf("instructions = %#v, want string", body["instructions"])
 	}
 	for _, want := range []string{
-		"sys",
 		`provider="openai-codex"`,
 		"Brief commentary is allowed",
 	} {
 		if !strings.Contains(instructions, want) {
 			t.Fatalf("instructions missing %q:\n%s", want, instructions)
 		}
+	}
+	input, ok := body["input"].([]any)
+	if !ok {
+		t.Fatalf("input = %#v, want array", body["input"])
+	}
+	if len(input) < 2 {
+		t.Fatalf("input len = %d, want at least 2", len(input))
+	}
+	first, ok := input[0].(map[string]any)
+	if !ok || first["role"] != "system" || first["content"] != "sys" {
+		t.Fatalf("input[0] = %#v, want sys system message", input[0])
+	}
+	second, ok := input[1].(map[string]any)
+	if !ok || second["role"] != "user" || second["content"] != "hello" {
+		t.Fatalf("input[1] = %#v, want user hello", input[1])
 	}
 	if got := body["store"]; got != false {
 		t.Fatalf("store = %#v, want false", got)
@@ -473,7 +503,7 @@ func TestBuildRequestParamsSetsToolChoiceParallelCallsAndReasoningConfig(t *test
 	}
 }
 
-func TestBuildRequestParamsUsesDefaultInstructionsWhenMissingSystemMessage(t *testing.T) {
+func TestBuildRequestParamsUsesDefaultSystemInputWhenMissingSystemMessage(t *testing.T) {
 	params, err := buildRequestParams(
 		"gpt-5-codex",
 		[]conversation.Message{
@@ -491,11 +521,23 @@ func TestBuildRequestParamsUsesDefaultInstructionsWhenMissingSystemMessage(t *te
 	if !ok {
 		t.Fatalf("instructions = %#v, want string", body["instructions"])
 	}
-	if !strings.Contains(instructions, agent.DefaultSystemPrompt) {
-		t.Fatalf("instructions should include default prompt:\n%s", instructions)
-	}
 	if !strings.Contains(instructions, `provider="openai-codex"`) {
-		t.Fatalf("instructions should include codex prompt profile:\n%s", instructions)
+		t.Fatalf("instructions missing codex profile:\n%s", instructions)
+	}
+	input, ok := body["input"].([]any)
+	if !ok {
+		t.Fatalf("input = %#v, want array", body["input"])
+	}
+	if len(input) < 2 {
+		t.Fatalf("input len = %d, want at least 2", len(input))
+	}
+	first, ok := input[0].(map[string]any)
+	if !ok || first["role"] != "system" || first["content"] != agent.DefaultSystemPrompt {
+		t.Fatalf("input[0] = %#v, want default system prompt", input[0])
+	}
+	second, ok := input[1].(map[string]any)
+	if !ok || second["role"] != "user" || second["content"] != "hello" {
+		t.Fatalf("input[1] = %#v, want user hello", input[1])
 	}
 	if _, ok := body["tool_choice"]; ok {
 		t.Fatalf(
@@ -529,32 +571,38 @@ func TestBuildRequestParamsIncludesBootstrapInputForSystemOnlyCognitionRequests(
 	if !ok {
 		t.Fatalf("instructions = %#v, want string", body["instructions"])
 	}
-	if !strings.Contains(instructions, "cognition prompt") {
-		t.Fatalf("instructions missing cognition prompt:\n%s", instructions)
+	if !strings.Contains(instructions, `provider="openai-codex"`) {
+		t.Fatalf("instructions missing codex profile:\n%s", instructions)
 	}
 	input, ok := body["input"].([]any)
 	if !ok {
 		t.Fatalf("input = %#v, want array", body["input"])
 	}
-	if len(input) != 1 {
-		t.Fatalf("input len = %d, want 1", len(input))
+	if len(input) != 2 {
+		t.Fatalf("input len = %d, want 2", len(input))
 	}
-	item, ok := input[0].(map[string]any)
+	first, ok := input[0].(map[string]any)
 	if !ok {
 		t.Fatalf("input[0] = %#v, want object", input[0])
 	}
+	if first["role"] != "system" || first["content"] != "cognition prompt" {
+		t.Fatalf("input[0] = %#v, want cognition system message", input[0])
+	}
+	item, ok := input[1].(map[string]any)
+	if !ok {
+		t.Fatalf("input[1] = %#v, want object", input[1])
+	}
 	if got := item["role"]; got != "user" {
-		t.Fatalf("input[0].role = %#v, want %q", got, "user")
+		t.Fatalf("input[1].role = %#v, want %q", got, "user")
 	}
 	if got := item["content"]; got != systemOnlyInputText {
-		t.Fatalf("input[0].content = %#v, want %q", got, systemOnlyInputText)
+		t.Fatalf("input[1].content = %#v, want %q", got, systemOnlyInputText)
 	}
 }
 
-func TestAppendPromptProfileInstructionsAddsCodexProfile(t *testing.T) {
-	got := appendPromptProfileInstructions("base")
+func TestCodexRequiredInstructionsAddsCodexProfile(t *testing.T) {
+	got := codexRequiredInstructions()
 	for _, want := range []string{
-		"base",
 		`provider="openai-codex"`,
 		"Brief commentary is allowed",
 	} {
@@ -564,6 +612,21 @@ func TestAppendPromptProfileInstructionsAddsCodexProfile(t *testing.T) {
 	}
 	if strings.Contains(got, `model="`) {
 		t.Fatalf("codex profile should not include model identity:\n%s", got)
+	}
+}
+
+func TestMapMessagesDoesNotMutateInput(t *testing.T) {
+	input := []conversation.Message{
+		conversation.SystemMessage("base"),
+		conversation.UserMessage("hello"),
+	}
+	want := conversation.CloneMessages(input)
+
+	if _, err := mapMessages(input, nil); err != nil {
+		t.Fatalf("mapMessages() error = %v", err)
+	}
+	if !reflect.DeepEqual(input, want) {
+		t.Fatalf("input mutated:\n got %#v\nwant %#v", input, want)
 	}
 }
 

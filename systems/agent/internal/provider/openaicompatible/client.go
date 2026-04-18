@@ -105,13 +105,26 @@ func mapMessages(
 	mediaStore q15media.Store,
 ) ([]openai.ChatCompletionMessageParamUnion, error) {
 	out := make([]openai.ChatCompletionMessageParamUnion, 0, len(messages)+1)
-	nonSystemMessages := make([]openai.ChatCompletionMessageParamUnion, 0, len(messages))
-	systemTexts := make([]string, 0, 1)
 	droppedReplayParts := 0
 	hasUserMessage := false
+	hasSystemMessage := false
+	for _, message := range messages {
+		switch message.Role {
+		case conversation.SystemRole:
+			hasSystemMessage = true
+		case conversation.UserRole:
+			hasUserMessage = true
+		}
+	}
+	needsBootstrap := hasSystemMessage && !hasUserMessage
+	insertedBootstrap := false
 
 	for i := 0; i < len(messages); i++ {
 		msg := messages[i]
+		if needsBootstrap && !insertedBootstrap && msg.Role != conversation.SystemRole {
+			out = append(out, openai.UserMessage(systemOnlyFollowupText))
+			insertedBootstrap = true
+		}
 		switch msg.Role {
 		case conversation.SystemRole:
 			text, err := textOnlyMessageContent(msg)
@@ -119,15 +132,14 @@ func mapMessages(
 				return nil, fmt.Errorf("message %d: %w", i, err)
 			}
 			if trimmed := strings.TrimSpace(text); trimmed != "" {
-				systemTexts = append(systemTexts, trimmed)
+				out = append(out, openai.SystemMessage(trimmed))
 			}
 		case conversation.UserRole:
 			userMessage, err := buildUserMessage(msg, mediaStore)
 			if err != nil {
 				return nil, fmt.Errorf("message %d: %w", i, err)
 			}
-			hasUserMessage = true
-			nonSystemMessages = append(nonSystemMessages, userMessage)
+			out = append(out, userMessage)
 		case conversation.AssistantRole:
 			group := []conversation.Message{msg}
 			for i+1 < len(messages) && messages[i+1].Role == conversation.AssistantRole {
@@ -142,8 +154,8 @@ func mapMessages(
 			if !ok {
 				continue
 			}
-			nonSystemMessages = append(
-				nonSystemMessages,
+			out = append(
+				out,
 				param.Override[openai.ChatCompletionMessageParamUnion](raw),
 			)
 		case conversation.ToolRole:
@@ -157,8 +169,8 @@ func mapMessages(
 					if strings.TrimSpace(part.ToolCallID) == "" {
 						return nil, fmt.Errorf("message %d: tool result missing tool call id", i)
 					}
-					nonSystemMessages = append(
-						nonSystemMessages,
+					out = append(
+						out,
 						openai.ToolMessage(part.Content, part.ToolCallID),
 					)
 				case conversation.ImagePartType:
@@ -173,20 +185,15 @@ func mapMessages(
 				if err != nil {
 					return nil, fmt.Errorf("message %d: %w", i, err)
 				}
-				nonSystemMessages = append(nonSystemMessages, followup)
+				out = append(out, followup)
 			}
 		default:
 			return nil, fmt.Errorf("message %d: unsupported role %q", i, msg.Role)
 		}
 	}
-
-	if len(systemTexts) > 0 {
-		out = append(out, openai.SystemMessage(strings.Join(systemTexts, "\n\n")))
-	}
-	if len(systemTexts) > 0 && !hasUserMessage {
+	if needsBootstrap && !insertedBootstrap {
 		out = append(out, openai.UserMessage(systemOnlyFollowupText))
 	}
-	out = append(out, nonSystemMessages...)
 
 	if droppedReplayParts > 0 {
 		log.Printf(

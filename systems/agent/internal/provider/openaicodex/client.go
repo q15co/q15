@@ -140,20 +140,29 @@ func buildRequestParams(
 	tools []agent.ToolDefinition,
 	mediaStore q15media.Store,
 ) (responses.ResponseNewParams, error) {
-	input, instructions, err := mapMessages(messages, mediaStore)
+	input, err := mapMessages(messages, mediaStore)
 	if err != nil {
 		return responses.ResponseNewParams{}, err
 	}
-	if strings.TrimSpace(instructions) == "" {
-		instructions = agent.DefaultSystemPrompt
+
+	systemPrefixCount := leadingSystemMessageCount(messages)
+	if !hasSystemMessage(messages) {
+		input = prependMessageInputItem(
+			input,
+			agent.DefaultSystemPrompt,
+			responses.EasyInputMessageRoleSystem,
+		)
+		systemPrefixCount = 1
 	}
-	instructions = appendPromptProfileInstructions(instructions)
-	if len(input) == 0 {
-		input = append(input, responses.ResponseInputItemParamOfMessage(
+	if containsOnlySystemMessageItems(input) {
+		input = insertMessageInputItem(
+			input,
+			systemPrefixCount,
 			systemOnlyInputText,
 			responses.EasyInputMessageRoleUser,
-		))
+		)
 	}
+	instructions := codexRequiredInstructions()
 
 	params := responses.ResponseNewParams{
 		Model: model,
@@ -183,9 +192,8 @@ func buildRequestParams(
 func mapMessages(
 	messages []conversation.Message,
 	mediaStore q15media.Store,
-) (responses.ResponseInputParam, string, error) {
+) (responses.ResponseInputParam, error) {
 	input := make(responses.ResponseInputParam, 0, len(messages))
-	instructionsParts := make([]string, 0, 1)
 	droppedReplayParts := 0
 
 	for i, msg := range messages {
@@ -193,15 +201,18 @@ func mapMessages(
 		case conversation.SystemRole:
 			text, err := textOnlyMessageContent(msg)
 			if err != nil {
-				return nil, "", fmt.Errorf("message %d: %w", i, err)
+				return nil, fmt.Errorf("message %d: %w", i, err)
 			}
 			if trimmed := strings.TrimSpace(text); trimmed != "" {
-				instructionsParts = append(instructionsParts, trimmed)
+				input = append(input, responses.ResponseInputItemParamOfMessage(
+					trimmed,
+					responses.EasyInputMessageRoleSystem,
+				))
 			}
 		case conversation.UserRole:
 			item, err := buildUserInputItem(msg, mediaStore)
 			if err != nil {
-				return nil, "", fmt.Errorf("message %d: %w", i, err)
+				return nil, fmt.Errorf("message %d: %w", i, err)
 			}
 			input = append(input, item)
 		case conversation.AssistantRole:
@@ -211,7 +222,7 @@ func mapMessages(
 				case conversation.TextPartType:
 					raw, ok, err := buildAssistantTextReplayMessage(part)
 					if err != nil {
-						return nil, "", fmt.Errorf("message %d: %w", i, err)
+						return nil, fmt.Errorf("message %d: %w", i, err)
 					}
 					if ok {
 						input = append(
@@ -222,7 +233,7 @@ func mapMessages(
 				case conversation.ReasoningPartType:
 					raw, ok, dropped, err := buildReasoningReplayItem(part)
 					if err != nil {
-						return nil, "", fmt.Errorf("message %d: %w", i, err)
+						return nil, fmt.Errorf("message %d: %w", i, err)
 					}
 					droppedReplayParts += dropped
 					if ok {
@@ -233,7 +244,7 @@ func mapMessages(
 					}
 				case conversation.ToolCallPartType:
 					if strings.TrimSpace(part.Name) == "" {
-						return nil, "", fmt.Errorf("message %d: tool call name is required", i)
+						return nil, fmt.Errorf("message %d: tool call name is required", i)
 					}
 					input = append(input, responses.ResponseInputItemUnionParam{
 						OfFunctionCall: &responses.ResponseFunctionToolCallParam{
@@ -253,7 +264,7 @@ func mapMessages(
 				case conversation.ToolResultPartType:
 					toolParts++
 					if strings.TrimSpace(part.ToolCallID) == "" {
-						return nil, "", fmt.Errorf(
+						return nil, fmt.Errorf(
 							"message %d: tool result missing tool call id",
 							i,
 						)
@@ -271,17 +282,17 @@ func mapMessages(
 				}
 			}
 			if toolParts == 0 && len(imageParts) == 0 {
-				return nil, "", fmt.Errorf("message %d: tool message missing tool result part", i)
+				return nil, fmt.Errorf("message %d: tool message missing tool result part", i)
 			}
 			if len(imageParts) > 0 {
 				item, err := buildToolImageFollowupInputItem(imageParts, mediaStore)
 				if err != nil {
-					return nil, "", fmt.Errorf("message %d: %w", i, err)
+					return nil, fmt.Errorf("message %d: %w", i, err)
 				}
 				input = append(input, item)
 			}
 		default:
-			return nil, "", fmt.Errorf("message %d: unsupported role %q", i, msg.Role)
+			return nil, fmt.Errorf("message %d: unsupported role %q", i, msg.Role)
 		}
 	}
 
@@ -292,7 +303,67 @@ func mapMessages(
 		)
 	}
 
-	return input, strings.Join(instructionsParts, "\n\n"), nil
+	return input, nil
+}
+
+func leadingSystemMessageCount(messages []conversation.Message) int {
+	count := 0
+	for _, message := range messages {
+		if message.Role != conversation.SystemRole {
+			break
+		}
+		count++
+	}
+	return count
+}
+
+func hasSystemMessage(messages []conversation.Message) bool {
+	for _, message := range messages {
+		if message.Role == conversation.SystemRole {
+			return true
+		}
+	}
+	return false
+}
+
+func prependMessageInputItem(
+	input responses.ResponseInputParam,
+	content string,
+	role responses.EasyInputMessageRole,
+) responses.ResponseInputParam {
+	return insertMessageInputItem(input, 0, content, role)
+}
+
+func insertMessageInputItem(
+	input responses.ResponseInputParam,
+	index int,
+	content string,
+	role responses.EasyInputMessageRole,
+) responses.ResponseInputParam {
+	if index < 0 {
+		index = 0
+	}
+	if index > len(input) {
+		index = len(input)
+	}
+	item := responses.ResponseInputItemParamOfMessage(content, role)
+	out := make(responses.ResponseInputParam, 0, len(input)+1)
+	out = append(out, input[:index]...)
+	out = append(out, item)
+	out = append(out, input[index:]...)
+	return out
+}
+
+func containsOnlySystemMessageItems(input responses.ResponseInputParam) bool {
+	if len(input) == 0 {
+		return false
+	}
+	for _, item := range input {
+		if item.OfMessage == nil || item.OfMessage.Role != responses.EasyInputMessageRoleSystem {
+			return false
+		}
+	}
+	return true
 }
 
 func buildUserInputItem(

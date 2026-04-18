@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -426,7 +427,9 @@ func TestMapMessagesAddsVisionFollowupForToolProducedImage(t *testing.T) {
 	}
 }
 
-func TestMapMessagesCollapsesSystemMessagesAndAddsBootstrapUserForSystemOnlyRequests(t *testing.T) {
+func TestMapMessagesPreservesSeparateSystemMessagesAndAddsBootstrapUserForSystemOnlyRequests(
+	t *testing.T,
+) {
 	messages, err := mapMessages([]conversation.Message{
 		conversation.SystemMessage("cognition prompt"),
 		conversation.SystemMessage("provider profile"),
@@ -434,25 +437,27 @@ func TestMapMessagesCollapsesSystemMessagesAndAddsBootstrapUserForSystemOnlyRequ
 	if err != nil {
 		t.Fatalf("mapMessages() error = %v", err)
 	}
-	if len(messages) != 2 {
-		t.Fatalf("messages len = %d, want 2", len(messages))
+	if len(messages) != 3 {
+		t.Fatalf("messages len = %d, want 3", len(messages))
 	}
 
-	systemJSON, err := json.Marshal(messages[0])
-	if err != nil {
-		t.Fatalf("json.Marshal(system message) error = %v", err)
-	}
-	systemBody := string(systemJSON)
-	for _, want := range []string{
-		`"role":"system"`,
-		`"content":"cognition prompt\n\nprovider profile"`,
-	} {
-		if !strings.Contains(systemBody, want) {
-			t.Fatalf("system message missing %q: %s", want, systemBody)
+	for idx, wantContent := range []string{"cognition prompt", "provider profile"} {
+		systemJSON, err := json.Marshal(messages[idx])
+		if err != nil {
+			t.Fatalf("json.Marshal(system message %d) error = %v", idx, err)
+		}
+		systemBody := string(systemJSON)
+		for _, want := range []string{
+			`"role":"system"`,
+			`"content":"` + wantContent + `"`,
+		} {
+			if !strings.Contains(systemBody, want) {
+				t.Fatalf("system message missing %q: %s", want, systemBody)
+			}
 		}
 	}
 
-	userJSON, err := json.Marshal(messages[1])
+	userJSON, err := json.Marshal(messages[2])
 	if err != nil {
 		t.Fatalf("json.Marshal(user message) error = %v", err)
 	}
@@ -467,7 +472,7 @@ func TestMapMessagesCollapsesSystemMessagesAndAddsBootstrapUserForSystemOnlyRequ
 	}
 }
 
-func TestMapMessagesCollapsesSystemMessagesAndPreservesNonSystemOrder(t *testing.T) {
+func TestMapMessagesPreservesSystemMessagesAndNonSystemOrder(t *testing.T) {
 	messages, err := mapMessages([]conversation.Message{
 		conversation.SystemMessage("base"),
 		conversation.UserMessage("hello"),
@@ -476,8 +481,8 @@ func TestMapMessagesCollapsesSystemMessagesAndPreservesNonSystemOrder(t *testing
 	if err != nil {
 		t.Fatalf("mapMessages() error = %v", err)
 	}
-	if len(messages) != 2 {
-		t.Fatalf("messages len = %d, want 2", len(messages))
+	if len(messages) != 3 {
+		t.Fatalf("messages len = %d, want 3", len(messages))
 	}
 
 	firstJSON, err := json.Marshal(messages[0])
@@ -487,7 +492,7 @@ func TestMapMessagesCollapsesSystemMessagesAndPreservesNonSystemOrder(t *testing
 	firstBody := string(firstJSON)
 	for _, want := range []string{
 		`"role":"system"`,
-		`"content":"base\n\nsteering"`,
+		`"content":"base"`,
 	} {
 		if !strings.Contains(firstBody, want) {
 			t.Fatalf("first message missing %q: %s", want, firstBody)
@@ -505,6 +510,20 @@ func TestMapMessagesCollapsesSystemMessagesAndPreservesNonSystemOrder(t *testing
 	}
 	if strings.Contains(secondBody, systemOnlyFollowupText) {
 		t.Fatalf("second message unexpectedly included bootstrap text: %s", secondBody)
+	}
+
+	thirdJSON, err := json.Marshal(messages[2])
+	if err != nil {
+		t.Fatalf("json.Marshal(third message) error = %v", err)
+	}
+	thirdBody := string(thirdJSON)
+	for _, want := range []string{
+		`"role":"system"`,
+		`"content":"steering"`,
+	} {
+		if !strings.Contains(thirdBody, want) {
+			t.Fatalf("third message missing %q: %s", want, thirdBody)
+		}
 	}
 }
 
@@ -579,7 +598,7 @@ func TestMapMessagesAddsBootstrapUserBeforeAssistantToolReplayWhenNoUserExists(t
 	}
 }
 
-func TestWithPromptProfileAppendsOpenAICompatibleProfile(t *testing.T) {
+func TestWithPromptProfileInsertsOpenAICompatibleProfileAfterLeadingSystemPrefix(t *testing.T) {
 	base := []conversation.Message{
 		conversation.SystemMessage("base"),
 		conversation.UserMessage("hello"),
@@ -589,11 +608,22 @@ func TestWithPromptProfileAppendsOpenAICompatibleProfile(t *testing.T) {
 	if len(tuned) != len(base)+1 {
 		t.Fatalf("tuned len = %d, want %d", len(tuned), len(base)+1)
 	}
-	last := tuned[len(tuned)-1]
-	if last.Role != conversation.SystemRole {
-		t.Fatalf("last role = %q, want system", last.Role)
+	if got := conversation.TextValue(base[0]); got != "base" {
+		t.Fatalf("base input mutated = %q, want %q", got, "base")
 	}
-	lastText := conversation.TextValue(last)
+	if got := conversation.TextValue(base[1]); got != "hello" {
+		t.Fatalf("user input mutated = %q, want %q", got, "hello")
+	}
+	if got := conversation.TextValue(tuned[0]); got != "base" {
+		t.Fatalf("tuned[0] = %q, want %q", got, "base")
+	}
+	if tuned[1].Role != conversation.SystemRole {
+		t.Fatalf("tuned[1].Role = %q, want system", tuned[1].Role)
+	}
+	if got := conversation.TextValue(tuned[2]); got != "hello" {
+		t.Fatalf("tuned[2] = %q, want %q", got, "hello")
+	}
+	lastText := conversation.TextValue(tuned[1])
 	for _, want := range []string{
 		`provider="openai-compatible"`,
 		"does not preserve assistant commentary disposition metadata",
@@ -604,6 +634,21 @@ func TestWithPromptProfileAppendsOpenAICompatibleProfile(t *testing.T) {
 	}
 	if strings.Contains(lastText, `model="`) {
 		t.Fatalf("profile should not depend on model name:\n%s", lastText)
+	}
+}
+
+func TestMapMessagesDoesNotMutateInput(t *testing.T) {
+	input := []conversation.Message{
+		conversation.SystemMessage("base"),
+		conversation.UserMessage("hello"),
+	}
+	want := conversation.CloneMessages(input)
+
+	if _, err := mapMessages(input, nil); err != nil {
+		t.Fatalf("mapMessages() error = %v", err)
+	}
+	if !reflect.DeepEqual(input, want) {
+		t.Fatalf("input mutated:\n got %#v\nwant %#v", input, want)
 	}
 }
 
