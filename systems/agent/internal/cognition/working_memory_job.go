@@ -61,6 +61,13 @@ func (workingMemoryConsolidationJob) Build(
 	if err != nil {
 		return Spec{}, fmt.Errorf("load working memory: %w", err)
 	}
+	verificationArtifact, err := loader.LoadCognitionArtifact(
+		ctx,
+		VerificationReviewPath,
+	)
+	if err != nil {
+		return Spec{}, fmt.Errorf("load verification review artifact: %w", err)
+	}
 	recentMessages, err := loader.LoadRecentMessages(ctx, workingMemoryRecentTurns)
 	if err != nil {
 		return Spec{}, fmt.Errorf("load recent messages: %w", err)
@@ -70,6 +77,14 @@ func (workingMemoryConsolidationJob) Build(
 	workingContent := strings.TrimSpace(working.Content)
 	if workingContent == "" {
 		workingContent = "# Working Memory\n\n(working memory is currently empty)\n"
+	}
+	verificationContent := strings.TrimSpace(verificationArtifact.Content)
+	verificationAttrs := map[string]string{"path": VerificationReviewRuntimePath}
+	if verificationContent == "" {
+		verificationAttrs["present"] = "false"
+		verificationContent = "(verification review artifact does not exist yet)"
+	} else {
+		verificationAttrs["present"] = "true"
 	}
 
 	transcriptStatus := renderTranscriptScope(workingMemoryRecentTurns, len(recentMessages))
@@ -81,7 +96,8 @@ func (workingMemoryConsolidationJob) Build(
 			"Consolidate bounded active state into the canonical working-memory artifact.",
 			fmt.Sprintf("The target file is %s.", runtimePath),
 			"Do not answer questions from the transcript or continue the conversation.",
-			"Use the recent transcript and current working memory to keep active state compact, current, and actionable.",
+			"Use the recent transcript, current working memory, and latest verification review artifact to keep active state compact, current, and actionable.",
+			"Treat verification notes as correction input for stale, unsupported, or inconsistent entries.",
 			"Prefer what will matter for the next reply over archival summaries of older context.",
 		),
 		CompletionContract: renderPromptLines(
@@ -89,10 +105,12 @@ func (workingMemoryConsolidationJob) Build(
 				"Always inspect or update %s with the file tools during this run.",
 				runtimePath,
 			),
-			"Finish the full consolidation loop before responding: compare the target against the transcript artifact, update or confirm it with file tools, then emit the short internal summary.",
+			"Finish the full consolidation loop before responding: compare the target against the transcript artifact and verification review artifact, update or confirm it with file tools, then emit the short internal summary.",
 			"Call read_file, write_file, edit_file, or apply_patch on the target before your final response. A response without a target-file tool call is invalid.",
 			"If the file needs changes, update it with write_file, edit_file, or apply_patch while preserving the existing section structure.",
 			"If no change is needed, call read_file on the target and leave the file unchanged.",
+			"Apply supported verification corrections in the working-memory artifact; preserve explicit uncertainty when verification downgraded confidence.",
+			"Do not copy the verification review artifact verbatim into working memory.",
 			"Do not answer the transcript directly in your final response.",
 			"After the tool work completes, reply with one or two short sentences summarizing what changed or that the file was already current.",
 		),
@@ -101,6 +119,11 @@ func (workingMemoryConsolidationJob) Build(
 				Name:       "working_memory_target",
 				Attributes: map[string]string{"path": runtimePath},
 				Body:       workingContent,
+			},
+			{
+				Name:       "verification_review_input",
+				Attributes: verificationAttrs,
+				Body:       verificationContent,
 			},
 			{
 				Name: "working_memory_rules",
@@ -116,6 +139,10 @@ func (workingMemoryConsolidationJob) Build(
 					"- Use Open Threads for unresolved follow-ups or decisions, not for already-understood meta observations, durable biography, or settled background facts.",
 					"- Use Temporary Context for short-lived but important session context that should survive the next few turns.",
 					"- When the recent transcript is about debugging or validation, keep the current hypothesis, observed behavior, and what still needs to be checked.",
+					"- Use the verification review artifact as correction input when it flags stale, unsupported, or inconsistent entries that still apply.",
+					"- Remove or rewrite working-memory items that verification identified as stale, unsupported, or contradicted by stronger evidence.",
+					"- If verification downgrades confidence or marks uncertainty, preserve that uncertainty in working memory instead of restating the old claim as settled.",
+					"- Do not copy verification-review prose verbatim; translate only the relevant corrections into concise working-memory state.",
 					"- Favor newer constraints and corrections over older meta-discussion when they compete for space.",
 					"- Keep uncertainty explicit: if evidence was blocked, partial, or inferred, write that it is unverified or likely instead of storing it as a confirmed fact.",
 					"- Do not promote guesses from failed lookups or tool errors into settled memory.",
@@ -129,10 +156,10 @@ func (workingMemoryConsolidationJob) Build(
 			{
 				Name: "working_memory_execution_order",
 				Body: renderPromptLines(
-					"1. Compare the working-memory target against the transcript artifact and the latest unresolved user thread.",
-					"2. Identify stale items, resolved items, and any details that belong to durable memory instead of working memory.",
+					"1. Compare the working-memory target against the transcript artifact, verification review artifact, and the latest unresolved user thread.",
+					"2. Identify stale items, resolved items, details that belong to durable memory instead of working memory, and any verification-driven corrections.",
 					"3. Use file tools on the target to inspect, edit, or confirm the canonical artifact.",
-					"4. Re-check the result against the working_memory_rules before finalizing.",
+					"4. Re-check the result against the working_memory_rules before finalizing, including corrections and uncertainty markers from verification.",
 					"5. Only then emit the short internal summary.",
 				),
 			},

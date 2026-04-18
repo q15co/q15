@@ -11,13 +11,11 @@ import (
 )
 
 const (
-	verificationReviewJobType                    = "verification_review"
-	verificationReviewArtifactRelativePath       = "state/verification_review.md"
-	verificationReviewArtifactRuntimePath        = "/memory/cognition/" + verificationReviewArtifactRelativePath
-	verificationHeadRuntimePath                  = "/memory/history/state/head.json"
-	verificationCheckpointRuntimePath            = "/memory/history/state/consolidation_checkpoint.json"
-	verificationReviewRecentTurns                = workingMemoryRecentTurns
-	verificationReviewMinDirtyTurns        int64 = workingMemoryMinDirtyTurns
+	verificationReviewJobType               = "verification_review"
+	verificationHeadRuntimePath             = "/memory/history/state/head.json"
+	verificationCheckpointRuntimePath       = "/memory/history/state/consolidation_checkpoint.json"
+	verificationReviewRecentTurns           = workingMemoryRecentTurns
+	verificationReviewMinDirtyTurns   int64 = workingMemoryMinDirtyTurns
 )
 
 var verificationReviewAllowedTools = []string{
@@ -76,7 +74,7 @@ func (verificationReviewJob) Build(
 	if err != nil {
 		return Spec{}, fmt.Errorf("load recent messages: %w", err)
 	}
-	priorArtifact, err := loader.LoadCognitionArtifact(ctx, verificationReviewArtifactRelativePath)
+	priorArtifact, err := loader.LoadCognitionArtifact(ctx, VerificationReviewPath)
 	if err != nil {
 		return Spec{}, fmt.Errorf("load verification review artifact: %w", err)
 	}
@@ -91,7 +89,7 @@ func (verificationReviewJob) Build(
 	checkpointContent := renderVerificationCheckpointState(checkpoint)
 	coreMemoryContent := renderVerificationCoreMemory(core)
 	priorReviewContent := strings.TrimSpace(priorArtifact.Content)
-	priorReviewAttrs := map[string]string{"path": verificationReviewArtifactRuntimePath}
+	priorReviewAttrs := map[string]string{"path": VerificationReviewRuntimePath}
 	if priorReviewContent == "" {
 		priorReviewAttrs["present"] = "false"
 		priorReviewContent = "(verification review artifact does not exist yet)"
@@ -116,7 +114,7 @@ func (verificationReviewJob) Build(
 		CompletionContract: renderPromptLines(
 			fmt.Sprintf(
 				"Produce the full verification review artifact as your final response; the framework will persist it to %s.",
-				verificationReviewArtifactRuntimePath,
+				VerificationReviewRuntimePath,
 			),
 			"Return a markdown review artifact that stays internal and evidence-driven; prefer the section order Review Target, Assessment Summary, Issues Identified, Recommendations, Unresolved Items.",
 			"Use read_file, web_fetch, or web_search only when they are materially useful for gathering evidence.",
@@ -215,7 +213,7 @@ func (verificationReviewJob) ApplyResult(
 	}
 
 	if err := loader.StoreCognitionArtifact(ctx, Artifact{
-		RelativePath: verificationReviewArtifactRelativePath,
+		RelativePath: VerificationReviewPath,
 		Content:      currentContent + "\n",
 	}); err != nil {
 		return ParsedResult{}, fmt.Errorf("store verification review artifact: %w", err)
@@ -224,7 +222,7 @@ func (verificationReviewJob) ApplyResult(
 	previousContent, previousPresent := verificationReviewBaseline(output.Spec)
 	changed := currentContent != previousContent
 	metadata := map[string]string{
-		"path":    verificationReviewArtifactRuntimePath,
+		"path":    VerificationReviewRuntimePath,
 		"changed": strconv.FormatBool(changed),
 	}
 	if previousPresent {

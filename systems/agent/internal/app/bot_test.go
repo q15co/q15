@@ -401,29 +401,29 @@ func TestCognitionJobsRegistersBuiltInCognitionJobs(t *testing.T) {
 		}
 		gotTypes = append(gotTypes, job.Type())
 	}
-	if got, want := gotTypes[0], "working_memory.consolidate"; got != want {
+	if got, want := gotTypes[0], "verification_review"; got != want {
 		t.Fatalf("jobs[0].Type() = %q, want %q", got, want)
 	}
-	if got, want := gotTypes[1], "verification_review"; got != want {
+	if got, want := gotTypes[1], "working_memory.consolidate"; got != want {
 		t.Fatalf("jobs[1].Type() = %q, want %q", got, want)
 	}
-	if len(jobs[0].Policy.Startup) == 0 {
-		t.Fatal("startup rules = 0, want at least 1")
+	if len(jobs[0].Policy.Startup) != 0 {
+		t.Fatalf("verification startup rules = %d, want 0", len(jobs[0].Policy.Startup))
 	}
-	if len(jobs[0].Policy.Schedule) == 0 {
-		t.Fatal("schedule rules = 0, want at least 1")
+	if len(jobs[0].Policy.Schedule) != 0 {
+		t.Fatalf("verification schedule rules = %d, want 0", len(jobs[0].Policy.Schedule))
 	}
 	if len(jobs[0].Policy.State) == 0 {
-		t.Fatal("state rules = 0, want at least 1")
+		t.Fatal("verification state rules = 0, want at least 1")
 	}
-	if len(jobs[1].Policy.Startup) != 0 {
-		t.Fatalf("verification startup rules = %d, want 0", len(jobs[1].Policy.Startup))
+	if len(jobs[1].Policy.Startup) == 0 {
+		t.Fatal("startup rules = 0, want at least 1")
 	}
-	if len(jobs[1].Policy.Schedule) != 0 {
-		t.Fatalf("verification schedule rules = %d, want 0", len(jobs[1].Policy.Schedule))
+	if len(jobs[1].Policy.Schedule) == 0 {
+		t.Fatal("schedule rules = 0, want at least 1")
 	}
 	if len(jobs[1].Policy.State) == 0 {
-		t.Fatal("verification state rules = 0, want at least 1")
+		t.Fatal("state rules = 0, want at least 1")
 	}
 }
 
