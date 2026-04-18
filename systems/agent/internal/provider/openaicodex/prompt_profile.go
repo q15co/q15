@@ -6,16 +6,12 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/agent"
 )
 
-func appendPromptProfileInstructions(instructions string) string {
-	instructions = strings.TrimSpace(instructions)
+func codexRequiredInstructions() string {
 	profile := strings.TrimSpace(renderPromptProfile())
-	if profile == "" {
-		return instructions
-	}
-	if instructions == "" {
+	if profile != "" {
 		return profile
 	}
-	return instructions + "\n\n" + profile
+	return "Follow the system messages in the input and continue the conversation."
 }
 
 func renderPromptProfile() string {

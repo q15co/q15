@@ -7,10 +7,9 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/conversation"
 )
 
-func injectCoreMemory(systemText string, core CoreMemory) string {
-	systemText = strings.TrimSpace(systemText)
+func injectCoreMemory(core CoreMemory) (conversation.Message, bool) {
 	if len(core.Files) == 0 {
-		return systemText
+		return conversation.Message{}, false
 	}
 
 	files := make([]string, 0, len(core.Files))
@@ -35,35 +34,33 @@ func injectCoreMemory(systemText string, core CoreMemory) string {
 		files = append(files, rendered)
 	}
 	if len(files) == 0 {
-		return systemText
+		return conversation.Message{}, false
 	}
 
-	return strings.TrimSpace(systemText + "\n\n" + RenderPromptElement(
+	return systemMessage(RenderPromptElement(
 		"core_memory",
 		nil,
 		strings.Join(files, "\n\n"),
-	))
+	)), true
 }
 
-func injectWorkingMemory(systemText string, working WorkingMemory) string {
-	systemText = strings.TrimSpace(systemText)
+func injectWorkingMemory(working WorkingMemory) (conversation.Message, bool) {
 	path := strings.TrimSpace(working.RelativePath)
 	content := strings.TrimSpace(working.Content)
 	if path == "" || content == "" {
-		return systemText
+		return conversation.Message{}, false
 	}
 
-	return strings.TrimSpace(systemText + "\n\n" + RenderPromptElement(
+	return systemMessage(RenderPromptElement(
 		"working_memory",
 		map[string]string{"path": path},
 		content,
-	))
+	)), true
 }
 
-func injectSkillCatalog(systemText string, catalog SkillCatalog) string {
-	systemText = strings.TrimSpace(systemText)
+func injectSkillCatalog(catalog SkillCatalog) (conversation.Message, bool) {
 	if len(catalog.Entries) == 0 && len(catalog.Warnings) == 0 {
-		return systemText
+		return conversation.Message{}, false
 	}
 
 	parts := make([]string, 0, len(catalog.Entries)+len(catalog.Warnings))
@@ -99,14 +96,14 @@ func injectSkillCatalog(systemText string, catalog SkillCatalog) string {
 		parts = append(parts, RenderPromptElement("warning", nil, warning))
 	}
 	if len(parts) == 0 {
-		return systemText
+		return conversation.Message{}, false
 	}
 
-	return strings.TrimSpace(systemText + "\n\n" + RenderPromptElement(
+	return systemMessage(RenderPromptElement(
 		"skill_catalog",
 		nil,
 		strings.Join(parts, "\n\n"),
-	))
+	)), true
 }
 
 func copyMessages(in []conversation.Message) []conversation.Message {

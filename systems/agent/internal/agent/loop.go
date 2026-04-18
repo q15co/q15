@@ -143,7 +143,9 @@ func (l *Loop) Reply(
 		Type: RunEventRunStarted,
 	})
 
-	systemText := l.systemText
+	// Keep the canonical system prefix ordered from most stable to least stable
+	// so providers can reuse cached prefixes across working-memory changes.
+	systemMessages := []conversation.Message{systemMessage(l.systemText)}
 	if l.store != nil {
 		if coreStore, ok := l.store.(CoreMemoryStore); ok {
 			coreMemory, err := coreStore.LoadCoreMemory(ctx)
@@ -154,18 +156,9 @@ func (l *Loop) Reply(
 				})
 				return ReplyResult{}, fmt.Errorf("load core memory: %w", err)
 			}
-			systemText = injectCoreMemory(systemText, coreMemory)
-		}
-		if workingStore, ok := l.store.(WorkingMemoryStore); ok {
-			workingMemory, err := workingStore.LoadWorkingMemory(ctx)
-			if err != nil {
-				emitRunEvent(ctx, observer, RunEvent{
-					Type: RunEventRunFailed,
-					Err:  err,
-				})
-				return ReplyResult{}, fmt.Errorf("load working memory: %w", err)
+			if message, ok := injectCoreMemory(coreMemory); ok {
+				systemMessages = append(systemMessages, message)
 			}
-			systemText = injectWorkingMemory(systemText, workingMemory)
 		}
 		if skillStore, ok := l.store.(SkillCatalogStore); ok {
 			skillCatalog, err := skillStore.LoadSkillCatalog(ctx)
@@ -176,7 +169,22 @@ func (l *Loop) Reply(
 				})
 				return ReplyResult{}, fmt.Errorf("load skill catalog: %w", err)
 			}
-			systemText = injectSkillCatalog(systemText, skillCatalog)
+			if message, ok := injectSkillCatalog(skillCatalog); ok {
+				systemMessages = append(systemMessages, message)
+			}
+		}
+		if workingStore, ok := l.store.(WorkingMemoryStore); ok {
+			workingMemory, err := workingStore.LoadWorkingMemory(ctx)
+			if err != nil {
+				emitRunEvent(ctx, observer, RunEvent{
+					Type: RunEventRunFailed,
+					Err:  err,
+				})
+				return ReplyResult{}, fmt.Errorf("load working memory: %w", err)
+			}
+			if message, ok := injectWorkingMemory(workingMemory); ok {
+				systemMessages = append(systemMessages, message)
+			}
 		}
 	}
 
@@ -193,8 +201,8 @@ func (l *Loop) Reply(
 		}
 	}
 
-	messages := make([]conversation.Message, 0, 2+len(recentMessages))
-	messages = append(messages, systemMessage(systemText))
+	messages := make([]conversation.Message, 0, len(systemMessages)+len(recentMessages)+1)
+	messages = append(messages, copyMessages(systemMessages)...)
 	messages = append(messages, copyMessages(recentMessages)...)
 
 	messages = append(messages, copyMessages([]conversation.Message{userMessage})...)

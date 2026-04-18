@@ -13,9 +13,23 @@ func withPromptProfile(messages []conversation.Message) []conversation.Message {
 		return messages
 	}
 
-	out := append([]conversation.Message(nil), messages...)
-	out = append(out, conversation.SystemMessage(profile))
+	out := conversation.CloneMessages(messages)
+	insertAt := leadingSystemMessageCount(out)
+	out = append(out, conversation.Message{})
+	copy(out[insertAt+1:], out[insertAt:])
+	out[insertAt] = conversation.SystemMessage(profile)
 	return out
+}
+
+func leadingSystemMessageCount(messages []conversation.Message) int {
+	count := 0
+	for _, message := range messages {
+		if message.Role != conversation.SystemRole {
+			break
+		}
+		count++
+	}
+	return count
 }
 
 func renderPromptProfile() string {

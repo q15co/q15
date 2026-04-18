@@ -870,7 +870,7 @@ func TestLoopReply_ReturnsNoTextAfterEmptyRetryExhausted(t *testing.T) {
 	}
 }
 
-func TestLoopReply_IncludesCoreMemoryInSystemMessage(t *testing.T) {
+func TestLoopReply_IncludesCoreMemoryInSeparateSystemMessage(t *testing.T) {
 	store := &fakeConversationStore{
 		coreMemory: CoreMemory{
 			Files: []CoreMemoryFile{
@@ -897,22 +897,26 @@ func TestLoopReply_IncludesCoreMemoryInSystemMessage(t *testing.T) {
 		t.Fatalf("model calls = %d, want 1", len(model.callMsgs))
 	}
 
-	system := messageText(model.callMsgs[0][0])
+	if got, want := len(model.callMsgs[0]), 3; got != want {
+		t.Fatalf("request messages len = %d, want %d", got, want)
+	}
+
+	system := messageText(model.callMsgs[0][1])
 	if !strings.Contains(system, "<core_memory>") {
-		t.Fatalf("system prompt missing core memory section: %q", system)
+		t.Fatalf("core memory message missing section: %q", system)
 	}
 	if !strings.Contains(
 		system,
 		"<core_file description=\"Core behavior guide\" limit=\"6000\" path=\"core/AGENT.md\">",
 	) {
-		t.Fatalf("system prompt missing core file metadata: %q", system)
+		t.Fatalf("core memory message missing core file metadata: %q", system)
 	}
 	if !strings.Contains(system, "# AGENT.md\n- Be precise.") {
-		t.Fatalf("system prompt missing core file body: %q", system)
+		t.Fatalf("core memory message missing core file body: %q", system)
 	}
 }
 
-func TestLoopReply_IncludesWorkingMemoryInSystemMessageAfterCoreMemory(t *testing.T) {
+func TestLoopReply_IncludesOrderedSystemPrefix(t *testing.T) {
 	store := &fakeConversationStore{
 		coreMemory: CoreMemory{
 			Files: []CoreMemoryFile{
@@ -949,37 +953,38 @@ func TestLoopReply_IncludesWorkingMemoryInSystemMessageAfterCoreMemory(t *testin
 		t.Fatalf("Reply() error = %v", err)
 	}
 
-	system := messageText(model.callMsgs[0][0])
+	call := model.callMsgs[0]
+	if got, want := len(call), 5; got != want {
+		t.Fatalf("request messages len = %d, want %d", got, want)
+	}
+	if got := messageText(call[0]); got != DefaultSystemPrompt {
+		t.Fatalf("base system message = %q, want default prompt", got)
+	}
+	if got := messageText(call[1]); !strings.Contains(got, "<core_memory>") {
+		t.Fatalf("core memory message missing section:\n%s", got)
+	}
+	if got := messageText(call[2]); !strings.Contains(got, "<skill_catalog>") {
+		t.Fatalf("skill catalog message missing section:\n%s", got)
+	}
+	working := messageText(call[3])
 	for _, want := range []string{
-		"<core_memory>",
 		"<working_memory path=\"working/WORKING_MEMORY.md\">",
 		"# Working Memory",
 		"Implement canonical working memory",
-		"<skill_catalog>",
 	} {
-		if !strings.Contains(system, want) {
-			t.Fatalf("system prompt missing %q:\n%s", want, system)
+		if !strings.Contains(working, want) {
+			t.Fatalf("working memory message missing %q:\n%s", want, working)
 		}
 	}
-
-	coreIdx := strings.Index(system, "<core_memory>")
-	workingIdx := strings.Index(system, "<working_memory path=")
-	skillIdx := strings.Index(system, "<skill_catalog>")
-	if coreIdx == -1 || workingIdx == -1 || skillIdx == -1 {
-		t.Fatalf("missing prompt sections:\n%s", system)
+	if got := call[4].Role; got != conversation.UserRole {
+		t.Fatalf("call[4].Role = %q, want %q", got, conversation.UserRole)
 	}
-	if !(coreIdx < workingIdx && workingIdx < skillIdx) {
-		t.Fatalf(
-			"prompt section order = core:%d working:%d skill:%d\n%s",
-			coreIdx,
-			workingIdx,
-			skillIdx,
-			system,
-		)
+	if got := messageText(call[4]); got != "hello" {
+		t.Fatalf("user message = %q, want hello", got)
 	}
 }
 
-func TestLoopReply_IncludesSkillCatalogInSystemMessage(t *testing.T) {
+func TestLoopReply_IncludesSkillCatalogInSeparateSystemMessage(t *testing.T) {
 	store := &fakeConversationStore{
 		skillCatalog: SkillCatalog{
 			Entries: []SkillCatalogEntry{
@@ -1002,7 +1007,10 @@ func TestLoopReply_IncludesSkillCatalogInSystemMessage(t *testing.T) {
 		t.Fatalf("Reply() error = %v", err)
 	}
 
-	system := messageText(model.callMsgs[0][0])
+	if got, want := len(model.callMsgs[0]), 3; got != want {
+		t.Fatalf("request messages len = %d, want %d", got, want)
+	}
+	system := messageText(model.callMsgs[0][1])
 	for _, want := range []string{
 		"<skill_catalog>",
 		`<skill name="skill-creator" path="/skills/@builtin/skill-creator/SKILL.md" source="builtin">`,

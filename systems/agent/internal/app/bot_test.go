@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,6 +24,24 @@ type fakeModelCall struct {
 	model    string
 	tools    []agent.ToolDefinition
 	messages []conversation.Message
+}
+
+type funcModelClient struct {
+	complete func(
+		context.Context,
+		string,
+		[]conversation.Message,
+		[]agent.ToolDefinition,
+	) (agent.ModelClientResult, error)
+}
+
+func (f *funcModelClient) Complete(
+	ctx context.Context,
+	model string,
+	messages []conversation.Message,
+	tools []agent.ToolDefinition,
+) (agent.ModelClientResult, error) {
+	return f.complete(ctx, model, messages, tools)
 }
 
 func (f *fakeModelClient) Complete(
@@ -137,6 +157,146 @@ func TestNewModelAdapterRoutesConfiguredModelsAndSuppressesTools(t *testing.T) {
 			clients["openai-sub"].calls[0].model,
 			"gpt-5-codex",
 		)
+	}
+}
+
+func TestEngineFallbackDoesNotLeakProviderLocalSystemMessagesAcrossProviders(t *testing.T) {
+	type providerClient struct {
+		profile       string
+		err           error
+		receivedCalls [][]conversation.Message
+		localCalls    [][]conversation.Message
+	}
+
+	insertProfile := func(messages []conversation.Message, profile string) []conversation.Message {
+		out := conversation.CloneMessages(messages)
+		insertAt := 0
+		for insertAt < len(out) && out[insertAt].Role == conversation.SystemRole {
+			insertAt++
+		}
+		out = append(out, conversation.Message{})
+		copy(out[insertAt+1:], out[insertAt:])
+		out[insertAt] = conversation.SystemMessage(profile)
+		return out
+	}
+
+	codexClient := &providerClient{
+		profile: `<provider_profile provider="openai-codex">codex</provider_profile>`,
+		err:     errors.New("codex failed"),
+	}
+	kimiClient := &providerClient{
+		profile: `<provider_profile provider="openai-compatible">kimi</provider_profile>`,
+	}
+
+	adapter, err := newModelAdapterWithFactory([]config.AgentModelRuntime{
+		{
+			Ref:           "gpt-5.4",
+			ProviderName:  "openai",
+			ProviderModel: "gpt-5.4",
+			Capabilities:  config.ModelCapabilities{Text: true},
+		},
+		{
+			Ref:           "kimi-k2.5",
+			ProviderName:  "moonshot",
+			ProviderModel: "kimi-k2.5",
+			Capabilities:  config.ModelCapabilities{Text: true},
+		},
+	}, nil, func(modelCfg config.AgentModelRuntime, _ q15media.Store) (agent.ModelClient, error) {
+		switch modelCfg.ProviderName {
+		case "openai":
+			return &funcModelClient{
+				complete: func(
+					_ context.Context,
+					_ string,
+					messages []conversation.Message,
+					_ []agent.ToolDefinition,
+				) (agent.ModelClientResult, error) {
+					codexClient.receivedCalls = append(
+						codexClient.receivedCalls,
+						conversation.CloneMessages(messages),
+					)
+					codexClient.localCalls = append(
+						codexClient.localCalls,
+						insertProfile(messages, codexClient.profile),
+					)
+					return agent.ModelClientResult{}, codexClient.err
+				},
+			}, nil
+		case "moonshot":
+			return &funcModelClient{
+				complete: func(
+					_ context.Context,
+					_ string,
+					messages []conversation.Message,
+					_ []agent.ToolDefinition,
+				) (agent.ModelClientResult, error) {
+					kimiClient.receivedCalls = append(
+						kimiClient.receivedCalls,
+						conversation.CloneMessages(messages),
+					)
+					kimiClient.localCalls = append(
+						kimiClient.localCalls,
+						insertProfile(messages, kimiClient.profile),
+					)
+					return agent.ModelClientResult{
+						Messages: []conversation.Message{
+							conversation.AssistantMessage(conversation.Text("ok", "")),
+						},
+					}, nil
+				},
+			}, nil
+		default:
+			t.Fatalf("unexpected provider %q", modelCfg.ProviderName)
+			return nil, nil
+		}
+	})
+	if err != nil {
+		t.Fatalf("newModelAdapterWithFactory() error = %v", err)
+	}
+
+	engine := agent.NewEngineWithPlanner(adapter, adapter, nil, []string{"gpt-5.4", "kimi-k2.5"})
+	_, err = engine.Run(context.Background(), agent.EngineRequest{
+		Messages: []conversation.Message{
+			conversation.SystemMessage("base"),
+			conversation.UserMessage("hello"),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if got := len(codexClient.receivedCalls); got != 1 {
+		t.Fatalf("codex received calls = %d, want 1", got)
+	}
+	if got := len(kimiClient.receivedCalls); got != 1 {
+		t.Fatalf("kimi received calls = %d, want 1", got)
+	}
+	if got := conversation.TextValue(codexClient.receivedCalls[0][0]); got != "base" {
+		t.Fatalf("codex canonical system = %q, want %q", got, "base")
+	}
+	if got := conversation.TextValue(kimiClient.receivedCalls[0][0]); got != "base" {
+		t.Fatalf("kimi canonical system = %q, want %q", got, "base")
+	}
+	for _, message := range kimiClient.receivedCalls[0] {
+		if message.Role != conversation.SystemRole {
+			continue
+		}
+		text := conversation.TextValue(message)
+		if strings.Contains(text, `provider="openai-codex"`) {
+			t.Fatalf("kimi fallback received leaked codex profile:\n%s", text)
+		}
+	}
+	if got := conversation.TextValue(codexClient.localCalls[0][1]); !strings.Contains(
+		got,
+		`provider="openai-codex"`,
+	) {
+		t.Fatalf("codex local profile missing marker:\n%s", got)
+	}
+	if got := conversation.TextValue(kimiClient.localCalls[0][1]); !strings.Contains(
+		got,
+		`provider="openai-compatible"`,
+	) {
+		t.Fatalf("kimi local profile missing marker:\n%s", got)
 	}
 }
 
