@@ -240,6 +240,49 @@ func TestMapMessagesBuildsMultipartUserInputForImageInput(t *testing.T) {
 	}
 }
 
+func TestMapMessagesReplaysAssistantImages(t *testing.T) {
+	store, ref, rawImage := mustStoreTestImage(t)
+
+	input, err := mapMessages([]conversation.Message{
+		conversation.AssistantMessage(
+			conversation.Text("sent this", conversation.TextDispositionFinal),
+			conversation.Image(ref, ""),
+		),
+	}, store)
+	if err != nil {
+		t.Fatalf("mapMessages() error = %v", err)
+	}
+	if len(input) != 2 {
+		t.Fatalf("input len = %d, want 2", len(input))
+	}
+
+	assistantJSON := marshalInputItemToString(t, input[0])
+	for _, want := range []string{
+		`"role":"assistant"`,
+		`"phase":"final_answer"`,
+		`"type":"output_text"`,
+		`"text":"sent this"`,
+	} {
+		if !strings.Contains(assistantJSON, want) {
+			t.Fatalf("serialized assistant replay missing %q: %s", want, assistantJSON)
+		}
+	}
+
+	body := marshalInputItemToString(t, input[1])
+	wantDataURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString(rawImage)
+	for _, want := range []string{
+		`"type":"input_text"`,
+		assistantImageFollowupText,
+		`"role":"user"`,
+		`"type":"input_image"`,
+		wantDataURL,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("serialized assistant image followup missing %q: %s", want, body)
+		}
+	}
+}
+
 func TestMapMessagesPrependsExplicitUserTemporalMetadataTag(t *testing.T) {
 	location := time.FixedZone("UTC+2", 2*60*60)
 	metadata := &conversation.UserTemporalMetadata{

@@ -11,6 +11,7 @@ import (
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/bus"
+	"github.com/q15co/q15/systems/agent/internal/conversation"
 )
 
 type fakeAgentRunChannel struct {
@@ -18,15 +19,25 @@ type fakeAgentRunChannel struct {
 
 	sendTexts        []string
 	sendMessageTexts []string
+	sendPhotos       []fakeSentPhoto
 	editTexts        []string
+	deletedMessages  []string
 	reactions        []string
 	clearReactions   int
 	typingStarts     int
 	typingStops      int
 	nextMessageID    int
 	editErr          error
+	deleteErr        error
 	sendErr          error
 	sendMessageErr   error
+	sendPhotoErr     error
+}
+
+type fakeSentPhoto struct {
+	chatID   string
+	mediaRef string
+	caption  string
 }
 
 func (f *fakeAgentRunChannel) SendText(
@@ -59,6 +70,23 @@ func (f *fakeAgentRunChannel) SendTextMessage(
 	return strconv.Itoa(f.nextMessageID), nil
 }
 
+func (f *fakeAgentRunChannel) SendPhoto(
+	ctx context.Context,
+	chatID string,
+	mediaRef string,
+	caption string,
+) error {
+	_ = ctx
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sendPhotos = append(f.sendPhotos, fakeSentPhoto{
+		chatID:   chatID,
+		mediaRef: mediaRef,
+		caption:  caption,
+	})
+	return f.sendPhotoErr
+}
+
 func (f *fakeAgentRunChannel) EditText(
 	ctx context.Context,
 	chatID string,
@@ -72,6 +100,19 @@ func (f *fakeAgentRunChannel) EditText(
 	defer f.mu.Unlock()
 	f.editTexts = append(f.editTexts, text)
 	return f.editErr
+}
+
+func (f *fakeAgentRunChannel) DeleteMessage(
+	ctx context.Context,
+	chatID string,
+	messageID string,
+) error {
+	_ = ctx
+	_ = chatID
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.deletedMessages = append(f.deletedMessages, messageID)
+	return f.deleteErr
 }
 
 func (f *fakeAgentRunChannel) StartTyping(
@@ -441,6 +482,128 @@ func TestAgentRunSession_MultiChunkFinalKeepsPlaceholder(t *testing.T) {
 	)
 }
 
+func TestAgentRunSession_SingleImageReplyUsesCaptionWithoutPlaceholder(t *testing.T) {
+	channel := &fakeAgentRunChannel{}
+	session := newAgentRunSession(channel, "123", "", progressModeProgress)
+
+	session.Finish(context.Background(), agent.ReplyResult{
+		Text:        "done",
+		Attachments: []conversation.Part{conversation.Image("media://sha256/reply", "")},
+	})
+
+	channel.mu.Lock()
+	defer channel.mu.Unlock()
+	if len(channel.sendPhotos) != 1 {
+		t.Fatalf("sendPhotos len = %d, want 1", len(channel.sendPhotos))
+	}
+	if got := channel.sendPhotos[0]; got.mediaRef != "media://sha256/reply" ||
+		got.caption != "done" {
+		t.Fatalf("sendPhotos[0] = %#v, want captioned photo", got)
+	}
+	if len(channel.sendTexts) != 0 {
+		t.Fatalf("sendTexts = %#v, want none", channel.sendTexts)
+	}
+}
+
+func TestAgentRunSession_MultiImageReplySendsTextAndPhotosSeparately(t *testing.T) {
+	channel := &fakeAgentRunChannel{}
+	session := newAgentRunSession(channel, "123", "", progressModeProgress)
+
+	session.Finish(context.Background(), agent.ReplyResult{
+		Text: "done",
+		MediaRefs: []string{
+			"media://sha256/one",
+			"media://sha256/two",
+		},
+	})
+
+	channel.mu.Lock()
+	defer channel.mu.Unlock()
+	if len(channel.sendTexts) != 1 || channel.sendTexts[0] != "done" {
+		t.Fatalf("sendTexts = %#v, want [done]", channel.sendTexts)
+	}
+	if len(channel.sendPhotos) != 2 {
+		t.Fatalf("sendPhotos len = %d, want 2", len(channel.sendPhotos))
+	}
+	for i, photo := range channel.sendPhotos {
+		if photo.caption != "" {
+			t.Fatalf("sendPhotos[%d].caption = %q, want empty", i, photo.caption)
+		}
+	}
+}
+
+func TestAgentRunSession_ImageOnlyReplyDeletesPlaceholderBeforeSendingPhoto(t *testing.T) {
+	withTelegramProgressDurations(
+		5*time.Millisecond,
+		time.Hour,
+		time.Hour,
+		5*time.Millisecond,
+		func() {
+			channel := &fakeAgentRunChannel{}
+			session := newAgentRunSession(channel, "123", "42", progressModeProgress)
+			ctx := context.Background()
+
+			session.start(ctx)
+			waitForCondition(t, 200*time.Millisecond, func() bool {
+				channel.mu.Lock()
+				defer channel.mu.Unlock()
+				return len(channel.sendMessageTexts) == 1
+			})
+
+			session.Finish(ctx, agent.ReplyResult{
+				MediaRefs: []string{"media://sha256/reply"},
+			})
+
+			channel.mu.Lock()
+			defer channel.mu.Unlock()
+			if len(channel.deletedMessages) != 1 || channel.deletedMessages[0] != "1" {
+				t.Fatalf("deletedMessages = %#v, want [1]", channel.deletedMessages)
+			}
+			if len(channel.sendPhotos) != 1 {
+				t.Fatalf("sendPhotos len = %d, want 1", len(channel.sendPhotos))
+			}
+			if len(channel.editTexts) != 0 {
+				t.Fatalf("editTexts = %#v, want none", channel.editTexts)
+			}
+		},
+	)
+}
+
+func TestAgentRunSession_PlaceholderTextReplyCanStillSendPhoto(t *testing.T) {
+	withTelegramProgressDurations(
+		5*time.Millisecond,
+		time.Hour,
+		time.Hour,
+		5*time.Millisecond,
+		func() {
+			channel := &fakeAgentRunChannel{}
+			session := newAgentRunSession(channel, "123", "42", progressModeProgress)
+			ctx := context.Background()
+
+			session.start(ctx)
+			waitForCondition(t, 200*time.Millisecond, func() bool {
+				channel.mu.Lock()
+				defer channel.mu.Unlock()
+				return len(channel.sendMessageTexts) == 1
+			})
+
+			session.Finish(ctx, agent.ReplyResult{
+				Text:      "done",
+				MediaRefs: []string{"media://sha256/reply"},
+			})
+
+			channel.mu.Lock()
+			defer channel.mu.Unlock()
+			if len(channel.editTexts) != 1 || channel.editTexts[0] != "done" {
+				t.Fatalf("editTexts = %#v, want [done]", channel.editTexts)
+			}
+			if len(channel.sendPhotos) != 1 || channel.sendPhotos[0].caption != "" {
+				t.Fatalf("sendPhotos = %#v, want one uncaptained photo", channel.sendPhotos)
+			}
+		},
+	)
+}
+
 func TestAgentRunSession_EditFailureFallsBackToNormalSend(t *testing.T) {
 	withTelegramProgressDurations(
 		5*time.Millisecond,
@@ -471,6 +634,24 @@ func TestAgentRunSession_EditFailureFallsBackToNormalSend(t *testing.T) {
 			}
 		},
 	)
+}
+
+func TestAgentRunSession_PhotoSendFailureFallsBackToTextNotice(t *testing.T) {
+	channel := &fakeAgentRunChannel{sendPhotoErr: errors.New("boom")}
+	session := newAgentRunSession(channel, "123", "", progressModeProgress)
+
+	session.Finish(context.Background(), agent.ReplyResult{
+		MediaRefs: []string{"media://sha256/reply"},
+	})
+
+	channel.mu.Lock()
+	defer channel.mu.Unlock()
+	if len(channel.sendPhotos) != 1 {
+		t.Fatalf("sendPhotos len = %d, want 1", len(channel.sendPhotos))
+	}
+	if len(channel.sendTexts) != 1 || channel.sendTexts[0] != imageSendFailureText {
+		t.Fatalf("sendTexts = %#v, want [%q]", channel.sendTexts, imageSendFailureText)
+	}
 }
 
 func TestAgentRunSession_AbortClearsReactionAndEditsStatus(t *testing.T) {

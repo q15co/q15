@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/q15co/q15/systems/agent/internal/conversation"
+	"github.com/q15co/q15/systems/agent/internal/turnreply"
 )
 
 func systemMessage(text string) conversation.Message {
@@ -52,11 +53,10 @@ func assistantTextMessage(
 }
 
 func toolResultMessage(toolCallID string, result ToolResult, isError bool) conversation.Message {
-	parts := make([]conversation.Part, 0, 1+len(result.MediaRefs))
+	attachments := toolResultAttachments(result)
+	parts := make([]conversation.Part, 0, 1+len(attachments))
 	parts = append(parts, conversation.ToolResult(toolCallID, result.Output, isError))
-	for _, ref := range result.MediaRefs {
-		parts = append(parts, conversation.Image(ref, ""))
-	}
+	parts = append(parts, attachments...)
 	return conversation.Message{
 		Role:  conversation.ToolRole,
 		Parts: conversation.NormalizeParts(parts),
@@ -80,8 +80,61 @@ func resultToolCalls(messages []conversation.Message) []ToolCall {
 	return out
 }
 
-func finalAnswer(messages []conversation.Message) string {
-	return conversation.FinalAnswer(messages)
+func finalReply(messages []conversation.Message) ReplyResult {
+	selection := turnreply.Extract(messages)
+	return ReplyResult{
+		Text:        selection.Text,
+		Attachments: conversation.CloneParts(selection.Attachments),
+		MediaRefs:   mediaRefsFromAttachments(selection.Attachments),
+	}
+}
+
+func toolResultAttachments(result ToolResult) []conversation.Part {
+	if len(result.Attachments) > 0 {
+		return conversation.CloneParts(conversation.NormalizeParts(result.Attachments))
+	}
+	return imagePartsFromMediaRefs(result.MediaRefs)
+}
+
+func imagePartsFromMediaRefs(refs []string) []conversation.Part {
+	if len(refs) == 0 {
+		return nil
+	}
+	out := make([]conversation.Part, 0, len(refs))
+	for _, ref := range refs {
+		ref = strings.TrimSpace(ref)
+		if ref == "" {
+			continue
+		}
+		out = append(out, conversation.Image(ref, ""))
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func mediaRefsFromAttachments(parts []conversation.Part) []string {
+	seen := make(map[string]struct{})
+	out := make([]string, 0, len(parts))
+	for _, part := range conversation.NormalizeParts(parts) {
+		switch part.Type {
+		case conversation.ImagePartType:
+			ref := strings.TrimSpace(part.MediaRef)
+			if ref == "" {
+				continue
+			}
+			if _, ok := seen[ref]; ok {
+				continue
+			}
+			seen[ref] = struct{}{}
+			out = append(out, ref)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func withUserTemporalMetadata(

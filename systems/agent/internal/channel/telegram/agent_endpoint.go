@@ -11,10 +11,12 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/bus"
 	channelport "github.com/q15co/q15/systems/agent/internal/channel"
+	"github.com/q15co/q15/systems/agent/internal/conversation"
 )
 
 var (
@@ -35,15 +37,18 @@ const (
 const telegramAckReaction = "👀"
 
 const (
-	thinkingStatus      = "🧠 Thinking…"
-	stillThinkingStatus = "🧠 Still thinking…"
-	stoppedStatusPrefix = "⏹️ Stopped:"
+	thinkingStatus       = "🧠 Thinking…"
+	stillThinkingStatus  = "🧠 Still thinking…"
+	stoppedStatusPrefix  = "⏹️ Stopped:"
+	imageSendFailureText = "I couldn't send the generated image."
 )
 
 type agentRunChannel interface {
 	SendText(context.Context, string, string) error
 	SendTextMessage(context.Context, string, string) (string, error)
+	SendPhoto(context.Context, string, string, string) error
 	EditText(context.Context, string, string, string) error
+	DeleteMessage(context.Context, string, string) error
 	StartTyping(context.Context, string) (func(), error)
 	SetReaction(context.Context, string, string, string) error
 	ClearReaction(context.Context, string, string) error
@@ -271,33 +276,42 @@ func (s *agentRunSession) Finish(ctx context.Context, result agent.ReplyResult) 
 		typingStop()
 	}
 
-	finalText := result.Text
-	if strings.TrimSpace(finalText) == "" {
-		finalText = "(assistant returned no text)"
-	}
+	finalText := strings.TrimSpace(result.Text)
+	mediaRefs := normalizeTelegramPhotoRefs(result)
 
 	s.opMu.Lock()
-	if statusMessageID == "" {
-		if err := s.channel.SendText(ctx, s.chatID, finalText); err != nil {
-			s.logError("telegram final send error: %v", err)
+	if len(mediaRefs) == 0 {
+		if finalText == "" {
+			finalText = "(assistant returned no text)"
 		}
+		s.sendFinalText(ctx, statusMessageID, finalText)
 	} else {
-		chunks := SplitText(finalText)
-		if len(chunks) == 0 {
-			chunks = []string{finalText}
-		}
-
-		editErr := s.channel.EditText(ctx, s.chatID, statusMessageID, chunks[0])
-		if editErr != nil {
-			s.logError("telegram placeholder edit error: %v", editErr)
-			if err := s.channel.SendText(ctx, s.chatID, finalText); err != nil {
-				s.logError("telegram final fallback send error: %v", err)
+		if statusMessageID == "" && len(mediaRefs) == 1 && canUseTelegramPhotoCaption(finalText) {
+			if err := s.channel.SendPhoto(ctx, s.chatID, mediaRefs[0], finalText); err != nil {
+				s.logError("telegram photo send error: %v", err)
+				if finalText != "" {
+					s.sendFinalText(ctx, "", finalText)
+				} else if err := s.channel.SendText(ctx, s.chatID, imageSendFailureText); err != nil {
+					s.logError("telegram image fallback send error: %v", err)
+				}
 			}
 		} else {
-			for _, chunk := range chunks[1:] {
-				if _, err := s.channel.SendTextMessage(ctx, s.chatID, chunk); err != nil {
-					s.logError("telegram continuation send error: %v", err)
-					break
+			if finalText != "" {
+				s.sendFinalText(ctx, statusMessageID, finalText)
+			} else {
+				s.deleteStatusMessage(ctx, statusMessageID)
+			}
+			sentPhotos := 0
+			for _, ref := range mediaRefs {
+				if err := s.channel.SendPhoto(ctx, s.chatID, ref, ""); err != nil {
+					s.logError("telegram photo send error: %v", err)
+					continue
+				}
+				sentPhotos++
+			}
+			if sentPhotos == 0 && finalText == "" {
+				if err := s.channel.SendText(ctx, s.chatID, imageSendFailureText); err != nil {
+					s.logError("telegram image fallback send error: %v", err)
 				}
 			}
 		}
@@ -308,6 +322,49 @@ func (s *agentRunSession) Finish(ctx context.Context, result agent.ReplyResult) 
 		if err := s.channel.ClearReaction(ctx, s.chatID, s.messageID); err != nil {
 			s.logError("telegram reaction clear error: %v", err)
 		}
+	}
+}
+
+func (s *agentRunSession) sendFinalText(ctx context.Context, statusMessageID, finalText string) {
+	if strings.TrimSpace(finalText) == "" {
+		return
+	}
+
+	if statusMessageID == "" {
+		if err := s.channel.SendText(ctx, s.chatID, finalText); err != nil {
+			s.logError("telegram final send error: %v", err)
+		}
+		return
+	}
+
+	chunks := SplitText(finalText)
+	if len(chunks) == 0 {
+		chunks = []string{finalText}
+	}
+
+	if err := s.channel.EditText(ctx, s.chatID, statusMessageID, chunks[0]); err != nil {
+		s.logError("telegram placeholder edit error: %v", err)
+		if err := s.channel.SendText(ctx, s.chatID, finalText); err != nil {
+			s.logError("telegram final fallback send error: %v", err)
+		}
+		return
+	}
+
+	for _, chunk := range chunks[1:] {
+		if _, err := s.channel.SendTextMessage(ctx, s.chatID, chunk); err != nil {
+			s.logError("telegram continuation send error: %v", err)
+			return
+		}
+	}
+}
+
+func (s *agentRunSession) deleteStatusMessage(ctx context.Context, statusMessageID string) {
+	statusMessageID = strings.TrimSpace(statusMessageID)
+	if statusMessageID == "" {
+		return
+	}
+	if err := s.channel.DeleteMessage(ctx, s.chatID, statusMessageID); err != nil {
+		s.logError("telegram placeholder delete error: %v", err)
 	}
 }
 
@@ -675,4 +732,59 @@ func normalizeDisplayPath(path string) string {
 		return ""
 	}
 	return filepath.ToSlash(filepath.Clean(path))
+}
+
+func normalizeTelegramPhotoRefs(result agent.ReplyResult) []string {
+	if refs := imageMediaRefs(result.Attachments); len(refs) > 0 {
+		return refs
+	}
+	return uniqueMediaRefs(result.MediaRefs)
+}
+
+func imageMediaRefs(parts []conversation.Part) []string {
+	seen := make(map[string]struct{})
+	out := make([]string, 0, len(parts))
+	for _, part := range conversation.NormalizeParts(parts) {
+		if part.Type != conversation.ImagePartType {
+			continue
+		}
+		ref := strings.TrimSpace(part.MediaRef)
+		if ref == "" {
+			continue
+		}
+		if _, ok := seen[ref]; ok {
+			continue
+		}
+		seen[ref] = struct{}{}
+		out = append(out, ref)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func uniqueMediaRefs(refs []string) []string {
+	seen := make(map[string]struct{})
+	out := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		ref = strings.TrimSpace(ref)
+		if ref == "" {
+			continue
+		}
+		if _, ok := seen[ref]; ok {
+			continue
+		}
+		seen[ref] = struct{}{}
+		out = append(out, ref)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func canUseTelegramPhotoCaption(text string) bool {
+	text = strings.TrimSpace(text)
+	return utf8.RuneCountInString(text) <= telegramPhotoCaptionRunes
 }

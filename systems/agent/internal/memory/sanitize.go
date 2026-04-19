@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/q15co/q15/systems/agent/internal/conversation"
+	"github.com/q15co/q15/systems/agent/internal/turnreply"
 )
 
 func sanitizeStoredMessages(in []conversation.Message) []conversation.Message {
@@ -13,6 +14,7 @@ func sanitizeStoredMessages(in []conversation.Message) []conversation.Message {
 	}
 
 	backfillPortableReasoningForToolReplay(normalized)
+	normalized = turnreply.Canonicalize(normalized)
 
 	out := make([]conversation.Message, 0, len(normalized))
 	for _, msg := range normalized {

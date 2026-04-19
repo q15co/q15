@@ -732,6 +732,27 @@ func TestLoopReply_ToolProducedImageRequiresImageInputOnNextTurn(t *testing.T) {
 	if out.Text != "done" {
 		t.Fatalf("Reply().Text = %q, want done", out.Text)
 	}
+	if got := out.MediaRefs; len(got) != 1 || got[0] != "media://sha256/abc" {
+		t.Fatalf("Reply().MediaRefs = %#v, want tool image ref", got)
+	}
+	if got := out.Attachments; len(got) != 1 || got[0].MediaRef != "media://sha256/abc" {
+		t.Fatalf("Reply().Attachments = %#v, want image attachment", got)
+	}
+	if len(store.lastAppend) != 4 {
+		t.Fatalf("persisted turn len = %d, want 4", len(store.lastAppend))
+	}
+	if toolParts := store.lastAppend[2].Parts; len(toolParts) != 1 ||
+		toolParts[0].Type != conversation.ToolResultPartType {
+		t.Fatalf("persisted tool parts = %#v, want tool_result only", toolParts)
+	}
+	final := store.lastAppend[3]
+	if final.Role != conversation.AssistantRole || len(final.Parts) != 2 {
+		t.Fatalf("persisted final assistant = %#v, want text plus image", final)
+	}
+	if final.Parts[1].Type != conversation.ImagePartType ||
+		final.Parts[1].MediaRef != "media://sha256/abc" {
+		t.Fatalf("persisted final image part = %#v, want promoted image", final.Parts[1])
+	}
 	if len(planner.plannedRequirements) != 2 {
 		t.Fatalf("plannedRequirements len = %d, want 2", len(planner.plannedRequirements))
 	}
@@ -740,6 +761,102 @@ func TestLoopReply_ToolProducedImageRequiresImageInputOnNextTurn(t *testing.T) {
 	}
 	if !planner.plannedRequirements[1].ImageInput {
 		t.Fatalf("second turn requirements = %#v, want image_input", planner.plannedRequirements[1])
+	}
+}
+
+func TestLoopReply_ExecThenLoadImageCarriesFinalMediaRefs(t *testing.T) {
+	store := &fakeConversationStore{}
+	planner := &fakePlanner{}
+	model := &fakeModelClient{
+		results: []ModelClientResult{
+			toolCallResult(
+				"call-1",
+				"exec",
+				`{"command":"curl -o /workspace/cat.png https://example.com/cat.png"}`,
+			),
+			toolCallResult("call-2", "load_image", `{"path":"/workspace/cat.png"}`),
+			assistantResult("done"),
+		},
+	}
+	registry, err := NewToolRegistry(
+		&testTool{
+			def: ToolDefinition{Name: "exec"},
+			run: func(context.Context, string) (string, error) {
+				return "Exit-Code: 0\n--- STDOUT ---\ndownloaded /workspace/cat.png", nil
+			},
+		},
+		&structuredTestTool{
+			def: ToolDefinition{Name: "load_image"},
+			runResult: func(context.Context, string) (ToolResult, error) {
+				return ToolResult{
+					Output:    "Loaded image: /workspace/cat.png",
+					MediaRefs: []string{"media://sha256/cat"},
+				}, nil
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewToolRegistry() error = %v", err)
+	}
+
+	loop := NewLoopWithPlanner(
+		model,
+		planner,
+		registry,
+		[]string{"m1"},
+		DefaultSystemPrompt,
+		store,
+		3,
+	)
+	out, err := loop.Reply(
+		context.Background(),
+		userTextMessage("download and send the image"),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("Reply() error = %v", err)
+	}
+	if out.Text != "done" {
+		t.Fatalf("Reply().Text = %q, want done", out.Text)
+	}
+	if got := out.MediaRefs; len(got) != 1 || got[0] != "media://sha256/cat" {
+		t.Fatalf("Reply().MediaRefs = %#v, want load_image ref", got)
+	}
+	if got := out.Attachments; len(got) != 1 || got[0].MediaRef != "media://sha256/cat" {
+		t.Fatalf("Reply().Attachments = %#v, want load_image attachment", got)
+	}
+	if len(store.lastAppend) != 6 {
+		t.Fatalf("persisted turn len = %d, want 6", len(store.lastAppend))
+	}
+	if toolParts := store.lastAppend[4].Parts; len(toolParts) != 1 ||
+		toolParts[0].Type != conversation.ToolResultPartType {
+		t.Fatalf("persisted load_image tool parts = %#v, want tool_result only", toolParts)
+	}
+	final := store.lastAppend[5]
+	if final.Role != conversation.AssistantRole || len(final.Parts) != 2 {
+		t.Fatalf("persisted final assistant = %#v, want text plus image", final)
+	}
+	if final.Parts[1].Type != conversation.ImagePartType ||
+		final.Parts[1].MediaRef != "media://sha256/cat" {
+		t.Fatalf("persisted final image part = %#v, want promoted image", final.Parts[1])
+	}
+	if len(planner.plannedRequirements) != 3 {
+		t.Fatalf("plannedRequirements len = %d, want 3", len(planner.plannedRequirements))
+	}
+	if planner.plannedRequirements[0].ImageInput {
+		t.Fatalf("first turn requirements = %#v, want text-only", planner.plannedRequirements[0])
+	}
+	if planner.plannedRequirements[1].ImageInput {
+		t.Fatalf(
+			"second turn requirements = %#v, want text-only after exec",
+			planner.plannedRequirements[1],
+		)
+	}
+	if !planner.plannedRequirements[2].ImageInput {
+		t.Fatalf(
+			"third turn requirements = %#v, want image_input after load_image",
+			planner.plannedRequirements[2],
+		)
 	}
 }
 

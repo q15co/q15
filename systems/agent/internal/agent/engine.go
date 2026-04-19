@@ -8,6 +8,7 @@ import (
 
 	"github.com/q15co/q15/systems/agent/internal/conversation"
 	"github.com/q15co/q15/systems/agent/internal/modelselection"
+	"github.com/q15co/q15/systems/agent/internal/turnreply"
 )
 
 // Engine runs model/tool turns without assuming a user-facing chat turn or
@@ -32,10 +33,12 @@ type EngineRequest struct {
 // EngineResult captures the engine-produced messages and final outcome for one
 // execution.
 type EngineResult struct {
-	Messages  []conversation.Message
-	FinalText string
-	ModelRef  string
-	Turn      int
+	Messages    []conversation.Message
+	FinalText   string
+	Attachments []conversation.Part
+	MediaRefs   []string
+	ModelRef    string
+	Turn        int
 }
 
 // NewEngine constructs an Engine with default planner behavior.
@@ -109,8 +112,9 @@ func (e *Engine) Run(ctx context.Context, req EngineRequest) (EngineResult, erro
 
 		resultMessages := conversation.NormalizeMessages(copyMessages(result.Messages))
 		toolCalls := resultToolCalls(resultMessages)
-		answer := finalAnswer(resultMessages)
-		if len(toolCalls) == 0 && answer == "" &&
+		reply := finalReply(resultMessages)
+		if len(toolCalls) == 0 && strings.TrimSpace(reply.Text) == "" &&
+			len(reply.MediaRefs) == 0 &&
 			emptyAssistantRetries < maxEmptyAssistantRetries {
 			emptyAssistantRetries++
 			continue
@@ -120,15 +124,18 @@ func (e *Engine) Run(ctx context.Context, req EngineRequest) (EngineResult, erro
 		messages = append(messages, resultMessages...)
 
 		if len(toolCalls) == 0 {
-			answer = finalAnswer(messages[start:])
-			if answer == "" {
-				answer = "(assistant returned no text)"
+			finalMessages := turnreply.Canonicalize(messages[start:])
+			reply = finalReply(finalMessages)
+			if strings.TrimSpace(reply.Text) == "" && len(reply.MediaRefs) == 0 {
+				reply.Text = "(assistant returned no text)"
 			}
 			return EngineResult{
-				Messages:  copyMessages(messages[start:]),
-				FinalText: answer,
-				ModelRef:  modelRef,
-				Turn:      turn,
+				Messages:    copyMessages(finalMessages),
+				FinalText:   reply.Text,
+				Attachments: conversation.CloneParts(reply.Attachments),
+				MediaRefs:   append([]string(nil), reply.MediaRefs...),
+				ModelRef:    modelRef,
+				Turn:        turn,
 			}, nil
 		}
 
@@ -174,11 +181,15 @@ func (e *Engine) Run(ctx context.Context, req EngineRequest) (EngineResult, erro
 						assessment.NoProgressCount,
 					),
 				}
+				finalMessages := turnreply.Canonicalize(messages[start:])
+				reply := finalReply(finalMessages)
 				return EngineResult{
-					Messages:  copyMessages(messages[start:]),
-					FinalText: stopSummary,
-					ModelRef:  modelRef,
-					Turn:      turn,
+					Messages:    copyMessages(finalMessages),
+					FinalText:   stopSummary,
+					Attachments: conversation.CloneParts(reply.Attachments),
+					MediaRefs:   append([]string(nil), reply.MediaRefs...),
+					ModelRef:    modelRef,
+					Turn:        turn,
 				}, stopErr
 			}
 		}
@@ -195,9 +206,13 @@ func (e *Engine) Run(ctx context.Context, req EngineRequest) (EngineResult, erro
 		Reason: StopReasonToolTurnLimit,
 		Detail: fmt.Sprintf("max tool-call turns reached (%d)", e.maxTurns),
 	}
+	finalMessages := turnreply.Canonicalize(messages[start:])
+	reply := finalReply(finalMessages)
 	return EngineResult{
-		Messages:  copyMessages(messages[start:]),
-		FinalText: stopSummary,
+		Messages:    copyMessages(finalMessages),
+		FinalText:   stopSummary,
+		Attachments: conversation.CloneParts(reply.Attachments),
+		MediaRefs:   append([]string(nil), reply.MediaRefs...),
 	}, stopErr
 }
 

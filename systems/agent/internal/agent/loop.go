@@ -260,7 +260,11 @@ func (l *Loop) Reply(
 		ModelRef:  result.ModelRef,
 		FinalText: result.FinalText,
 	})
-	return ReplyResult{Text: result.FinalText}, nil
+	return ReplyResult{
+		Text:        result.FinalText,
+		Attachments: conversation.CloneParts(result.Attachments),
+		MediaRefs:   append([]string(nil), result.MediaRefs...),
+	}, nil
 }
 
 func (l *Loop) persistTurn(

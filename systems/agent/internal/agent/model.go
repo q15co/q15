@@ -33,8 +33,11 @@ type ToolDefinition struct {
 type ToolResult struct {
 	// Output is the textual result returned to the model as the tool-result body.
 	Output string
-	// MediaRefs are media-store refs attached to the tool result for follow-up
-	// multimodal inspection on the next model turn.
+	// Attachments are typed transcript parts attached to the tool result for
+	// follow-up multimodal inspection on the next model turn.
+	Attachments []conversation.Part
+	// MediaRefs is the legacy image-ref convenience field. When Attachments is
+	// empty, these refs are treated as image attachments.
 	MediaRefs []string
 }
 
@@ -42,9 +45,12 @@ type ToolResult struct {
 type ReplyResult struct {
 	// Text is the final assistant text to render back to the user.
 	Text string
-	// MediaRefs are transport-agnostic media-store refs attached to the final
-	// assistant response. Current transports may ignore them until outbound
-	// multimodal support is implemented.
+	// Attachments are typed canonical transcript parts attached to the final
+	// assistant response. Transports may support only a subset of attachment
+	// types.
+	Attachments []conversation.Part
+	// MediaRefs is the legacy image-ref convenience field derived from
+	// Attachments when possible.
 	MediaRefs []string
 }
 

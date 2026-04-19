@@ -24,9 +24,10 @@ const (
 	codexOriginator = "codex_cli_rs"
 	codexBetaHeader = "responses=experimental"
 
-	openAIResponsesReplayKey = "openai_responses"
-	toolImageFollowupText    = "Use the attached image output from the previous tool result when continuing."
-	systemOnlyInputText      = "Use the system instructions above as the full task definition and complete them directly."
+	openAIResponsesReplayKey   = "openai_responses"
+	toolImageFollowupText      = "Use the attached image output from the previous tool result when continuing."
+	assistantImageFollowupText = "Use the attached image from the assistant's previous response when continuing."
+	systemOnlyInputText        = "Use the system instructions above as the full task definition and complete them directly."
 )
 
 type tokenSource func(context.Context) (token string, accountID string, err error)
@@ -216,21 +217,27 @@ func mapMessages(
 			}
 			input = append(input, item)
 		case conversation.AssistantRole:
+			assistantParts := make([]conversation.Part, 0, len(msg.Parts))
+			flushAssistantParts := func() error {
+				items, err := buildAssistantReplayItems(assistantParts, mediaStore)
+				if err != nil {
+					return err
+				}
+				if len(items) > 0 {
+					input = append(input, items...)
+				}
+				assistantParts = assistantParts[:0]
+				return nil
+			}
 			for _, part := range msg.Parts {
 				part = conversation.NormalizePart(part)
 				switch part.Type {
-				case conversation.TextPartType:
-					raw, ok, err := buildAssistantTextReplayMessage(part)
-					if err != nil {
+				case conversation.TextPartType, conversation.ImagePartType:
+					assistantParts = append(assistantParts, part)
+				case conversation.ReasoningPartType:
+					if err := flushAssistantParts(); err != nil {
 						return nil, fmt.Errorf("message %d: %w", i, err)
 					}
-					if ok {
-						input = append(
-							input,
-							param.Override[responses.ResponseInputItemUnionParam](raw),
-						)
-					}
-				case conversation.ReasoningPartType:
 					raw, ok, dropped, err := buildReasoningReplayItem(part)
 					if err != nil {
 						return nil, fmt.Errorf("message %d: %w", i, err)
@@ -243,6 +250,9 @@ func mapMessages(
 						)
 					}
 				case conversation.ToolCallPartType:
+					if err := flushAssistantParts(); err != nil {
+						return nil, fmt.Errorf("message %d: %w", i, err)
+					}
 					if strings.TrimSpace(part.Name) == "" {
 						return nil, fmt.Errorf("message %d: tool call name is required", i)
 					}
@@ -253,7 +263,16 @@ func mapMessages(
 							Arguments: part.Arguments,
 						},
 					})
+				default:
+					return nil, fmt.Errorf(
+						"message %d: unsupported assistant message part type %q",
+						i,
+						part.Type,
+					)
 				}
+			}
+			if err := flushAssistantParts(); err != nil {
+				return nil, fmt.Errorf("message %d: %w", i, err)
 			}
 		case conversation.ToolRole:
 			toolParts := 0
@@ -431,6 +450,16 @@ func buildToolImageFollowupInputItem(
 	return buildUserInputItem(conversation.UserMessageParts(parts...), mediaStore)
 }
 
+func buildAssistantImageFollowupInputItem(
+	imageParts []conversation.Part,
+	mediaStore q15media.Store,
+) (responses.ResponseInputItemUnionParam, error) {
+	parts := make([]conversation.Part, 0, 1+len(imageParts))
+	parts = append(parts, conversation.Text(assistantImageFollowupText, ""))
+	parts = append(parts, conversation.CloneParts(imageParts)...)
+	return buildUserInputItem(conversation.UserMessageParts(parts...), mediaStore)
+}
+
 func mapTools(tools []agent.ToolDefinition) []responses.ToolUnionParam {
 	if len(tools) == 0 {
 		return nil
@@ -515,23 +544,77 @@ func parseResponse(resp *responses.Response) agent.ModelClientResult {
 	}
 }
 
-func buildAssistantTextReplayMessage(part conversation.Part) (json.RawMessage, bool, error) {
-	text := strings.TrimSpace(part.Text)
-	if text == "" {
+func buildAssistantReplayItems(
+	parts []conversation.Part,
+	mediaStore q15media.Store,
+) ([]responses.ResponseInputItemUnionParam, error) {
+	if len(parts) == 0 {
+		return nil, nil
+	}
+
+	textParts := make([]conversation.Part, 0, len(parts))
+	imageParts := make([]conversation.Part, 0, len(parts))
+	for _, part := range conversation.NormalizeParts(parts) {
+		switch part.Type {
+		case conversation.TextPartType:
+			textParts = append(textParts, part)
+		case conversation.ImagePartType:
+			imageParts = append(imageParts, part)
+		}
+	}
+
+	items := make([]responses.ResponseInputItemUnionParam, 0, 2)
+	if raw, ok, err := buildAssistantTextReplayMessage(textParts); err != nil {
+		return nil, err
+	} else if ok {
+		items = append(
+			items,
+			param.Override[responses.ResponseInputItemUnionParam](raw),
+		)
+	}
+	if len(imageParts) > 0 {
+		item, err := buildAssistantImageFollowupInputItem(imageParts, mediaStore)
+		if err != nil {
+			return nil, fmt.Errorf("build assistant image followup: %w", err)
+		}
+		items = append(items, item)
+	}
+	if len(items) == 0 {
+		return nil, nil
+	}
+	return items, nil
+}
+
+func buildAssistantTextReplayMessage(parts []conversation.Part) (json.RawMessage, bool, error) {
+	if len(parts) == 0 {
+		return nil, false, nil
+	}
+
+	content := make([]map[string]any, 0, len(parts))
+	disposition := conversation.TextDisposition("")
+	for _, part := range conversation.NormalizeParts(parts) {
+		if part.Type != conversation.TextPartType {
+			continue
+		}
+		if strings.TrimSpace(part.Text) == "" {
+			continue
+		}
+		disposition = mergeAssistantReplayDisposition(disposition, part.Disposition)
+		content = append(content, map[string]any{
+			"type": "output_text",
+			"text": part.Text,
+		})
+	}
+	if len(content) == 0 {
 		return nil, false, nil
 	}
 
 	payload := map[string]any{
-		"type": "message",
-		"role": "assistant",
-		"content": []map[string]any{
-			{
-				"type": "output_text",
-				"text": text,
-			},
-		},
+		"type":    "message",
+		"role":    "assistant",
+		"content": content,
 	}
-	switch part.Disposition {
+	switch disposition {
 	case conversation.TextDispositionCommentary:
 		payload["phase"] = "commentary"
 	case conversation.TextDispositionFinal:
@@ -539,9 +622,24 @@ func buildAssistantTextReplayMessage(part conversation.Part) (json.RawMessage, b
 	}
 	raw, err := json.Marshal(payload)
 	if err != nil {
-		return nil, false, fmt.Errorf("marshal assistant text replay message: %w", err)
+		return nil, false, fmt.Errorf("marshal assistant replay message: %w", err)
 	}
 	return raw, true, nil
+}
+
+func mergeAssistantReplayDisposition(
+	current conversation.TextDisposition,
+	next conversation.TextDisposition,
+) conversation.TextDisposition {
+	switch next {
+	case conversation.TextDispositionFinal:
+		return next
+	case conversation.TextDispositionCommentary:
+		if current == "" {
+			return next
+		}
+	}
+	return current
 }
 
 func buildReasoningReplayItem(part conversation.Part) (json.RawMessage, bool, int, error) {
