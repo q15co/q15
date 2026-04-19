@@ -44,6 +44,40 @@ func TestEngineRun_ReturnsOnlyGeneratedMessages(t *testing.T) {
 	}
 }
 
+func TestEngineRun_ImageOnlyReplyLeavesFinalTextEmpty(t *testing.T) {
+	model := &fakeModelClient{
+		results: []ModelClientResult{
+			{
+				Messages: []conversation.Message{
+					conversation.AssistantMessage(
+						conversation.Image("media://sha256/only", ""),
+					),
+				},
+			},
+		},
+	}
+
+	engine := NewEngine(model, nil, []string{"m1"})
+	result, err := engine.Run(context.Background(), EngineRequest{
+		Messages: []conversation.Message{
+			conversation.SystemMessage("prompt"),
+			conversation.UserMessage("hello"),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.FinalText != "" {
+		t.Fatalf("result.FinalText = %q, want empty", result.FinalText)
+	}
+	if got := result.MediaRefs; len(got) != 1 || got[0] != "media://sha256/only" {
+		t.Fatalf("result.MediaRefs = %#v, want image ref", got)
+	}
+	if got := result.Attachments; len(got) != 1 || got[0].MediaRef != "media://sha256/only" {
+		t.Fatalf("result.Attachments = %#v, want image attachment", got)
+	}
+}
+
 func TestEngineRun_RequiresToolCallingWhenRequested(t *testing.T) {
 	planner := &fakePlanner{}
 	var gotTools []ToolDefinition
@@ -124,6 +158,27 @@ func TestEngineRun_ToolProducedImageRequiresImageInputOnNextTurn(t *testing.T) {
 	if result.FinalText != "done" {
 		t.Fatalf("result.FinalText = %q, want %q", result.FinalText, "done")
 	}
+	if got := result.MediaRefs; len(got) != 1 || got[0] != "media://sha256/abc" {
+		t.Fatalf("result.MediaRefs = %#v, want tool image ref", got)
+	}
+	if got := result.Attachments; len(got) != 1 || got[0].MediaRef != "media://sha256/abc" {
+		t.Fatalf("result.Attachments = %#v, want final image attachment", got)
+	}
+	if len(result.Messages) != 3 {
+		t.Fatalf("result.Messages len = %d, want 3", len(result.Messages))
+	}
+	if toolParts := result.Messages[1].Parts; len(toolParts) != 1 ||
+		toolParts[0].Type != conversation.ToolResultPartType {
+		t.Fatalf("result.Messages[1].Parts = %#v, want tool_result only", toolParts)
+	}
+	last := result.Messages[2]
+	if last.Role != conversation.AssistantRole || len(last.Parts) != 2 {
+		t.Fatalf("result.Messages[2] = %#v, want final assistant text plus image", last)
+	}
+	if last.Parts[1].Type != conversation.ImagePartType ||
+		last.Parts[1].MediaRef != "media://sha256/abc" {
+		t.Fatalf("result.Messages[2].Parts[1] = %#v, want promoted image", last.Parts[1])
+	}
 	if len(planner.plannedRequirements) != 2 {
 		t.Fatalf("planned requirements len = %d, want 2", len(planner.plannedRequirements))
 	}
@@ -136,6 +191,134 @@ func TestEngineRun_ToolProducedImageRequiresImageInputOnNextTurn(t *testing.T) {
 			planner.plannedRequirements[1],
 		)
 	}
+}
+
+func TestEngineRun_PromotesOnlyTrailingToolBatchAttachments(t *testing.T) {
+	model := &fakeModelClient{
+		results: []ModelClientResult{
+			toolCallResult("call-1", "load_image", `{"path":"preview.png"}`),
+			toolCallResult("call-2", "load_image", `{"path":"final.png"}`),
+			assistantResult("done"),
+		},
+	}
+	registry, err := NewToolRegistry(&structuredTestTool{
+		def: ToolDefinition{Name: "load_image"},
+		runResult: func(_ context.Context, arguments string) (ToolResult, error) {
+			switch arguments {
+			case `{"path":"preview.png"}`:
+				return ToolResult{
+					Output:    "Loaded image: /workspace/preview.png",
+					MediaRefs: []string{"media://sha256/preview"},
+				}, nil
+			case `{"path":"final.png"}`:
+				return ToolResult{
+					Output:    "Loaded image: /workspace/final.png",
+					MediaRefs: []string{"media://sha256/final"},
+				}, nil
+			default:
+				t.Fatalf("unexpected tool arguments %q", arguments)
+				return ToolResult{}, nil
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewToolRegistry() error = %v", err)
+	}
+
+	engine := NewEngine(model, registry, []string{"m1"})
+	result, err := engine.Run(context.Background(), EngineRequest{
+		Messages: []conversation.Message{
+			conversation.SystemMessage("prompt"),
+		},
+		UseTools: true,
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if got := result.MediaRefs; len(got) != 1 || got[0] != "media://sha256/final" {
+		t.Fatalf("result.MediaRefs = %#v, want only final image", got)
+	}
+	if len(result.Messages) != 5 {
+		t.Fatalf("result.Messages len = %d, want 5", len(result.Messages))
+	}
+	if previewParts := result.Messages[1].Parts; len(previewParts) != 2 {
+		t.Fatalf("preview tool parts = %#v, want preview tool result plus image", previewParts)
+	}
+	if finalToolParts := result.Messages[3].Parts; len(finalToolParts) != 1 ||
+		finalToolParts[0].Type != conversation.ToolResultPartType {
+		t.Fatalf("final tool parts = %#v, want tool_result only", finalToolParts)
+	}
+	final := result.Messages[4]
+	if final.Role != conversation.AssistantRole || len(final.Parts) != 2 {
+		t.Fatalf("final assistant = %#v, want text plus image", final)
+	}
+	if final.Parts[1].MediaRef != "media://sha256/final" {
+		t.Fatalf("final attachment = %#v, want final image", final.Parts[1])
+	}
+}
+
+func TestEngineRun_PrefersAssistantImageRefsOverToolFallback(t *testing.T) {
+	model := &fakeModelClient{
+		results: []ModelClientResult{
+			toolCallResult("call-1", "load_image", `{"path":"artifact.png"}`),
+			{
+				Messages: []conversation.Message{
+					conversation.AssistantMessage(
+						conversation.Text("done", ""),
+						conversation.Image("media://sha256/assistant-1", ""),
+						conversation.Image("media://sha256/assistant-1", ""),
+						conversation.Image("media://sha256/assistant-2", ""),
+					),
+				},
+			},
+		},
+	}
+	registry, err := NewToolRegistry(&structuredTestTool{
+		def: ToolDefinition{Name: "load_image"},
+		runResult: func(context.Context, string) (ToolResult, error) {
+			return ToolResult{
+				Output:    "Loaded image: /workspace/artifact.png",
+				MediaRefs: []string{"media://sha256/tool-1", "media://sha256/tool-1"},
+			}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewToolRegistry() error = %v", err)
+	}
+
+	engine := NewEngine(model, registry, []string{"m1"})
+	result, err := engine.Run(context.Background(), EngineRequest{
+		Messages: []conversation.Message{
+			conversation.SystemMessage("prompt"),
+		},
+		UseTools: true,
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.FinalText != "done" {
+		t.Fatalf("result.FinalText = %q, want done", result.FinalText)
+	}
+	if got, want := result.MediaRefs, []string{
+		"media://sha256/assistant-1",
+		"media://sha256/assistant-2",
+	}; !equalStrings(got, want) {
+		t.Fatalf("result.MediaRefs = %#v, want %#v", got, want)
+	}
+	if len(result.Messages) != 3 {
+		t.Fatalf("result.Messages len = %d, want 3", len(result.Messages))
+	}
+	if toolParts := result.Messages[1].Parts; len(toolParts) != 3 ||
+		toolParts[0].Type != conversation.ToolResultPartType {
+		t.Fatalf(
+			"result.Messages[1].Parts = %#v, want tool result plus original duplicate images",
+			toolParts,
+		)
+	}
+}
+
+func equalStrings(got, want []string) bool {
+	return strings.Join(got, "\x00") == strings.Join(want, "\x00")
 }
 
 func TestEngineRun_EmptyAllowedToolsPreservesAllTools(t *testing.T) {

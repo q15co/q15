@@ -502,6 +502,105 @@ func TestStoreAppendAndLoadRecentMessagesWithImageParts(t *testing.T) {
 	}
 }
 
+func TestStoreAppendTurnPromotesFinalReplyMediaToAssistant(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "memory")
+	store := NewStore(root, "Jared", &fakeCommitter{})
+
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	if err := store.AppendTurn(context.Background(), []conversation.Message{
+		conversation.UserMessage("send the image"),
+		conversation.AssistantMessage(
+			conversation.ToolCall("call-1", "load_image", `{"path":"cat.png"}`),
+		),
+		{
+			Role: conversation.ToolRole,
+			Parts: []conversation.Part{
+				conversation.ToolResult("call-1", "Loaded image: /workspace/cat.png", false),
+				conversation.Image("media://sha256/cat", ""),
+			},
+		},
+		conversation.AssistantMessage(conversation.Text("done", "")),
+	}); err != nil {
+		t.Fatalf("AppendTurn() error = %v", err)
+	}
+
+	got, err := store.LoadRecentMessages(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("LoadRecentMessages() error = %v", err)
+	}
+	if len(got) != 4 {
+		t.Fatalf("LoadRecentMessages len = %d, want 4", len(got))
+	}
+	if toolParts := got[2].Parts; len(toolParts) != 1 ||
+		toolParts[0].Type != conversation.ToolResultPartType {
+		t.Fatalf("replayed tool parts = %#v, want tool_result only", toolParts)
+	}
+	if final := got[3]; len(final.Parts) != 2 ||
+		final.Parts[1].Type != conversation.ImagePartType ||
+		final.Parts[1].MediaRef != "media://sha256/cat" {
+		t.Fatalf("replayed final assistant = %#v, want text plus image", final)
+	}
+}
+
+func TestStoreAppendTurnPromotesOnlyTrailingToolBatchToAssistant(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "memory")
+	store := NewStore(root, "Jared", &fakeCommitter{})
+
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	if err := store.AppendTurn(context.Background(), []conversation.Message{
+		conversation.UserMessage("send the final image"),
+		conversation.AssistantMessage(
+			conversation.ToolCall("call-1", "load_image", `{"path":"preview.png"}`),
+		),
+		{
+			Role: conversation.ToolRole,
+			Parts: []conversation.Part{
+				conversation.ToolResult("call-1", "Loaded preview", false),
+				conversation.Image("media://sha256/preview", ""),
+			},
+		},
+		conversation.AssistantMessage(
+			conversation.ToolCall("call-2", "load_image", `{"path":"final.png"}`),
+		),
+		{
+			Role: conversation.ToolRole,
+			Parts: []conversation.Part{
+				conversation.ToolResult("call-2", "Loaded final", false),
+				conversation.Image("media://sha256/final", ""),
+			},
+		},
+		conversation.AssistantMessage(conversation.Text("done", "")),
+	}); err != nil {
+		t.Fatalf("AppendTurn() error = %v", err)
+	}
+
+	got, err := store.LoadRecentMessages(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("LoadRecentMessages() error = %v", err)
+	}
+	if len(got) != 6 {
+		t.Fatalf("LoadRecentMessages len = %d, want 6", len(got))
+	}
+	if previewParts := got[2].Parts; len(previewParts) != 2 {
+		t.Fatalf("preview tool parts = %#v, want preview tool result plus image", previewParts)
+	}
+	if finalToolParts := got[4].Parts; len(finalToolParts) != 1 ||
+		finalToolParts[0].Type != conversation.ToolResultPartType {
+		t.Fatalf("final tool parts = %#v, want tool_result only", finalToolParts)
+	}
+	if final := got[5]; len(final.Parts) != 2 ||
+		final.Parts[1].Type != conversation.ImagePartType ||
+		final.Parts[1].MediaRef != "media://sha256/final" {
+		t.Fatalf("replayed final assistant = %#v, want text plus final image", final)
+	}
+}
+
 func TestStoreInterruptedTurnPersistsAndReplays(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "memory")
 	store := NewStore(root, "Jared", &fakeCommitter{})
@@ -855,6 +954,76 @@ func TestStoreInitSanitizesExistingV2TurnsIntoCurrentSchema(t *testing.T) {
 	if turn.Messages[0].Role != conversation.UserRole ||
 		turn.Messages[1].Role != conversation.AssistantRole {
 		t.Fatalf("sanitized roles = %#v", turn.Messages)
+	}
+}
+
+func TestStoreInitPromotesStoredToolReplyImagesToFinalAssistant(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "memory")
+	turnPath := filepath.Join(
+		root,
+		"history",
+		"turns",
+		"2026",
+		"03",
+		"29",
+		"00000000000000000005.json",
+	)
+	if err := os.MkdirAll(filepath.Dir(turnPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	record := turnRecord{
+		SchemaVersion: conversation.SchemaVersion,
+		ID:            "turn-00000000000000000005",
+		Seq:           5,
+		CreatedAt:     time.Date(2026, time.March, 29, 12, 0, 0, 0, time.UTC),
+		Messages: []conversation.Message{
+			conversation.UserMessage("send the image"),
+			conversation.AssistantMessage(
+				conversation.ToolCall("call-1", "load_image", `{"path":"cat.png"}`),
+			),
+			{
+				Role: conversation.ToolRole,
+				Parts: []conversation.Part{
+					conversation.ToolResult("call-1", "Loaded image: /workspace/cat.png", false),
+					conversation.Image("media://sha256/cat", ""),
+				},
+			},
+			conversation.AssistantMessage(conversation.Text("done", "")),
+		},
+	}
+	if err := writeJSONFileAtomic(turnPath, record); err != nil {
+		t.Fatalf("writeJSONFileAtomic() error = %v", err)
+	}
+
+	committer := &fakeCommitter{}
+	store := NewStore(root, "Jared", committer)
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	if committer.lastMessage != "memory: upgrade transcript history to v3" {
+		t.Fatalf(
+			"commit message = %q, want %q",
+			committer.lastMessage,
+			"memory: upgrade transcript history to v3",
+		)
+	}
+
+	turn, err := store.readTurn(turnPath)
+	if err != nil {
+		t.Fatalf("readTurn() error = %v", err)
+	}
+	if len(turn.Messages) != 4 {
+		t.Fatalf("messages len = %d, want 4", len(turn.Messages))
+	}
+	if toolParts := turn.Messages[2].Parts; len(toolParts) != 1 ||
+		toolParts[0].Type != conversation.ToolResultPartType {
+		t.Fatalf("tool parts = %#v, want tool_result only", toolParts)
+	}
+	if final := turn.Messages[3]; len(final.Parts) != 2 ||
+		final.Parts[1].Type != conversation.ImagePartType ||
+		final.Parts[1].MediaRef != "media://sha256/cat" {
+		t.Fatalf("final assistant = %#v, want text plus image", final)
 	}
 }
 

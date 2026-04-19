@@ -5,7 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"mime"
+	"mime/multipart"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -17,8 +20,9 @@ import (
 )
 
 type apiCall struct {
-	url  string
-	body map[string]any
+	url   string
+	body  map[string]any
+	files map[string]int
 }
 
 type mockAPICaller struct {
@@ -52,14 +56,22 @@ func (m *mockAPICaller) Call(
 	}
 
 	body := map[string]any{}
+	files := map[string]int{}
 	if len(bodyRaw) > 0 {
-		if err := json.Unmarshal(bodyRaw, &body); err != nil {
+		if strings.HasPrefix(strings.ToLower(data.ContentType), "multipart/form-data") {
+			var err error
+			body, files, err = parseMultipartAPICall(bodyRaw, data.ContentType)
+			if err != nil {
+				return nil, err
+			}
+		} else if err := json.Unmarshal(bodyRaw, &body); err != nil {
 			return nil, err
 		}
 	}
 	m.calls = append(m.calls, apiCall{
-		url:  url,
-		body: body,
+		url:   url,
+		body:  body,
+		files: files,
 	})
 
 	if len(m.responses) == 0 {
@@ -72,6 +84,43 @@ func (m *mockAPICaller) Call(
 	resp := m.responses[0]
 	m.responses = m.responses[1:]
 	return resp, nil
+}
+
+func parseMultipartAPICall(
+	bodyRaw []byte,
+	contentType string,
+) (map[string]any, map[string]int, error) {
+	mediaType, params, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return nil, nil, err
+	}
+	if mediaType != "multipart/form-data" {
+		return nil, nil, nil
+	}
+
+	reader := multipart.NewReader(bytes.NewReader(bodyRaw), params["boundary"])
+	body := make(map[string]any)
+	files := make(map[string]int)
+	for {
+		part, err := reader.NextPart()
+		if err == io.EOF {
+			return body, files, nil
+		}
+		if err != nil {
+			return nil, nil, err
+		}
+		data, err := io.ReadAll(part)
+		if err != nil {
+			return nil, nil, err
+		}
+		if name := part.FormName(); name != "" {
+			if part.FileName() != "" {
+				files[name] = len(data)
+			} else {
+				body[name] = string(data)
+			}
+		}
+	}
 }
 
 func newTestChannelWithCaller(t *testing.T, caller ta.Caller) *Channel {
@@ -88,6 +137,30 @@ func newTestChannelWithCaller(t *testing.T, caller ta.Caller) *Channel {
 	}
 
 	return &Channel{bot: bot}
+}
+
+func mustStoreMediaRef(
+	t *testing.T,
+	content []byte,
+	meta q15media.Meta,
+) (*q15media.FileStore, string) {
+	t.Helper()
+
+	store, err := q15media.NewFileStore(filepath.Join(t.TempDir(), "media"))
+	if err != nil {
+		t.Fatalf("NewFileStore() error = %v", err)
+	}
+
+	sourcePath := filepath.Join(t.TempDir(), "source")
+	if err := os.WriteFile(sourcePath, content, 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	ref, err := store.Store(sourcePath, meta, "test-scope")
+	if err != nil {
+		t.Fatalf("Store() error = %v", err)
+	}
+	return store, ref
 }
 
 var testTelegramPNGBytes = []byte{
@@ -233,6 +306,110 @@ func TestSendText_ReturnsErrorWhenBothAttemptsFail(t *testing.T) {
 	}
 	if len(caller.calls) != 2 {
 		t.Fatalf("calls = %d, want 2", len(caller.calls))
+	}
+}
+
+func TestSendPhoto_UsesHTMLCaptionAndMultipart(t *testing.T) {
+	store, ref := mustStoreMediaRef(t, testTelegramPNGBytes, q15media.Meta{
+		ContentType: "image/png",
+	})
+	caller := &mockAPICaller{}
+	ch := newTestChannelWithCaller(t, caller)
+	ch.mediaStore = store
+
+	err := ch.SendPhoto(t.Context(), "12345", ref, "**bold**")
+	if err != nil {
+		t.Fatalf("SendPhoto() error = %v", err)
+	}
+
+	if len(caller.calls) != 1 {
+		t.Fatalf("calls = %d, want 1", len(caller.calls))
+	}
+	if !strings.HasSuffix(caller.calls[0].url, "/sendPhoto") {
+		t.Fatalf("first URL = %q, want suffix /sendPhoto", caller.calls[0].url)
+	}
+	if got := caller.calls[0].body["caption"]; got != "<b>bold</b>" {
+		t.Fatalf("caption = %#v, want %q", got, "<b>bold</b>")
+	}
+	if got := caller.calls[0].body["parse_mode"]; got != telego.ModeHTML {
+		t.Fatalf("parse_mode = %#v, want %q", got, telego.ModeHTML)
+	}
+	if got := caller.calls[0].files["photo"]; got != len(testTelegramPNGBytes) {
+		t.Fatalf("photo bytes = %d, want %d", got, len(testTelegramPNGBytes))
+	}
+}
+
+func TestSendPhoto_FallbacksToPlainCaption(t *testing.T) {
+	store, ref := mustStoreMediaRef(t, testTelegramPNGBytes, q15media.Meta{
+		ContentType: "image/png",
+	})
+	caller := &mockAPICaller{
+		responses: []*ta.Response{
+			{
+				Ok: false,
+				Error: &ta.Error{
+					ErrorCode:   400,
+					Description: "Bad Request: can't parse entities",
+				},
+			},
+			{
+				Ok:     true,
+				Result: []byte(`{}`),
+			},
+		},
+	}
+	ch := newTestChannelWithCaller(t, caller)
+	ch.mediaStore = store
+
+	err := ch.SendPhoto(t.Context(), "99", ref, "**bold**")
+	if err != nil {
+		t.Fatalf("SendPhoto() error = %v", err)
+	}
+
+	if len(caller.calls) != 2 {
+		t.Fatalf("calls = %d, want 2", len(caller.calls))
+	}
+	first := caller.calls[0]
+	if got := first.body["caption"]; got != "<b>bold</b>" {
+		t.Fatalf("first caption = %#v, want %q", got, "<b>bold</b>")
+	}
+	if got := first.body["parse_mode"]; got != telego.ModeHTML {
+		t.Fatalf("first parse_mode = %#v, want %q", got, telego.ModeHTML)
+	}
+	second := caller.calls[1]
+	if got := second.body["caption"]; got != "**bold**" {
+		t.Fatalf("second caption = %#v, want %q", got, "**bold**")
+	}
+	if _, ok := second.body["parse_mode"]; ok {
+		t.Fatalf("second parse_mode should be omitted, got %#v", second.body["parse_mode"])
+	}
+}
+
+func TestSendPhoto_RejectsMissingMediaStore(t *testing.T) {
+	ch := newTestChannelWithCaller(t, &mockAPICaller{})
+
+	err := ch.SendPhoto(t.Context(), "123", "media://sha256/abc", "")
+	if err == nil {
+		t.Fatal("SendPhoto() error = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "media store") {
+		t.Fatalf("error = %q, want media store failure", err.Error())
+	}
+}
+
+func TestSendPhoto_RejectsNonImageRef(t *testing.T) {
+	store, ref := mustStoreMediaRef(t, []byte("not an image"), q15media.Meta{
+		ContentType: "text/plain",
+	})
+	ch := newTestChannelWithCaller(t, &mockAPICaller{})
+	ch.mediaStore = store
+
+	err := ch.SendPhoto(t.Context(), "123", ref, "")
+	if err == nil {
+		t.Fatal("SendPhoto() error = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "not an image") {
+		t.Fatalf("error = %q, want non-image failure", err.Error())
 	}
 }
 

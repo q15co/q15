@@ -32,6 +32,8 @@ const synthesizedReasoningContent = "Portable reasoning summary unavailable for 
 
 const toolImageFollowupText = "Use the attached image output from the previous tool result when continuing."
 
+const assistantImageFollowupText = "Use the attached image output from the assistant's previous response when continuing."
+
 const systemOnlyFollowupText = "Use the system instructions above as the full task definition and complete them directly."
 
 // NewClient constructs a Chat Completions-compatible model client.
@@ -152,12 +154,22 @@ func mapMessages(
 			}
 			droppedReplayParts += dropped
 			if !ok {
+				if imageFollowup, hasImages, err := buildAssistantImageFollowupMessage(group, mediaStore); err != nil {
+					return nil, fmt.Errorf("message %d: %w", i, err)
+				} else if hasImages {
+					out = append(out, imageFollowup)
+				}
 				continue
 			}
 			out = append(
 				out,
 				param.Override[openai.ChatCompletionMessageParamUnion](raw),
 			)
+			if imageFollowup, hasImages, err := buildAssistantImageFollowupMessage(group, mediaStore); err != nil {
+				return nil, fmt.Errorf("message %d: %w", i, err)
+			} else if hasImages {
+				out = append(out, imageFollowup)
+			}
 		case conversation.ToolRole:
 			toolParts := 0
 			imageParts := make([]conversation.Part, 0, len(msg.Parts))
@@ -257,6 +269,40 @@ func buildToolImageFollowupMessage(
 	parts = append(parts, conversation.Text(toolImageFollowupText, ""))
 	parts = append(parts, conversation.CloneParts(imageParts)...)
 	return buildUserMessage(conversation.UserMessageParts(parts...), mediaStore)
+}
+
+func buildAssistantImageFollowupMessage(
+	messages []conversation.Message,
+	mediaStore q15media.Store,
+) (openai.ChatCompletionMessageParamUnion, bool, error) {
+	imageParts := collectAssistantImageParts(messages)
+	if len(imageParts) == 0 {
+		return openai.ChatCompletionMessageParamUnion{}, false, nil
+	}
+	parts := make([]conversation.Part, 0, 1+len(imageParts))
+	parts = append(parts, conversation.Text(assistantImageFollowupText, ""))
+	parts = append(parts, imageParts...)
+	message, err := buildUserMessage(conversation.UserMessageParts(parts...), mediaStore)
+	if err != nil {
+		return openai.ChatCompletionMessageParamUnion{}, false, err
+	}
+	return message, true, nil
+}
+
+func collectAssistantImageParts(messages []conversation.Message) []conversation.Part {
+	out := make([]conversation.Part, 0)
+	for _, msg := range messages {
+		for _, part := range conversation.NormalizeParts(msg.Parts) {
+			if part.Type != conversation.ImagePartType {
+				continue
+			}
+			out = append(out, part)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func textOnlyMessageContent(msg conversation.Message) (string, error) {

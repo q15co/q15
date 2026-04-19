@@ -48,6 +48,7 @@ type Channel struct {
 var (
 	telegramTypingKeepaliveInterval = 4 * time.Second
 	telegramTextChunkRunes          = 3800
+	telegramPhotoCaptionRunes       = 1024
 )
 
 // NewChannel constructs a Telegram channel adapter.
@@ -220,6 +221,104 @@ func (c *Channel) SendTextMessage(ctx context.Context, chatID, text string) (str
 		}
 	}
 	return strconv.Itoa(msg.MessageID), nil
+}
+
+// SendPhoto sends one Telegram photo resolved from a media-store ref.
+func (c *Channel) SendPhoto(ctx context.Context, chatID, mediaRef, caption string) error {
+	chatID = strings.TrimSpace(chatID)
+	mediaRef = strings.TrimSpace(mediaRef)
+	caption = strings.TrimSpace(caption)
+
+	if chatID == "" {
+		return errors.New("chat id is required")
+	}
+	if mediaRef == "" {
+		return errors.New("media ref is required")
+	}
+	if c.mediaStore == nil {
+		return errors.New("telegram media store is not configured")
+	}
+	if caption != "" && utf8.RuneCountInString(caption) > telegramPhotoCaptionRunes {
+		return fmt.Errorf("telegram photo caption exceeds %d runes", telegramPhotoCaptionRunes)
+	}
+
+	chatValue, err := parseChatID(chatID)
+	if err != nil {
+		return fmt.Errorf("invalid chat id %q: %w", chatID, err)
+	}
+
+	localPath, meta, err := c.mediaStore.Resolve(mediaRef)
+	if err != nil {
+		return fmt.Errorf("resolve telegram photo %q: %w", mediaRef, err)
+	}
+	if err := ensureTelegramPhoto(localPath, meta); err != nil {
+		return err
+	}
+
+	file, err := os.Open(localPath)
+	if err != nil {
+		return fmt.Errorf("open telegram photo %q: %w", localPath, err)
+	}
+	defer file.Close()
+
+	params := &telego.SendPhotoParams{
+		ChatID: telego.ChatID{ID: chatValue},
+		Photo:  telego.InputFile{File: file},
+	}
+	if caption == "" {
+		if _, err := c.bot.SendPhoto(ctx, params); err != nil {
+			return fmt.Errorf("send telegram photo: %w", err)
+		}
+		return nil
+	}
+
+	formatted := markdownToTelegramHTML(caption)
+	if formatted != "" && utf8.RuneCountInString(formatted) <= telegramPhotoCaptionRunes {
+		params.Caption = formatted
+		params.ParseMode = telego.ModeHTML
+		if _, err := c.bot.SendPhoto(ctx, params); err == nil {
+			return nil
+		}
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			return fmt.Errorf("rewind telegram photo %q: %w", localPath, err)
+		}
+	}
+
+	params.Caption = caption
+	params.ParseMode = ""
+	if _, err := c.bot.SendPhoto(ctx, params); err != nil {
+		return fmt.Errorf("send telegram photo: %w", err)
+	}
+	return nil
+}
+
+// DeleteMessage removes one Telegram message.
+func (c *Channel) DeleteMessage(ctx context.Context, chatID, messageID string) error {
+	chatID = strings.TrimSpace(chatID)
+	messageID = strings.TrimSpace(messageID)
+
+	if chatID == "" {
+		return errors.New("chat id is required")
+	}
+	if messageID == "" {
+		return errors.New("message id is required")
+	}
+
+	chatValue, err := parseChatID(chatID)
+	if err != nil {
+		return fmt.Errorf("invalid chat id %q: %w", chatID, err)
+	}
+	msgValue, err := parseMessageID(messageID)
+	if err != nil {
+		return fmt.Errorf("invalid message id %q: %w", messageID, err)
+	}
+	if err := c.bot.DeleteMessage(ctx, &telego.DeleteMessageParams{
+		ChatID:    telego.ChatID{ID: chatValue},
+		MessageID: msgValue,
+	}); err != nil {
+		return fmt.Errorf("delete telegram message: %w", err)
+	}
+	return nil
 }
 
 // EditText edits one Telegram message in place.
@@ -434,6 +533,49 @@ func attachmentNotice(summary, originalText string) string {
 		lines = append(lines, "Original user text: "+originalText)
 	}
 	return strings.Join(lines, "\n")
+}
+
+func ensureTelegramPhoto(localPath string, meta q15media.Meta) error {
+	info, err := os.Stat(localPath)
+	if err != nil {
+		return fmt.Errorf("stat telegram photo %q: %w", localPath, err)
+	}
+	if info.IsDir() {
+		return fmt.Errorf("telegram photo %q must be a file", localPath)
+	}
+
+	if contentType := strings.ToLower(strings.TrimSpace(meta.ContentType)); contentType != "" {
+		if !strings.HasPrefix(contentType, "image/") {
+			return fmt.Errorf(
+				"media object %q is not an image (content type %q)",
+				localPath,
+				contentType,
+			)
+		}
+		return nil
+	}
+
+	f, err := os.Open(localPath)
+	if err != nil {
+		return fmt.Errorf("open media object %q: %w", localPath, err)
+	}
+	defer f.Close()
+
+	header := make([]byte, 512)
+	n, err := f.Read(header)
+	if err != nil && err != io.EOF {
+		return fmt.Errorf("read media object header %q: %w", localPath, err)
+	}
+
+	contentType := strings.ToLower(http.DetectContentType(header[:n]))
+	if !strings.HasPrefix(contentType, "image/") {
+		return fmt.Errorf(
+			"media object %q is not an image (detected %q)",
+			localPath,
+			contentType,
+		)
+	}
+	return nil
 }
 
 func (c *Channel) storePhoto(ctx context.Context, fileID, scope string) (string, error) {
