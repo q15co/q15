@@ -27,6 +27,10 @@ func (l *workingMemoryJobLoader) LoadCoreMemory(context.Context) (agent.CoreMemo
 	return agent.CoreMemory{}, nil
 }
 
+func (l *workingMemoryJobLoader) LoadSemanticMemory(context.Context) (agent.SemanticMemory, error) {
+	return agent.SemanticMemory{}, nil
+}
+
 func (l *workingMemoryJobLoader) LoadWorkingMemory(context.Context) (agent.WorkingMemory, error) {
 	return l.working, nil
 }
@@ -41,6 +45,13 @@ func (l *workingMemoryJobLoader) LoadRecentMessages(
 ) ([]conversation.Message, error) {
 	l.loadRecentTurns = turns
 	return conversation.CloneMessages(l.recent), nil
+}
+
+func (l *workingMemoryJobLoader) LoadLatestMessages(
+	context.Context,
+	int,
+) ([]conversation.Message, error) {
+	return nil, nil
 }
 
 func (l *workingMemoryJobLoader) LoadHead(context.Context) (int64, time.Time, error) {
@@ -153,6 +164,34 @@ func TestWorkingMemoryConsolidationBuildLoadsWorkingMemoryTranscriptAndVerificat
 	}
 	if !spec.ExposeTools {
 		t.Fatal("ExposeTools = false, want true")
+	}
+	if !spec.RequireToolCalling {
+		t.Fatal("RequireToolCalling = false, want true")
+	}
+	if got, want := len(spec.AllowedTools), len(workingMemoryAllowedTools); got != want {
+		t.Fatalf("AllowedTools len = %d, want %d", got, want)
+	}
+	for i, want := range workingMemoryAllowedTools {
+		if got := spec.AllowedTools[i]; got != want {
+			t.Fatalf("AllowedTools[%d] = %q, want %q", i, got, want)
+		}
+	}
+	if spec.ToolCallPolicy == nil {
+		t.Fatal("ToolCallPolicy = nil, want working-memory path policy")
+	}
+	if err := spec.ToolCallPolicy.CheckToolCall(agent.ToolCall{
+		ID:        "call-allowed",
+		Name:      "write_file",
+		Arguments: fmt.Sprintf(`{"path":%q,"content":"# Working Memory"}`, workingMemoryRuntimePath),
+	}); err != nil {
+		t.Fatalf("ToolCallPolicy allowed write error = %v", err)
+	}
+	if err := spec.ToolCallPolicy.CheckToolCall(agent.ToolCall{
+		ID:        "call-denied",
+		Name:      "write_file",
+		Arguments: `{"path":"/memory/semantic/facts.md","content":"x"}`,
+	}); err == nil || !contains(err.Error(), "outside allowed write paths") {
+		t.Fatalf("ToolCallPolicy denied write error = %v, want path policy rejection", err)
 	}
 	if got, want := loader.loadRecentTurns, workingMemoryRecentTurns; got != want {
 		t.Fatalf("LoadRecentMessages turns = %d, want %d", got, want)
@@ -282,6 +321,51 @@ func TestWorkingMemoryConsolidationParseResultRejectsMissingToolUse(t *testing.T
 	)
 	if err == nil {
 		t.Fatal("ApplyResult() error = nil, want non-nil")
+	}
+}
+
+func TestWorkingMemoryConsolidationParseResultIgnoresFailedAndMisleadingToolResults(t *testing.T) {
+	t.Parallel()
+
+	_, err := NewWorkingMemoryConsolidationRegistration().NewJob().ApplyResult(
+		context.Background(),
+		nil,
+		JobOutput{
+			Type:      workingMemoryConsolidationJobType,
+			FinalText: "Working memory looks current.",
+			Messages: []conversation.Message{
+				conversation.AssistantMessage(
+					conversation.ToolCall(
+						"call-1",
+						"read_file",
+						`{"path":"/memory/semantic/facts.md"}`,
+					),
+				),
+				conversation.ToolResultMessage(
+					"call-1",
+					"Path: /memory/semantic/facts.md\nSee /memory/working/WORKING_MEMORY.md.",
+					false,
+				),
+				conversation.AssistantMessage(
+					conversation.ToolCall(
+						"call-2",
+						"read_file",
+						fmt.Sprintf(`{"path":%q}`, workingMemoryRuntimePath),
+					),
+				),
+				conversation.ToolResultMessage(
+					"call-2",
+					"tool error: file not found: /memory/working/WORKING_MEMORY.md",
+					true,
+				),
+			},
+		},
+	)
+	if err == nil {
+		t.Fatal("ApplyResult() error = nil, want non-nil")
+	}
+	if !contains(err.Error(), "working-memory run must inspect") {
+		t.Fatalf("ApplyResult() error = %v, want missing target inspection", err)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
+	filetools "github.com/q15co/q15/systems/agent/internal/tools/files"
 )
 
 const (
@@ -17,6 +18,13 @@ const (
 	workingMemoryRecentTurns                = 16
 	workingMemoryMinDirtyTurns        int64 = 6
 )
+
+var workingMemoryAllowedTools = []string{
+	"read_file",
+	"write_file",
+	"edit_file",
+	"apply_patch",
+}
 
 // NewWorkingMemoryConsolidationRegistration returns the built-in working-memory
 // consolidation job registration used to exercise the background trigger
@@ -183,6 +191,11 @@ func (workingMemoryConsolidationJob) Build(
 		},
 		ExposeTools:        true,
 		RequireToolCalling: true,
+		AllowedTools:       append([]string(nil), workingMemoryAllowedTools...),
+		ToolCallPolicy: filetools.PathAccessPolicy{
+			ReadPaths:  []string{workingMemoryRuntimePath},
+			WritePaths: []string{workingMemoryRuntimePath},
+		},
 	}, nil
 }
 
@@ -258,12 +271,17 @@ func workingMemoryPath(working agent.WorkingMemory) string {
 }
 
 func workingMemoryTargetUsed(messages []conversation.Message, targetPath string) bool {
-	allowedCalls := make(map[string]string)
+	calls := make(map[string]filetools.FileToolAccess)
 	for _, call := range conversation.ToolCalls(messages) {
-		switch call.Name {
-		case "read_file", "write_file", "edit_file", "apply_patch":
-			allowedCalls[strings.TrimSpace(call.ID)] = call.Name
+		access, ok, err := filetools.InspectToolCallAccess(agent.ToolCall{
+			ID:        call.ID,
+			Name:      call.Name,
+			Arguments: call.Arguments,
+		})
+		if err != nil || !ok {
+			continue
 		}
+		calls[strings.TrimSpace(call.ID)] = access
 	}
 
 	for _, msg := range messages {
@@ -274,13 +292,17 @@ func workingMemoryTargetUsed(messages []conversation.Message, targetPath string)
 			if part.Type != conversation.ToolResultPartType {
 				continue
 			}
-			if _, ok := allowedCalls[strings.TrimSpace(part.ToolCallID)]; !ok {
+			if part.IsError {
 				continue
 			}
-			if !strings.Contains(part.Content, targetPath) {
+			access, ok := calls[strings.TrimSpace(part.ToolCallID)]
+			if !ok {
 				continue
 			}
-			return true
+			if accessIncludesPath(access.ReadPaths, targetPath) ||
+				accessIncludesPath(access.WritePaths, targetPath) {
+				return true
+			}
 		}
 	}
 	return false
@@ -298,9 +320,5 @@ func summarizeWorkingMemoryNotes(text string) string {
 }
 
 func compactWorkingMemoryText(text string) string {
-	text = strings.Join(strings.Fields(text), " ")
-	if len(text) <= 200 {
-		return text
-	}
-	return text[:197] + "..."
+	return compactCognitionText(text)
 }

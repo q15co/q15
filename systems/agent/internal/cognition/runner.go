@@ -14,9 +14,11 @@ import (
 // ContextLoader provides explicit access to state a cognition job may opt into.
 type ContextLoader interface {
 	LoadCoreMemory(ctx context.Context) (agent.CoreMemory, error)
+	LoadSemanticMemory(ctx context.Context) (agent.SemanticMemory, error)
 	LoadWorkingMemory(ctx context.Context) (agent.WorkingMemory, error)
 	LoadSkillCatalog(ctx context.Context) (agent.SkillCatalog, error)
 	LoadRecentMessages(ctx context.Context, turns int) ([]conversation.Message, error)
+	LoadLatestMessages(ctx context.Context, turns int) ([]conversation.Message, error)
 	LoadHead(ctx context.Context) (int64, time.Time, error)
 	LoadConsolidationCheckpoint(ctx context.Context) (ConsolidationCheckpoint, error)
 	LoadCognitionArtifact(ctx context.Context, relativePath string) (Artifact, error)
@@ -167,6 +169,7 @@ func (r *Runner) Run(
 		Messages:           inputMessages,
 		UseTools:           spec.ExposeTools,
 		AllowedTools:       append([]string(nil), spec.AllowedTools...),
+		ToolCallPolicy:     spec.ToolCallPolicy,
 		RequireToolCalling: spec.RequireToolCalling,
 		Observer:           observer,
 	})

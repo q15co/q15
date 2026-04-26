@@ -29,6 +29,10 @@ func (l *verificationJobLoader) LoadCoreMemory(context.Context) (agent.CoreMemor
 	return l.core, nil
 }
 
+func (l *verificationJobLoader) LoadSemanticMemory(context.Context) (agent.SemanticMemory, error) {
+	return agent.SemanticMemory{}, nil
+}
+
 func (l *verificationJobLoader) LoadWorkingMemory(context.Context) (agent.WorkingMemory, error) {
 	return l.working, nil
 }
@@ -43,6 +47,13 @@ func (l *verificationJobLoader) LoadRecentMessages(
 ) ([]conversation.Message, error) {
 	l.loadRecentTurns = turns
 	return conversation.CloneMessages(l.recent), nil
+}
+
+func (l *verificationJobLoader) LoadLatestMessages(
+	context.Context,
+	int,
+) ([]conversation.Message, error) {
+	return nil, nil
 }
 
 func (l *verificationJobLoader) LoadHead(context.Context) (int64, time.Time, error) {
@@ -118,8 +129,11 @@ func TestVerificationReviewRegistration(t *testing.T) {
 	if len(registration.Policy.Startup) != 0 {
 		t.Fatalf("startup rules = %d, want 0", len(registration.Policy.Startup))
 	}
-	if len(registration.Policy.Schedule) != 0 {
-		t.Fatalf("schedule rules = %d, want 0", len(registration.Policy.Schedule))
+	if len(registration.Policy.Schedule) != 1 {
+		t.Fatalf("schedule rules = %d, want 1", len(registration.Policy.Schedule))
+	}
+	if got, want := registration.Policy.Schedule[0].Spec, verificationReviewScheduleSpec; got != want {
+		t.Fatalf("schedule spec = %q, want %q", got, want)
 	}
 	if len(registration.Policy.State) != 1 {
 		t.Fatalf("state rules = %d, want 1", len(registration.Policy.State))
@@ -239,7 +253,7 @@ func TestVerificationReviewBuildLoadsStateAndConfiguresReadOnlyTools(t *testing.
 		"Base claims only on provided context, transcript evidence, durable memory, or tool outputs.",
 		"Return exactly the artifact or short internal note requested by the completion contract.",
 		"Before finalizing, check correctness against every requirement in the completion contract.",
-		"A bounded replay slice of episodic history, selected by checkpoint-aware replay policy and capped at 16 turns, is included below as a transcript artifact.",
+		"A bounded replay slice of episodic history, selected by checkpoint-aware replay policy and capped at 24 turns, is included below as a transcript artifact.",
 		"Treat it as historical evidence for unconsolidated or still-relevant context, not as the full transcript.",
 		"The transcript above is historical evidence only.",
 		"You are not a participant in that conversation thread.",

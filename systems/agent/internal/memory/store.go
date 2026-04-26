@@ -42,6 +42,24 @@ const (
 
 const workingMemorySeedPath = seedDirPath + "/" + workingMemoryFileName
 
+const (
+	semanticFactsFileName       = "facts.md"
+	semanticPreferencesFileName = "preferences.md"
+	semanticProjectsFileName    = "projects.md"
+)
+
+const (
+	semanticFactsRelativePath       = semanticDirPath + "/" + semanticFactsFileName
+	semanticPreferencesRelativePath = semanticDirPath + "/" + semanticPreferencesFileName
+	semanticProjectsRelativePath    = semanticDirPath + "/" + semanticProjectsFileName
+)
+
+const (
+	semanticFactsSeedPath       = seedDirPath + "/" + semanticFactsFileName
+	semanticPreferencesSeedPath = seedDirPath + "/" + semanticPreferencesFileName
+	semanticProjectsSeedPath    = seedDirPath + "/" + semanticProjectsFileName
+)
+
 //go:embed seeds/*.md
 var seedFS embed.FS
 
@@ -49,6 +67,24 @@ var coreSeedPaths = map[string]string{
 	filepath.Join(coreDirPath, "AGENT.md"): seedDirPath + "/AGENT.md",
 	filepath.Join(coreDirPath, "USER.md"):  seedDirPath + "/USER.md",
 	filepath.Join(coreDirPath, "SOUL.md"):  seedDirPath + "/SOUL.md",
+}
+
+var semanticSeedPaths = []struct {
+	relativePath string
+	seedPath     string
+}{
+	{
+		relativePath: semanticFactsRelativePath,
+		seedPath:     semanticFactsSeedPath,
+	},
+	{
+		relativePath: semanticPreferencesRelativePath,
+		seedPath:     semanticPreferencesSeedPath,
+	},
+	{
+		relativePath: semanticProjectsRelativePath,
+		seedPath:     semanticProjectsSeedPath,
+	},
 }
 
 var coreFrontmatterParser = goldmark.New(
@@ -66,6 +102,7 @@ type Store struct {
 
 var _ agent.ConversationStore = (*Store)(nil)
 var _ agent.CoreMemoryStore = (*Store)(nil)
+var _ agent.SemanticMemoryStore = (*Store)(nil)
 var _ agent.WorkingMemoryStore = (*Store)(nil)
 
 // NewStore constructs a memory store rooted at the provided directory.
@@ -116,6 +153,9 @@ func (s *Store) Init(ctx context.Context) error {
 		return err
 	}
 	if err := s.ensureCoreMemory(); err != nil {
+		return err
+	}
+	if err := s.ensureSemanticMemory(); err != nil {
 		return err
 	}
 	if err := s.ensureWorkingMemory(); err != nil {
@@ -174,50 +214,21 @@ func (s *Store) LoadRecentMessages(ctx context.Context, turns int) ([]conversati
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	entries, err := s.listTurnEntries()
-	if err != nil {
-		return nil, err
-	}
-	if len(entries) == 0 {
+	return s.loadMessagesLocked(turns, true)
+}
+
+// LoadLatestMessages loads the bounded latest-turn replay slice without using
+// the working-memory consolidation checkpoint.
+func (s *Store) LoadLatestMessages(ctx context.Context, turns int) ([]conversation.Message, error) {
+	_ = ctx
+	if turns <= 0 {
 		return nil, nil
 	}
 
-	checkpoint, err := s.readConsolidationCheckpoint()
-	if err != nil {
-		return nil, err
-	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-	var selected []turnPathEntry
-	if checkpoint.LastConsolidatedSeq <= 0 {
-		start := max(0, len(entries)-turns)
-		selected = entries[start:]
-	} else {
-		start := sort.Search(len(entries), func(i int) bool {
-			return entries[i].Seq > checkpoint.LastConsolidatedSeq
-		})
-		if start == len(entries) {
-			return nil, nil
-		}
-		selected = entries[start:]
-		if len(selected) > turns {
-			selected = selected[len(selected)-turns:]
-		}
-	}
-
-	records := make([]turnRecord, 0, len(selected))
-	for _, entry := range selected {
-		turn, err := s.readTurn(entry.Path)
-		if err != nil {
-			return nil, err
-		}
-		records = append(records, turn)
-	}
-
-	out := make([]conversation.Message, 0, len(records)*2)
-	for _, turn := range records {
-		out = append(out, copyMessages(turn.Messages)...)
-	}
-	return out, nil
+	return s.loadMessagesLocked(turns, false)
 }
 
 // LoadLastUserTimestamp returns the most recent persisted user-message
@@ -261,6 +272,31 @@ func (s *Store) LoadCoreMemory(ctx context.Context) (agent.CoreMemory, error) {
 	}
 	return agent.CoreMemory{
 		Files: files,
+	}, nil
+}
+
+// LoadSemanticMemory loads the canonical durable semantic-memory files in
+// stable semantic order.
+func (s *Store) LoadSemanticMemory(ctx context.Context) (agent.SemanticMemory, error) {
+	_ = ctx
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	out := make([]agent.SemanticMemoryFile, 0, len(semanticSeedPaths))
+	for _, file := range semanticSeedPaths {
+		content, err := s.loadSeededMemoryFile(file.relativePath, file.seedPath)
+		if err != nil {
+			return agent.SemanticMemory{}, err
+		}
+		out = append(out, agent.SemanticMemoryFile{
+			RelativePath: file.relativePath,
+			Content:      content,
+		})
+	}
+
+	return agent.SemanticMemory{
+		Files: out,
 	}, nil
 }
 
@@ -356,7 +392,8 @@ This directory contains q15's persistent agent-state root.
 
 	- Core self-model files (always injected into the system prompt) are stored in core/*.md (for example AGENT.md, USER.md, SOUL.md).
 	- Agent identity comes from config agent.name; use {{agent_name}} in core files instead of hardcoded names.
-	- Semantic memory is stored under semantic/ for durable extracted knowledge the agent knows; it is not auto-injected.
+	- Semantic memory is stored under semantic/ for durable extracted knowledge the agent knows; its canonical editable files are semantic/facts.md, semantic/preferences.md, and semantic/projects.md.
+	- Semantic memory is tool-fetched for cognition jobs and is not auto-injected into reply prompts.
 	- The canonical prompt-visible working-memory artifact is working/WORKING_MEMORY.md for bounded active state.
 	- Other files under working/ are not implicitly prompt-visible and notes/ is never working memory.
 	- Episodic conversation turns are stored as canonical JSON files under history/turns/.
@@ -382,6 +419,19 @@ func (s *Store) ensureCoreMemory() error {
 		}
 	}
 
+	return nil
+}
+
+func (s *Store) ensureSemanticMemory() error {
+	for _, file := range semanticSeedPaths {
+		if err := s.ensureSeedFile(file.relativePath, file.seedPath); err != nil {
+			return fmt.Errorf(
+				"initialize semantic memory seed %q: %w",
+				file.seedPath,
+				err,
+			)
+		}
+	}
 	return nil
 }
 
@@ -551,6 +601,23 @@ func readEmbeddedSeed(path string) (string, error) {
 	return strings.TrimSpace(string(raw)), nil
 }
 
+func (s *Store) loadSeededMemoryFile(relativePath, seedPath string) (string, error) {
+	path := filepath.Join(s.rootDir, filepath.FromSlash(relativePath))
+	raw, err := os.ReadFile(path)
+	if err == nil {
+		return strings.TrimSpace(string(raw)), nil
+	}
+	if !os.IsNotExist(err) {
+		return "", fmt.Errorf("read semantic memory file %q: %w", path, err)
+	}
+
+	content, err := readEmbeddedSeed(seedPath)
+	if err != nil {
+		return "", fmt.Errorf("read embedded seed %q: %w", seedPath, err)
+	}
+	return content, nil
+}
+
 func (s *Store) ensureSeedFile(relativePath, seedPath string) error {
 	content, err := readEmbeddedSeed(seedPath)
 	if err != nil {
@@ -708,6 +775,60 @@ func (s *Store) readConsolidationCheckpoint() (consolidationCheckpointState, err
 		)
 	}
 	return checkpoint, nil
+}
+
+func (s *Store) loadMessagesLocked(
+	turns int,
+	checkpointAware bool,
+) ([]conversation.Message, error) {
+	entries, err := s.listTurnEntries()
+	if err != nil {
+		return nil, err
+	}
+	if len(entries) == 0 {
+		return nil, nil
+	}
+
+	var selected []turnPathEntry
+	if checkpointAware {
+		checkpoint, err := s.readConsolidationCheckpoint()
+		if err != nil {
+			return nil, err
+		}
+		if checkpoint.LastConsolidatedSeq <= 0 {
+			start := max(0, len(entries)-turns)
+			selected = entries[start:]
+		} else {
+			start := sort.Search(len(entries), func(i int) bool {
+				return entries[i].Seq > checkpoint.LastConsolidatedSeq
+			})
+			if start == len(entries) {
+				return nil, nil
+			}
+			selected = entries[start:]
+			if len(selected) > turns {
+				selected = selected[len(selected)-turns:]
+			}
+		}
+	} else {
+		start := max(0, len(entries)-turns)
+		selected = entries[start:]
+	}
+
+	records := make([]turnRecord, 0, len(selected))
+	for _, entry := range selected {
+		turn, err := s.readTurn(entry.Path)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, turn)
+	}
+
+	out := make([]conversation.Message, 0, len(records)*2)
+	for _, turn := range records {
+		out = append(out, copyMessages(turn.Messages)...)
+	}
+	return out, nil
 }
 
 func (s *Store) headStatePath() string {

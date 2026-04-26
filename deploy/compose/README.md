@@ -7,8 +7,8 @@ This directory contains the checked-in Compose-facing config, policy, and secret
   `Q15_IMAGE_TAG`, and mounts persistent storage for `/workspace`, `/memory`, `/skills`, `/nix`, and
   `/var/lib/q15/proxy`.
 - [docker-compose.yml](/docker-compose.yml) in the repo root is the local-development stack. It
-  keeps `build:` enabled and bind-mounts this repo into `/workspace`; it is not the image-first
-  deployment example for downstream consumers.
+  keeps `build:` enabled and uses a named `q15_workspace` volume for `/workspace`; it is not the
+  image-first deployment example for downstream consumers.
 - [agent-config.yaml](/deploy/compose/agent-config.yaml),
   [proxy-policy.yaml](/deploy/compose/proxy-policy.yaml), and
   [secrets/\*.example](/deploy/compose/secrets) are generic templates that downstream repos can copy

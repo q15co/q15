@@ -26,6 +26,7 @@ type EngineRequest struct {
 	Messages           []conversation.Message
 	UseTools           bool
 	AllowedTools       []string
+	ToolCallPolicy     ToolCallPolicy
 	RequireToolCalling bool
 	Observer           RunObserver
 }
@@ -147,7 +148,7 @@ func (e *Engine) Run(ctx context.Context, req EngineRequest) (EngineResult, erro
 				ToolCall: call,
 			})
 
-			toolResult, err := e.runTool(ctx, toolRegistry, call)
+			toolResult, err := e.runTool(ctx, toolRegistry, req.ToolCallPolicy, call)
 			output := toolResult.Output
 			if err != nil {
 				output = "tool error: " + err.Error()
@@ -219,6 +220,7 @@ func (e *Engine) Run(ctx context.Context, req EngineRequest) (EngineResult, erro
 func (e *Engine) runTool(
 	ctx context.Context,
 	tools ToolRegistry,
+	policy ToolCallPolicy,
 	call ToolCall,
 ) (ToolResult, error) {
 	if tools == nil {
@@ -226,6 +228,11 @@ func (e *Engine) runTool(
 	}
 	if strings.TrimSpace(call.ID) == "" {
 		return ToolResult{}, fmt.Errorf("tool call is missing id")
+	}
+	if policy != nil {
+		if err := policy.CheckToolCall(call); err != nil {
+			return ToolResult{}, err
+		}
 	}
 	return tools.Run(ctx, call)
 }

@@ -98,3 +98,8 @@ type ToolRegistry interface {
 	// Run executes a single tool call.
 	Run(ctx context.Context, call ToolCall) (ToolResult, error)
 }
+
+// ToolCallPolicy can reject a tool call before it reaches the registry.
+type ToolCallPolicy interface {
+	CheckToolCall(call ToolCall) error
+}

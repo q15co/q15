@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -49,6 +50,9 @@ func TestStoreInitCreatesScaffold(t *testing.T) {
 		filepath.Join(root, "core", "USER.md"),
 		filepath.Join(root, "core", "SOUL.md"),
 		filepath.Join(root, "semantic"),
+		filepath.Join(root, "semantic", "facts.md"),
+		filepath.Join(root, "semantic", "preferences.md"),
+		filepath.Join(root, "semantic", "projects.md"),
 		filepath.Join(root, "working"),
 		filepath.Join(root, "working", "WORKING_MEMORY.md"),
 		filepath.Join(root, "history", "turns"),
@@ -78,7 +82,8 @@ func TestStoreInitCreatesScaffold(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Core self-model files",
-		"Semantic memory is stored under semantic/",
+		"semantic/facts.md, semantic/preferences.md, and semantic/projects.md",
+		"Semantic memory is tool-fetched for cognition jobs and is not auto-injected",
 		"working/WORKING_MEMORY.md",
 		"notes/ is never working memory",
 		"history/state/head.json",
@@ -189,6 +194,110 @@ func TestStoreLoadWorkingMemory(t *testing.T) {
 	}
 }
 
+func TestStoreLoadSemanticMemory(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "memory")
+	store := NewStore(root, "Jared", &fakeCommitter{})
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	unrelatedPath := filepath.Join(root, "semantic", "scratch.md")
+	if err := os.WriteFile(unrelatedPath, []byte("# Scratch\n- ignore me\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(unrelated semantic file) error = %v", err)
+	}
+
+	semantic, err := store.LoadSemanticMemory(context.Background())
+	if err != nil {
+		t.Fatalf("LoadSemanticMemory() error = %v", err)
+	}
+
+	gotPaths := make([]string, 0, len(semantic.Files))
+	for _, file := range semantic.Files {
+		gotPaths = append(gotPaths, file.RelativePath)
+	}
+	wantPaths := []string{
+		"semantic/facts.md",
+		"semantic/preferences.md",
+		"semantic/projects.md",
+	}
+	if !reflect.DeepEqual(gotPaths, wantPaths) {
+		t.Fatalf("semantic paths = %v, want %v", gotPaths, wantPaths)
+	}
+
+	for _, file := range semantic.Files {
+		switch file.RelativePath {
+		case "semantic/facts.md":
+			for _, want := range []string{"# Semantic Facts", "## Confirmed Facts", "## Grounded Inferences"} {
+				if !strings.Contains(file.Content, want) {
+					t.Fatalf("facts content missing %q:\n%s", want, file.Content)
+				}
+			}
+		case "semantic/preferences.md":
+			for _, want := range []string{
+				"# Semantic Preferences",
+				"## User Preferences",
+				"## Collaboration Preferences",
+			} {
+				if !strings.Contains(file.Content, want) {
+					t.Fatalf("preferences content missing %q:\n%s", want, file.Content)
+				}
+			}
+		case "semantic/projects.md":
+			for _, want := range []string{
+				"# Semantic Projects",
+				"## Active Projects",
+				"## Durable Project Knowledge",
+			} {
+				if !strings.Contains(file.Content, want) {
+					t.Fatalf("projects content missing %q:\n%s", want, file.Content)
+				}
+			}
+		default:
+			t.Fatalf("unexpected semantic file loaded: %#v", file)
+		}
+	}
+}
+
+func TestStoreLoadSemanticMemoryFallsBackToEmbeddedSeedWhenFileIsMissing(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "memory")
+	store := NewStore(root, "Jared", &fakeCommitter{})
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	path := filepath.Join(root, "semantic", "facts.md")
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("Remove(facts.md) error = %v", err)
+	}
+
+	semantic, err := store.LoadSemanticMemory(context.Background())
+	if err != nil {
+		t.Fatalf("LoadSemanticMemory() error = %v", err)
+	}
+
+	if got, want := len(semantic.Files), 3; got != want {
+		t.Fatalf("semantic files len = %d, want %d", got, want)
+	}
+
+	for _, file := range semantic.Files {
+		if file.RelativePath != "semantic/facts.md" {
+			continue
+		}
+		for _, want := range []string{
+			"# Semantic Facts",
+			"## Confirmed Facts",
+			"## Grounded Inferences",
+		} {
+			if !strings.Contains(file.Content, want) {
+				t.Fatalf("facts fallback content missing %q:\n%s", want, file.Content)
+			}
+		}
+		return
+	}
+
+	t.Fatalf("semantic files missing facts.md: %#v", semantic.Files)
+}
+
 func TestStoreAppendAndLoadRecentMessages(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "memory")
 	store := NewStore(root, "Jared", &fakeCommitter{})
@@ -219,6 +328,60 @@ func TestStoreAppendAndLoadRecentMessages(t *testing.T) {
 	}
 	if conversation.TextValue(got[0]) != "two" || conversation.TextValue(got[1]) != "second" {
 		t.Fatalf("LoadRecentMessages contents = %#v, want latest turn only", got)
+	}
+}
+
+func TestStoreLoadLatestMessagesIgnoresConsolidationCheckpoint(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "memory")
+	store := NewStore(root, "Jared", &fakeCommitter{})
+
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	for _, pair := range [][2]string{
+		{"one", "first"},
+		{"two", "second"},
+		{"three", "third"},
+	} {
+		if err := store.AppendTurn(context.Background(), []conversation.Message{
+			conversation.UserMessage(pair[0]),
+			conversation.AssistantMessage(conversation.Text(pair[1], "")),
+		}); err != nil {
+			t.Fatalf("AppendTurn(%q) error = %v", pair[0], err)
+		}
+	}
+
+	if _, err := store.StoreConsolidationCheckpoint(
+		context.Background(),
+		cognition.ConsolidationCheckpoint{LastConsolidatedSeq: 2},
+	); err != nil {
+		t.Fatalf("StoreConsolidationCheckpoint() error = %v", err)
+	}
+
+	checkpointAware, err := store.LoadRecentMessages(context.Background(), 2)
+	if err != nil {
+		t.Fatalf("LoadRecentMessages() error = %v", err)
+	}
+	if len(checkpointAware) != 2 {
+		t.Fatalf("LoadRecentMessages len = %d, want 2", len(checkpointAware))
+	}
+	if got, want := conversation.TextValue(checkpointAware[0]), "three"; got != want {
+		t.Fatalf("LoadRecentMessages first message = %q, want %q", got, want)
+	}
+
+	tail, err := store.LoadLatestMessages(context.Background(), 2)
+	if err != nil {
+		t.Fatalf("LoadLatestMessages() error = %v", err)
+	}
+	if len(tail) != 4 {
+		t.Fatalf("LoadLatestMessages len = %d, want 4", len(tail))
+	}
+	if got, want := conversation.TextValue(tail[0]), "two"; got != want {
+		t.Fatalf("LoadLatestMessages first message = %q, want %q", got, want)
+	}
+	if got, want := conversation.TextValue(tail[2]), "three"; got != want {
+		t.Fatalf("LoadLatestMessages third message = %q, want %q", got, want)
 	}
 }
 

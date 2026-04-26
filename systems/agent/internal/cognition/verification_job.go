@@ -14,8 +14,9 @@ const (
 	verificationReviewJobType               = "verification_review"
 	verificationHeadRuntimePath             = "/memory/history/state/head.json"
 	verificationCheckpointRuntimePath       = "/memory/history/state/consolidation_checkpoint.json"
-	verificationReviewRecentTurns           = workingMemoryRecentTurns
-	verificationReviewMinDirtyTurns   int64 = workingMemoryMinDirtyTurns
+	verificationReviewScheduleSpec          = "0 3,15 * * *"
+	verificationReviewRecentTurns           = 24
+	verificationReviewMinDirtyTurns   int64 = 8
 )
 
 var verificationReviewAllowedTools = []string{
@@ -32,6 +33,10 @@ func NewVerificationReviewRegistration() JobRegistration {
 			return verificationReviewJob{}
 		},
 		Policy: TriggerPolicy{
+			Schedule: []ScheduleRule{{
+				ID:   "periodic_audit",
+				Spec: verificationReviewScheduleSpec,
+			}},
 			State: []StateRule{{
 				ID:       "dirty_tail_threshold",
 				Evaluate: evaluateVerificationReviewState,
@@ -349,9 +354,5 @@ func verificationReviewBaseline(spec Spec) (string, bool) {
 }
 
 func compactVerificationReviewText(text string) string {
-	text = strings.Join(strings.Fields(text), " ")
-	if len(text) <= 200 {
-		return text
-	}
-	return text[:197] + "..."
+	return compactCognitionText(text)
 }
