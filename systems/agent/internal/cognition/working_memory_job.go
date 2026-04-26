@@ -299,19 +299,10 @@ func workingMemoryTargetUsed(messages []conversation.Message, targetPath string)
 			if !ok {
 				continue
 			}
-			if workingMemoryAccessIncludesPath(access.ReadPaths, targetPath) ||
-				workingMemoryAccessIncludesPath(access.WritePaths, targetPath) {
+			if accessIncludesPath(access.ReadPaths, targetPath) ||
+				accessIncludesPath(access.WritePaths, targetPath) {
 				return true
 			}
-		}
-	}
-	return false
-}
-
-func workingMemoryAccessIncludesPath(paths []string, target string) bool {
-	for _, path := range paths {
-		if path == target {
-			return true
 		}
 	}
 	return false
@@ -329,9 +320,5 @@ func summarizeWorkingMemoryNotes(text string) string {
 }
 
 func compactWorkingMemoryText(text string) string {
-	text = strings.Join(strings.Fields(text), " ")
-	if len(text) <= 200 {
-		return text
-	}
-	return text[:197] + "..."
+	return compactCognitionText(text)
 }

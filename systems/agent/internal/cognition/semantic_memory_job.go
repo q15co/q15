@@ -403,13 +403,13 @@ func semanticTargetCoverage(
 				continue
 			}
 			for path, status := range targets {
-				if semanticAccessIncludesPath(access.WritePaths, path) {
+				if accessIncludesPath(access.WritePaths, path) {
 					status.inspected = true
 					status.mutated = true
 					targets[path] = status
 					continue
 				}
-				if semanticAccessIncludesPath(access.ReadPaths, path) {
+				if accessIncludesPath(access.ReadPaths, path) {
 					status.inspected = true
 					targets[path] = status
 				}
@@ -417,15 +417,6 @@ func semanticTargetCoverage(
 		}
 	}
 	return targets
-}
-
-func semanticAccessIncludesPath(paths []string, target string) bool {
-	for _, path := range paths {
-		if path == target {
-			return true
-		}
-	}
-	return false
 }
 
 func summarizeSemanticMemoryNotes(text string) string {
@@ -440,9 +431,5 @@ func summarizeSemanticMemoryNotes(text string) string {
 }
 
 func compactSemanticMemoryText(text string) string {
-	text = strings.Join(strings.Fields(text), " ")
-	if len(text) <= 200 {
-		return text
-	}
-	return text[:197] + "..."
+	return compactCognitionText(text)
 }

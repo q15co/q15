@@ -354,9 +354,5 @@ func verificationReviewBaseline(spec Spec) (string, bool) {
 }
 
 func compactVerificationReviewText(text string) string {
-	text = strings.Join(strings.Fields(text), " ")
-	if len(text) <= 200 {
-		return text
-	}
-	return text[:197] + "..."
+	return compactCognitionText(text)
 }
