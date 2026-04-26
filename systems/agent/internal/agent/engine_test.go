@@ -9,6 +9,14 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/conversation"
 )
 
+type staticToolCallPolicy struct {
+	err error
+}
+
+func (p staticToolCallPolicy) CheckToolCall(ToolCall) error {
+	return p.err
+}
+
 func TestEngineRun_ReturnsOnlyGeneratedMessages(t *testing.T) {
 	model := &fakeModelClient{
 		results: []ModelClientResult{assistantResult("done")},
@@ -431,6 +439,58 @@ func TestEngineRun_DisallowedToolCallReturnsUnsupportedToolResult(t *testing.T) 
 	}
 	if !foundToolError {
 		t.Fatalf("result.Messages = %#v, want unsupported tool result", result.Messages)
+	}
+}
+
+func TestEngineRun_ToolCallPolicyReturnsToolErrorBeforeExecution(t *testing.T) {
+	model := &fakeModelClient{
+		results: []ModelClientResult{
+			toolCallResult("call-1", "one", `{}`),
+			assistantResult("done"),
+		},
+	}
+	executed := false
+	registry, err := NewToolRegistry(&testTool{
+		def: ToolDefinition{Name: "one"},
+		run: func(context.Context, string) (string, error) {
+			executed = true
+			return "ok", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewToolRegistry() error = %v", err)
+	}
+
+	engine := NewEngine(model, registry, []string{"m1"})
+	result, err := engine.Run(context.Background(), EngineRequest{
+		Messages: []conversation.Message{conversation.SystemMessage("prompt")},
+		UseTools: true,
+		ToolCallPolicy: staticToolCallPolicy{
+			err: errors.New("blocked by policy"),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if executed {
+		t.Fatal("tool executed despite policy rejection")
+	}
+
+	foundToolError := false
+	for _, msg := range result.Messages {
+		if msg.Role != conversation.ToolRole || len(msg.Parts) == 0 {
+			continue
+		}
+		part := msg.Parts[0]
+		if part.Type == conversation.ToolResultPartType &&
+			part.IsError &&
+			strings.Contains(part.Content, "blocked by policy") {
+			foundToolError = true
+			break
+		}
+	}
+	if !foundToolError {
+		t.Fatalf("result.Messages = %#v, want policy error tool result", result.Messages)
 	}
 }
 

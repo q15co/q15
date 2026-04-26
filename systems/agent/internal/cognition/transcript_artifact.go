@@ -36,12 +36,29 @@ func renderTranscriptArtifact(messages []conversation.Message) string {
 }
 
 func renderTranscriptScope(capTurns int, loadedMessages int) string {
+	return renderTranscriptScopeWithPolicy(
+		"selected by checkpoint-aware replay policy",
+		capTurns,
+		loadedMessages,
+	)
+}
+
+func renderTranscriptScopeWithPolicy(
+	policy string,
+	capTurns int,
+	loadedMessages int,
+) string {
 	if loadedMessages == 0 {
 		return "No transcript messages were loaded for this run."
 	}
+	policy = strings.TrimSpace(policy)
+	if policy == "" {
+		policy = "selected by the configured replay policy"
+	}
 	return renderPromptLines(
 		fmt.Sprintf(
-			"A bounded replay slice of episodic history, selected by checkpoint-aware replay policy and capped at %d turns, is included below as a transcript artifact.",
+			"A bounded replay slice of episodic history, %s and capped at %d turns, is included below as a transcript artifact.",
+			policy,
 			capTurns,
 		),
 		"Treat it as historical evidence for unconsolidated or still-relevant context, not as the full transcript.",

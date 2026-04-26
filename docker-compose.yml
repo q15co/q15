@@ -32,8 +32,8 @@ services:
     environment:
       TZ: Europe/Berlin
     volumes:
-      - type: bind
-        source: .
+      - type: volume
+        source: q15_workspace
         target: /workspace
       - type: volume
         source: q15_memory
@@ -75,8 +75,8 @@ services:
         source: ./deploy/compose/secrets/q15_auth_json
         target: /etc/q15/auth/auth.json
         read_only: true
-      - type: bind
-        source: .
+      - type: volume
+        source: q15_workspace
         target: /workspace
       - type: volume
         source: q15_memory
@@ -99,6 +99,7 @@ volumes:
   q15_memory:
   q15_proxy_state:
   q15_skills:
+  q15_workspace:
 
 configs:
   q15_agent_config:

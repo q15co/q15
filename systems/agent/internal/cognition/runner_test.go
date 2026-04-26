@@ -80,6 +80,10 @@ func (s *spyLoader) LoadCoreMemory(context.Context) (agent.CoreMemory, error) {
 	return agent.CoreMemory{}, nil
 }
 
+func (s *spyLoader) LoadSemanticMemory(context.Context) (agent.SemanticMemory, error) {
+	return agent.SemanticMemory{}, nil
+}
+
 func (s *spyLoader) LoadWorkingMemory(context.Context) (agent.WorkingMemory, error) {
 	return agent.WorkingMemory{}, nil
 }
@@ -89,6 +93,13 @@ func (s *spyLoader) LoadSkillCatalog(context.Context) (agent.SkillCatalog, error
 }
 
 func (s *spyLoader) LoadRecentMessages(
+	context.Context,
+	int,
+) ([]conversation.Message, error) {
+	return nil, nil
+}
+
+func (s *spyLoader) LoadLatestMessages(
 	context.Context,
 	int,
 ) ([]conversation.Message, error) {

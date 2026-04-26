@@ -24,6 +24,13 @@ func (s *spyRuntimeStore) LoadRecentMessages(
 	return nil, nil
 }
 
+func (s *spyRuntimeStore) LoadLatestMessages(
+	context.Context,
+	int,
+) ([]conversation.Message, error) {
+	return nil, nil
+}
+
 func (s *spyRuntimeStore) LoadLastUserTimestamp(
 	context.Context,
 ) (time.Time, bool, error) {
@@ -40,6 +47,10 @@ func (s *spyRuntimeStore) AppendTurn(
 
 func (s *spyRuntimeStore) LoadCoreMemory(context.Context) (agent.CoreMemory, error) {
 	return agent.CoreMemory{}, nil
+}
+
+func (s *spyRuntimeStore) LoadSemanticMemory(context.Context) (agent.SemanticMemory, error) {
+	return agent.SemanticMemory{}, nil
 }
 
 func (s *spyRuntimeStore) LoadWorkingMemory(context.Context) (agent.WorkingMemory, error) {

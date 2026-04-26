@@ -22,6 +22,7 @@ type runtimeStore struct {
 
 var _ agent.ConversationStore = (*runtimeStore)(nil)
 var _ agent.CoreMemoryStore = (*runtimeStore)(nil)
+var _ agent.SemanticMemoryStore = (*runtimeStore)(nil)
 var _ agent.WorkingMemoryStore = (*runtimeStore)(nil)
 var _ agent.SkillCatalogStore = (*runtimeStore)(nil)
 var _ cognition.ContextLoader = (*runtimeStore)(nil)
@@ -32,6 +33,13 @@ func (s *runtimeStore) LoadRecentMessages(
 	turns int,
 ) ([]conversation.Message, error) {
 	return s.memory.LoadRecentMessages(ctx, turns)
+}
+
+func (s *runtimeStore) LoadLatestMessages(
+	ctx context.Context,
+	turns int,
+) ([]conversation.Message, error) {
+	return s.memory.LoadLatestMessages(ctx, turns)
 }
 
 func (s *runtimeStore) LoadLastUserTimestamp(
@@ -58,6 +66,10 @@ func (s *runtimeStore) AppendTurn(ctx context.Context, messages []conversation.M
 
 func (s *runtimeStore) LoadCoreMemory(ctx context.Context) (agent.CoreMemory, error) {
 	return s.memory.LoadCoreMemory(ctx)
+}
+
+func (s *runtimeStore) LoadSemanticMemory(ctx context.Context) (agent.SemanticMemory, error) {
+	return s.memory.LoadSemanticMemory(ctx)
 }
 
 func (s *runtimeStore) LoadWorkingMemory(ctx context.Context) (agent.WorkingMemory, error) {

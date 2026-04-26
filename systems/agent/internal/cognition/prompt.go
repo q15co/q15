@@ -17,6 +17,7 @@ type Spec struct {
 	ExposeTools        bool
 	RequireToolCalling bool
 	AllowedTools       []string
+	ToolCallPolicy     agent.ToolCallPolicy
 }
 
 func renderPrompt(jobType string, spec Spec) (string, error) {

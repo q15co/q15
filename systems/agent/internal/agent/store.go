@@ -47,6 +47,24 @@ type WorkingMemoryStore interface {
 	LoadWorkingMemory(ctx context.Context) (WorkingMemory, error)
 }
 
+// SemanticMemory holds canonical durable extracted memory files that are
+// available to cognition jobs but are not auto-injected into reply prompts.
+type SemanticMemory struct {
+	Files []SemanticMemoryFile
+}
+
+// SemanticMemoryFile is one canonical semantic-memory markdown file.
+type SemanticMemoryFile struct {
+	RelativePath string
+	Content      string
+}
+
+// SemanticMemoryStore can provide canonical semantic memory for background
+// cognition jobs.
+type SemanticMemoryStore interface {
+	LoadSemanticMemory(ctx context.Context) (SemanticMemory, error)
+}
+
 // SkillCatalog describes dynamically available skills that may be loaded by
 // the model on demand.
 type SkillCatalog struct {

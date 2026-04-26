@@ -389,8 +389,8 @@ func TestRoutedModelAdapterPlanSelectionRejectsUnknownModelRef(t *testing.T) {
 
 func TestCognitionJobsRegistersBuiltInCognitionJobs(t *testing.T) {
 	jobs := cognitionJobs()
-	if len(jobs) != 2 {
-		t.Fatalf("cognitionJobs len = %d, want 2", len(jobs))
+	if len(jobs) != 3 {
+		t.Fatalf("cognitionJobs len = %d, want 3", len(jobs))
 	}
 
 	gotTypes := make([]string, 0, len(jobs))
@@ -404,25 +404,37 @@ func TestCognitionJobsRegistersBuiltInCognitionJobs(t *testing.T) {
 	if got, want := gotTypes[0], "verification_review"; got != want {
 		t.Fatalf("jobs[0].Type() = %q, want %q", got, want)
 	}
-	if got, want := gotTypes[1], "working_memory.consolidate"; got != want {
+	if got, want := gotTypes[1], "semantic_memory.extract"; got != want {
 		t.Fatalf("jobs[1].Type() = %q, want %q", got, want)
+	}
+	if got, want := gotTypes[2], "working_memory.consolidate"; got != want {
+		t.Fatalf("jobs[2].Type() = %q, want %q", got, want)
 	}
 	if len(jobs[0].Policy.Startup) != 0 {
 		t.Fatalf("verification startup rules = %d, want 0", len(jobs[0].Policy.Startup))
 	}
-	if len(jobs[0].Policy.Schedule) != 0 {
-		t.Fatalf("verification schedule rules = %d, want 0", len(jobs[0].Policy.Schedule))
+	if len(jobs[0].Policy.Schedule) == 0 {
+		t.Fatal("verification schedule rules = 0, want at least 1")
 	}
 	if len(jobs[0].Policy.State) == 0 {
 		t.Fatal("verification state rules = 0, want at least 1")
 	}
-	if len(jobs[1].Policy.Startup) == 0 {
-		t.Fatal("startup rules = 0, want at least 1")
+	if len(jobs[1].Policy.Startup) != 0 {
+		t.Fatalf("semantic startup rules = %d, want 0", len(jobs[1].Policy.Startup))
 	}
 	if len(jobs[1].Policy.Schedule) == 0 {
-		t.Fatal("schedule rules = 0, want at least 1")
+		t.Fatal("semantic schedule rules = 0, want at least 1")
 	}
 	if len(jobs[1].Policy.State) == 0 {
+		t.Fatal("semantic state rules = 0, want at least 1")
+	}
+	if len(jobs[2].Policy.Startup) == 0 {
+		t.Fatal("startup rules = 0, want at least 1")
+	}
+	if len(jobs[2].Policy.Schedule) == 0 {
+		t.Fatal("schedule rules = 0, want at least 1")
+	}
+	if len(jobs[2].Policy.State) == 0 {
 		t.Fatal("state rules = 0, want at least 1")
 	}
 }

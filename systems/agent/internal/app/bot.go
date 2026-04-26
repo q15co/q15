@@ -185,6 +185,7 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 func cognitionJobs() []cognition.JobRegistration {
 	return []cognition.JobRegistration{
 		cognition.NewVerificationReviewRegistration(),
+		cognition.NewSemanticMemoryExtractionRegistration(),
 		cognition.NewWorkingMemoryConsolidationRegistration(),
 	}
 }
@@ -315,6 +316,17 @@ func renderRuntimeEnvironmentPrompt(
 				info.MemoryDir,
 				info.MemoryDir,
 			),
+			fmt.Sprintf(
+				"- Canonical semantic-memory files are %s/semantic/facts.md, %s/semantic/preferences.md, and %s/semantic/projects.md.",
+				info.MemoryDir,
+				info.MemoryDir,
+				info.MemoryDir,
+			),
+			"- When editing canonical semantic memory, preserve these exact H2 headings:",
+			"- facts.md: Confirmed Facts, Grounded Inferences",
+			"- preferences.md: User Preferences, Collaboration Preferences",
+			"- projects.md: Active Projects, Durable Project Knowledge",
+			"- Do not invent new top-level sections in canonical semantic memory; merge content into the existing headings instead.",
 			fmt.Sprintf(
 				"- Other files under %s/working are not implicitly prompt-visible; only WORKING_MEMORY.md is auto-injected.",
 				info.MemoryDir,
