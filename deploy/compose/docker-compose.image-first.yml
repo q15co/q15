@@ -45,12 +45,139 @@ services:
         source: q15_exec_nix_store
         target: /nix
 
+  q15-lightrag-postgres:
+    image: gzdaniel/postgres-for-rag:16.6
+    restart: unless-stopped
+    init: true
+    environment:
+      POSTGRES_USER: ${LIGHTRAG_POSTGRES_USER:-rag}
+      POSTGRES_PASSWORD: ${LIGHTRAG_POSTGRES_PASSWORD:-rag}
+      POSTGRES_DB: ${LIGHTRAG_POSTGRES_DATABASE:-rag}
+    volumes:
+      - type: volume
+        source: q15_lightrag_postgres
+        target: /var/lib/postgresql/data
+
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    init: true
+    ports:
+      - "127.0.0.1:${OLLAMA_PORT:-11435}:11434"
+    environment:
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30m}
+      OLLAMA_MAX_LOADED_MODELS: ${OLLAMA_MAX_LOADED_MODELS:-1}
+      OLLAMA_NUM_PARALLEL: ${OLLAMA_NUM_PARALLEL:-1}
+    devices:
+      - ${OLLAMA_GPU_DEVICE:-nvidia.com/gpu=all}
+    volumes:
+      - type: volume
+        source: q15_ollama
+        target: /root/.ollama
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - OLLAMA_HOST=http://127.0.0.1:11434 ollama list >/dev/null 2>&1
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+
+  ollama-models:
+    image: ollama/ollama:latest
+    restart: "no"
+    init: true
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-${LIGHTRAG_EMBEDDING_MODEL:-qwen3-embedding:4b}}
+    entrypoint:
+      - /bin/sh
+      - -c
+    command:
+      - |
+        set -eu
+        ollama pull "${OLLAMA_EMBEDDING_MODEL:-${LIGHTRAG_EMBEDDING_MODEL:-qwen3-embedding:4b}}"
+
+  lightrag:
+    image: ghcr.io/hkuds/lightrag:latest
+    restart: unless-stopped
+    init: true
+    depends_on:
+      q15-lightrag-postgres:
+        condition: service_started
+      ollama-models:
+        condition: service_completed_successfully
+    entrypoint:
+      - /bin/sh
+      - -c
+    command:
+      - |
+        set -eu
+        if [ -z "$${LLM_BINDING_API_KEY:-}" ] && [ -n "$${LIGHTRAG_LLM_BINDING_API_KEY_FILE:-}" ] && [ -f "$${LIGHTRAG_LLM_BINDING_API_KEY_FILE}" ]; then
+          export LLM_BINDING_API_KEY="$$(tr -d '\r\n' < "$${LIGHTRAG_LLM_BINDING_API_KEY_FILE}")"
+        fi
+        exec python -m lightrag.api.lightrag_server
+    ports:
+      - "127.0.0.1:${LIGHTRAG_PORT:-9621}:9621"
+    environment:
+      HOST: 0.0.0.0
+      PORT: "9621"
+      WORKING_DIR: /app/data/rag_storage
+      INPUT_DIR: /app/data/inputs
+      LIGHTRAG_API_KEY: ${LIGHTRAG_API_KEY-}
+      LIGHTRAG_LLM_BINDING_API_KEY_FILE: /run/q15-secrets/zai_api_key
+      LIGHTRAG_KV_STORAGE: PGKVStorage
+      LIGHTRAG_DOC_STATUS_STORAGE: PGDocStatusStorage
+      LIGHTRAG_GRAPH_STORAGE: PGGraphStorage
+      LIGHTRAG_VECTOR_STORAGE: PGVectorStorage
+      POSTGRES_HOST: q15-lightrag-postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: ${LIGHTRAG_POSTGRES_USER:-rag}
+      POSTGRES_PASSWORD: ${LIGHTRAG_POSTGRES_PASSWORD:-rag}
+      POSTGRES_DATABASE: ${LIGHTRAG_POSTGRES_DATABASE:-rag}
+      POSTGRES_VECTOR_INDEX_TYPE: ${LIGHTRAG_POSTGRES_VECTOR_INDEX_TYPE:-HNSW_HALFVEC}
+      CHUNK_SIZE: ${LIGHTRAG_CHUNK_SIZE:-1200}
+      CHUNK_OVERLAP_SIZE: ${LIGHTRAG_CHUNK_OVERLAP_SIZE:-100}
+      DOCUMENT_LOADING_ENGINE: ${LIGHTRAG_DOCUMENT_LOADING_ENGINE:-DEFAULT}
+      MAX_ASYNC: ${LIGHTRAG_MAX_ASYNC:-4}
+      MAX_PARALLEL_INSERT: ${LIGHTRAG_MAX_PARALLEL_INSERT:-2}
+      LLM_TIMEOUT: ${LIGHTRAG_LLM_TIMEOUT:-180}
+      LLM_BINDING: ${LIGHTRAG_LLM_BINDING:-openai}
+      LLM_BINDING_HOST: ${LIGHTRAG_LLM_BINDING_HOST:-https://api.z.ai/api/coding/paas/v4/}
+      LLM_MODEL: ${LIGHTRAG_LLM_MODEL:-glm-4.7}
+      LLM_BINDING_API_KEY: ${LIGHTRAG_LLM_BINDING_API_KEY-}
+      EMBEDDING_BINDING: ${LIGHTRAG_EMBEDDING_BINDING:-ollama}
+      EMBEDDING_BINDING_HOST: ${LIGHTRAG_EMBEDDING_BINDING_HOST:-http://ollama:11434}
+      EMBEDDING_MODEL: ${LIGHTRAG_EMBEDDING_MODEL:-${OLLAMA_EMBEDDING_MODEL:-qwen3-embedding:4b}}
+      EMBEDDING_DIM: ${LIGHTRAG_EMBEDDING_DIM:-2560}
+      EMBEDDING_BINDING_API_KEY: ${LIGHTRAG_EMBEDDING_BINDING_API_KEY-}
+      RERANK_BINDING: ${LIGHTRAG_RERANK_BINDING:-null}
+      RERANK_BY_DEFAULT: ${LIGHTRAG_RERANK_BY_DEFAULT:-false}
+      RERANK_MODEL: ${LIGHTRAG_RERANK_MODEL-}
+      RERANK_BINDING_HOST: ${LIGHTRAG_RERANK_BINDING_HOST-}
+      RERANK_BINDING_API_KEY: ${LIGHTRAG_RERANK_BINDING_API_KEY-}
+    volumes:
+      - type: volume
+        source: q15_lightrag_storage
+        target: /app/data/rag_storage
+      - type: volume
+        source: q15_lightrag_inputs
+        target: /app/data/inputs
+      - type: bind
+        source: ./secrets/zai_api_key
+        target: /run/q15-secrets/zai_api_key
+        read_only: true
+
   q15-agent:
     image: ghcr.io/q15co/q15-agent:${Q15_IMAGE_TAG:?set Q15_IMAGE_TAG to a published sha-<short-sha> tag}
     restart: unless-stopped
     init: true
     depends_on:
       - q15-exec
+      - lightrag
     environment:
       HOME: /root
       GODEBUG: updatemaxprocs=0
@@ -61,6 +188,8 @@ services:
       Q15_TELEGRAM_TOKEN_FILE: /run/q15-secrets/q15_telegram_token
       Q15_TELEGRAM_ALLOWED_USER_IDS_FILE: /run/q15-secrets/q15_telegram_allowed_user_ids
       Q15_BRAVE_API_KEY: ${Q15_BRAVE_API_KEY-}
+      LIGHTRAG_API_URL: ${LIGHTRAG_API_URL:-http://lightrag:9621}
+      LIGHTRAG_API_KEY: ${LIGHTRAG_API_KEY-}
     volumes:
       - type: bind
         source: ./agent-config.yaml
@@ -101,8 +230,12 @@ services:
 
 volumes:
   q15_exec_nix_store:
+  q15_lightrag_inputs:
+  q15_lightrag_postgres:
+  q15_lightrag_storage:
   q15_media:
   q15_memory:
+  q15_ollama:
   q15_proxy_state:
   q15_skills:
   q15_workspace:

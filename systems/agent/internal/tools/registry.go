@@ -6,12 +6,14 @@
 package tools
 
 import (
+	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/execution"
 	"github.com/q15co/q15/systems/agent/internal/fileops"
 	q15media "github.com/q15co/q15/systems/agent/internal/media"
 
 	"github.com/q15co/q15/systems/agent/internal/tools/exec"
 	"github.com/q15co/q15/systems/agent/internal/tools/files"
+	"github.com/q15co/q15/systems/agent/internal/tools/lightrag"
 	mediatools "github.com/q15co/q15/systems/agent/internal/tools/media"
 	"github.com/q15co/q15/systems/agent/internal/tools/skills"
 	"github.com/q15co/q15/systems/agent/internal/tools/web"
@@ -19,6 +21,9 @@ import (
 
 // FileToolExecutor performs rooted file operations inside the runtime-visible roots.
 type FileToolExecutor = files.FileToolExecutor
+
+// LightRAGSettings configures LightRAG-backed tools.
+type LightRAGSettings = lightrag.Settings
 
 // NewReadFile delegates to files.NewReadFile.
 func NewReadFile(exec FileToolExecutor) *files.ReadFile {
@@ -63,4 +68,9 @@ func NewWebFetch() *web.Fetch {
 // NewBraveWebSearch delegates to web.NewBraveWebSearch.
 func NewBraveWebSearch(apiKey string) (*web.BraveWebSearch, error) {
 	return web.NewBraveWebSearch(apiKey)
+}
+
+// NewLightRAGTools delegates to lightrag.NewTools.
+func NewLightRAGTools(settings LightRAGSettings) ([]agent.Tool, error) {
+	return lightrag.NewTools(settings)
 }

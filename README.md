@@ -394,6 +394,9 @@ The local-development stack uses:
 - a named volume for `/skills`
 - a named volume `q15_exec_nix_store` mounted at `/nix` for persistent executor package/store reuse
   across sessions
+- a LightRAG API service exposed on `127.0.0.1:${LIGHTRAG_PORT:-9621}` with PostgreSQL/pgvector
+  storage
+- an Ollama service exposed on `127.0.0.1:${OLLAMA_PORT:-11435}` for GPU-backed local embeddings
 - Docker secret files under [deploy/compose/secrets](/deploy/compose/secrets)
 
 That `/nix` named volume keeps fetched packages warm across sessions. Docker's named-volume copy-up
@@ -418,6 +421,88 @@ make compose-logs SERVICE=q15-agent
 make compose-ps
 ```
 
+### LightRAG Document Search
+
+The Compose stacks include optional LightRAG-backed document search. `q15-agent` enables the native
+`rag_query`, `rag_ingest`, `rag_status`, and `rag_graph` tools when `LIGHTRAG_API_URL` is set. The
+checked-in Compose files set it to `http://lightrag:9621`.
+
+By default, the Compose stack starts Ollama with the NVIDIA CDI device `nvidia.com/gpu=all`,
+pre-pulls `qwen3-embedding:4b`, and points LightRAG at it with `LIGHTRAG_EMBEDDING_DIM=2560`. This
+default was selected for the 6GB RTX 2060 development machine; the model is small enough to load
+fully on CUDA while still giving stronger retrieval quality than the sub-1B local options.
+
+By default, LightRAG uses the Z.AI Coding Plan OpenAI-compatible endpoint for LLM calls, reading the
+API key from the ignored local secret file `deploy/compose/secrets/zai_api_key`. The default LLM is
+`glm-4.7`, which is the best default for routine LightRAG ingestion because it is strong enough for
+daily extraction work and avoids the higher GLM-5.1/GLM-5-Turbo quota multiplier.
+
+Configure or override LightRAG's model providers before first ingestion:
+
+```bash
+export LIGHTRAG_LLM_BINDING=openai
+export LIGHTRAG_LLM_BINDING_HOST=https://api.z.ai/api/coding/paas/v4/
+export LIGHTRAG_LLM_MODEL=glm-4.7
+export LIGHTRAG_LLM_BINDING_API_KEY=
+export LIGHTRAG_LLM_TIMEOUT=180
+export LIGHTRAG_CHUNK_SIZE=1200
+export LIGHTRAG_CHUNK_OVERLAP_SIZE=100
+export LIGHTRAG_DOCUMENT_LOADING_ENGINE=DEFAULT
+export LIGHTRAG_MAX_ASYNC=4
+export LIGHTRAG_MAX_PARALLEL_INSERT=2
+export OLLAMA_PORT=11435
+export OLLAMA_GPU_DEVICE=nvidia.com/gpu=all
+export OLLAMA_EMBEDDING_MODEL=qwen3-embedding:4b
+export LIGHTRAG_EMBEDDING_BINDING=ollama
+export LIGHTRAG_EMBEDDING_BINDING_HOST=http://ollama:11434
+export LIGHTRAG_EMBEDDING_MODEL=qwen3-embedding:4b
+export LIGHTRAG_EMBEDDING_DIM=2560
+export LIGHTRAG_EMBEDDING_BINDING_API_KEY=
+export LIGHTRAG_RERANK_BY_DEFAULT=false
+```
+
+Use `LIGHTRAG_LLM_BINDING_API_KEY` only when you need to override the Compose secret file. The
+Coding Plan endpoint currently works here with `glm-5.1`, `glm-5-turbo`, `glm-4.7`, and
+`glm-4.5-air`; set `LIGHTRAG_LLM_MODEL=glm-5.1` only for complex documents or evaluation runs where
+maximum extraction quality is worth the extra quota burn.
+
+The native `rag_query` tool sends `enable_rerank=false` by default to avoid LightRAG reranker
+warnings while no rerank provider is configured. To add a reranker later, set
+`LIGHTRAG_RERANK_BINDING`, `LIGHTRAG_RERANK_MODEL`, `LIGHTRAG_RERANK_BINDING_HOST`, and
+`LIGHTRAG_RERANK_BINDING_API_KEY`, then explicitly call `rag_query` with `enable_rerank=true`.
+
+On an 8GB production GPU, `qwen3-embedding:8b` is the higher-quality option to test first. Set both
+`OLLAMA_EMBEDDING_MODEL` and `LIGHTRAG_EMBEDDING_MODEL` to `qwen3-embedding:8b`, and set
+`LIGHTRAG_EMBEDDING_DIM=4096`. Changing the embedding model or dimension after ingestion requires
+rebuilding the LightRAG vector data.
+
+The LightRAG API key is optional. When set, the same `LIGHTRAG_API_KEY` value is passed to the
+LightRAG service and sent by `q15-agent` as the `X-API-Key` header. PostgreSQL defaults are
+`LIGHTRAG_POSTGRES_USER=rag`, `LIGHTRAG_POSTGRES_PASSWORD=rag`, and
+`LIGHTRAG_POSTGRES_DATABASE=rag`; override them before first startup if needed.
+
+Initial corpus ingestion is manual. After the stack is running, ask the agent to call `rag_ingest`
+for files under `/workspace/library-markdown/` and `/memory/notes/`, then use `rag_status` with the
+returned track IDs until indexing completes. File ingestion accepts paths under `/workspace`,
+`/memory`, or `/media`; relative paths resolve under `/workspace`.
+
+LightRAG's default chunking is token-window based, not document-type aware. The Compose defaults
+expose the upstream settings `LIGHTRAG_CHUNK_SIZE=1200` and `LIGHTRAG_CHUNK_OVERLAP_SIZE=100`, which
+are reasonable first-ingestion defaults for prose, but changing them later requires re-ingesting the
+affected corpus. For dense philosophy texts, academic papers, and books with important section
+boundaries, prefer curated Markdown or text in `/workspace/library-markdown/` before ingestion.
+Chapter or article-section files with headings preserved usually produce better chunks and graph
+extraction than one large converted file.
+
+Raw uploads are not equally reliable across file types. Current LightRAG accepts `.epub` by
+extension, but the upload path treats `.epub` like a UTF-8 text file rather than unpacking the EPUB
+container into chapters. Convert EPUBs to Markdown or plain text first. For academic journals,
+publisher HTML/XML/Markdown or clean text PDFs are preferable; scanned PDFs need OCR before
+ingestion, and complex PDF layout, tables, footnotes, and references should be converted to Markdown
+with structure preserved. `LIGHTRAG_DOCUMENT_LOADING_ENGINE=DOCLING` can improve supported
+PDF/DOCX/PPTX/XLSX extraction only when the LightRAG image includes Docling; the default published
+image falls back to built-in extractors.
+
 ## Image-First Compose Deployment Example
 
 The canonical downstream image-first Compose example is
@@ -429,7 +514,7 @@ This deployment-oriented example:
 - uses `image:` only, with no `build:`
 - requires `Q15_IMAGE_TAG` and applies the same tag to `q15-agent`, `q15-exec`, and `q15-proxy`
 - mounts persistent named volumes for `/workspace`, `/memory`, `/skills`, `/nix`, and
-  `/var/lib/q15/proxy`
+  `/var/lib/q15/proxy`, plus LightRAG PostgreSQL/input/storage volumes
 - mounts `agent-config.yaml`, `proxy-policy.yaml`, and `auth.json` at the exact runtime paths the
   binaries expect
 - mounts provider and proxy secret files and resolves them via the `*_FILE` environment pattern

@@ -113,7 +113,11 @@ func TestBuildToolListIncludesOnlyCurrentRuntimeTools(t *testing.T) {
 			SkillsLocalDir:      t.TempDir(),
 			SkillsRuntimeDir:    "/skills",
 		},
+		t.TempDir(),
+		"/media",
 		mediaStore,
+		"",
+		"",
 		"",
 	)
 	if err != nil {
@@ -154,8 +158,12 @@ func TestBuildToolListAppendsWebSearchWhenConfigured(t *testing.T) {
 			SkillsLocalDir:      t.TempDir(),
 			SkillsRuntimeDir:    "/skills",
 		},
+		t.TempDir(),
+		"/media",
 		mediaStore,
 		"brave-key",
+		"",
+		"",
 	)
 	if err != nil {
 		t.Fatalf("buildToolList() error = %v", err)
@@ -171,6 +179,55 @@ func TestBuildToolListAppendsWebSearchWhenConfigured(t *testing.T) {
 		"load_image",
 		"web_fetch",
 		"web_search",
+	}; !equalStrings(got, want) {
+		t.Fatalf("tool names = %v, want %v", got, want)
+	}
+}
+
+func TestBuildToolListAppendsLightRAGToolsWhenConfigured(t *testing.T) {
+	t.Parallel()
+
+	fileExec := &stubFileExecutor{}
+	mediaStore, err := q15media.NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileStore() error = %v", err)
+	}
+	toolList, err := buildToolList(
+		&stubExecutionService{},
+		fileExec,
+		nil,
+		fileops.Settings{
+			WorkspaceLocalDir:   t.TempDir(),
+			WorkspaceRuntimeDir: "/workspace",
+			MemoryLocalDir:      t.TempDir(),
+			MemoryRuntimeDir:    "/memory",
+			SkillsLocalDir:      t.TempDir(),
+			SkillsRuntimeDir:    "/skills",
+		},
+		t.TempDir(),
+		"/media",
+		mediaStore,
+		"",
+		"http://lightrag:9621",
+		"rag-key",
+	)
+	if err != nil {
+		t.Fatalf("buildToolList() error = %v", err)
+	}
+
+	if got, want := toolNames(toolList), []string{
+		"read_file",
+		"write_file",
+		"edit_file",
+		"apply_patch",
+		"validate_skill",
+		"exec",
+		"load_image",
+		"web_fetch",
+		"rag_query",
+		"rag_ingest",
+		"rag_status",
+		"rag_graph",
 	}; !equalStrings(got, want) {
 		t.Fatalf("tool names = %v, want %v", got, want)
 	}

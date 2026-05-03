@@ -89,13 +89,19 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 	}
 	fileExec := q15skills.NewFileExecutor(fileops.NewExecutor(fileSettings), skillManager)
 	braveAPIKey := strings.TrimSpace(os.Getenv("Q15_BRAVE_API_KEY"))
+	lightRAGAPIURL := strings.TrimSpace(os.Getenv("LIGHTRAG_API_URL"))
+	lightRAGAPIKey := strings.TrimSpace(os.Getenv("LIGHTRAG_API_KEY"))
 	toolList, err := buildToolList(
 		executionClient,
 		fileExec,
 		skillManager,
 		fileSettings,
+		rt.MediaLocalDir,
+		runtimeInfo.MediaDir,
 		mediaStore,
 		braveAPIKey,
+		lightRAGAPIURL,
+		lightRAGAPIKey,
 	)
 	if err != nil {
 		return fmt.Errorf("configure tools for agent %q: %w", rt.Name, err)
@@ -207,8 +213,12 @@ func buildToolList(
 	fileExec tools.FileToolExecutor,
 	skillManager *q15skills.Manager,
 	fileSettings fileops.Settings,
+	mediaLocalDir string,
+	mediaRuntimeDir string,
 	mediaStore q15media.Store,
 	braveAPIKey string,
+	lightRAGAPIURL string,
+	lightRAGAPIKey string,
 ) ([]agent.Tool, error) {
 	toolList := []agent.Tool{
 		tools.NewReadFile(fileExec),
@@ -221,11 +231,28 @@ func buildToolList(
 		tools.NewWebFetch(),
 	}
 
+	lightRAGAPIURL = strings.TrimSpace(lightRAGAPIURL)
+	if lightRAGAPIURL != "" {
+		ragTools, err := tools.NewLightRAGTools(tools.LightRAGSettings{
+			BaseURL:             lightRAGAPIURL,
+			APIKey:              lightRAGAPIKey,
+			WorkspaceLocalDir:   fileSettings.WorkspaceLocalDir,
+			WorkspaceRuntimeDir: fileSettings.WorkspaceRuntimeDir,
+			MemoryLocalDir:      fileSettings.MemoryLocalDir,
+			MemoryRuntimeDir:    fileSettings.MemoryRuntimeDir,
+			MediaLocalDir:       mediaLocalDir,
+			MediaRuntimeDir:     mediaRuntimeDir,
+		})
+		if err != nil {
+			return nil, err
+		}
+		toolList = append(toolList, ragTools...)
+	}
+
 	braveAPIKey = strings.TrimSpace(braveAPIKey)
 	if braveAPIKey == "" {
 		return toolList, nil
 	}
-
 	webSearchTool, err := tools.NewBraveWebSearch(braveAPIKey)
 	if err != nil {
 		return nil, err
