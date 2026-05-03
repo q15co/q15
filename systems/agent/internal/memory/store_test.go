@@ -59,6 +59,7 @@ func TestStoreInitCreatesScaffold(t *testing.T) {
 		filepath.Join(root, "history", "state", "head.json"),
 		filepath.Join(root, "history", "state", "consolidation_checkpoint.json"),
 		filepath.Join(root, "cognition", "state"),
+		filepath.Join(root, "cognition", "state", "semantic_extraction_checkpoint.json"),
 		filepath.Join(root, "cognition", "indexer"),
 		filepath.Join(root, "cognition", "triggers", "jobs"),
 		filepath.Join(root, "cognition", "runs"),
@@ -90,6 +91,7 @@ func TestStoreInitCreatesScaffold(t *testing.T) {
 		"history/state/consolidation_checkpoint.json",
 		"cognition/",
 		"cognition/state/",
+		"cognition/state/semantic_extraction_checkpoint.json",
 		"cognition/triggers/jobs/",
 		"cognition/runs/",
 		"zettelkasten layout",
@@ -382,6 +384,50 @@ func TestStoreLoadLatestMessagesIgnoresConsolidationCheckpoint(t *testing.T) {
 	}
 	if got, want := conversation.TextValue(tail[2]), "three"; got != want {
 		t.Fatalf("LoadLatestMessages third message = %q, want %q", got, want)
+	}
+}
+
+func TestStoreLoadMessagesSinceSeq(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "memory")
+	store := NewStore(root, "Jared", &fakeCommitter{})
+
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	for _, pair := range [][2]string{
+		{"one", "first"},
+		{"two", "second"},
+		{"three", "third"},
+	} {
+		if err := store.AppendTurn(context.Background(), []conversation.Message{
+			conversation.UserMessage(pair[0]),
+			conversation.AssistantMessage(conversation.Text(pair[1], "")),
+		}); err != nil {
+			t.Fatalf("AppendTurn(%q) error = %v", pair[0], err)
+		}
+	}
+
+	got, err := store.LoadMessagesSinceSeq(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("LoadMessagesSinceSeq() error = %v", err)
+	}
+	if len(got) != 4 {
+		t.Fatalf("LoadMessagesSinceSeq len = %d, want 4", len(got))
+	}
+	if conversation.TextValue(got[0]) != "two" ||
+		conversation.TextValue(got[1]) != "second" ||
+		conversation.TextValue(got[2]) != "three" ||
+		conversation.TextValue(got[3]) != "third" {
+		t.Fatalf("LoadMessagesSinceSeq contents = %#v, want turns after seq 1", got)
+	}
+
+	got, err = store.LoadMessagesSinceSeq(context.Background(), 3)
+	if err != nil {
+		t.Fatalf("LoadMessagesSinceSeq(at head) error = %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("LoadMessagesSinceSeq(at head) len = %d, want 0", len(got))
 	}
 }
 
@@ -1431,6 +1477,113 @@ func TestStoreStoreConsolidationCheckpoint(t *testing.T) {
 	}
 	if checkpoint.UpdatedAt.IsZero() {
 		t.Fatal("checkpoint.UpdatedAt after no-op = zero, want existing timestamp")
+	}
+}
+
+func TestStoreStoreSemanticExtractionCheckpoint(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "memory")
+	committer := &fakeCommitter{}
+	store := NewStore(root, "Jared", committer)
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	if err := store.AppendTurn(context.Background(), []conversation.Message{
+		conversation.UserMessage("hello"),
+		conversation.AssistantMessage(conversation.Text("ok", "")),
+	}); err != nil {
+		t.Fatalf("AppendTurn() error = %v", err)
+	}
+
+	turn, ok, err := store.findTurnBySeq(1)
+	if err != nil {
+		t.Fatalf("findTurnBySeq() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("findTurnBySeq() ok = false, want true")
+	}
+
+	checkpoint, err := store.StoreSemanticExtractionCheckpoint(
+		context.Background(),
+		cognition.SemanticExtractionCheckpoint{LastExtractedSeq: 1},
+	)
+	if err != nil {
+		t.Fatalf("StoreSemanticExtractionCheckpoint() error = %v", err)
+	}
+	if committer.lastMessage != "memory: update semantic extraction checkpoint" {
+		t.Fatalf("commit message = %q", committer.lastMessage)
+	}
+	if checkpoint.LastExtractedSeq != 1 {
+		t.Fatalf("checkpoint.LastExtractedSeq = %d, want 1", checkpoint.LastExtractedSeq)
+	}
+	if checkpoint.LastExtractedTurnID != turn.ID {
+		t.Fatalf(
+			"checkpoint.LastExtractedTurnID = %q, want %q",
+			checkpoint.LastExtractedTurnID,
+			turn.ID,
+		)
+	}
+	if !checkpoint.LastExtractedAt.Equal(turn.CreatedAt) {
+		t.Fatalf(
+			"checkpoint.LastExtractedAt = %s, want %s",
+			checkpoint.LastExtractedAt,
+			turn.CreatedAt,
+		)
+	}
+	if checkpoint.UpdatedAt.IsZero() {
+		t.Fatal("checkpoint.UpdatedAt = zero, want non-zero")
+	}
+
+	stored, err := store.readSemanticExtractionCheckpoint()
+	if err != nil {
+		t.Fatalf("readSemanticExtractionCheckpoint() error = %v", err)
+	}
+	if stored.LastExtractedSeq != checkpoint.LastExtractedSeq ||
+		stored.LastExtractedTurnID != checkpoint.LastExtractedTurnID {
+		t.Fatalf("stored checkpoint = %#v, want %#v", stored, checkpoint)
+	}
+	loaded, err := store.LoadSemanticExtractionCheckpoint(context.Background())
+	if err != nil {
+		t.Fatalf("LoadSemanticExtractionCheckpoint() error = %v", err)
+	}
+	if loaded.LastExtractedSeq != checkpoint.LastExtractedSeq ||
+		loaded.LastExtractedTurnID != checkpoint.LastExtractedTurnID ||
+		!loaded.LastExtractedAt.Equal(checkpoint.LastExtractedAt) {
+		t.Fatalf("loaded checkpoint = %#v, want %#v", loaded, checkpoint)
+	}
+
+	commitCalls := committer.commitCalls
+	checkpoint, err = store.StoreSemanticExtractionCheckpoint(
+		context.Background(),
+		cognition.SemanticExtractionCheckpoint{LastExtractedSeq: 1},
+	)
+	if err != nil {
+		t.Fatalf("StoreSemanticExtractionCheckpoint() second error = %v", err)
+	}
+	if committer.commitCalls != commitCalls {
+		t.Fatalf("commit calls = %d, want unchanged %d", committer.commitCalls, commitCalls)
+	}
+	if checkpoint.UpdatedAt.IsZero() {
+		t.Fatal("checkpoint.UpdatedAt after no-op = zero, want existing timestamp")
+	}
+}
+
+func TestStoreLoadSemanticExtractionCheckpointMissingFile(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "memory")
+	store := NewStore(root, "Jared", &fakeCommitter{})
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	if err := os.Remove(store.semanticExtractionCheckpointPath()); err != nil {
+		t.Fatalf("Remove(semantic checkpoint) error = %v", err)
+	}
+
+	checkpoint, err := store.LoadSemanticExtractionCheckpoint(context.Background())
+	if err != nil {
+		t.Fatalf("LoadSemanticExtractionCheckpoint() error = %v", err)
+	}
+	if checkpoint != (cognition.SemanticExtractionCheckpoint{}) {
+		t.Fatalf("checkpoint = %#v, want zero value", checkpoint)
 	}
 }
 

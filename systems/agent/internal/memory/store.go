@@ -24,20 +24,21 @@ import (
 )
 
 const (
-	headStateRelativePath               = "history/state/head.json"
-	consolidationCheckpointRelativePath = "history/state/consolidation_checkpoint.json"
-	readmeRelativePath                  = "README.md"
-	seedDirPath                         = "seeds"
-	coreDirPath                         = "core"
-	semanticDirPath                     = "semantic"
-	workingDirPath                      = "working"
-	workingMemoryFileName               = "WORKING_MEMORY.md"
-	cognitionDirPath                    = "cognition"
-	cognitionStatePath                  = cognitionDirPath + "/state"
-	cognitionIndexerPath                = cognitionDirPath + "/indexer"
-	cognitionRunsPath                   = cognitionDirPath + "/runs"
-	cognitionTriggersPath               = cognitionDirPath + "/triggers"
-	cognitionJobsPath                   = cognitionTriggersPath + "/jobs"
+	headStateRelativePath                    = "history/state/head.json"
+	consolidationCheckpointRelativePath      = "history/state/consolidation_checkpoint.json"
+	semanticExtractionCheckpointRelativePath = "cognition/state/semantic_extraction_checkpoint.json"
+	readmeRelativePath                       = "README.md"
+	seedDirPath                              = "seeds"
+	coreDirPath                              = "core"
+	semanticDirPath                          = "semantic"
+	workingDirPath                           = "working"
+	workingMemoryFileName                    = "WORKING_MEMORY.md"
+	cognitionDirPath                         = "cognition"
+	cognitionStatePath                       = cognitionDirPath + "/state"
+	cognitionIndexerPath                     = cognitionDirPath + "/indexer"
+	cognitionRunsPath                        = cognitionDirPath + "/runs"
+	cognitionTriggersPath                    = cognitionDirPath + "/triggers"
+	cognitionJobsPath                        = cognitionTriggersPath + "/jobs"
 )
 
 const workingMemorySeedPath = seedDirPath + "/" + workingMemoryFileName
@@ -167,6 +168,9 @@ func (s *Store) Init(ctx context.Context) error {
 	if err := s.ensureConsolidationCheckpoint(); err != nil {
 		return err
 	}
+	if err := s.ensureSemanticExtractionCheckpoint(); err != nil {
+		return err
+	}
 
 	upgrade, err := s.upgradeHistory()
 	if err != nil {
@@ -229,6 +233,20 @@ func (s *Store) LoadLatestMessages(ctx context.Context, turns int) ([]conversati
 	defer s.mu.Unlock()
 
 	return s.loadMessagesLocked(turns, false)
+}
+
+// LoadMessagesSinceSeq loads all messages from turns after the provided
+// transcript sequence boundary.
+func (s *Store) LoadMessagesSinceSeq(
+	ctx context.Context,
+	afterSeq int64,
+) ([]conversation.Message, error) {
+	_ = ctx
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.loadMessagesSinceSeqLocked(afterSeq)
 }
 
 // LoadLastUserTimestamp returns the most recent persisted user-message
@@ -401,6 +419,7 @@ This directory contains q15's persistent agent-state root.
 	- Replay checkpoints for consolidated episodic history are stored under history/state/consolidation_checkpoint.json.
 	- Cognition subsystem maintenance state is stored under cognition/.
 	- Job-owned cognition artifacts are stored under cognition/state/.
+	- Semantic extraction replay checkpoints are stored under cognition/state/semantic_extraction_checkpoint.json.
 	- Per-job cognition trigger state is stored under cognition/triggers/jobs/.
 	- Append-only cognition run provenance is stored under cognition/runs/.
 	- Auxiliary notebook files are organized under notes/inbox, notes/zettel, and notes/maps as the built-in zettelkasten layout.
@@ -476,6 +495,23 @@ func (s *Store) ensureConsolidationCheckpoint() error {
 	}
 	if err := writeJSONFileAtomic(path, checkpoint); err != nil {
 		return fmt.Errorf("initialize consolidation checkpoint: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) ensureSemanticExtractionCheckpoint() error {
+	path := s.semanticExtractionCheckpointPath()
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("stat semantic extraction checkpoint: %w", err)
+	}
+
+	checkpoint := semanticExtractionCheckpointState{
+		UpdatedAt: time.Now().UTC(),
+	}
+	if err := writeJSONFileAtomic(path, checkpoint); err != nil {
+		return fmt.Errorf("initialize semantic extraction checkpoint: %w", err)
 	}
 	return nil
 }
@@ -777,6 +813,28 @@ func (s *Store) readConsolidationCheckpoint() (consolidationCheckpointState, err
 	return checkpoint, nil
 }
 
+func (s *Store) readSemanticExtractionCheckpoint() (semanticExtractionCheckpointState, error) {
+	data, err := os.ReadFile(s.semanticExtractionCheckpointPath())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return semanticExtractionCheckpointState{}, nil
+		}
+		return semanticExtractionCheckpointState{}, fmt.Errorf(
+			"read semantic extraction checkpoint: %w",
+			err,
+		)
+	}
+
+	var checkpoint semanticExtractionCheckpointState
+	if err := json.Unmarshal(data, &checkpoint); err != nil {
+		return semanticExtractionCheckpointState{}, fmt.Errorf(
+			"decode semantic extraction checkpoint: %w",
+			err,
+		)
+	}
+	return checkpoint, nil
+}
+
 func (s *Store) loadMessagesLocked(
 	turns int,
 	checkpointAware bool,
@@ -831,12 +889,50 @@ func (s *Store) loadMessagesLocked(
 	return out, nil
 }
 
+func (s *Store) loadMessagesSinceSeqLocked(
+	afterSeq int64,
+) ([]conversation.Message, error) {
+	entries, err := s.listTurnEntries()
+	if err != nil {
+		return nil, err
+	}
+	if len(entries) == 0 {
+		return nil, nil
+	}
+
+	start := sort.Search(len(entries), func(i int) bool {
+		return entries[i].Seq > afterSeq
+	})
+	if start == len(entries) {
+		return nil, nil
+	}
+
+	records := make([]turnRecord, 0, len(entries)-start)
+	for _, entry := range entries[start:] {
+		turn, err := s.readTurn(entry.Path)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, turn)
+	}
+
+	out := make([]conversation.Message, 0, len(records)*2)
+	for _, turn := range records {
+		out = append(out, copyMessages(turn.Messages)...)
+	}
+	return out, nil
+}
+
 func (s *Store) headStatePath() string {
 	return filepath.Join(s.rootDir, headStateRelativePath)
 }
 
 func (s *Store) consolidationCheckpointPath() string {
 	return filepath.Join(s.rootDir, consolidationCheckpointRelativePath)
+}
+
+func (s *Store) semanticExtractionCheckpointPath() string {
+	return filepath.Join(s.rootDir, semanticExtractionCheckpointRelativePath)
 }
 
 func (s *Store) workingMemoryPath() string {

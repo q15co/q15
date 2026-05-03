@@ -54,6 +54,13 @@ func (l *workingMemoryJobLoader) LoadLatestMessages(
 	return nil, nil
 }
 
+func (l *workingMemoryJobLoader) LoadMessagesSinceSeq(
+	context.Context,
+	int64,
+) ([]conversation.Message, error) {
+	return nil, nil
+}
+
 func (l *workingMemoryJobLoader) LoadHead(context.Context) (int64, time.Time, error) {
 	return 0, time.Time{}, nil
 }
@@ -62,6 +69,12 @@ func (l *workingMemoryJobLoader) LoadConsolidationCheckpoint(
 	context.Context,
 ) (ConsolidationCheckpoint, error) {
 	return ConsolidationCheckpoint{}, nil
+}
+
+func (l *workingMemoryJobLoader) LoadSemanticExtractionCheckpoint(
+	context.Context,
+) (SemanticExtractionCheckpoint, error) {
+	return SemanticExtractionCheckpoint{}, nil
 }
 
 func (l *workingMemoryJobLoader) LoadCognitionArtifact(

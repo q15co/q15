@@ -56,6 +56,13 @@ func (l *verificationJobLoader) LoadLatestMessages(
 	return nil, nil
 }
 
+func (l *verificationJobLoader) LoadMessagesSinceSeq(
+	context.Context,
+	int64,
+) ([]conversation.Message, error) {
+	return nil, nil
+}
+
 func (l *verificationJobLoader) LoadHead(context.Context) (int64, time.Time, error) {
 	return l.headSeq, l.headUpdatedAt, nil
 }
@@ -64,6 +71,12 @@ func (l *verificationJobLoader) LoadConsolidationCheckpoint(
 	context.Context,
 ) (ConsolidationCheckpoint, error) {
 	return l.checkpoint, nil
+}
+
+func (l *verificationJobLoader) LoadSemanticExtractionCheckpoint(
+	context.Context,
+) (SemanticExtractionCheckpoint, error) {
+	return SemanticExtractionCheckpoint{}, nil
 }
 
 func (l *verificationJobLoader) LoadCognitionArtifact(

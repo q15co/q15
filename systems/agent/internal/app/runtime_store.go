@@ -42,6 +42,13 @@ func (s *runtimeStore) LoadLatestMessages(
 	return s.memory.LoadLatestMessages(ctx, turns)
 }
 
+func (s *runtimeStore) LoadMessagesSinceSeq(
+	ctx context.Context,
+	afterSeq int64,
+) ([]conversation.Message, error) {
+	return s.memory.LoadMessagesSinceSeq(ctx, afterSeq)
+}
+
 func (s *runtimeStore) LoadLastUserTimestamp(
 	ctx context.Context,
 ) (time.Time, bool, error) {
@@ -122,6 +129,12 @@ func (s *runtimeStore) LoadConsolidationCheckpoint(
 	return s.memory.LoadConsolidationCheckpoint(ctx)
 }
 
+func (s *runtimeStore) LoadSemanticExtractionCheckpoint(
+	ctx context.Context,
+) (cognition.SemanticExtractionCheckpoint, error) {
+	return s.memory.LoadSemanticExtractionCheckpoint(ctx)
+}
+
 func (s *runtimeStore) LoadJobState(
 	ctx context.Context,
 	jobType string,
@@ -142,6 +155,13 @@ func (s *runtimeStore) StoreConsolidationCheckpoint(
 	checkpoint cognition.ConsolidationCheckpoint,
 ) (cognition.ConsolidationCheckpoint, error) {
 	return s.memory.StoreConsolidationCheckpoint(ctx, checkpoint)
+}
+
+func (s *runtimeStore) StoreSemanticExtractionCheckpoint(
+	ctx context.Context,
+	checkpoint cognition.SemanticExtractionCheckpoint,
+) (cognition.SemanticExtractionCheckpoint, error) {
+	return s.memory.StoreSemanticExtractionCheckpoint(ctx, checkpoint)
 }
 
 func (s *runtimeStore) AppendRunRecord(ctx context.Context, record cognition.RunRecord) error {
