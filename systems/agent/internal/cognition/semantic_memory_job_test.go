@@ -12,14 +12,17 @@ import (
 )
 
 type semanticMemoryJobLoader struct {
-	semantic          agent.SemanticMemory
-	working           agent.WorkingMemory
-	artifacts         map[string]Artifact
-	recent            []conversation.Message
-	loadSemanticCalls int
-	loadLatestTurns   int
-	loadRecentTurns   int
-	loadArtifacts     []string
+	semantic                agent.SemanticMemory
+	working                 agent.WorkingMemory
+	artifacts               map[string]Artifact
+	recent                  []conversation.Message
+	checkpoint              SemanticExtractionCheckpoint
+	loadSemanticCalls       int
+	loadLatestTurns         int
+	loadRecentTurns         int
+	loadMessagesSinceSeqSeq int64
+	loadCheckpointCalls     int
+	loadArtifacts           []string
 }
 
 func (l *semanticMemoryJobLoader) LoadCoreMemory(context.Context) (agent.CoreMemory, error) {
@@ -57,6 +60,14 @@ func (l *semanticMemoryJobLoader) LoadLatestMessages(
 	return conversation.CloneMessages(l.recent), nil
 }
 
+func (l *semanticMemoryJobLoader) LoadMessagesSinceSeq(
+	_ context.Context,
+	afterSeq int64,
+) ([]conversation.Message, error) {
+	l.loadMessagesSinceSeqSeq = afterSeq
+	return conversation.CloneMessages(l.recent), nil
+}
+
 func (l *semanticMemoryJobLoader) LoadHead(context.Context) (int64, time.Time, error) {
 	return 0, time.Time{}, nil
 }
@@ -65,6 +76,13 @@ func (l *semanticMemoryJobLoader) LoadConsolidationCheckpoint(
 	context.Context,
 ) (ConsolidationCheckpoint, error) {
 	return ConsolidationCheckpoint{}, nil
+}
+
+func (l *semanticMemoryJobLoader) LoadSemanticExtractionCheckpoint(
+	context.Context,
+) (SemanticExtractionCheckpoint, error) {
+	l.loadCheckpointCalls++
+	return l.checkpoint, nil
 }
 
 func (l *semanticMemoryJobLoader) LoadCognitionArtifact(
@@ -209,6 +227,12 @@ func TestSemanticMemoryExtractionBuildLoadsSemanticWorkingVerificationAndTranscr
 	if got, want := loader.loadRecentTurns, 0; got != want {
 		t.Fatalf("LoadRecentMessages turns = %d, want %d", got, want)
 	}
+	if got, want := loader.loadMessagesSinceSeqSeq, int64(0); got != want {
+		t.Fatalf("LoadMessagesSinceSeq seq = %d, want %d", got, want)
+	}
+	if got, want := loader.loadCheckpointCalls, 1; got != want {
+		t.Fatalf("LoadSemanticExtractionCheckpoint calls = %d, want %d", got, want)
+	}
 	if got, want := len(loader.loadArtifacts), 1; got != want {
 		t.Fatalf("LoadCognitionArtifact calls = %d, want %d", got, want)
 	}
@@ -260,13 +284,76 @@ func TestSemanticMemoryExtractionBuildLoadsSemanticWorkingVerificationAndTranscr
 		"If a durable fact or preference is explicit and useful across future sessions, prefer promoting it rather than leaving it only in working memory.",
 		"Do not copy transcript detail or verification-review prose verbatim into semantic memory.",
 		"Run a cross-file de-duplication pass: remove fact side clauses from preferences.md and preference phrasing from facts.md before finalizing.",
-		"A bounded replay slice of episodic history, selected by a semantic replay window independent of the working-memory consolidation checkpoint and capped at 32 turns, is included below as a transcript artifact.",
+		"A bounded replay slice of episodic history, selected by the initial semantic replay fallback window independent of the working-memory consolidation checkpoint and capped at 32 turns, is included below as a transcript artifact.",
 		`<message_meta day_of_week_local="Sunday" timestamp_local="20260412T101112+0200" since_prev_user_message="3m42s"/>`,
 		"Remove unsupported durable claims.",
 	} {
 		if !contains(prompt, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, prompt)
 		}
+	}
+}
+
+func TestSemanticMemoryExtractionBuildUsesSemanticCheckpointReplay(t *testing.T) {
+	t.Parallel()
+
+	loader := &semanticMemoryJobLoader{
+		checkpoint: SemanticExtractionCheckpoint{LastExtractedSeq: 7},
+		semantic: agent.SemanticMemory{
+			Files: []agent.SemanticMemoryFile{
+				{
+					RelativePath: semanticFactsRelativePath,
+					Content:      "# Semantic Facts\n\n## Confirmed Facts\n\n- None\n\n## Grounded Inferences\n\n- None\n",
+				},
+				{
+					RelativePath: semanticPreferencesRelativePath,
+					Content:      "# Semantic Preferences\n\n## User Preferences\n\n- None\n\n## Collaboration Preferences\n\n- None\n",
+				},
+				{
+					RelativePath: semanticProjectsRelativePath,
+					Content:      "# Semantic Projects\n\n## Active Projects\n\n- None\n\n## Durable Project Knowledge\n\n- None\n",
+				},
+			},
+		},
+		working: agent.WorkingMemory{
+			RelativePath: workingMemoryRelativePath,
+			Content:      "# Working Memory\n\n## Active Tasks\n\n- None\n",
+		},
+		recent: []conversation.Message{
+			conversation.UserMessage("New durable preference after checkpoint."),
+			conversation.AssistantMessage(conversation.Text("Noted.", "")),
+		},
+	}
+
+	spec, err := NewSemanticMemoryExtractionRegistration().NewJob().Build(
+		context.Background(),
+		loader,
+	)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if got, want := loader.loadCheckpointCalls, 1; got != want {
+		t.Fatalf("LoadSemanticExtractionCheckpoint calls = %d, want %d", got, want)
+	}
+	if got, want := loader.loadMessagesSinceSeqSeq, int64(7); got != want {
+		t.Fatalf("LoadMessagesSinceSeq seq = %d, want %d", got, want)
+	}
+	if got, want := loader.loadLatestTurns, 0; got != want {
+		t.Fatalf("LoadLatestMessages turns = %d, want %d", got, want)
+	}
+
+	prompt, err := renderPrompt(semanticMemoryExtractionJobType, spec)
+	if err != nil {
+		t.Fatalf("renderPrompt() error = %v", err)
+	}
+	if !contains(
+		prompt,
+		"A semantic extraction replay slice of episodic history after semantic extraction checkpoint seq 7 is included below as a transcript artifact.",
+	) {
+		t.Fatalf("prompt missing semantic checkpoint replay scope:\n%s", prompt)
+	}
+	if contains(prompt, "capped at 32 turns") {
+		t.Fatalf("prompt unexpectedly described checkpoint replay as capped:\n%s", prompt)
 	}
 }
 

@@ -78,6 +78,15 @@ type ConsolidationCheckpoint struct {
 	UpdatedAt              time.Time `json:"updated_at,omitempty"`
 }
 
+// SemanticExtractionCheckpoint records the last episodic turn boundary that has
+// been successfully processed by semantic-memory extraction.
+type SemanticExtractionCheckpoint struct {
+	LastExtractedTurnID string    `json:"last_extracted_turn_id,omitempty"`
+	LastExtractedSeq    int64     `json:"last_extracted_seq,omitempty"`
+	LastExtractedAt     time.Time `json:"last_extracted_at,omitempty"`
+	UpdatedAt           time.Time `json:"updated_at,omitempty"`
+}
+
 // JobState tracks persisted trigger/controller state for one job type.
 type JobState struct {
 	LastRunAt           time.Time            `json:"last_run_at,omitempty"`
@@ -127,6 +136,10 @@ type ControllerStore interface {
 		context.Context,
 		ConsolidationCheckpoint,
 	) (ConsolidationCheckpoint, error)
+	StoreSemanticExtractionCheckpoint(
+		context.Context,
+		SemanticExtractionCheckpoint,
+	) (SemanticExtractionCheckpoint, error)
 	AppendRunRecord(context.Context, RunRecord) error
 }
 
@@ -484,14 +497,30 @@ func (c *Controller) runPending(ctx context.Context, pending pendingRun) error {
 	}
 
 	result, runErr := c.runner.Run(ctx, pending.job.newJob(), nil)
-	var checkpoint ConsolidationCheckpoint
+	var consolidationCheckpoint ConsolidationCheckpoint
 	if runErr == nil && shouldAdvanceConsolidationCheckpoint(pending.job.jobType) {
-		checkpoint, runErr = c.store.StoreConsolidationCheckpoint(ctx, ConsolidationCheckpoint{
-			LastConsolidatedSeq: pending.headSeq,
-			LastConsolidatedAt:  pending.headAt,
-		})
+		consolidationCheckpoint, runErr = c.store.StoreConsolidationCheckpoint(
+			ctx,
+			ConsolidationCheckpoint{
+				LastConsolidatedSeq: pending.headSeq,
+				LastConsolidatedAt:  pending.headAt,
+			},
+		)
 		if runErr != nil {
 			runErr = fmt.Errorf("store consolidation checkpoint: %w", runErr)
+		}
+	}
+	var semanticExtractionCheckpoint SemanticExtractionCheckpoint
+	if runErr == nil && shouldAdvanceSemanticExtractionCheckpoint(pending.job.jobType) {
+		semanticExtractionCheckpoint, runErr = c.store.StoreSemanticExtractionCheckpoint(
+			ctx,
+			SemanticExtractionCheckpoint{
+				LastExtractedSeq: pending.headSeq,
+				LastExtractedAt:  pending.headAt,
+			},
+		)
+		if runErr != nil {
+			runErr = fmt.Errorf("store semantic extraction checkpoint: %w", runErr)
 		}
 	}
 	finishedAt := time.Now().UTC()
@@ -532,7 +561,14 @@ func (c *Controller) runPending(ctx context.Context, pending pendingRun) error {
 	} else {
 		record.Summary = strings.TrimSpace(result.Summary)
 		record.Metadata = cloneRunRecordMetadata(result.Metadata)
-		record.Metadata = withConsolidationCheckpointMetadata(record.Metadata, checkpoint)
+		record.Metadata = withConsolidationCheckpointMetadata(
+			record.Metadata,
+			consolidationCheckpoint,
+		)
+		record.Metadata = withSemanticExtractionCheckpointMetadata(
+			record.Metadata,
+			semanticExtractionCheckpoint,
+		)
 		record.ModelRef = result.ModelRef
 	}
 	if err := c.store.AppendRunRecord(ctx, record); err != nil {
@@ -612,6 +648,33 @@ func withConsolidationCheckpointMetadata(
 	return metadata
 }
 
+func withSemanticExtractionCheckpointMetadata(
+	metadata map[string]string,
+	checkpoint SemanticExtractionCheckpoint,
+) map[string]string {
+	if checkpoint.LastExtractedSeq == 0 &&
+		strings.TrimSpace(checkpoint.LastExtractedTurnID) == "" &&
+		checkpoint.LastExtractedAt.IsZero() {
+		return metadata
+	}
+	if metadata == nil {
+		metadata = make(map[string]string)
+	}
+	metadata["semantic_extraction_checkpoint_seq"] = fmt.Sprintf(
+		"%d",
+		checkpoint.LastExtractedSeq,
+	)
+	if turnID := strings.TrimSpace(checkpoint.LastExtractedTurnID); turnID != "" {
+		metadata["semantic_extraction_checkpoint_turn_id"] = turnID
+	}
+	if !checkpoint.LastExtractedAt.IsZero() {
+		metadata["semantic_extraction_checkpoint_at"] = checkpoint.LastExtractedAt.UTC().Format(
+			time.RFC3339Nano,
+		)
+	}
+	return metadata
+}
+
 func (c *Controller) latestDue(
 	rule compiledScheduleRule,
 	state JobState,
@@ -682,6 +745,10 @@ func shouldEvaluateStateRules(state JobState, headSeq int64) bool {
 
 func shouldAdvanceConsolidationCheckpoint(jobType string) bool {
 	return strings.TrimSpace(jobType) == workingMemoryConsolidationJobType
+}
+
+func shouldAdvanceSemanticExtractionCheckpoint(jobType string) bool {
+	return strings.TrimSpace(jobType) == semanticMemoryExtractionJobType
 }
 
 func syncDirtyState(state JobState, headSeq int64, headAt time.Time) (JobState, bool) {

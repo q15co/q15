@@ -80,9 +80,34 @@ func (semanticMemoryExtractionJob) Build(
 	if err != nil {
 		return Spec{}, fmt.Errorf("load verification review artifact: %w", err)
 	}
-	recentMessages, err := loader.LoadLatestMessages(ctx, semanticMemoryRecentTurns)
+	semanticCheckpoint, err := loader.LoadSemanticExtractionCheckpoint(ctx)
 	if err != nil {
-		return Spec{}, fmt.Errorf("load latest messages: %w", err)
+		return Spec{}, fmt.Errorf("load semantic extraction checkpoint: %w", err)
+	}
+	var recentMessages []conversation.Message
+	var transcriptStatus string
+	if semanticCheckpoint.LastExtractedSeq > 0 {
+		recentMessages, err = loader.LoadMessagesSinceSeq(
+			ctx,
+			semanticCheckpoint.LastExtractedSeq,
+		)
+		if err != nil {
+			return Spec{}, fmt.Errorf("load messages since semantic extraction checkpoint: %w", err)
+		}
+		transcriptStatus = renderSemanticExtractionTranscriptScope(
+			semanticCheckpoint,
+			len(recentMessages),
+		)
+	} else {
+		recentMessages, err = loader.LoadLatestMessages(ctx, semanticMemoryRecentTurns)
+		if err != nil {
+			return Spec{}, fmt.Errorf("load latest messages: %w", err)
+		}
+		transcriptStatus = renderTranscriptScopeWithPolicy(
+			"selected by the initial semantic replay fallback window independent of the working-memory consolidation checkpoint",
+			semanticMemoryRecentTurns,
+			len(recentMessages),
+		)
 	}
 
 	semanticFiles := semanticMemoryContentMap(semantic)
@@ -114,11 +139,6 @@ func (semanticMemoryExtractionJob) Build(
 		verificationAttrs["present"] = "true"
 	}
 
-	transcriptStatus := renderTranscriptScopeWithPolicy(
-		"selected by a semantic replay window independent of the working-memory consolidation checkpoint",
-		semanticMemoryRecentTurns,
-		len(recentMessages),
-	)
 	transcriptArtifact := renderTranscriptArtifact(recentMessages)
 
 	return Spec{
@@ -323,6 +343,23 @@ func shouldRunSemanticMemoryExtraction(
 		dirtyTurns,
 		state.DirtySinceSeq,
 		snapshot.HeadLastSeq,
+	)
+}
+
+func renderSemanticExtractionTranscriptScope(
+	checkpoint SemanticExtractionCheckpoint,
+	loadedMessages int,
+) string {
+	if loadedMessages == 0 {
+		return "No transcript messages were loaded for this run."
+	}
+	checkpointSeq := max(0, checkpoint.LastExtractedSeq)
+	return renderPromptLines(
+		fmt.Sprintf(
+			"A semantic extraction replay slice of episodic history after semantic extraction checkpoint seq %d is included below as a transcript artifact.",
+			checkpointSeq,
+		),
+		"Treat it as historical evidence for newly unextracted or still-relevant context, not as the full transcript.",
 	)
 }
 

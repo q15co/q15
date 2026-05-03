@@ -116,6 +116,23 @@ func (s *Store) LoadConsolidationCheckpoint(
 	return consolidationCheckpointStateToCognition(checkpoint), nil
 }
 
+// LoadSemanticExtractionCheckpoint returns the current persisted semantic-memory
+// extraction checkpoint.
+func (s *Store) LoadSemanticExtractionCheckpoint(
+	ctx context.Context,
+) (cognition.SemanticExtractionCheckpoint, error) {
+	_ = ctx
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	checkpoint, err := s.readSemanticExtractionCheckpoint()
+	if err != nil {
+		return cognition.SemanticExtractionCheckpoint{}, err
+	}
+	return semanticExtractionCheckpointStateToCognition(checkpoint), nil
+}
+
 // StoreConsolidationCheckpoint persists the last successful working-memory
 // consolidation boundary used by checkpoint-aware transcript replay.
 func (s *Store) StoreConsolidationCheckpoint(
@@ -167,6 +184,63 @@ func (s *Store) StoreConsolidationCheckpoint(
 		)
 	}
 	return consolidationCheckpointStateToCognition(state), nil
+}
+
+// StoreSemanticExtractionCheckpoint persists the last successful semantic
+// extraction boundary used by semantic checkpoint-aware transcript replay.
+func (s *Store) StoreSemanticExtractionCheckpoint(
+	ctx context.Context,
+	checkpoint cognition.SemanticExtractionCheckpoint,
+) (cognition.SemanticExtractionCheckpoint, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	state := semanticExtractionCheckpointStateFromCognition(checkpoint)
+
+	if state.LastExtractedSeq > 0 {
+		turn, ok, err := s.findTurnBySeq(state.LastExtractedSeq)
+		if err != nil {
+			return cognition.SemanticExtractionCheckpoint{}, err
+		}
+		if !ok {
+			return cognition.SemanticExtractionCheckpoint{}, fmt.Errorf(
+				"semantic extraction checkpoint seq %d not found in turn history",
+				state.LastExtractedSeq,
+			)
+		}
+		state.LastExtractedTurnID = strings.TrimSpace(turn.ID)
+		state.LastExtractedAt = turn.CreatedAt.UTC()
+	} else {
+		state.LastExtractedTurnID = ""
+		state.LastExtractedAt = time.Time{}
+	}
+
+	existing, err := s.readSemanticExtractionCheckpoint()
+	if err != nil {
+		return cognition.SemanticExtractionCheckpoint{}, err
+	}
+	if sameSemanticExtractionCheckpoint(existing, state) {
+		return semanticExtractionCheckpointStateToCognition(existing), nil
+	}
+
+	state.UpdatedAt = time.Now().UTC()
+	if err := writeJSONFileAtomic(s.semanticExtractionCheckpointPath(), state); err != nil {
+		return cognition.SemanticExtractionCheckpoint{}, fmt.Errorf(
+			"write semantic extraction checkpoint: %w",
+			err,
+		)
+	}
+	if _, err := s.committer.CommitAll(
+		ctx,
+		s.rootDir,
+		"memory: update semantic extraction checkpoint",
+	); err != nil {
+		return cognition.SemanticExtractionCheckpoint{}, fmt.Errorf(
+			"commit semantic extraction checkpoint: %w",
+			err,
+		)
+	}
+	return semanticExtractionCheckpointStateToCognition(state), nil
 }
 
 // LoadJobState loads persisted cognition trigger state for one job type.
@@ -319,6 +393,19 @@ func sameConsolidationCheckpoint(
 		left.LastConsolidatedAt.UTC().Equal(right.LastConsolidatedAt.UTC())
 }
 
+func sameSemanticExtractionCheckpoint(
+	left semanticExtractionCheckpointState,
+	right semanticExtractionCheckpointState,
+) bool {
+	return left.LastExtractedSeq == right.LastExtractedSeq &&
+		strings.TrimSpace(
+			left.LastExtractedTurnID,
+		) == strings.TrimSpace(
+			right.LastExtractedTurnID,
+		) &&
+		left.LastExtractedAt.UTC().Equal(right.LastExtractedAt.UTC())
+}
+
 func (s *Store) findTurnBySeq(seq int64) (turnRecord, bool, error) {
 	entries, err := s.listTurnEntries()
 	if err != nil {
@@ -356,6 +443,28 @@ func consolidationCheckpointStateToCognition(
 		LastConsolidatedSeq:    max(0, checkpoint.LastConsolidatedSeq),
 		LastConsolidatedAt:     checkpoint.LastConsolidatedAt.UTC(),
 		UpdatedAt:              checkpoint.UpdatedAt.UTC(),
+	}
+}
+
+func semanticExtractionCheckpointStateFromCognition(
+	checkpoint cognition.SemanticExtractionCheckpoint,
+) semanticExtractionCheckpointState {
+	return semanticExtractionCheckpointState{
+		LastExtractedTurnID: strings.TrimSpace(checkpoint.LastExtractedTurnID),
+		LastExtractedSeq:    max(0, checkpoint.LastExtractedSeq),
+		LastExtractedAt:     checkpoint.LastExtractedAt.UTC(),
+		UpdatedAt:           checkpoint.UpdatedAt.UTC(),
+	}
+}
+
+func semanticExtractionCheckpointStateToCognition(
+	checkpoint semanticExtractionCheckpointState,
+) cognition.SemanticExtractionCheckpoint {
+	return cognition.SemanticExtractionCheckpoint{
+		LastExtractedTurnID: strings.TrimSpace(checkpoint.LastExtractedTurnID),
+		LastExtractedSeq:    max(0, checkpoint.LastExtractedSeq),
+		LastExtractedAt:     checkpoint.LastExtractedAt.UTC(),
+		UpdatedAt:           checkpoint.UpdatedAt.UTC(),
 	}
 }
 

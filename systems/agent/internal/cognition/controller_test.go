@@ -12,12 +12,13 @@ import (
 )
 
 type fakeControllerStore struct {
-	mu         sync.Mutex
-	headSeq    int64
-	headAt     time.Time
-	states     map[string]JobState
-	records    []RunRecord
-	checkpoint ConsolidationCheckpoint
+	mu                           sync.Mutex
+	headSeq                      int64
+	headAt                       time.Time
+	states                       map[string]JobState
+	records                      []RunRecord
+	checkpoint                   ConsolidationCheckpoint
+	semanticExtractionCheckpoint SemanticExtractionCheckpoint
 }
 
 func newFakeControllerStore() *fakeControllerStore {
@@ -80,6 +81,33 @@ func (s *fakeControllerStore) StoreConsolidationCheckpoint(
 	return checkpoint, nil
 }
 
+func (s *fakeControllerStore) StoreSemanticExtractionCheckpoint(
+	_ context.Context,
+	checkpoint SemanticExtractionCheckpoint,
+) (SemanticExtractionCheckpoint, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	checkpoint.LastExtractedSeq = max(0, checkpoint.LastExtractedSeq)
+	if checkpoint.LastExtractedSeq > 0 {
+		checkpoint.LastExtractedTurnID = fmt.Sprintf(
+			"turn-%020d",
+			checkpoint.LastExtractedSeq,
+		)
+		if checkpoint.LastExtractedAt.IsZero() {
+			checkpoint.LastExtractedAt = s.headAt
+		}
+	} else {
+		checkpoint.LastExtractedTurnID = ""
+		checkpoint.LastExtractedAt = time.Time{}
+	}
+	if checkpoint.UpdatedAt.IsZero() {
+		checkpoint.UpdatedAt = time.Now().UTC()
+	}
+	s.semanticExtractionCheckpoint = checkpoint
+	return checkpoint, nil
+}
+
 func (s *fakeControllerStore) AppendRunRecord(_ context.Context, record RunRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -112,6 +140,12 @@ func (s *fakeControllerStore) consolidationCheckpoint() ConsolidationCheckpoint 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.checkpoint
+}
+
+func (s *fakeControllerStore) semanticCheckpoint() SemanticExtractionCheckpoint {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.semanticExtractionCheckpoint
 }
 
 func waitFor(t *testing.T, timeout time.Duration, fn func() bool) {
@@ -595,6 +629,94 @@ func TestControllerPreservesDirtyStateWhenHeadAdvancesDuringRun(t *testing.T) {
 	if got, want := records[0].Metadata["consolidation_checkpoint_at"], initialHeadAt.Format(time.RFC3339Nano); got != want {
 		t.Fatalf("run metadata[consolidation_checkpoint_at] = %q, want %q", got, want)
 	}
+	if checkpoint := store.semanticCheckpoint(); checkpoint != (SemanticExtractionCheckpoint{}) {
+		t.Fatalf("semantic checkpoint = %#v, want zero value", checkpoint)
+	}
+}
+
+func TestControllerSuccessfulSemanticRunAdvancesSemanticExtractionCheckpoint(t *testing.T) {
+	store := newFakeControllerStore()
+	initialHeadAt := time.Date(2026, time.April, 7, 8, 9, 10, 0, time.UTC)
+	store.setHead(3, initialHeadAt)
+
+	controller := newControllerForTest(t, store, JobRegistration{
+		NewJob: func() JobDefinition {
+			return fakeJob{
+				jobType: semanticMemoryExtractionJobType,
+				build: func(context.Context, ContextLoader) (Spec, error) {
+					return Spec{
+						Objective:          "Extract semantic memory.",
+						CompletionContract: "Return `status: ok`.",
+					}, nil
+				},
+				apply: func(context.Context, ContextLoader, JobOutput) (ParsedResult, error) {
+					return ParsedResult{Summary: "semantic"}, nil
+				},
+			}
+		},
+		Policy: TriggerPolicy{
+			State: []StateRule{{
+				ID: "dirty",
+				Evaluate: func(_ context.Context, _ Snapshot, state JobState) (bool, string, error) {
+					return state.DirtySinceSeq > 0, "dirty", nil
+				},
+			}},
+		},
+	})
+	controller.started = time.Now().UTC()
+
+	pending, ok, err := controller.nextPendingRun(context.Background(), false, false, true)
+	if err != nil {
+		t.Fatalf("nextPendingRun() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("nextPendingRun() ok = false, want true")
+	}
+	if err := controller.runPending(context.Background(), pending); err != nil {
+		t.Fatalf("runPending() error = %v", err)
+	}
+
+	checkpoint := store.semanticCheckpoint()
+	if checkpoint.LastExtractedSeq != 3 {
+		t.Fatalf("checkpoint.LastExtractedSeq = %d, want 3", checkpoint.LastExtractedSeq)
+	}
+	if checkpoint.LastExtractedTurnID != "turn-00000000000000000003" {
+		t.Fatalf(
+			"checkpoint.LastExtractedTurnID = %q, want %q",
+			checkpoint.LastExtractedTurnID,
+			"turn-00000000000000000003",
+		)
+	}
+	if !checkpoint.LastExtractedAt.Equal(initialHeadAt) {
+		t.Fatalf(
+			"checkpoint.LastExtractedAt = %s, want %s",
+			checkpoint.LastExtractedAt,
+			initialHeadAt,
+		)
+	}
+	if checkpoint := store.consolidationCheckpoint(); checkpoint != (ConsolidationCheckpoint{}) {
+		t.Fatalf("consolidation checkpoint = %#v, want zero value", checkpoint)
+	}
+
+	records := store.runRecords()
+	if len(records) != 1 {
+		t.Fatalf("run records len = %d, want 1", len(records))
+	}
+	if got, want := records[0].Metadata["semantic_extraction_checkpoint_seq"], "3"; got != want {
+		t.Fatalf("run metadata[semantic_extraction_checkpoint_seq] = %q, want %q", got, want)
+	}
+	if got, want := records[0].Metadata["semantic_extraction_checkpoint_turn_id"], "turn-00000000000000000003"; got != want {
+		t.Fatalf("run metadata[semantic_extraction_checkpoint_turn_id] = %q, want %q", got, want)
+	}
+	if got, want := records[0].Metadata["semantic_extraction_checkpoint_at"], initialHeadAt.Format(time.RFC3339Nano); got != want {
+		t.Fatalf("run metadata[semantic_extraction_checkpoint_at] = %q, want %q", got, want)
+	}
+	if _, ok := records[0].Metadata["consolidation_checkpoint_seq"]; ok {
+		t.Fatalf(
+			"run metadata unexpectedly included consolidation checkpoint: %#v",
+			records[0].Metadata,
+		)
+	}
 }
 
 func TestControllerFailedWorkingMemoryRunLeavesCheckpointUnchanged(t *testing.T) {
@@ -643,6 +765,52 @@ func TestControllerFailedWorkingMemoryRunLeavesCheckpointUnchanged(t *testing.T)
 	}
 }
 
+func TestControllerFailedSemanticRunLeavesCheckpointUnchanged(t *testing.T) {
+	store := newFakeControllerStore()
+	store.setHead(1, time.Now().UTC())
+
+	controller := newControllerForTest(t, store, JobRegistration{
+		NewJob: func() JobDefinition {
+			return fakeJob{
+				jobType: semanticMemoryExtractionJobType,
+				build: func(context.Context, ContextLoader) (Spec, error) {
+					return Spec{
+						Objective:          "Fail semantic extraction.",
+						CompletionContract: "Return `status: ok`.",
+					}, nil
+				},
+				apply: func(context.Context, ContextLoader, JobOutput) (ParsedResult, error) {
+					return ParsedResult{}, errors.New("apply failed")
+				},
+			}
+		},
+		Policy: TriggerPolicy{
+			State: []StateRule{{
+				ID: "dirty",
+				Evaluate: func(_ context.Context, _ Snapshot, state JobState) (bool, string, error) {
+					return state.DirtySinceSeq > 0, "dirty", nil
+				},
+			}},
+		},
+	})
+	controller.started = time.Now().UTC()
+
+	pending, ok, err := controller.nextPendingRun(context.Background(), false, false, true)
+	if err != nil {
+		t.Fatalf("nextPendingRun() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("nextPendingRun() ok = false, want true")
+	}
+	if err := controller.runPending(context.Background(), pending); err != nil {
+		t.Fatalf("runPending() error = %v", err)
+	}
+
+	if checkpoint := store.semanticCheckpoint(); checkpoint != (SemanticExtractionCheckpoint{}) {
+		t.Fatalf("semantic checkpoint = %#v, want zero value", checkpoint)
+	}
+}
+
 func TestControllerVerificationRunDoesNotAdvanceCheckpoint(t *testing.T) {
 	store := newFakeControllerStore()
 	store.setHead(1, time.Now().UTC())
@@ -687,6 +855,9 @@ func TestControllerVerificationRunDoesNotAdvanceCheckpoint(t *testing.T) {
 	if checkpoint := store.consolidationCheckpoint(); checkpoint != (ConsolidationCheckpoint{}) {
 		t.Fatalf("checkpoint = %#v, want zero value", checkpoint)
 	}
+	if checkpoint := store.semanticCheckpoint(); checkpoint != (SemanticExtractionCheckpoint{}) {
+		t.Fatalf("semantic checkpoint = %#v, want zero value", checkpoint)
+	}
 	records := store.runRecords()
 	if len(records) != 1 {
 		t.Fatalf("run records len = %d, want 1", len(records))
@@ -694,6 +865,12 @@ func TestControllerVerificationRunDoesNotAdvanceCheckpoint(t *testing.T) {
 	if _, ok := records[0].Metadata["consolidation_checkpoint_seq"]; ok {
 		t.Fatalf(
 			"run metadata unexpectedly included consolidation checkpoint: %#v",
+			records[0].Metadata,
+		)
+	}
+	if _, ok := records[0].Metadata["semantic_extraction_checkpoint_seq"]; ok {
+		t.Fatalf(
+			"run metadata unexpectedly included semantic checkpoint: %#v",
 			records[0].Metadata,
 		)
 	}

@@ -29,6 +29,13 @@ type consolidationCheckpointState struct {
 	UpdatedAt              time.Time `json:"updated_at,omitempty"`
 }
 
+type semanticExtractionCheckpointState struct {
+	LastExtractedTurnID string    `json:"last_extracted_turn_id,omitempty"`
+	LastExtractedSeq    int64     `json:"last_extracted_seq,omitempty"`
+	LastExtractedAt     time.Time `json:"last_extracted_at,omitempty"`
+	UpdatedAt           time.Time `json:"updated_at,omitempty"`
+}
+
 type turnPathEntry struct {
 	Path string
 	Seq  int64

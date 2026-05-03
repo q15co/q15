@@ -106,6 +106,13 @@ func (s *spyLoader) LoadLatestMessages(
 	return nil, nil
 }
 
+func (s *spyLoader) LoadMessagesSinceSeq(
+	context.Context,
+	int64,
+) ([]conversation.Message, error) {
+	return nil, nil
+}
+
 func (s *spyLoader) LoadHead(context.Context) (int64, time.Time, error) {
 	return 0, time.Time{}, nil
 }
@@ -114,6 +121,12 @@ func (s *spyLoader) LoadConsolidationCheckpoint(
 	context.Context,
 ) (ConsolidationCheckpoint, error) {
 	return ConsolidationCheckpoint{}, nil
+}
+
+func (s *spyLoader) LoadSemanticExtractionCheckpoint(
+	context.Context,
+) (SemanticExtractionCheckpoint, error) {
+	return SemanticExtractionCheckpoint{}, nil
 }
 
 func (s *spyLoader) LoadCognitionArtifact(

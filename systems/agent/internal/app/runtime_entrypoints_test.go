@@ -31,6 +31,13 @@ func (s *spyRuntimeStore) LoadLatestMessages(
 	return nil, nil
 }
 
+func (s *spyRuntimeStore) LoadMessagesSinceSeq(
+	context.Context,
+	int64,
+) ([]conversation.Message, error) {
+	return nil, nil
+}
+
 func (s *spyRuntimeStore) LoadLastUserTimestamp(
 	context.Context,
 ) (time.Time, bool, error) {
@@ -85,6 +92,12 @@ func (s *spyRuntimeStore) LoadConsolidationCheckpoint(
 	return cognition.ConsolidationCheckpoint{}, nil
 }
 
+func (s *spyRuntimeStore) LoadSemanticExtractionCheckpoint(
+	context.Context,
+) (cognition.SemanticExtractionCheckpoint, error) {
+	return cognition.SemanticExtractionCheckpoint{}, nil
+}
+
 func (s *spyRuntimeStore) LoadJobState(
 	context.Context,
 	string,
@@ -105,6 +118,13 @@ func (s *spyRuntimeStore) StoreConsolidationCheckpoint(
 	cognition.ConsolidationCheckpoint,
 ) (cognition.ConsolidationCheckpoint, error) {
 	return cognition.ConsolidationCheckpoint{}, nil
+}
+
+func (s *spyRuntimeStore) StoreSemanticExtractionCheckpoint(
+	context.Context,
+	cognition.SemanticExtractionCheckpoint,
+) (cognition.SemanticExtractionCheckpoint, error) {
+	return cognition.SemanticExtractionCheckpoint{}, nil
 }
 
 func (s *spyRuntimeStore) AppendRunRecord(
