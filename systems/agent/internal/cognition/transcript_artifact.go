@@ -9,6 +9,11 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/conversation"
 )
 
+const (
+	transcriptToolCallArgumentsLimit = 2048
+	transcriptToolResultContentLimit = 2048
+)
+
 func renderTranscriptArtifact(messages []conversation.Message) string {
 	if len(messages) == 0 {
 		return "No transcript messages were loaded."
@@ -123,6 +128,7 @@ func renderTranscriptPart(part conversation.Part) (string, map[string]string) {
 		if body == "" {
 			body = "{}"
 		}
+		body = truncateTranscriptToolPayload(body, transcriptToolCallArgumentsLimit)
 		attrs := map[string]string{}
 		if id := strings.TrimSpace(part.ID); id != "" {
 			attrs["id"] = id
@@ -136,6 +142,7 @@ func renderTranscriptPart(part conversation.Part) (string, map[string]string) {
 		if body == "" {
 			body = "(empty tool result)"
 		}
+		body = truncateTranscriptToolPayload(body, transcriptToolResultContentLimit)
 		attrs := map[string]string{}
 		if toolCallID := strings.TrimSpace(part.ToolCallID); toolCallID != "" {
 			attrs["tool_call_id"] = toolCallID
@@ -147,4 +154,30 @@ func renderTranscriptPart(part conversation.Part) (string, map[string]string) {
 	default:
 		return "", nil
 	}
+}
+
+func truncateTranscriptToolPayload(text string, characterLimit int) string {
+	limitByteIndex := transcriptCharacterLimitByteIndex(text, characterLimit)
+	if limitByteIndex == len(text) {
+		return text
+	}
+	return fmt.Sprintf(
+		"%s\n[truncated: %d bytes omitted]",
+		text[:limitByteIndex],
+		len(text)-limitByteIndex,
+	)
+}
+
+func transcriptCharacterLimitByteIndex(text string, characterLimit int) int {
+	if characterLimit <= 0 {
+		return 0
+	}
+	characters := 0
+	for byteIndex := range text {
+		if characters == characterLimit {
+			return byteIndex
+		}
+		characters++
+	}
+	return len(text)
 }
