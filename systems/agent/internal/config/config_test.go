@@ -182,6 +182,96 @@ agent:
 	}
 }
 
+func TestLoadAgentRuntimeYAMLResolvesBraveAPIKeyFromConfiguredEnvFile(t *testing.T) {
+	t.Setenv("MOONSHOT_API_KEY", "api-123")
+	t.Setenv("Q15_TELEGRAM_TOKEN", "tg-123")
+	bravePath := filepath.Join(t.TempDir(), "brave_api_key")
+	if err := os.WriteFile(bravePath, []byte("brave-123\n"), 0o600); err != nil {
+		t.Fatalf("write brave api key: %v", err)
+	}
+	t.Setenv("BRAVE_API_KEY_FILE", bravePath)
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+providers:
+  - name: moonshot
+    type: openai-compatible
+    base_url: https://api.moonshot.ai/v1
+    key_env: MOONSHOT_API_KEY
+
+models:
+  - name: kimi-k2.5
+    provider: moonshot
+
+agent:
+  name: Q15
+  models:
+    - kimi-k2.5
+  tools:
+    web_search:
+      brave_api_key_env: BRAVE_API_KEY
+  telegram:
+    token_env: Q15_TELEGRAM_TOKEN
+    allowed_user_ids:
+      - 123456789
+`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	runtime, err := LoadAgentRuntime(path)
+	if err != nil {
+		t.Fatalf("LoadAgentRuntime() error = %v", err)
+	}
+	if runtime.Tools.WebSearch.BraveAPIKey != "brave-123" {
+		t.Fatalf(
+			"Tools.WebSearch.BraveAPIKey = %q, want %q",
+			runtime.Tools.WebSearch.BraveAPIKey,
+			"brave-123",
+		)
+	}
+}
+
+func TestLoadAgentRuntimeYAMLRequiresConfiguredBraveAPIKeyEnv(t *testing.T) {
+	t.Setenv("MOONSHOT_API_KEY", "api-123")
+	t.Setenv("Q15_TELEGRAM_TOKEN", "tg-123")
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+providers:
+  - name: moonshot
+    type: openai-compatible
+    base_url: https://api.moonshot.ai/v1
+    key_env: MOONSHOT_API_KEY
+
+models:
+  - name: kimi-k2.5
+    provider: moonshot
+
+agent:
+  name: Q15
+  models:
+    - kimi-k2.5
+  tools:
+    web_search:
+      brave_api_key_env: BRAVE_API_KEY
+  telegram:
+    token_env: Q15_TELEGRAM_TOKEN
+    allowed_user_ids:
+      - 123456789
+`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := LoadAgentRuntime(path)
+	if err == nil ||
+		!strings.Contains(
+			err.Error(),
+			`env var "BRAVE_API_KEY" or "BRAVE_API_KEY_FILE" is required`,
+		) {
+		t.Fatalf("LoadAgentRuntime() error = %v, want missing BRAVE_API_KEY", err)
+	}
+}
+
 func TestLoadAgentRuntimeYAMLResolvesSeparateCognitionModels(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "api-openai")
 	t.Setenv("MOONSHOT_API_KEY", "api-moonshot")

@@ -18,6 +18,23 @@ func TestBraveWebSearchDefinition(t *testing.T) {
 	if def.Name != "web_search" {
 		t.Fatalf("Definition().Name = %q, want %q", def.Name, "web_search")
 	}
+	properties, ok := def.Parameters["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf(
+			"Definition().Parameters[properties] = %#v, want object",
+			def.Parameters["properties"],
+		)
+	}
+	query, ok := properties["query"].(map[string]any)
+	if !ok {
+		t.Fatalf(
+			"Definition().Parameters.properties[query] = %#v, want object",
+			properties["query"],
+		)
+	}
+	if got := query["maxLength"]; got != maxBraveSearchQueryChars {
+		t.Fatalf("query maxLength = %#v, want %d", got, maxBraveSearchQueryChars)
+	}
 }
 
 func TestBraveWebSearchRunErrorsOnInvalidJSON(t *testing.T) {
@@ -35,6 +52,44 @@ func TestBraveWebSearchRunErrorsOnMissingQuery(t *testing.T) {
 	_, err := tool.Run(context.Background(), `{"query":"   "}`)
 	if err == nil || !strings.Contains(err.Error(), "missing required argument: query") {
 		t.Fatalf("Run() error = %v, want missing query error", err)
+	}
+}
+
+func TestBraveWebSearchRunErrorsBeforeRequestOnTooLongQuery(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		requests++
+	}))
+	defer server.Close()
+
+	tool, _ := NewBraveWebSearch("test-key")
+	tool.baseURL = server.URL
+	tool.client = server.Client()
+
+	cases := []struct {
+		name  string
+		query string
+		want  string
+	}{
+		{
+			name:  "characters",
+			query: strings.Repeat("a", maxBraveSearchQueryChars+1),
+			want:  "401 characters",
+		},
+		{
+			name:  "words",
+			query: strings.TrimSpace(strings.Repeat("word ", maxBraveSearchQueryWords+1)),
+			want:  "51 words",
+		},
+	}
+	for _, tc := range cases {
+		_, err := tool.Run(context.Background(), `{"query":"`+tc.query+`"}`)
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("%s Run() error = %v, want %q", tc.name, err, tc.want)
+		}
+	}
+	if requests != 0 {
+		t.Fatalf("requests = %d, want 0", requests)
 	}
 }
 
@@ -68,7 +123,7 @@ func TestBraveWebSearchRunFormatsResults(t *testing.T) {
 	tool.baseURL = server.URL
 	tool.client = server.Client()
 
-	got, err := tool.Run(context.Background(), `{"query":"golang news","count":2}`)
+	got, err := tool.Run(context.Background(), `{"query":"  golang\n news  ","count":2}`)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}

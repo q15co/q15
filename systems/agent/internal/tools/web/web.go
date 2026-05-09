@@ -10,15 +10,18 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
 )
 
 const (
-	braveSearchURL        = "https://api.search.brave.com/res/v1/web/search"
-	defaultWebSearchCount = 5
-	maxWebSearchCount     = 10
-	maxErrorResponseBody  = 200
+	braveSearchURL           = "https://api.search.brave.com/res/v1/web/search"
+	defaultWebSearchCount    = 5
+	maxWebSearchCount        = 10
+	maxBraveSearchQueryChars = 400
+	maxBraveSearchQueryWords = 50
+	maxErrorResponseBody     = 200
 )
 
 // BraveWebSearch queries the Brave Search API and formats a text result list.
@@ -51,6 +54,7 @@ func (b *BraveWebSearch) Definition() agent.ToolDefinition {
 		Description: "Search the web for current information using Brave Search and return titles, URLs, and snippets.",
 		PromptGuidance: []string{
 			"Use for discovery when the question depends on current web information.",
+			"Keep queries concise: Brave rejects queries over 400 characters or 50 words; use search keywords, not full paragraphs.",
 			"After choosing a result, use web_fetch on the selected URL when you need the page contents.",
 		},
 		Parameters: map[string]any{
@@ -58,7 +62,8 @@ func (b *BraveWebSearch) Definition() agent.ToolDefinition {
 			"properties": map[string]any{
 				"query": map[string]any{
 					"type":        "string",
-					"description": "Search query",
+					"description": "Concise search query (max 400 characters and 50 words)",
+					"maxLength":   maxBraveSearchQueryChars,
 				},
 				"count": map[string]any{
 					"type":        "integer",
@@ -89,9 +94,12 @@ func (b *BraveWebSearch) Run(ctx context.Context, arguments string) (string, err
 		return "", fmt.Errorf("invalid arguments JSON: %w", err)
 	}
 
-	query := strings.TrimSpace(args.Query)
+	query := normalizeSearchQuery(args.Query)
 	if query == "" {
 		return "", fmt.Errorf("missing required argument: query")
+	}
+	if err := validateSearchQuery(query); err != nil {
+		return "", err
 	}
 
 	count := b.maxResults
@@ -181,6 +189,28 @@ func trimForError(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+func normalizeSearchQuery(query string) string {
+	return strings.Join(strings.Fields(strings.TrimSpace(query)), " ")
+}
+
+func validateSearchQuery(query string) error {
+	if charCount := utf8.RuneCountInString(query); charCount > maxBraveSearchQueryChars {
+		return fmt.Errorf(
+			"query is too long for Brave Search: %d characters, maximum is %d; retry with a shorter search query",
+			charCount,
+			maxBraveSearchQueryChars,
+		)
+	}
+	if wordCount := len(strings.Fields(query)); wordCount > maxBraveSearchQueryWords {
+		return fmt.Errorf(
+			"query is too long for Brave Search: %d words, maximum is %d; retry with a concise keyword search",
+			wordCount,
+			maxBraveSearchQueryWords,
+		)
+	}
+	return nil
 }
 
 func clamp(v, minV, maxV int) int {

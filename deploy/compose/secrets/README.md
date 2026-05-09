@@ -12,6 +12,7 @@ Rules:
 - The generic tracked templates are:
   - `moonshot_api_key.example`
   - `zai_api_key.example`
+  - `brave_api_key.example`
   - `q15_telegram_token.example`
   - `q15_telegram_allowed_user_ids.example`
   - `github_token.example`

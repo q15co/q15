@@ -60,7 +60,7 @@ services:
       ZAI_API_KEY_FILE: /run/q15-secrets/zai_api_key
       Q15_TELEGRAM_TOKEN_FILE: /run/q15-secrets/q15_telegram_token
       Q15_TELEGRAM_ALLOWED_USER_IDS_FILE: /run/q15-secrets/q15_telegram_allowed_user_ids
-      Q15_BRAVE_API_KEY: ${Q15_BRAVE_API_KEY-}
+      BRAVE_API_KEY_FILE: /run/q15-secrets/brave_api_key
     volumes:
       - type: bind
         source: ./agent-config.yaml
@@ -77,6 +77,10 @@ services:
       - type: bind
         source: ./secrets/zai_api_key
         target: /run/q15-secrets/zai_api_key
+        read_only: true
+      - type: bind
+        source: ./secrets/brave_api_key
+        target: /run/q15-secrets/brave_api_key
         read_only: true
       - type: bind
         source: ./secrets/q15_telegram_token

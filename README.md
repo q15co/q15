@@ -145,7 +145,7 @@ q15 uses a narrow container-first runtime contract:
 - agent config is a mounted YAML file at `/etc/q15/agent/config.yaml`
 - proxy policy is a mounted YAML file at `/etc/q15/proxy/policy.yaml`
 - auth credentials are a mounted JSON file at `/etc/q15/auth/auth.json`
-- provider, Telegram, and proxy secrets come from env vars or `_FILE`
+- provider, Brave, Telegram, and proxy secrets come from env vars or `_FILE`
 - service topology, ports, and runtime directories are hard-coded
 
 The fixed runtime contract is:
@@ -206,7 +206,7 @@ locations) in long-running deployments.
 
 ### Agent Config
 
-Keep the agent file focused on identity, models, providers, and Telegram policy.
+Keep the agent file focused on identity, models, providers, optional tools, and Telegram policy.
 
 Example:
 
@@ -245,6 +245,9 @@ agent:
       - kimi-k2.5
       - gpt-5.4
   memory_recent_turns: 6
+  tools:
+    web_search:
+      brave_api_key_env: BRAVE_API_KEY
   telegram:
     token_env: Q15_TELEGRAM_TOKEN
     allowed_user_ids_env: Q15_TELEGRAM_ALLOWED_USER_IDS
@@ -252,10 +255,12 @@ agent:
 
 Notes:
 
-- provider keys, Telegram tokens, and Telegram allowed-user lists can come from `NAME` or
-  `NAME_FILE`
+- provider keys, Brave API keys, Telegram tokens, and Telegram allowed-user lists can come from
+  `NAME` or `NAME_FILE`
 - `openai-codex` uses `/etc/q15/auth/auth.json` from `q15-auth`; `openai-compatible` providers use
   `key_env`
+- `agent.tools.web_search.brave_api_key_env` is optional; omit it to disable `web_search`; when it
+  is set, q15 resolves that env var through `NAME` or `NAME_FILE`
 - `models[].capabilities` drive capability-aware selection; q15 skips models that cannot satisfy the
   currently inferred request requirements before calling a provider
 - `agent.models` order is the deterministic per-turn fallback preference order after capability
@@ -265,7 +270,8 @@ Notes:
 - current inference is intentionally text-first; image-input and tool-calling requirement inference
   land when canonical request signals for those modes are available
 - agent memory lives under `/memory`
-- `Q15_BRAVE_API_KEY` remains optional for Brave web search
+- `BRAVE_API_KEY` / `BRAVE_API_KEY_FILE` is the default Brave web-search secret name used by the
+  checked-in deployment examples
 
 ### Conversation History
 
