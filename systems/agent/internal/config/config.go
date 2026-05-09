@@ -50,12 +50,23 @@ type Agent struct {
 	Models            []string  `yaml:"models"`
 	Cognition         Cognition `yaml:"cognition"`
 	MemoryRecentTurns int       `yaml:"memory_recent_turns"`
+	Tools             Tools     `yaml:"tools"`
 	Telegram          Telegram  `yaml:"telegram"`
 }
 
 // Cognition defines optional background cognition settings for an agent.
 type Cognition struct {
 	Models []string `yaml:"models"`
+}
+
+// Tools defines optional agent tool settings.
+type Tools struct {
+	WebSearch WebSearchTool `yaml:"web_search"`
+}
+
+// WebSearchTool defines optional web_search settings.
+type WebSearchTool struct {
+	BraveAPIKeyEnv string `yaml:"brave_api_key_env"`
 }
 
 // Telegram defines Telegram integration settings for an agent.
@@ -90,6 +101,16 @@ type ExecutionRuntime struct {
 	ServiceAddress string
 }
 
+// ToolsRuntime is the resolved runtime tool configuration for an agent.
+type ToolsRuntime struct {
+	WebSearch WebSearchToolRuntime
+}
+
+// WebSearchToolRuntime is the resolved runtime configuration for web_search.
+type WebSearchToolRuntime struct {
+	BraveAPIKey string
+}
+
 // AgentRuntime is the resolved runtime config for the configured agent.
 type AgentRuntime struct {
 	Name                   string
@@ -101,6 +122,7 @@ type AgentRuntime struct {
 	SkillsLocalDir         string
 	MemoryRecentTurns      int
 	Execution              ExecutionRuntime
+	Tools                  ToolsRuntime
 	TelegramToken          string
 	TelegramAllowedUserIDs []int64
 }
@@ -228,6 +250,23 @@ func (a Agent) TelegramAllowedUserIDs() ([]int64, error) {
 	return parseAllowedUserIDs(value)
 }
 
+// BraveAPIKey resolves the optional Brave Search API key for web_search.
+func (a Agent) BraveAPIKey() (string, error) {
+	envName := strings.TrimSpace(a.Tools.WebSearch.BraveAPIKeyEnv)
+	if envName == "" {
+		return "", nil
+	}
+
+	value, ok, err := lookupSecretEnvValue(envName)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", fmt.Errorf("env var %q or %q is required", envName, envName+"_FILE")
+	}
+	return value, nil
+}
+
 // ResolveAgentRuntime resolves the configured agent into a runtime value.
 func (c Config) ResolveAgentRuntime() (*AgentRuntime, error) {
 	if err := c.Validate(); err != nil {
@@ -276,6 +315,10 @@ func (c Config) ResolveAgentRuntime() (*AgentRuntime, error) {
 			err,
 		)
 	}
+	braveAPIKey, err := agentCfg.BraveAPIKey()
+	if err != nil {
+		return nil, fmt.Errorf("resolve brave API key for agent %q: %w", agentCfg.Name, err)
+	}
 
 	memoryRecentTurns := agentCfg.MemoryRecentTurns
 	if memoryRecentTurns == 0 {
@@ -283,15 +326,20 @@ func (c Config) ResolveAgentRuntime() (*AgentRuntime, error) {
 	}
 
 	return &AgentRuntime{
-		Name:                   strings.TrimSpace(agentCfg.Name),
-		InteractiveModels:      interactiveModels,
-		CognitionModels:        cognitionModels,
-		WorkspaceLocalDir:      runtimeWorkspaceLocalDir,
-		MemoryLocalDir:         "/memory",
-		MediaLocalDir:          runtimeMediaLocalDir,
-		SkillsLocalDir:         runtimeSkillsLocalDir,
-		MemoryRecentTurns:      memoryRecentTurns,
-		Execution:              ExecutionRuntime{ServiceAddress: runtimeExecutionServiceAddr},
+		Name:              strings.TrimSpace(agentCfg.Name),
+		InteractiveModels: interactiveModels,
+		CognitionModels:   cognitionModels,
+		WorkspaceLocalDir: runtimeWorkspaceLocalDir,
+		MemoryLocalDir:    "/memory",
+		MediaLocalDir:     runtimeMediaLocalDir,
+		SkillsLocalDir:    runtimeSkillsLocalDir,
+		MemoryRecentTurns: memoryRecentTurns,
+		Execution:         ExecutionRuntime{ServiceAddress: runtimeExecutionServiceAddr},
+		Tools: ToolsRuntime{
+			WebSearch: WebSearchToolRuntime{
+				BraveAPIKey: braveAPIKey,
+			},
+		},
 		TelegramToken:          token,
 		TelegramAllowedUserIDs: allowedUserIDs,
 	}, nil

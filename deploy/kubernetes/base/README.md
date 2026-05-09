@@ -25,7 +25,8 @@ The runtime contract is fixed in the binaries. Overlays only need to provide:
 - `ConfigMap/q15-agent-config` data matching `agent-config.yaml`
 - `ConfigMap/q15-proxy-policy` data matching `proxy-policy.yaml`
 - `Secret/q15-agent-env` with keys referenced by the agent config
-  - Example: `MOONSHOT_API_KEY`, `Q15_TELEGRAM_TOKEN`, `Q15_TELEGRAM_ALLOWED_USER_IDS`
+  - Example: `MOONSHOT_API_KEY`, `BRAVE_API_KEY`, `Q15_TELEGRAM_TOKEN`,
+    `Q15_TELEGRAM_ALLOWED_USER_IDS`
 - `Secret/q15-agent-auth` with key `auth.json`
 - `Secret/q15-proxy-env` with keys matching the uppercased proxy secret aliases in
   `proxy-policy.yaml`

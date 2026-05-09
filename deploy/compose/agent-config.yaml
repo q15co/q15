@@ -36,6 +36,9 @@ agent:
       - kimi-k2.6
       - gpt-5.5
   memory_recent_turns: 6
+  tools:
+    web_search:
+      brave_api_key_env: BRAVE_API_KEY
   telegram:
     token_env: Q15_TELEGRAM_TOKEN
     allowed_user_ids_env: Q15_TELEGRAM_ALLOWED_USER_IDS

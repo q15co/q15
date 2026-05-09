@@ -35,6 +35,9 @@ Notes:
   checked-in Compose example uses OpenAI `gpt-5.4` first and Moonshot/Kimi second.
 - `agent.cognition.models` is optional and defines the background-cognition fallback order. If it is
   omitted, cognition jobs inherit `agent.models`.
+- The checked-in Compose agent config enables Brave Search with
+  `agent.tools.web_search.brave_api_key_env: BRAVE_API_KEY`, and the Compose file mounts that
+  optional secret as `BRAVE_API_KEY_FILE=/run/q15-secrets/brave_api_key`.
 - The checked-in Compose config reads the Telegram allow-list from `Q15_TELEGRAM_ALLOWED_USER_IDS`
   or `Q15_TELEGRAM_ALLOWED_USER_IDS_FILE`, so local user IDs stay out of tracked YAML.
 - Update or rollback by changing the pinned tag and redeploying while preserving the persistent

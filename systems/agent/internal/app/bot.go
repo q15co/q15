@@ -88,14 +88,13 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 		SkillsRuntimeDir:    runtimeInfo.SkillsDir,
 	}
 	fileExec := q15skills.NewFileExecutor(fileops.NewExecutor(fileSettings), skillManager)
-	braveAPIKey := strings.TrimSpace(os.Getenv("Q15_BRAVE_API_KEY"))
 	toolList, err := buildToolList(
 		executionClient,
 		fileExec,
 		skillManager,
 		fileSettings,
 		mediaStore,
-		braveAPIKey,
+		rt.Tools.WebSearch.BraveAPIKey,
 	)
 	if err != nil {
 		return fmt.Errorf("configure tools for agent %q: %w", rt.Name, err)
