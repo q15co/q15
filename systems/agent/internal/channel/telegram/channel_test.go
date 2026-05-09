@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -139,6 +140,53 @@ func newTestChannelWithCaller(t *testing.T, caller ta.Caller) *Channel {
 	return &Channel{bot: bot}
 }
 
+type closingThenUpdateCaller struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (c *closingThenUpdateCaller) Call(
+	_ context.Context,
+	_ string,
+	_ *ta.RequestData,
+) (*ta.Response, error) {
+	c.mu.Lock()
+	c.calls++
+	call := c.calls
+	c.mu.Unlock()
+
+	if call == 1 {
+		return nil, context.Canceled
+	}
+	if call == 2 {
+		return &ta.Response{
+			Ok: true,
+			Result: []byte(`[
+				{
+					"update_id": 42,
+					"message": {
+						"message_id": 7,
+						"date": 1710000000,
+						"chat": {"id": 123, "type": "private"},
+						"from": {"id": 456, "is_bot": false, "first_name": "Ada"},
+						"text": "after timeout"
+					}
+				}
+			]`),
+		}, nil
+	}
+	return &ta.Response{
+		Ok:     true,
+		Result: []byte(`[]`),
+	}, nil
+}
+
+func (c *closingThenUpdateCaller) Calls() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.calls
+}
+
 func mustStoreMediaRef(
 	t *testing.T,
 	content []byte,
@@ -173,6 +221,50 @@ var testTelegramPNGBytes = []byte{
 	0x03, 0x01, 0x01, 0x00, 0xc9, 0xfe, 0x92, 0xef,
 	0x00, 0x00, 0x00, 0x00, 'I', 'E', 'N', 'D',
 	0xae, 0x42, 0x60, 0x82,
+}
+
+func TestStartRestartsWhenTelegoLongPollingStops(t *testing.T) {
+	prevRestartDelay := telegramLongPollRestartDelay
+	telegramLongPollRestartDelay = time.Millisecond
+	t.Cleanup(func() {
+		telegramLongPollRestartDelay = prevRestartDelay
+	})
+
+	caller := &closingThenUpdateCaller{}
+	ch := newTestChannelWithCaller(t, caller)
+	got := make(chan IncomingMessage, 1)
+	ch.onMessage = func(msg IncomingMessage) {
+		got <- msg
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := ch.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	select {
+	case msg := <-got:
+		cancel()
+		if msg.ChatID != "123" {
+			t.Fatalf("ChatID = %q, want 123", msg.ChatID)
+		}
+		if msg.UserID != "456" {
+			t.Fatalf("UserID = %q, want 456", msg.UserID)
+		}
+		if msg.MessageID != "7" {
+			t.Fatalf("MessageID = %q, want 7", msg.MessageID)
+		}
+		if msg.Text != "after timeout" {
+			t.Fatalf("Text = %q, want after timeout", msg.Text)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for recovered Telegram update")
+	}
+
+	if gotCalls := caller.Calls(); gotCalls < 2 {
+		t.Fatalf("calls = %d, want at least 2", gotCalls)
+	}
 }
 
 func TestSendText_UsesHTMLParseMode(t *testing.T) {

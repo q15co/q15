@@ -49,6 +49,10 @@ var (
 	telegramTypingKeepaliveInterval = 4 * time.Second
 	telegramTextChunkRunes          = 3800
 	telegramPhotoCaptionRunes       = 1024
+	telegramLongPollTimeoutSeconds  = 30
+	telegramLongPollRequestTimeout  = 45 * time.Second
+	telegramLongPollRetryTimeout    = 8 * time.Second
+	telegramLongPollRestartDelay    = 5 * time.Second
 )
 
 // NewChannel constructs a Telegram channel adapter.
@@ -60,7 +64,10 @@ func NewChannel(token string, onMessage MessageHandler, opts ...Option) (*Channe
 		onMessage = func(IncomingMessage) {}
 	}
 
-	bot, err := telego.NewBot(token)
+	bot, err := telego.NewBot(
+		token,
+		telego.WithHTTPClient(&http.Client{Timeout: telegramLongPollRequestTimeout}),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("create telegram bot: %w", err)
 	}
@@ -85,9 +92,54 @@ func NewChannel(token string, onMessage MessageHandler, opts ...Option) (*Channe
 
 // Start begins long polling and dispatches inbound Telegram messages.
 func (c *Channel) Start(ctx context.Context) error {
-	updates, err := c.bot.UpdatesViaLongPolling(ctx, &telego.GetUpdatesParams{
-		Timeout: 30,
-	})
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	go c.superviseLongPolling(ctx)
+	return nil
+}
+
+func (c *Channel) superviseLongPolling(ctx context.Context) {
+	for {
+		if err := ctx.Err(); err != nil {
+			return
+		}
+		// Telego owns retries inside one session. This loop only restarts
+		// the session if the update channel or handler stops unexpectedly.
+		err := c.runLongPollingSession(ctx)
+		if err := ctx.Err(); err != nil {
+			return
+		}
+		if err != nil {
+			fmt.Fprintf(
+				os.Stderr,
+				"telegram long polling stopped: %v; restarting in %s\n",
+				err,
+				telegramLongPollRestartDelay,
+			)
+		} else {
+			fmt.Fprintf(
+				os.Stderr,
+				"telegram long polling stopped unexpectedly; restarting in %s\n",
+				telegramLongPollRestartDelay,
+			)
+		}
+		if !sleepContext(ctx, telegramLongPollRestartDelay) {
+			return
+		}
+	}
+}
+
+func (c *Channel) runLongPollingSession(ctx context.Context) error {
+	params := &telego.GetUpdatesParams{
+		Timeout:        telegramLongPollTimeoutSeconds,
+		AllowedUpdates: []string{telego.MessageUpdates},
+	}
+	updates, err := c.bot.UpdatesViaLongPolling(
+		ctx,
+		params,
+		telego.WithLongPollingRetryTimeout(telegramLongPollRetryTimeout),
+	)
 	if err != nil {
 		return fmt.Errorf("start long polling: %w", err)
 	}
@@ -101,15 +153,37 @@ func (c *Channel) Start(ctx context.Context) error {
 		return c.handleMessage(ctx, &message)
 	}, th.AnyMessage())
 
+	stopHandler := make(chan struct{})
 	go func() {
-		_ = bh.Start()
-	}()
-	go func() {
-		<-ctx.Done()
-		_ = bh.Stop()
+		select {
+		case <-ctx.Done():
+			_ = bh.Stop()
+		case <-stopHandler:
+		}
 	}()
 
+	// Start blocks until Telego's update channel closes or the handler stops.
+	if err := bh.Start(); err != nil {
+		close(stopHandler)
+		return fmt.Errorf("run bot handler: %w", err)
+	}
+	close(stopHandler)
 	return nil
+}
+
+func sleepContext(ctx context.Context, delay time.Duration) bool {
+	if delay <= 0 {
+		return ctx.Err() == nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 func (c *Channel) handleMessage(ctx context.Context, message *telego.Message) error {
