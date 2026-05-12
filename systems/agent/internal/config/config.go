@@ -61,12 +61,21 @@ type Cognition struct {
 
 // Tools defines optional agent tool settings.
 type Tools struct {
-	WebSearch WebSearchTool `yaml:"web_search"`
+	WebSearch  WebSearchTool  `yaml:"web_search"`
+	Embeddings EmbeddingsTool `yaml:"embeddings"`
 }
 
 // WebSearchTool defines optional web_search settings.
 type WebSearchTool struct {
 	BraveAPIKeyEnv string `yaml:"brave_api_key_env"`
+}
+
+// EmbeddingsTool defines optional embedding source/search tool settings.
+type EmbeddingsTool struct {
+	QdrantURLEnv    string `yaml:"qdrant_url_env"`
+	GeminiAPIKeyEnv string `yaml:"gemini_api_key_env"`
+	Model           string `yaml:"model"`
+	Dimensions      int    `yaml:"dimensions"`
 }
 
 // Telegram defines Telegram integration settings for an agent.
@@ -103,12 +112,22 @@ type ExecutionRuntime struct {
 
 // ToolsRuntime is the resolved runtime tool configuration for an agent.
 type ToolsRuntime struct {
-	WebSearch WebSearchToolRuntime
+	WebSearch  WebSearchToolRuntime
+	Embeddings EmbeddingsToolRuntime
 }
 
 // WebSearchToolRuntime is the resolved runtime configuration for web_search.
 type WebSearchToolRuntime struct {
 	BraveAPIKey string
+}
+
+// EmbeddingsToolRuntime is the resolved runtime configuration for embedding tools.
+type EmbeddingsToolRuntime struct {
+	Enabled      bool
+	QdrantURL    string
+	GeminiAPIKey string
+	Model        string
+	Dimensions   int
 }
 
 // AgentRuntime is the resolved runtime config for the configured agent.
@@ -267,6 +286,68 @@ func (a Agent) BraveAPIKey() (string, error) {
 	return value, nil
 }
 
+// EmbeddingsRuntime resolves optional embeddings configuration. It stays
+// disabled unless both the Qdrant URL and Gemini API key env names are set.
+func (a Agent) EmbeddingsRuntime() (EmbeddingsToolRuntime, error) {
+	tool := a.Tools.Embeddings
+	if !tool.configured() {
+		return EmbeddingsToolRuntime{}, nil
+	}
+	qdrantEnv := strings.TrimSpace(tool.QdrantURLEnv)
+	if qdrantEnv == "" {
+		return EmbeddingsToolRuntime{}, errors.New(
+			"qdrant_url_env is required when embeddings are configured",
+		)
+	}
+	geminiEnv := strings.TrimSpace(tool.GeminiAPIKeyEnv)
+	if geminiEnv == "" {
+		return EmbeddingsToolRuntime{}, errors.New(
+			"gemini_api_key_env is required when embeddings are configured",
+		)
+	}
+	qdrantURL, ok, err := lookupSecretEnvValue(qdrantEnv)
+	if err != nil {
+		return EmbeddingsToolRuntime{}, err
+	}
+	if !ok {
+		return EmbeddingsToolRuntime{}, fmt.Errorf(
+			"env var %q or %q is required",
+			qdrantEnv,
+			qdrantEnv+"_FILE",
+		)
+	}
+	geminiAPIKey, ok, err := lookupSecretEnvValue(geminiEnv)
+	if err != nil {
+		return EmbeddingsToolRuntime{}, err
+	}
+	if !ok {
+		return EmbeddingsToolRuntime{}, fmt.Errorf(
+			"env var %q or %q is required",
+			geminiEnv,
+			geminiEnv+"_FILE",
+		)
+	}
+	if strings.TrimSpace(qdrantURL) == "" {
+		return EmbeddingsToolRuntime{}, fmt.Errorf(
+			"env var %q resolved to an empty Qdrant URL",
+			qdrantEnv,
+		)
+	}
+	if strings.TrimSpace(geminiAPIKey) == "" {
+		return EmbeddingsToolRuntime{}, fmt.Errorf(
+			"env var %q resolved to an empty Gemini API key",
+			geminiEnv,
+		)
+	}
+	return EmbeddingsToolRuntime{
+		Enabled:      true,
+		QdrantURL:    qdrantURL,
+		GeminiAPIKey: geminiAPIKey,
+		Model:        strings.TrimSpace(tool.Model),
+		Dimensions:   tool.Dimensions,
+	}, nil
+}
+
 // ResolveAgentRuntime resolves the configured agent into a runtime value.
 func (c Config) ResolveAgentRuntime() (*AgentRuntime, error) {
 	if err := c.Validate(); err != nil {
@@ -319,6 +400,10 @@ func (c Config) ResolveAgentRuntime() (*AgentRuntime, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve brave API key for agent %q: %w", agentCfg.Name, err)
 	}
+	embeddingsRuntime, err := agentCfg.EmbeddingsRuntime()
+	if err != nil {
+		return nil, fmt.Errorf("resolve embeddings config for agent %q: %w", agentCfg.Name, err)
+	}
 
 	memoryRecentTurns := agentCfg.MemoryRecentTurns
 	if memoryRecentTurns == 0 {
@@ -339,6 +424,7 @@ func (c Config) ResolveAgentRuntime() (*AgentRuntime, error) {
 			WebSearch: WebSearchToolRuntime{
 				BraveAPIKey: braveAPIKey,
 			},
+			Embeddings: embeddingsRuntime,
 		},
 		TelegramToken:          token,
 		TelegramAllowedUserIDs: allowedUserIDs,
@@ -457,7 +543,33 @@ func (c Config) validate() error {
 			return fmt.Errorf("agent.telegram.allowed_user_ids: %w", err)
 		}
 	}
+	if err := c.Agent.Tools.Embeddings.validate(); err != nil {
+		return fmt.Errorf("agent.tools.embeddings: %w", err)
+	}
 
+	return nil
+}
+
+func (e EmbeddingsTool) configured() bool {
+	return strings.TrimSpace(e.QdrantURLEnv) != "" ||
+		strings.TrimSpace(e.GeminiAPIKeyEnv) != "" ||
+		strings.TrimSpace(e.Model) != "" ||
+		e.Dimensions != 0
+}
+
+func (e EmbeddingsTool) validate() error {
+	if !e.configured() {
+		return nil
+	}
+	if strings.TrimSpace(e.QdrantURLEnv) == "" {
+		return errors.New("qdrant_url_env is required when embeddings are configured")
+	}
+	if strings.TrimSpace(e.GeminiAPIKeyEnv) == "" {
+		return errors.New("gemini_api_key_env is required when embeddings are configured")
+	}
+	if e.Dimensions < 0 {
+		return errors.New("dimensions must be greater than or equal to 0")
+	}
 	return nil
 }
 

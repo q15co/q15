@@ -5,7 +5,7 @@ This directory contains the checked-in Compose-facing config, policy, and secret
 - [docker-compose.image-first.yml](/deploy/compose/docker-compose.image-first.yml) is the canonical
   downstream deployment example. It uses published `ghcr.io/q15co/q15-*` images only, requires
   `Q15_IMAGE_TAG`, and mounts persistent storage for `/workspace`, `/memory`, `/skills`, `/nix`, and
-  `/var/lib/q15/proxy`.
+  `/var/lib/q15/proxy`, plus persistent Qdrant storage for embedding collections.
 - [docker-compose.yml](/docker-compose.yml) in the repo root is the local-development stack. It
   keeps `build:` enabled and uses a named `q15_workspace` volume for `/workspace`; it is not the
   image-first deployment example for downstream consumers.
@@ -38,6 +38,9 @@ Notes:
 - The checked-in Compose agent config enables Brave Search with
   `agent.tools.web_search.brave_api_key_env: BRAVE_API_KEY`, and the Compose file mounts that
   optional secret as `BRAVE_API_KEY_FILE=/run/q15-secrets/brave_api_key`.
+- The checked-in Compose agent config enables typed embedding tools with Qdrant and Gemini. Source
+  registry and JSONL sync state live under `/workspace/.q15/embed/`; library books remain opt-in via
+  `embed_sources add` with `source_type: chunked_markdown_tree`.
 - The checked-in Compose config reads the Telegram allow-list from `Q15_TELEGRAM_ALLOWED_USER_IDS`
   or `Q15_TELEGRAM_ALLOWED_USER_IDS_FILE`, so local user IDs stay out of tracked YAML.
 - Update or rollback by changing the pinned tag and redeploying while preserving the persistent

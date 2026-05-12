@@ -48,6 +48,15 @@ services:
         source: q15_exec_nix_store
         target: /nix
 
+  q15-qdrant:
+    image: qdrant/qdrant:v1.17.1
+    restart: unless-stopped
+    init: true
+    volumes:
+      - type: volume
+        source: q15_qdrant_storage
+        target: /qdrant/storage
+
   q15-agent:
     image: ghcr.io/q15co/q15-agent:main
     build:
@@ -57,6 +66,7 @@ services:
     init: true
     depends_on:
       - q15-exec
+      - q15-qdrant
     environment:
       HOME: /root
       GODEBUG: updatemaxprocs=0
@@ -67,6 +77,8 @@ services:
       Q15_TELEGRAM_TOKEN_FILE: /run/secrets/q15_telegram_token
       Q15_TELEGRAM_ALLOWED_USER_IDS_FILE: /run/secrets/q15_telegram_allowed_user_ids
       BRAVE_API_KEY_FILE: /run/secrets/brave_api_key
+      Q15_QDRANT_URL: http://q15-qdrant:6334
+      Q15_GEMINI_API_KEY_FILE: /run/secrets/gemini_api_key
     configs:
       - source: q15_agent_config
         target: /etc/q15/agent/config.yaml
@@ -91,6 +103,7 @@ services:
       - moonshot_api_key
       - zai_api_key
       - brave_api_key
+      - gemini_api_key
       - q15_telegram_token
       - q15_telegram_allowed_user_ids
 
@@ -99,6 +112,7 @@ volumes:
   q15_media:
   q15_memory:
   q15_proxy_state:
+  q15_qdrant_storage:
   q15_skills:
   q15_workspace:
 
@@ -116,6 +130,8 @@ secrets:
     file: ./deploy/compose/secrets/zai_api_key
   brave_api_key:
     file: ./deploy/compose/secrets/brave_api_key
+  gemini_api_key:
+    file: ./deploy/compose/secrets/gemini_api_key
   q15_telegram_token:
     file: ./deploy/compose/secrets/q15_telegram_token
   q15_telegram_allowed_user_ids:

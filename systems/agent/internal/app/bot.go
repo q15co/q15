@@ -16,6 +16,7 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/cognition"
 	"github.com/q15co/q15/systems/agent/internal/config"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
+	"github.com/q15co/q15/systems/agent/internal/embed"
 	"github.com/q15co/q15/systems/agent/internal/execution"
 	"github.com/q15co/q15/systems/agent/internal/fileops"
 	q15media "github.com/q15co/q15/systems/agent/internal/media"
@@ -88,12 +89,20 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 		SkillsRuntimeDir:    runtimeInfo.SkillsDir,
 	}
 	fileExec := q15skills.NewFileExecutor(fileops.NewExecutor(fileSettings), skillManager)
+	embeddingService, err := newEmbeddingService(ctx, rt, fileSettings)
+	if err != nil {
+		return fmt.Errorf("configure embeddings for agent %q: %w", rt.Name, err)
+	}
+	if embeddingService != nil {
+		defer embeddingService.Close()
+	}
 	toolList, err := buildToolList(
 		executionClient,
 		fileExec,
 		skillManager,
 		fileSettings,
 		mediaStore,
+		embeddingService,
 		rt.Tools.WebSearch.BraveAPIKey,
 	)
 	if err != nil {
@@ -207,6 +216,7 @@ func buildToolList(
 	skillManager *q15skills.Manager,
 	fileSettings fileops.Settings,
 	mediaStore q15media.Store,
+	embeddingService *embed.Service,
 	braveAPIKey string,
 ) ([]agent.Tool, error) {
 	toolList := []agent.Tool{
@@ -220,6 +230,16 @@ func buildToolList(
 		tools.NewWebFetch(),
 	}
 
+	if embeddingService != nil {
+		toolList = append(
+			toolList,
+			tools.NewEmbedSources(embeddingService),
+			tools.NewEmbedSync(embeddingService),
+			tools.NewEmbedSearch(embeddingService),
+			tools.NewEmbedStatus(embeddingService),
+		)
+	}
+
 	braveAPIKey = strings.TrimSpace(braveAPIKey)
 	if braveAPIKey == "" {
 		return toolList, nil
@@ -230,6 +250,42 @@ func buildToolList(
 		return nil, err
 	}
 	return append(toolList, webSearchTool), nil
+}
+
+func newEmbeddingService(
+	ctx context.Context,
+	rt config.AgentRuntime,
+	fileSettings fileops.Settings,
+) (*embed.Service, error) {
+	tool := rt.Tools.Embeddings
+	if !tool.Enabled {
+		return nil, nil
+	}
+	settings := embed.Settings{
+		WorkspaceLocalDir: fileSettings.WorkspaceLocalDir,
+		MemoryLocalDir:    fileSettings.MemoryLocalDir,
+		SkillsLocalDir:    fileSettings.SkillsLocalDir,
+		QdrantURL:         tool.QdrantURL,
+		GeminiAPIKey:      tool.GeminiAPIKey,
+		Model:             tool.Model,
+		Dimensions:        tool.Dimensions,
+	}
+	state, err := embed.OpenState(ctx, settings)
+	if err != nil {
+		return nil, err
+	}
+	vectors, err := embed.NewQdrantStore(tool.QdrantURL, tool.Dimensions)
+	if err != nil {
+		_ = state.Close()
+		return nil, err
+	}
+	embedder, err := embed.NewGeminiEmbedder(ctx, tool.GeminiAPIKey, tool.Model, tool.Dimensions)
+	if err != nil {
+		_ = state.Close()
+		_ = vectors.Close()
+		return nil, err
+	}
+	return embed.NewService(settings, state, vectors, embedder), nil
 }
 
 func composeSystemPrompt(

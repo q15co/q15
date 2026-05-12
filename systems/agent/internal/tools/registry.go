@@ -6,10 +6,12 @@
 package tools
 
 import (
+	"github.com/q15co/q15/systems/agent/internal/embed"
 	"github.com/q15co/q15/systems/agent/internal/execution"
 	"github.com/q15co/q15/systems/agent/internal/fileops"
 	q15media "github.com/q15co/q15/systems/agent/internal/media"
 
+	embedtools "github.com/q15co/q15/systems/agent/internal/tools/embed"
 	"github.com/q15co/q15/systems/agent/internal/tools/exec"
 	"github.com/q15co/q15/systems/agent/internal/tools/files"
 	mediatools "github.com/q15co/q15/systems/agent/internal/tools/media"
@@ -63,4 +65,24 @@ func NewWebFetch() *web.Fetch {
 // NewBraveWebSearch delegates to web.NewBraveWebSearch.
 func NewBraveWebSearch(apiKey string) (*web.BraveWebSearch, error) {
 	return web.NewBraveWebSearch(apiKey)
+}
+
+// NewEmbedSources delegates to embedtools.NewSources.
+func NewEmbedSources(service *embed.Service) *embedtools.Sources {
+	return embedtools.NewSources(service)
+}
+
+// NewEmbedSync delegates to embedtools.NewSync.
+func NewEmbedSync(service *embed.Service) *embedtools.Sync {
+	return embedtools.NewSync(service)
+}
+
+// NewEmbedSearch delegates to embedtools.NewSearch.
+func NewEmbedSearch(service *embed.Service) *embedtools.Search {
+	return embedtools.NewSearch(service)
+}
+
+// NewEmbedStatus delegates to embedtools.NewStatus.
+func NewEmbedStatus(service *embed.Service) *embedtools.Status {
+	return embedtools.NewStatus(service)
 }

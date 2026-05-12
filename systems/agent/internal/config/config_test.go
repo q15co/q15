@@ -272,6 +272,113 @@ agent:
 	}
 }
 
+func TestLoadAgentRuntimeYAMLResolvesEmbeddingsFromConfiguredEnvFiles(t *testing.T) {
+	t.Setenv("MOONSHOT_API_KEY", "api-123")
+	t.Setenv("Q15_TELEGRAM_TOKEN", "tg-123")
+	qdrantPath := filepath.Join(t.TempDir(), "qdrant_url")
+	if err := os.WriteFile(qdrantPath, []byte("http://q15-qdrant:6334\n"), 0o600); err != nil {
+		t.Fatalf("write qdrant url: %v", err)
+	}
+	geminiPath := filepath.Join(t.TempDir(), "gemini_api_key")
+	if err := os.WriteFile(geminiPath, []byte("gemini-123\n"), 0o600); err != nil {
+		t.Fatalf("write gemini api key: %v", err)
+	}
+	t.Setenv("Q15_QDRANT_URL_FILE", qdrantPath)
+	t.Setenv("Q15_GEMINI_API_KEY_FILE", geminiPath)
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+providers:
+  - name: moonshot
+    type: openai-compatible
+    base_url: https://api.moonshot.ai/v1
+    key_env: MOONSHOT_API_KEY
+
+models:
+  - name: kimi-k2.5
+    provider: moonshot
+
+agent:
+  name: Q15
+  models:
+    - kimi-k2.5
+  tools:
+    embeddings:
+      qdrant_url_env: Q15_QDRANT_URL
+      gemini_api_key_env: Q15_GEMINI_API_KEY
+      model: gemini-embedding-2
+      dimensions: 768
+  telegram:
+    token_env: Q15_TELEGRAM_TOKEN
+    allowed_user_ids:
+      - 123456789
+`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	runtime, err := LoadAgentRuntime(path)
+	if err != nil {
+		t.Fatalf("LoadAgentRuntime() error = %v", err)
+	}
+	if !runtime.Tools.Embeddings.Enabled {
+		t.Fatal("Tools.Embeddings.Enabled = false, want true")
+	}
+	if runtime.Tools.Embeddings.QdrantURL != "http://q15-qdrant:6334" {
+		t.Fatalf("QdrantURL = %q", runtime.Tools.Embeddings.QdrantURL)
+	}
+	if runtime.Tools.Embeddings.GeminiAPIKey != "gemini-123" {
+		t.Fatalf("GeminiAPIKey = %q", runtime.Tools.Embeddings.GeminiAPIKey)
+	}
+	if runtime.Tools.Embeddings.Model != "gemini-embedding-2" {
+		t.Fatalf("Model = %q", runtime.Tools.Embeddings.Model)
+	}
+	if runtime.Tools.Embeddings.Dimensions != 768 {
+		t.Fatalf("Dimensions = %d, want 768", runtime.Tools.Embeddings.Dimensions)
+	}
+}
+
+func TestLoadAgentRuntimeYAMLRequiresConfiguredEmbeddingsEnv(t *testing.T) {
+	t.Setenv("MOONSHOT_API_KEY", "api-123")
+	t.Setenv("Q15_TELEGRAM_TOKEN", "tg-123")
+	t.Setenv("Q15_QDRANT_URL", "http://q15-qdrant:6334")
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+providers:
+  - name: moonshot
+    type: openai-compatible
+    base_url: https://api.moonshot.ai/v1
+    key_env: MOONSHOT_API_KEY
+
+models:
+  - name: kimi-k2.5
+    provider: moonshot
+
+agent:
+  name: Q15
+  models:
+    - kimi-k2.5
+  tools:
+    embeddings:
+      qdrant_url_env: Q15_QDRANT_URL
+      gemini_api_key_env: Q15_GEMINI_API_KEY
+  telegram:
+    token_env: Q15_TELEGRAM_TOKEN
+    allowed_user_ids:
+      - 123456789
+`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := LoadAgentRuntime(path)
+	if err == nil || !strings.Contains(
+		err.Error(),
+		`env var "Q15_GEMINI_API_KEY" or "Q15_GEMINI_API_KEY_FILE" is required`,
+	) {
+		t.Fatalf("LoadAgentRuntime() error = %v, want missing Q15_GEMINI_API_KEY", err)
+	}
+}
+
 func TestLoadAgentRuntimeYAMLResolvesSeparateCognitionModels(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "api-openai")
 	t.Setenv("MOONSHOT_API_KEY", "api-moonshot")
