@@ -17,6 +17,7 @@ const (
 
 	VectorNameDense  = "dense"
 	VectorNameSparse = "sparse"
+	SparseModelBM25  = "qdrant/bm25"
 )
 
 // Supported vector search modes.
@@ -90,16 +91,10 @@ type Document struct {
 
 // Point is the vector-store representation of one embedded document.
 type Point struct {
-	ID      string
-	Vector  []float32
-	Sparse  SparseVector
-	Payload map[string]any
-}
-
-// SparseVector is q15's local lexical sparse-vector representation.
-type SparseVector struct {
-	Indices []uint32
-	Values  []float32
+	ID         string
+	Vector     []float32
+	SparseText string
+	Payload    map[string]any
 }
 
 // SearchResult is a vector-store search hit with normalized payload.
@@ -116,6 +111,22 @@ type CollectionStatus struct {
 	Exists     bool   `json:"exists"`
 	Points     uint64 `json:"points"`
 	Dimensions int    `json:"dimensions"`
+}
+
+// CollectionDeleteResult summarizes a deliberate collection reset. The next
+// embed_sync recreates deleted collections from configured sources.
+type CollectionDeleteResult struct {
+	Collection    string `json:"collection"`
+	Deleted       bool   `json:"deleted"`
+	StatePoints   int    `json:"state_points"`
+	StateSyncRuns int    `json:"state_sync_runs"`
+}
+
+// CollectionEnsureResult reports whether EnsureCollection had to create or
+// recreate storage. Recreated collections require state invalidation.
+type CollectionEnsureResult struct {
+	Created   bool
+	Recreated bool
 }
 
 // SyncResult summarizes one embed_sync run.
@@ -147,19 +158,25 @@ type EmbeddingRequest struct {
 	Title string
 }
 
-// SearchRequest carries dense and/or sparse query vectors into the vector store.
+// SearchRequest carries dense vectors and/or sparse query text into the vector
+// store. Qdrant generates BM25 sparse vectors from SparseText.
 type SearchRequest struct {
-	Vector []float32
-	Sparse SparseVector
-	Filter map[string]any
-	Mode   string
-	Limit  int
+	Vector     []float32
+	SparseText string
+	Filter     map[string]any
+	Mode       string
+	Limit      int
 }
 
 // VectorStore hides the concrete Qdrant client behind the sync/search behavior
 // the service needs, keeping source scanning independent from storage.
 type VectorStore interface {
-	EnsureCollection(ctx context.Context, collection string, dimensions int) error
+	EnsureCollection(
+		ctx context.Context,
+		collection string,
+		dimensions int,
+	) (CollectionEnsureResult, error)
+	DeleteCollection(ctx context.Context, collection string) (bool, error)
 	Upsert(ctx context.Context, collection string, points []Point) error
 	UpdatePayload(
 		ctx context.Context,

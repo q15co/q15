@@ -70,6 +70,37 @@ func (s *Service) SetSourceEnabled(ctx context.Context, id string, enabled bool)
 	return s.registry.SetEnabled(ctx, id, enabled)
 }
 
+// DeleteCollection drops one collection and clears matching dirty-tracking
+// state. The next sync recreates the collection from configured sources.
+func (s *Service) DeleteCollection(
+	ctx context.Context,
+	collection string,
+) (CollectionDeleteResult, error) {
+	if s.state == nil {
+		return CollectionDeleteResult{}, fmt.Errorf("embed state store is not configured")
+	}
+	if s.vectors == nil {
+		return CollectionDeleteResult{}, fmt.Errorf("vector store is not configured")
+	}
+	if err := validateCollection(collection); err != nil {
+		return CollectionDeleteResult{}, err
+	}
+	deleted, err := s.vectors.DeleteCollection(ctx, collection)
+	if err != nil {
+		return CollectionDeleteResult{}, err
+	}
+	stateResult, err := s.state.deleteCollection(ctx, collection)
+	if err != nil {
+		return CollectionDeleteResult{}, err
+	}
+	return CollectionDeleteResult{
+		Collection:    collection,
+		Deleted:       deleted,
+		StatePoints:   stateResult.Points,
+		StateSyncRuns: stateResult.SyncRuns,
+	}, nil
+}
+
 // SyncOptions narrows or expands one embedding sync run.
 type SyncOptions struct {
 	Collection string
@@ -139,9 +170,19 @@ func (s *Service) syncSource(ctx context.Context, source Source, full bool) (Syn
 		return SyncResult{}, err
 	}
 	result := SyncResult{Scanned: len(docs)}
-	if err := s.vectors.EnsureCollection(ctx, source.Collection, s.settings.Dimensions); err != nil {
+	ensureResult, err := s.vectors.EnsureCollection(ctx, source.Collection, s.settings.Dimensions)
+	if err != nil {
 		return SyncResult{}, err
 	}
+	if ensureResult.Created || ensureResult.Recreated {
+		stateResult, err := s.state.deleteCollection(ctx, source.Collection)
+		if err != nil {
+			return SyncResult{}, err
+		}
+		result.Pruned += stateResult.Points
+		full = true
+	}
+	vectorVersion := currentVectorVersion(s.settings)
 
 	seen := make(map[string]struct{}, len(docs))
 	var embedReqs []EmbeddingRequest
@@ -155,7 +196,7 @@ func (s *Service) syncSource(ctx context.Context, source Source, full bool) (Syn
 		if err != nil {
 			return SyncResult{}, fmt.Errorf("query embed state: %w", err)
 		}
-		if ok && !full && record.ContentHash == doc.ContentHash {
+		if ok && !full && stateRecordMatchesDocument(record, doc, vectorVersion) {
 			result.Unchanged++
 			continue
 		}
@@ -169,17 +210,18 @@ func (s *Service) syncSource(ctx context.Context, source Source, full bool) (Syn
 			if err != nil {
 				return SyncResult{}, fmt.Errorf("query moved embed state: %w", err)
 			}
-			if movedOK {
+			if movedOK && stateRecordMatchesDocument(moved, doc, vectorVersion) {
 				if err := s.vectors.UpdatePayload(ctx, doc.Collection, moved.PointID, doc.Payload); err != nil {
 					return SyncResult{}, err
 				}
 				if err := s.state.upsertPoint(ctx, stateRecord{
-					PointID:     moved.PointID,
-					SourceID:    doc.SourceID,
-					Collection:  doc.Collection,
-					Path:        doc.Path,
-					Identity:    doc.Identity,
-					ContentHash: doc.ContentHash,
+					PointID:       moved.PointID,
+					SourceID:      doc.SourceID,
+					Collection:    doc.Collection,
+					Path:          doc.Path,
+					Identity:      doc.Identity,
+					ContentHash:   doc.ContentHash,
+					VectorVersion: vectorVersion,
 				}); err != nil {
 					return SyncResult{}, err
 				}
@@ -211,18 +253,19 @@ func (s *Service) syncSource(ctx context.Context, source Source, full bool) (Syn
 		for i, doc := range embedDocs {
 			pointID := deterministicPointID(doc.Collection, doc.SourceID, doc.Identity)
 			points = append(points, Point{
-				ID:      pointID,
-				Vector:  vectors[i],
-				Sparse:  encodeSparseText(doc.Text),
-				Payload: doc.Payload,
+				ID:         pointID,
+				Vector:     vectors[i],
+				SparseText: doc.Text,
+				Payload:    doc.Payload,
 			})
 			records = append(records, stateRecord{
-				PointID:     pointID,
-				SourceID:    doc.SourceID,
-				Collection:  doc.Collection,
-				Path:        doc.Path,
-				Identity:    doc.Identity,
-				ContentHash: doc.ContentHash,
+				PointID:       pointID,
+				SourceID:      doc.SourceID,
+				Collection:    doc.Collection,
+				Path:          doc.Path,
+				Identity:      doc.Identity,
+				ContentHash:   doc.ContentHash,
+				VectorVersion: vectorVersion,
 			})
 		}
 		if err := s.vectors.Upsert(ctx, source.Collection, points); err != nil {
@@ -343,10 +386,10 @@ func (s *Service) Search(ctx context.Context, opts SearchOptions) ([]SearchResul
 		limit = 50
 	}
 	req := SearchRequest{
-		Sparse: encodeSparseText(query),
-		Filter: opts.Filter,
-		Mode:   mode,
-		Limit:  limit,
+		SparseText: query,
+		Filter:     opts.Filter,
+		Mode:       mode,
+		Limit:      limit,
 	}
 	if mode != SearchModeSparse {
 		if s.embedder == nil {
@@ -483,4 +526,17 @@ func titleForDocument(doc Document) string {
 		}
 	}
 	return doc.Path
+}
+
+func currentVectorVersion(settings Settings) string {
+	return fmt.Sprintf(
+		"dense:%s:%d;sparse:%s",
+		normalizeModel(settings.Model),
+		normalizeDimensions(settings.Dimensions),
+		SparseModelBM25,
+	)
+}
+
+func stateRecordMatchesDocument(record stateRecord, doc Document, vectorVersion string) bool {
+	return record.ContentHash == doc.ContentHash && record.VectorVersion == vectorVersion
 }

@@ -40,21 +40,56 @@ func (s *QdrantStore) EnsureCollection(
 	ctx context.Context,
 	collection string,
 	dimensions int,
-) error {
+) (CollectionEnsureResult, error) {
 	if s == nil || s.client == nil {
-		return fmt.Errorf("qdrant client is not configured")
+		return CollectionEnsureResult{}, fmt.Errorf("qdrant client is not configured")
 	}
 	if err := validateCollection(collection); err != nil {
-		return err
+		return CollectionEnsureResult{}, err
 	}
 	dimensions = normalizeDimensions(dimensions)
 	exists, err := s.client.CollectionExists(ctx, collection)
 	if err != nil {
-		return err
+		return CollectionEnsureResult{}, err
 	}
 	if exists {
-		return s.ensureSparseVectorConfig(ctx, collection)
+		return s.ensureCollectionSchema(ctx, collection, dimensions)
 	}
+	if err := s.createCollection(ctx, collection, dimensions); err != nil {
+		return CollectionEnsureResult{}, err
+	}
+	return CollectionEnsureResult{Created: true}, nil
+}
+
+// DeleteCollection drops one Qdrant collection when it exists.
+func (s *QdrantStore) DeleteCollection(
+	ctx context.Context,
+	collection string,
+) (bool, error) {
+	if s == nil || s.client == nil {
+		return false, fmt.Errorf("qdrant client is not configured")
+	}
+	if err := validateCollection(collection); err != nil {
+		return false, err
+	}
+	exists, err := s.client.CollectionExists(ctx, collection)
+	if err != nil {
+		return false, err
+	}
+	if !exists {
+		return false, nil
+	}
+	if err := s.client.DeleteCollection(ctx, collection); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (s *QdrantStore) createCollection(
+	ctx context.Context,
+	collection string,
+	dimensions int,
+) error {
 	return s.client.CreateCollection(ctx, &qdrant.CreateCollection{
 		CollectionName: collection,
 		VectorsConfig: qdrant.NewVectorsConfigMap(map[string]*qdrant.VectorParams{
@@ -183,42 +218,56 @@ func (s *QdrantStore) Search(
 	return searchResultsFromPoints(collection, points), nil
 }
 
-func (s *QdrantStore) ensureSparseVectorConfig(ctx context.Context, collection string) error {
+func (s *QdrantStore) ensureCollectionSchema(
+	ctx context.Context,
+	collection string,
+	dimensions int,
+) (CollectionEnsureResult, error) {
 	info, err := s.client.GetCollectionInfo(ctx, collection)
 	if err != nil {
-		return err
+		return CollectionEnsureResult{}, err
 	}
-	sparseVectors := info.GetConfig().GetParams().GetSparseVectorsConfig().GetMap()
-	if _, ok := sparseVectors[VectorNameSparse]; ok {
-		return nil
+	if collectionHasExpectedVectorSchema(info, dimensions) {
+		return CollectionEnsureResult{}, nil
 	}
-	merged := make(map[string]*qdrant.SparseVectorParams, len(sparseVectors)+1)
-	for name, params := range sparseVectors {
-		merged[name] = params
-	}
-	merged[VectorNameSparse] = lexicalSparseVectorParams()
-	err = s.client.UpdateCollection(ctx, &qdrant.UpdateCollection{
-		CollectionName:      collection,
-		SparseVectorsConfig: qdrant.NewSparseVectorsConfig(merged),
-	})
-	if err != nil {
-		return fmt.Errorf(
-			"add sparse vector %q to Qdrant collection %q: %w",
-			VectorNameSparse,
+	if err := s.client.DeleteCollection(ctx, collection); err != nil {
+		return CollectionEnsureResult{}, fmt.Errorf(
+			"delete incompatible Qdrant collection %q: %w",
 			collection,
 			err,
 		)
 	}
-	return nil
+	if err := s.createCollection(ctx, collection, dimensions); err != nil {
+		return CollectionEnsureResult{}, fmt.Errorf(
+			"recreate incompatible Qdrant collection %q: %w",
+			collection,
+			err,
+		)
+	}
+	return CollectionEnsureResult{Recreated: true}, nil
+}
+
+func collectionHasExpectedVectorSchema(info *qdrant.CollectionInfo, dimensions int) bool {
+	params := info.GetConfig().GetParams()
+	vectors := params.GetVectorsConfig().GetParamsMap().GetMap()
+	dense := vectors[VectorNameDense]
+	if dense == nil ||
+		dense.GetSize() != uint64(dimensions) ||
+		dense.GetDistance() != qdrant.Distance_Cosine {
+		return false
+	}
+	sparseVectors := params.GetSparseVectorsConfig().GetMap()
+	_, ok := sparseVectors[VectorNameSparse]
+	return ok
 }
 
 func sparseVectorsConfig() *qdrant.SparseVectorConfig {
 	return qdrant.NewSparseVectorsConfig(map[string]*qdrant.SparseVectorParams{
-		VectorNameSparse: lexicalSparseVectorParams(),
+		VectorNameSparse: bm25SparseVectorParams(),
 	})
 }
 
-func lexicalSparseVectorParams() *qdrant.SparseVectorParams {
+func bm25SparseVectorParams() *qdrant.SparseVectorParams {
 	return &qdrant.SparseVectorParams{
 		Modifier: qdrant.Modifier_Idf.Enum(),
 	}
@@ -228,10 +277,9 @@ func vectorMapForPoint(point Point) *qdrant.Vectors {
 	vectors := map[string]*qdrant.Vector{
 		VectorNameDense: qdrant.NewVectorDense(point.Vector),
 	}
-	if len(point.Sparse.Indices) > 0 {
-		vectors[VectorNameSparse] = qdrant.NewVectorSparse(
-			point.Sparse.Indices,
-			point.Sparse.Values,
+	if strings.TrimSpace(point.SparseText) != "" {
+		vectors[VectorNameSparse] = qdrant.NewVectorDocument(
+			bm25Document(point.SparseText),
 		)
 	}
 	return qdrant.NewVectorsMap(vectors)
@@ -260,13 +308,13 @@ func queryPointsForSearch(
 			WithVectors:    qdrant.NewWithVectors(false),
 		}, nil
 	case SearchModeSparse:
-		if err := validateSparseVector(req.Sparse); err != nil {
+		if err := validateSparseText(req.SparseText); err != nil {
 			return nil, err
 		}
 		using := VectorNameSparse
 		return &qdrant.QueryPoints{
 			CollectionName: collection,
-			Query:          qdrant.NewQuerySparse(req.Sparse.Indices, req.Sparse.Values),
+			Query:          qdrant.NewQueryDocument(bm25Document(req.SparseText)),
 			Using:          &using,
 			Filter:         qfilter,
 			Limit:          &qlimit,
@@ -277,10 +325,10 @@ func queryPointsForSearch(
 		if len(req.Vector) == 0 {
 			return nil, fmt.Errorf("hybrid search requires a dense query vector")
 		}
-		if len(req.Sparse.Indices) == 0 {
+		if strings.TrimSpace(req.SparseText) == "" {
 			return queryPointsForSearch(collection, req, qfilter, SearchModeDense)
 		}
-		if err := validateSparseVector(req.Sparse); err != nil {
+		if err := validateSparseText(req.SparseText); err != nil {
 			return nil, err
 		}
 		denseUsing := VectorNameDense
@@ -299,7 +347,7 @@ func queryPointsForSearch(
 					Limit:  &prefetchLimit,
 				},
 				{
-					Query:  qdrant.NewQuerySparse(req.Sparse.Indices, req.Sparse.Values),
+					Query:  qdrant.NewQueryDocument(bm25Document(req.SparseText)),
 					Using:  &sparseUsing,
 					Filter: qfilter,
 					Limit:  &prefetchLimit,
@@ -320,16 +368,16 @@ func queryPointsForSearch(
 	}
 }
 
-func validateSparseVector(vector SparseVector) error {
-	if len(vector.Indices) == 0 {
-		return fmt.Errorf("sparse search requires at least one sparse query token")
+func bm25Document(text string) *qdrant.Document {
+	return &qdrant.Document{
+		Model: SparseModelBM25,
+		Text:  text,
 	}
-	if len(vector.Indices) != len(vector.Values) {
-		return fmt.Errorf(
-			"sparse query has %d indices for %d values",
-			len(vector.Indices),
-			len(vector.Values),
-		)
+}
+
+func validateSparseText(text string) error {
+	if strings.TrimSpace(text) == "" {
+		return fmt.Errorf("sparse search requires query text")
 	}
 	return nil
 }

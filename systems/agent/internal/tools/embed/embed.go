@@ -16,6 +16,7 @@ type service interface {
 	AddSource(ctx context.Context, source embed.Source) (embed.Source, error)
 	RemoveSource(ctx context.Context, id string) (embed.Source, error)
 	SetSourceEnabled(ctx context.Context, id string, enabled bool) (embed.Source, error)
+	DeleteCollection(ctx context.Context, collection string) (embed.CollectionDeleteResult, error)
 	Sync(ctx context.Context, opts embed.SyncOptions) (embed.SyncResult, error)
 	Search(ctx context.Context, opts embed.SearchOptions) ([]embed.SearchResult, error)
 	Status(ctx context.Context, collection string) (embed.Status, error)
@@ -65,10 +66,11 @@ func NewStatus(service service) *Status {
 func (s *Sources) Definition() agent.ToolDefinition {
 	return agent.ToolDefinition{
 		Name:        "embed_sources",
-		Description: "List, add, remove, enable, and disable typed embedding ingestion sources.",
+		Description: "List, add, remove, enable, disable, and reset typed embedding ingestion sources and collections.",
 		PromptGuidance: []string{
 			"Use source_type to choose scanner behavior; never infer behavior from the collection name.",
 			"Use chunked_markdown_tree for pre-chunked Markdown corpora such as /workspace/library/<author>/<work>/chunks.",
+			"Use delete_collection only for deliberate collection resets; it drops the Qdrant collection and clears matching sync state.",
 		},
 		Parameters: map[string]any{
 			"type": "object",
@@ -76,7 +78,14 @@ func (s *Sources) Definition() agent.ToolDefinition {
 				"action": map[string]any{
 					"type":        "string",
 					"description": "Source registry action",
-					"enum":        []string{"list", "add", "remove", "enable", "disable"},
+					"enum": []string{
+						"list",
+						"add",
+						"remove",
+						"enable",
+						"disable",
+						"delete_collection",
+					},
 				},
 				"id": map[string]any{
 					"type":        "string",
@@ -84,7 +93,7 @@ func (s *Sources) Definition() agent.ToolDefinition {
 				},
 				"collection": map[string]any{
 					"type":        "string",
-					"description": "Target Qdrant collection for add",
+					"description": "Target Qdrant collection for add or delete_collection",
 					"enum":        embed.SupportedCollections(),
 				},
 				"source_type": map[string]any{
@@ -193,9 +202,18 @@ func (s *Sources) Run(ctx context.Context, arguments string) (string, error) {
 			return "", err
 		}
 		return jsonOutput(map[string]any{"source": source})
+	case "delete_collection":
+		if strings.TrimSpace(args.Collection) == "" {
+			return "", fmt.Errorf("missing required argument for delete_collection: collection")
+		}
+		result, err := s.service.DeleteCollection(ctx, args.Collection)
+		if err != nil {
+			return "", err
+		}
+		return jsonOutput(result)
 	default:
 		return "", fmt.Errorf(
-			"action %q is not supported (want list, add, remove, enable, or disable)",
+			"action %q is not supported (want list, add, remove, enable, disable, or delete_collection)",
 			args.Action,
 		)
 	}
@@ -259,10 +277,10 @@ func (s *Sync) Run(ctx context.Context, arguments string) (string, error) {
 func (s *Search) Definition() agent.ToolDefinition {
 	return agent.ToolDefinition{
 		Name:        "embed_search",
-		Description: "Run semantic, lexical, or hybrid search over one or more Qdrant embedding collections.",
+		Description: "Run semantic, BM25 lexical, or hybrid search over one or more Qdrant embedding collections.",
 		PromptGuidance: []string{
 			"Use for local semantic recall from configured embedding sources.",
-			"Omit mode for hybrid dense+sparse search. Use dense to force Gemini-only semantic search or sparse to avoid an embedding call.",
+			"Omit mode for hybrid Gemini+dense and Qdrant BM25 sparse search. Use dense to force Gemini-only semantic search or sparse to avoid an embedding call.",
 		},
 		Parameters: map[string]any{
 			"type": "object",

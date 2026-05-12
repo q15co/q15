@@ -14,12 +14,13 @@ func TestStateStorePersistsPointAndSyncState(t *testing.T) {
 	}
 
 	record := stateRecord{
-		PointID:     "point-1",
-		SourceID:    "source-1",
-		Collection:  CollectionCore,
-		Path:        "/memory/core/a.md",
-		Identity:    "/memory/core/a.md",
-		ContentHash: "hash-a",
+		PointID:       "point-1",
+		SourceID:      "source-1",
+		Collection:    CollectionCore,
+		Path:          "/memory/core/a.md",
+		Identity:      "/memory/core/a.md",
+		ContentHash:   "hash-a",
+		VectorVersion: "dense:test;sparse:test",
 	}
 	if err := state.upsertPoint(ctx, record); err != nil {
 		t.Fatalf("upsertPoint() error = %v", err)
@@ -44,7 +45,7 @@ func TestStateStorePersistsPointAndSyncState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("findByIdentity() error = %v", err)
 	}
-	if !ok || got.PointID != "point-1" {
+	if !ok || got.PointID != "point-1" || got.VectorVersion != "dense:test;sparse:test" {
 		t.Fatalf("findByIdentity() = %#v, %v; want point-1", got, ok)
 	}
 	got, ok, err = reopened.findByContentHash(ctx, CollectionCore, "source-1", "hash-a")
@@ -136,5 +137,66 @@ func TestStateStoreUpdatesDeletesAndRemovesSource(t *testing.T) {
 	}
 	if len(statuses) != 0 {
 		t.Fatalf("sourceStatuses() after delete source = %#v, want none", statuses)
+	}
+}
+
+func TestStateStoreDeletesCollectionState(t *testing.T) {
+	ctx := context.Background()
+	settings := testSettings(t)
+	state, err := OpenState(ctx, settings)
+	if err != nil {
+		t.Fatalf("OpenState() error = %v", err)
+	}
+	defer state.Close()
+	for _, record := range []stateRecord{
+		{
+			PointID:     "semantic-point",
+			SourceID:    "semantic-source",
+			Collection:  CollectionSemantic,
+			Path:        "/memory/semantic/a.md",
+			Identity:    "/memory/semantic/a.md",
+			ContentHash: "hash-a",
+		},
+		{
+			PointID:     "core-point",
+			SourceID:    "core-source",
+			Collection:  CollectionCore,
+			Path:        "/memory/core/a.md",
+			Identity:    "/memory/core/a.md",
+			ContentHash: "hash-b",
+		},
+	} {
+		if err := state.upsertPoint(ctx, record); err != nil {
+			t.Fatalf("upsertPoint(%s) error = %v", record.PointID, err)
+		}
+	}
+	if err := state.storeSyncResult(ctx, Source{
+		ID:         "semantic-source",
+		Collection: CollectionSemantic,
+	}, SyncResult{Scanned: 1}); err != nil {
+		t.Fatalf("store semantic sync result: %v", err)
+	}
+	if err := state.storeSyncResult(ctx, Source{
+		ID:         "core-source",
+		Collection: CollectionCore,
+	}, SyncResult{Scanned: 1}); err != nil {
+		t.Fatalf("store core sync result: %v", err)
+	}
+
+	result, err := state.deleteCollection(ctx, CollectionSemantic)
+	if err != nil {
+		t.Fatalf("deleteCollection() error = %v", err)
+	}
+	if result.Points != 1 || result.SyncRuns != 1 {
+		t.Fatalf("deleteCollection() = %#v, want one point and one sync run", result)
+	}
+	statuses, err := state.sourceStatuses(ctx)
+	if err != nil {
+		t.Fatalf("sourceStatuses() error = %v", err)
+	}
+	if len(statuses) != 1 ||
+		statuses[0].Collection != CollectionCore ||
+		statuses[0].SourceID != "core-source" {
+		t.Fatalf("sourceStatuses() after collection delete = %#v, want only core", statuses)
 	}
 }

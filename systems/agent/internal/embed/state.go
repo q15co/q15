@@ -38,13 +38,14 @@ type StateStore struct {
 }
 
 type stateRecord struct {
-	PointID     string    `json:"point_id"`
-	SourceID    string    `json:"source_id"`
-	Collection  string    `json:"collection"`
-	Path        string    `json:"path"`
-	Identity    string    `json:"identity"`
-	ContentHash string    `json:"content_hash"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	PointID       string    `json:"point_id"`
+	SourceID      string    `json:"source_id"`
+	Collection    string    `json:"collection"`
+	Path          string    `json:"path"`
+	Identity      string    `json:"identity"`
+	ContentHash   string    `json:"content_hash"`
+	VectorVersion string    `json:"vector_version,omitempty"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 type stateSyncRecord struct {
@@ -52,6 +53,11 @@ type stateSyncRecord struct {
 	Collection string     `json:"collection"`
 	LastSynced time.Time  `json:"last_synced"`
 	Result     SyncResult `json:"result"`
+}
+
+type stateDeleteCollectionResult struct {
+	Points   int
+	SyncRuns int
 }
 
 type stateLine struct {
@@ -303,6 +309,39 @@ func (s *StateStore) deleteSource(ctx context.Context, sourceID string) error {
 	return s.persistLocked()
 }
 
+func (s *StateStore) deleteCollection(
+	ctx context.Context,
+	collection string,
+) (stateDeleteCollectionResult, error) {
+	if err := ctx.Err(); err != nil {
+		return stateDeleteCollectionResult{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closeCalled {
+		return stateDeleteCollectionResult{}, fmt.Errorf("embed state store is closed")
+	}
+	var result stateDeleteCollectionResult
+	ids := make([]string, 0)
+	for id, record := range s.points {
+		if record.Collection == collection {
+			ids = append(ids, id)
+		}
+	}
+	for _, id := range ids {
+		s.removePointLocked(id)
+		result.Points++
+	}
+	for id, record := range s.syncRuns {
+		if record.Collection == collection {
+			delete(s.syncRuns, id)
+			result.SyncRuns++
+		}
+	}
+	s.needsFlush = true
+	return result, s.persistLocked()
+}
+
 func (s *StateStore) storeSyncResult(
 	ctx context.Context,
 	source Source,
@@ -363,9 +402,13 @@ func (s *StateStore) sourceStatuses(ctx context.Context) ([]SourceStatus, error)
 }
 
 func (s *StateStore) putPointLocked(record stateRecord) {
+	identityKey := stateIdentityKey(record.Collection, record.SourceID, record.Identity)
+	if existingID, ok := s.byIdentity[identityKey]; ok && existingID != record.PointID {
+		s.removePointLocked(existingID)
+	}
 	s.removePointLocked(record.PointID)
 	s.points[record.PointID] = record
-	s.byIdentity[stateIdentityKey(record.Collection, record.SourceID, record.Identity)] = record.PointID
+	s.byIdentity[identityKey] = record.PointID
 
 	hashKey := stateHashKey(record.Collection, record.SourceID, record.ContentHash)
 	if s.byHash[hashKey] == nil {

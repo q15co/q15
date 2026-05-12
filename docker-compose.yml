@@ -49,7 +49,7 @@ services:
         target: /nix
 
   q15-qdrant:
-    image: qdrant/qdrant:v1.15.5
+    image: qdrant/qdrant:v1.17.1
     restart: unless-stopped
     init: true
     volumes:

@@ -46,6 +46,32 @@ func TestSourcesAddRequiresTypedSourceFields(t *testing.T) {
 	}
 }
 
+func TestSourcesDeleteCollectionReturnsResetSummary(t *testing.T) {
+	service := &fakeService{}
+	tool := NewSources(service)
+
+	got, err := tool.Run(context.Background(), `{
+		"action": "delete_collection",
+		"collection": "semantic"
+	}`)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if service.deletedCollection != embed.CollectionSemantic {
+		t.Fatalf("deleted collection = %q, want semantic", service.deletedCollection)
+	}
+	for _, want := range []string{
+		`"collection": "semantic"`,
+		`"deleted": true`,
+		`"state_points": 2`,
+		`"state_sync_runs": 1`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("output missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestSearchReturnsServiceResultsAsJSON(t *testing.T) {
 	tool := NewSearch(&fakeService{
 		results: []embed.SearchResult{
@@ -76,8 +102,9 @@ func TestSearchReturnsServiceResultsAsJSON(t *testing.T) {
 }
 
 type fakeService struct {
-	added   embed.Source
-	results []embed.SearchResult
+	added             embed.Source
+	deletedCollection string
+	results           []embed.SearchResult
 }
 
 func (f *fakeService) ListSources(ctx context.Context) ([]embed.Source, error) {
@@ -106,6 +133,20 @@ func (f *fakeService) SetSourceEnabled(
 ) (embed.Source, error) {
 	_, _ = ctx, id
 	return embed.Source{Enabled: enabled}, nil
+}
+
+func (f *fakeService) DeleteCollection(
+	ctx context.Context,
+	collection string,
+) (embed.CollectionDeleteResult, error) {
+	_ = ctx
+	f.deletedCollection = collection
+	return embed.CollectionDeleteResult{
+		Collection:    collection,
+		Deleted:       true,
+		StatePoints:   2,
+		StateSyncRuns: 1,
+	}, nil
 }
 
 func (f *fakeService) Sync(
