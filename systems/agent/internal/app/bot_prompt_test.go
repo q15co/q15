@@ -9,6 +9,7 @@ import (
 
 	"github.com/q15co/q15/libs/exec-contract/execpb"
 	"github.com/q15co/q15/systems/agent/internal/agent"
+	"github.com/q15co/q15/systems/agent/internal/embed"
 	"github.com/q15co/q15/systems/agent/internal/execution"
 	"github.com/q15co/q15/systems/agent/internal/fileops"
 	q15media "github.com/q15co/q15/systems/agent/internal/media"
@@ -114,6 +115,7 @@ func TestBuildToolListIncludesOnlyCurrentRuntimeTools(t *testing.T) {
 			SkillsRuntimeDir:    "/skills",
 		},
 		mediaStore,
+		nil,
 		"",
 	)
 	if err != nil {
@@ -155,6 +157,7 @@ func TestBuildToolListAppendsWebSearchWhenConfigured(t *testing.T) {
 			SkillsRuntimeDir:    "/skills",
 		},
 		mediaStore,
+		nil,
 		"brave-key",
 	)
 	if err != nil {
@@ -171,6 +174,52 @@ func TestBuildToolListAppendsWebSearchWhenConfigured(t *testing.T) {
 		"load_image",
 		"web_fetch",
 		"web_search",
+	}; !equalStrings(got, want) {
+		t.Fatalf("tool names = %v, want %v", got, want)
+	}
+}
+
+func TestBuildToolListAppendsEmbeddingToolsWhenConfigured(t *testing.T) {
+	t.Parallel()
+
+	fileExec := &stubFileExecutor{}
+	mediaStore, err := q15media.NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileStore() error = %v", err)
+	}
+	toolList, err := buildToolList(
+		&stubExecutionService{},
+		fileExec,
+		nil,
+		fileops.Settings{
+			WorkspaceLocalDir:   t.TempDir(),
+			WorkspaceRuntimeDir: "/workspace",
+			MemoryLocalDir:      t.TempDir(),
+			MemoryRuntimeDir:    "/memory",
+			SkillsLocalDir:      t.TempDir(),
+			SkillsRuntimeDir:    "/skills",
+		},
+		mediaStore,
+		embed.NewService(embed.Settings{}, nil, nil, nil),
+		"",
+	)
+	if err != nil {
+		t.Fatalf("buildToolList() error = %v", err)
+	}
+
+	if got, want := toolNames(toolList), []string{
+		"read_file",
+		"write_file",
+		"edit_file",
+		"apply_patch",
+		"validate_skill",
+		"exec",
+		"load_image",
+		"web_fetch",
+		"embed_sources",
+		"embed_sync",
+		"embed_search",
+		"embed_status",
 	}; !equalStrings(got, want) {
 		t.Fatalf("tool names = %v, want %v", got, want)
 	}

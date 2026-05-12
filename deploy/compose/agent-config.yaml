@@ -39,6 +39,11 @@ agent:
   tools:
     web_search:
       brave_api_key_env: BRAVE_API_KEY
+    embeddings:
+      qdrant_url_env: Q15_QDRANT_URL
+      gemini_api_key_env: Q15_GEMINI_API_KEY
+      model: gemini-embedding-2
+      dimensions: 768
   telegram:
     token_env: Q15_TELEGRAM_TOKEN
     allowed_user_ids_env: Q15_TELEGRAM_ALLOWED_USER_IDS
