@@ -732,11 +732,17 @@ func TestLoopReply_ToolProducedImageRequiresImageInputOnNextTurn(t *testing.T) {
 	if out.Text != "done" {
 		t.Fatalf("Reply().Text = %q, want done", out.Text)
 	}
-	if got := out.MediaRefs; len(got) != 1 || got[0] != "media://sha256/abc" {
-		t.Fatalf("Reply().MediaRefs = %#v, want tool image ref", got)
+	if got := out.MediaRefs; len(got) != 0 {
+		t.Fatalf(
+			"Reply().MediaRefs = %#v, want empty (no image promotion from tool MediaRefs)",
+			got,
+		)
 	}
-	if got := out.Attachments; len(got) != 1 || got[0].MediaRef != "media://sha256/abc" {
-		t.Fatalf("Reply().Attachments = %#v, want image attachment", got)
+	if got := out.Attachments; len(got) != 0 {
+		t.Fatalf(
+			"Reply().Attachments = %#v, want empty (no image promotion from tool MediaRefs)",
+			got,
+		)
 	}
 	if len(store.lastAppend) != 4 {
 		t.Fatalf("persisted turn len = %d, want 4", len(store.lastAppend))
@@ -746,12 +752,8 @@ func TestLoopReply_ToolProducedImageRequiresImageInputOnNextTurn(t *testing.T) {
 		t.Fatalf("persisted tool parts = %#v, want tool_result only", toolParts)
 	}
 	final := store.lastAppend[3]
-	if final.Role != conversation.AssistantRole || len(final.Parts) != 2 {
-		t.Fatalf("persisted final assistant = %#v, want text plus image", final)
-	}
-	if final.Parts[1].Type != conversation.ImagePartType ||
-		final.Parts[1].MediaRef != "media://sha256/abc" {
-		t.Fatalf("persisted final image part = %#v, want promoted image", final.Parts[1])
+	if final.Role != conversation.AssistantRole || len(final.Parts) != 1 {
+		t.Fatalf("persisted final assistant = %#v, want text only", final)
 	}
 	if len(planner.plannedRequirements) != 2 {
 		t.Fatalf("plannedRequirements len = %d, want 2", len(planner.plannedRequirements))
@@ -759,8 +761,11 @@ func TestLoopReply_ToolProducedImageRequiresImageInputOnNextTurn(t *testing.T) {
 	if planner.plannedRequirements[0].ImageInput {
 		t.Fatalf("first turn requirements = %#v, want text-only", planner.plannedRequirements[0])
 	}
-	if !planner.plannedRequirements[1].ImageInput {
-		t.Fatalf("second turn requirements = %#v, want image_input", planner.plannedRequirements[1])
+	if planner.plannedRequirements[1].ImageInput {
+		t.Fatalf(
+			"second turn requirements = %#v, want text-only (no image promotion from tool MediaRefs)",
+			planner.plannedRequirements[1],
+		)
 	}
 }
 
@@ -819,11 +824,17 @@ func TestLoopReply_ExecThenLoadImageCarriesFinalMediaRefs(t *testing.T) {
 	if out.Text != "done" {
 		t.Fatalf("Reply().Text = %q, want done", out.Text)
 	}
-	if got := out.MediaRefs; len(got) != 1 || got[0] != "media://sha256/cat" {
-		t.Fatalf("Reply().MediaRefs = %#v, want load_image ref", got)
+	if got := out.MediaRefs; len(got) != 0 {
+		t.Fatalf(
+			"Reply().MediaRefs = %#v, want empty (no image promotion from tool MediaRefs)",
+			got,
+		)
 	}
-	if got := out.Attachments; len(got) != 1 || got[0].MediaRef != "media://sha256/cat" {
-		t.Fatalf("Reply().Attachments = %#v, want load_image attachment", got)
+	if got := out.Attachments; len(got) != 0 {
+		t.Fatalf(
+			"Reply().Attachments = %#v, want empty (no image promotion from tool MediaRefs)",
+			got,
+		)
 	}
 	if len(store.lastAppend) != 6 {
 		t.Fatalf("persisted turn len = %d, want 6", len(store.lastAppend))
@@ -833,12 +844,8 @@ func TestLoopReply_ExecThenLoadImageCarriesFinalMediaRefs(t *testing.T) {
 		t.Fatalf("persisted load_image tool parts = %#v, want tool_result only", toolParts)
 	}
 	final := store.lastAppend[5]
-	if final.Role != conversation.AssistantRole || len(final.Parts) != 2 {
-		t.Fatalf("persisted final assistant = %#v, want text plus image", final)
-	}
-	if final.Parts[1].Type != conversation.ImagePartType ||
-		final.Parts[1].MediaRef != "media://sha256/cat" {
-		t.Fatalf("persisted final image part = %#v, want promoted image", final.Parts[1])
+	if final.Role != conversation.AssistantRole || len(final.Parts) != 1 {
+		t.Fatalf("persisted final assistant = %#v, want text only", final)
 	}
 	if len(planner.plannedRequirements) != 3 {
 		t.Fatalf("plannedRequirements len = %d, want 3", len(planner.plannedRequirements))
@@ -852,9 +859,9 @@ func TestLoopReply_ExecThenLoadImageCarriesFinalMediaRefs(t *testing.T) {
 			planner.plannedRequirements[1],
 		)
 	}
-	if !planner.plannedRequirements[2].ImageInput {
+	if planner.plannedRequirements[2].ImageInput {
 		t.Fatalf(
-			"third turn requirements = %#v, want image_input after load_image",
+			"third turn requirements = %#v, want text-only (no image promotion from tool MediaRefs)",
 			planner.plannedRequirements[2],
 		)
 	}
