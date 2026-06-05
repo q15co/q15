@@ -4,10 +4,30 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+func withOpenAIHTTPClient(t *testing.T, client *http.Client) {
+	t.Helper()
+
+	prev := openAIHTTPClient
+	openAIHTTPClient = client
+	t.Cleanup(func() { openAIHTTPClient = prev })
+}
 
 func makeJWT(t *testing.T, claims map[string]any) string {
 	t.Helper()
@@ -105,7 +125,7 @@ func TestExtractAccountIDVariants(t *testing.T) {
 	}
 }
 
-func TestRefreshOpenAITokenPreservesExistingRefreshAndAccountID(t *testing.T) {
+func TestRefreshOpenAITokenDoesNotReuseMissingRefreshToken(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/oauth/token" {
 			t.Fatalf("unexpected path = %q", r.URL.Path)
@@ -135,11 +155,178 @@ func TestRefreshOpenAITokenPreservesExistingRefreshAndAccountID(t *testing.T) {
 	if cred.AccessToken != "new-access-token" {
 		t.Fatalf("access token = %q, want %q", cred.AccessToken, "new-access-token")
 	}
-	if cred.RefreshToken != "old-refresh-token" {
-		t.Fatalf("refresh token = %q, want %q", cred.RefreshToken, "old-refresh-token")
+	if cred.RefreshToken != "" {
+		t.Fatalf("refresh token = %q, want empty", cred.RefreshToken)
 	}
 	if cred.AccountID != "acc-123" {
 		t.Fatalf("account id = %q, want %q", cred.AccountID, "acc-123")
+	}
+}
+
+func TestLoadOpenAITokenSerializesConcurrentRefresh(t *testing.T) {
+	_ = withTestStorePath(t)
+
+	if err := SaveStore(&Store{
+		Credentials: map[string]*Credential{
+			"openai": {
+				AccessToken:  "old-access-token",
+				RefreshToken: "old-refresh-token",
+				AccountID:    "acc-123",
+				ExpiresAt:    time.Now().Add(-1 * time.Minute),
+				Provider:     "openai",
+				AuthMethod:   "oauth",
+			},
+		},
+	}); err != nil {
+		t.Fatalf("SaveStore error = %v", err)
+	}
+
+	var refreshCalls atomic.Int32
+	withOpenAIHTTPClient(
+		t,
+		&http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.URL.Path != "/oauth/token" {
+				return nil, fmt.Errorf("unexpected path = %q", req.URL.Path)
+			}
+			reqBody, err := io.ReadAll(req.Body)
+			if err != nil {
+				return nil, err
+			}
+			if !strings.Contains(string(reqBody), "refresh_token=old-refresh-token") {
+				return nil, fmt.Errorf("refresh request body = %q", string(reqBody))
+			}
+			if refreshCalls.Add(1) > 1 {
+				return responseWithBody(
+					http.StatusBadRequest,
+					`{"error":"refresh token reused"}`,
+				), nil
+			}
+
+			return responseWithBody(http.StatusOK, `{
+			"access_token": "new-access-token",
+			"refresh_token": "new-refresh-token",
+			"expires_in": 3600
+		}`), nil
+		})},
+	)
+
+	const callers = 8
+	start := make(chan struct{})
+	errs := make(chan error, callers)
+	var wg sync.WaitGroup
+	for range callers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+
+			accessToken, accountID, err := LoadOpenAIToken(context.Background())
+			if err != nil {
+				errs <- err
+				return
+			}
+			if accessToken != "new-access-token" {
+				errs <- fmt.Errorf("access token = %q, want new-access-token", accessToken)
+				return
+			}
+			if accountID != "acc-123" {
+				errs <- fmt.Errorf("account id = %q, want acc-123", accountID)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("LoadOpenAIToken error = %v", err)
+		}
+	}
+	if got := refreshCalls.Load(); got != 1 {
+		t.Fatalf("refresh calls = %d, want 1", got)
+	}
+
+	store, err := LoadStore()
+	if err != nil {
+		t.Fatalf("LoadStore error = %v", err)
+	}
+	if got := store.Credentials["openai"].RefreshToken; got != "new-refresh-token" {
+		t.Fatalf("stored refresh token = %q, want new-refresh-token", got)
+	}
+}
+
+func TestLoadOpenAITokenClearsRejectedRefreshToken(t *testing.T) {
+	_ = withTestStorePath(t)
+
+	if err := SaveStore(&Store{
+		Credentials: map[string]*Credential{
+			"openai": {
+				AccessToken:  "old-access-token",
+				RefreshToken: "dead-refresh-token",
+				AccountID:    "acc-123",
+				ExpiresAt:    time.Now().Add(-1 * time.Minute),
+				Provider:     "openai",
+				AuthMethod:   "oauth",
+			},
+		},
+	}); err != nil {
+		t.Fatalf("SaveStore error = %v", err)
+	}
+
+	withOpenAIHTTPClient(
+		t,
+		&http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.URL.Path != "/oauth/token" {
+				return nil, fmt.Errorf("unexpected path = %q", req.URL.Path)
+			}
+			return responseWithBody(http.StatusBadRequest, `{
+			"error": {
+				"message": "Your refresh token has already been used to generate a new access token.",
+				"type": "invalidrequesterror",
+				"code": "refreshtokenreused"
+			}
+		}`), nil
+		})},
+	)
+
+	_, _, err := LoadOpenAIToken(context.Background())
+	if err == nil {
+		t.Fatalf("expected refresh error")
+	}
+	if !strings.Contains(err.Error(), "refreshtokenreused") {
+		t.Fatalf("error = %v, want refreshtokenreused", err)
+	}
+
+	store, err := LoadStore()
+	if err != nil {
+		t.Fatalf("LoadStore error = %v", err)
+	}
+	cred := store.Credentials["openai"]
+	if cred == nil {
+		t.Fatalf("stored openai credential missing")
+	}
+	if cred.RefreshToken != "" {
+		t.Fatalf("stored refresh token = %q, want empty", cred.RefreshToken)
+	}
+	if cred.AccessToken != "old-access-token" {
+		t.Fatalf("stored access token = %q, want old-access-token", cred.AccessToken)
+	}
+
+	_, _, err = LoadOpenAIToken(context.Background())
+	if err == nil {
+		t.Fatalf("expected missing refresh token error")
+	}
+	if !strings.Contains(err.Error(), "no refresh token is available") {
+		t.Fatalf("error = %v, want no refresh token", err)
+	}
+}
+
+func responseWithBody(statusCode int, body string) *http.Response {
+	return &http.Response{
+		StatusCode: statusCode,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(body)),
 	}
 }
 

@@ -79,9 +79,8 @@ services:
         target: /etc/q15/agent/config.yaml
         read_only: true
       - type: bind
-        source: ./secrets/q15_auth_json
-        target: /etc/q15/auth/auth.json
-        read_only: true
+        source: ./auth
+        target: /etc/q15/auth
       - type: bind
         source: ./secrets/moonshot_api_key
         target: /run/q15-secrets/moonshot_api_key

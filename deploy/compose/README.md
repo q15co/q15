@@ -13,6 +13,9 @@ This directory contains the checked-in Compose-facing config, policy, and secret
   [proxy-policy.yaml](/deploy/compose/proxy-policy.yaml), and
   [secrets/\*.example](/deploy/compose/secrets) are generic templates that downstream repos can copy
   or adapt.
+- [auth/auth.json.example](/deploy/compose/auth/auth.json.example) is the OpenAI OAuth credential
+  template. Mount the auth directory, not the `auth.json` file, so atomic credential refreshes and
+  re-authentication updates remain visible to a running container.
 
 For a long-running image-first deployment:
 
@@ -28,6 +31,9 @@ Notes:
 - `/workspace` is expected to persist long-term for one stack. It may be empty on first startup.
 - `/memory` should also persist across updates. `q15-agent` eagerly upgrades stored turn history to
   the latest transcript schema on startup.
+- `/etc/q15/auth` must be a writable directory mount containing `auth.json`. A single-file
+  `auth.json` bind mount can keep pointing at an old inode after `q15-auth login` atomically
+  replaces the host file.
 - In `agent-config.yaml`, `agent.models` order defines the deterministic per-turn fallback
   preference order. q15 filters out models that do not satisfy the currently inferred request
   requirements before any provider call. Current inference is text-first; image-input and

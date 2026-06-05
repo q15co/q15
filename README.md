@@ -144,7 +144,7 @@ q15 uses a narrow container-first runtime contract:
 
 - agent config is a mounted YAML file at `/etc/q15/agent/config.yaml`
 - proxy policy is a mounted YAML file at `/etc/q15/proxy/policy.yaml`
-- auth credentials are a mounted JSON file at `/etc/q15/auth/auth.json`
+- auth credentials are a JSON file at `/etc/q15/auth/auth.json` within a mounted auth directory
 - provider, Brave, Gemini, Telegram, and proxy secrets come from env vars or `_FILE`
 - service topology, ports, and runtime directories are hard-coded
 
@@ -200,7 +200,7 @@ ephemeral, and what must be provided as config/secret input.
 | Qdrant storage                            | Persistent     | **Compose:** required named volume (`q15_qdrant_storage`) for embedding collections.                                                                                                                                                                                                                                                                                                                                                                                                                  | `q15-qdrant`                      | Dense Gemini vectors plus Qdrant BM25 sparse vectors for opt-in typed sources.                                                                                                                                                                                                                             |
 | `/etc/q15/agent/config.yaml`              | Config         | **Kubernetes:** required via `ConfigMap/q15-agent-config`. **Compose:** required via compose `configs` or bind mount. **Local development:** required when running `q15-agent`.                                                                                                                                                                                                                                                                                                                       | `q15-agent`                       | Structured agent config (providers, models, Telegram policy).                                                                                                                                                                                                                                              |
 | `/etc/q15/proxy/policy.yaml`              | Config         | **Kubernetes:** required via `ConfigMap/q15-proxy-policy`. **Compose:** required via compose `configs` or bind mount. **Local development:** required when running `q15-proxy`.                                                                                                                                                                                                                                                                                                                       | `q15-proxy`                       | Structured proxy policy (rules, allowed secret aliases, request env mapping).                                                                                                                                                                                                                              |
-| `/etc/q15/auth/auth.json`                 | Secret         | **Kubernetes:** required via `Secret/q15-agent-auth` (`auth.json` key). **Compose:** required file mount or secret. **Local development:** may be omitted only when auth-dependent flows are intentionally not used.                                                                                                                                                                                                                                                                                  | `q15-agent`                       | Auth bootstrap output from `q15-auth`; consumed at runtime by the agent.                                                                                                                                                                                                                                   |
+| `/etc/q15/auth/auth.json`                 | Secret         | **Kubernetes:** required via `Secret/q15-agent-auth` (`auth.json` key). **Compose:** required writable directory mount at `/etc/q15/auth` containing `auth.json`; do not bind-mount only the file. **Local development:** may be omitted only when auth-dependent flows are intentionally not used.                                                                                                                                                                                                   | `q15-agent`                       | Auth bootstrap output from `q15-auth`; consumed at runtime by the agent and updated when OpenAI OAuth refreshes rotate credentials.                                                                                                                                                                        |
 | Provider/API key secrets (env or `_FILE`) | Secret         | **Kubernetes:** required secret keys in `q15-agent-env` and/or `q15-proxy-env` based on configured providers and policy aliases. **Compose:** required Docker secrets or env files for enabled integrations. **Local development:** optional only for integrations you are not using.                                                                                                                                                                                                                 | shared (`q15-agent`, `q15-proxy`) | Includes provider keys, Telegram token, Brave key (optional), Gemini key (optional), and proxy secret aliases resolved from env or `_FILE`.                                                                                                                                                                |
 
 ### Ephemeral/Scratch Paths
@@ -373,8 +373,9 @@ q15-auth status --auth-path ./auth.json
 q15-auth logout --auth-path ./auth.json
 ```
 
-The resulting `auth.json` should be mounted into the `q15-agent` container or stored as a Kubernetes
-Secret.
+For Compose, put the resulting `auth.json` in the directory mounted at `/etc/q15/auth`; do not
+single-file bind-mount `auth.json`, because `q15-auth` and q15-agent write credentials atomically by
+replacing the file. For Kubernetes, store it as the `auth.json` key in the agent auth Secret.
 
 ## First Startup Inputs
 
@@ -401,6 +402,8 @@ Its interface is organized as:
 - [deploy/compose/proxy-policy.yaml](/deploy/compose/proxy-policy.yaml) for structured proxy policy
 - ignored local Docker secret files under [deploy/compose/secrets](/deploy/compose/secrets), seeded
   from tracked `*.example` templates in that same directory
+- ignored local OpenAI auth state under [deploy/compose/auth](/deploy/compose/auth), seeded from
+  [auth.json.example](/deploy/compose/auth/auth.json.example)
 
 The local-development stack intentionally:
 
@@ -420,7 +423,7 @@ The local-development stack uses:
 
 - default container entrypoints with no runtime flags
 - Compose `configs` for non-secret YAML files
-- a read-only bind mount for `auth.json` at `/etc/q15/auth/auth.json`
+- a read-write bind mount for the auth directory at `/etc/q15/auth`
 - a named volume shared as `/workspace`
 - a named volume shared as `/memory`
 - a named volume for `/skills`
@@ -437,7 +440,7 @@ Before using the local-development stack, replace the placeholder values in:
 - [deploy/compose/secrets/moonshot_api_key.example](/deploy/compose/secrets/moonshot_api_key.example)
 - [deploy/compose/secrets/q15_telegram_token.example](/deploy/compose/secrets/q15_telegram_token.example)
 - [deploy/compose/secrets/github_token.example](/deploy/compose/secrets/github_token.example)
-- [deploy/compose/secrets/q15_auth_json.example](/deploy/compose/secrets/q15_auth_json.example)
+- [deploy/compose/auth/auth.json.example](/deploy/compose/auth/auth.json.example)
 
 `make compose-secrets-init` copies those templates to ignored local files without the `.example`
 suffix. Edit the local copies, not the templates.

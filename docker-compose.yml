@@ -84,9 +84,8 @@ services:
         target: /etc/q15/agent/config.yaml
     volumes:
       - type: bind
-        source: ./deploy/compose/secrets/q15_auth_json
-        target: /etc/q15/auth/auth.json
-        read_only: true
+        source: ./deploy/compose/auth
+        target: /etc/q15/auth
       - type: volume
         source: q15_workspace
         target: /workspace

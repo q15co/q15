@@ -17,4 +17,3 @@ Rules:
   - `q15_telegram_token.example`
   - `q15_telegram_allowed_user_ids.example`
   - `github_token.example`
-  - `q15_auth_json.example`

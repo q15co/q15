@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -29,7 +30,26 @@ var (
 	// ErrAuthorizationPending indicates device login is still awaiting user approval.
 	ErrAuthorizationPending = errors.New("authorization pending")
 	openAIHTTPClient        = &http.Client{Timeout: 15 * time.Second}
+	openAICredentialMu      sync.Mutex
 )
+
+type openAITokenRefreshRejectedError struct {
+	statusCode int
+	body       string
+}
+
+func (e *openAITokenRefreshRejectedError) Error() string {
+	return fmt.Sprintf("openai token refresh failed: %s", strings.TrimSpace(e.body))
+}
+
+func (e *openAITokenRefreshRejectedError) refreshTokenRejected() bool {
+	if e == nil {
+		return false
+	}
+	return e.statusCode >= http.StatusBadRequest &&
+		e.statusCode < http.StatusInternalServerError &&
+		e.statusCode != http.StatusTooManyRequests
+}
 
 type openAIOAuthConfig struct {
 	Issuer     string
@@ -197,15 +217,15 @@ func refreshOpenAIToken(
 		return nil, fmt.Errorf("refresh openai token: %w", err)
 	}
 	if statusCode != http.StatusOK {
-		return nil, fmt.Errorf("openai token refresh failed: %s", strings.TrimSpace(string(body)))
+		return nil, &openAITokenRefreshRejectedError{
+			statusCode: statusCode,
+			body:       string(body),
+		}
 	}
 
 	refreshed, err := parseTokenResponse(body, "openai")
 	if err != nil {
 		return nil, err
-	}
-	if strings.TrimSpace(refreshed.RefreshToken) == "" {
-		refreshed.RefreshToken = cred.RefreshToken
 	}
 	if strings.TrimSpace(refreshed.AccountID) == "" {
 		refreshed.AccountID = cred.AccountID
@@ -224,6 +244,9 @@ func LoadOpenAIToken(ctx context.Context) (string, string, error) {
 }
 
 func resolveOpenAICredential(ctx context.Context) (*Credential, error) {
+	openAICredentialMu.Lock()
+	defer openAICredentialMu.Unlock()
+
 	cred, err := GetCredential("openai")
 	if err != nil {
 		return nil, fmt.Errorf("load q15 auth credential: %w", err)
@@ -234,18 +257,33 @@ func resolveOpenAICredential(ctx context.Context) (*Credential, error) {
 	if strings.TrimSpace(cred.AccessToken) == "" {
 		return nil, fmt.Errorf("openai credential has empty access token")
 	}
-	if !cred.NeedsRefresh() || strings.TrimSpace(cred.RefreshToken) == "" {
+	if !cred.NeedsRefresh() {
 		return cred, nil
+	}
+	if strings.TrimSpace(cred.RefreshToken) == "" {
+		return nil, fmt.Errorf(
+			"openai credential needs refresh but no refresh token is available. Generate auth.json with: q15-auth login",
+		)
 	}
 
 	refreshed, err := RefreshOpenAIToken(ctx, cred)
 	if err != nil {
+		if refreshTokenRejected(err) {
+			if clearErr := clearCredentialRefreshToken("openai"); clearErr != nil {
+				return nil, fmt.Errorf("%w; clear stored openai refresh token: %v", err, clearErr)
+			}
+		}
 		return nil, err
 	}
 	if err := SetCredential("openai", refreshed); err != nil {
 		return nil, fmt.Errorf("save refreshed openai credential: %w", err)
 	}
 	return refreshed, nil
+}
+
+func refreshTokenRejected(err error) bool {
+	var rejected *openAITokenRefreshRejectedError
+	return errors.As(err, &rejected) && rejected.refreshTokenRejected()
 }
 
 func pollOpenAIDeviceCodeOnce(
