@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	q15paths "github.com/q15co/q15/systems/agent/internal/paths"
@@ -32,7 +33,10 @@ type Store struct {
 	Credentials map[string]*Credential `json:"credentials"`
 }
 
-var authStorePath = defaultAuthStorePath
+var (
+	authStoreMu   sync.Mutex
+	authStorePath = defaultAuthStorePath
+)
 
 // IsExpired reports whether the credential access token is already expired.
 func (c *Credential) IsExpired() bool {
@@ -56,6 +60,8 @@ func SetStorePath(path string) error {
 	if path == "" {
 		return fmt.Errorf("auth store path is required")
 	}
+	authStoreMu.Lock()
+	defer authStoreMu.Unlock()
 	authStorePath = func() (string, error) { return path, nil }
 	return nil
 }
@@ -71,6 +77,13 @@ func DefaultStorePath() (string, error) {
 
 // LoadStore reads credentials from disk and returns an empty store when missing.
 func LoadStore() (*Store, error) {
+	authStoreMu.Lock()
+	defer authStoreMu.Unlock()
+
+	return loadStoreLocked()
+}
+
+func loadStoreLocked() (*Store, error) {
 	path, err := authStorePath()
 	if err != nil {
 		return nil, err
@@ -96,6 +109,13 @@ func LoadStore() (*Store, error) {
 
 // SaveStore writes the credential store to disk atomically.
 func SaveStore(store *Store) error {
+	authStoreMu.Lock()
+	defer authStoreMu.Unlock()
+
+	return saveStoreLocked(store)
+}
+
+func saveStoreLocked(store *Store) error {
 	if store == nil {
 		store = &Store{}
 	}
@@ -124,7 +144,10 @@ func GetCredential(provider string) (*Credential, error) {
 		return nil, fmt.Errorf("provider is required")
 	}
 
-	store, err := LoadStore()
+	authStoreMu.Lock()
+	defer authStoreMu.Unlock()
+
+	store, err := loadStoreLocked()
 	if err != nil {
 		return nil, err
 	}
@@ -146,7 +169,10 @@ func SetCredential(provider string, cred *Credential) error {
 		return fmt.Errorf("credential is required")
 	}
 
-	store, err := LoadStore()
+	authStoreMu.Lock()
+	defer authStoreMu.Unlock()
+
+	store, err := loadStoreLocked()
 	if err != nil {
 		return err
 	}
@@ -156,7 +182,32 @@ func SetCredential(provider string, cred *Credential) error {
 		cred.AuthMethod = "oauth"
 	}
 	store.Credentials[provider] = cred
-	return SaveStore(store)
+	return saveStoreLocked(store)
+}
+
+func clearCredentialRefreshToken(provider string) error {
+	provider = strings.TrimSpace(provider)
+	if provider == "" {
+		return fmt.Errorf("provider is required")
+	}
+
+	authStoreMu.Lock()
+	defer authStoreMu.Unlock()
+
+	store, err := loadStoreLocked()
+	if err != nil {
+		return err
+	}
+
+	cred, ok := store.Credentials[provider]
+	if !ok || cred == nil || strings.TrimSpace(cred.RefreshToken) == "" {
+		return nil
+	}
+
+	updated := *cred
+	updated.RefreshToken = ""
+	store.Credentials[provider] = &updated
+	return saveStoreLocked(store)
 }
 
 // DeleteCredential removes one provider credential from the store.
@@ -166,17 +217,23 @@ func DeleteCredential(provider string) error {
 		return fmt.Errorf("provider is required")
 	}
 
-	store, err := LoadStore()
+	authStoreMu.Lock()
+	defer authStoreMu.Unlock()
+
+	store, err := loadStoreLocked()
 	if err != nil {
 		return err
 	}
 
 	delete(store.Credentials, provider)
-	return SaveStore(store)
+	return saveStoreLocked(store)
 }
 
 // DeleteAllCredentials removes the entire auth store file.
 func DeleteAllCredentials() error {
+	authStoreMu.Lock()
+	defer authStoreMu.Unlock()
+
 	path, err := authStorePath()
 	if err != nil {
 		return err

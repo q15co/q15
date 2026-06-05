@@ -77,8 +77,9 @@ hooks-uninstall:
 
 compose-secrets-init:
 	@set -eu; \
-	for example in deploy/compose/secrets/*.example; do \
+	for example in deploy/compose/secrets/*.example deploy/compose/auth/*.example; do \
 		target=$${example%.example}; \
+		mkdir -p "$$(dirname "$$target")"; \
 		if [ -f "$$target" ]; then \
 			echo "kept $$target"; \
 			continue; \
