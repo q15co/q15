@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/q15co/q15/libs/exec-contract/execpb"
@@ -536,6 +537,9 @@ func exitCodeFromWait(err error) (int32, bool) {
 
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
+		if status, ok := exitErr.Sys().(syscall.WaitStatus); ok && status.Signaled() {
+			return -int32(status.Signal()), true
+		}
 		return int32(exitErr.ExitCode()), true
 	}
 	return 0, false

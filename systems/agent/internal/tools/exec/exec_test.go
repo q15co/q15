@@ -10,13 +10,21 @@ import (
 
 	"github.com/q15co/q15/libs/exec-contract/execpb"
 	"github.com/q15co/q15/systems/agent/internal/execution"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type fakeExecClient struct {
 	startResp       *execpb.StartSessionResponse
 	getResp         *execpb.GetSessionResponse
+	writeResp       *execpb.WriteSessionStdinResponse
+	terminateResp   *execpb.TerminateSessionResponse
 	watchEvents     []*execpb.WatchSessionResponse
 	watchErr        error
+	watchRecvErr    error
+	startReq        *execpb.StartSessionRequest
+	watchReq        *execpb.WatchSessionRequest
+	writeReq        *execpb.WriteSessionStdinRequest
+	terminateReq    *execpb.TerminateSessionRequest
 	terminateCalled bool
 }
 
@@ -30,8 +38,9 @@ func (f *fakeExecClient) GetRuntimeInfo(
 
 func (f *fakeExecClient) StartSession(
 	_ context.Context,
-	_ *execpb.StartSessionRequest,
+	req *execpb.StartSessionRequest,
 ) (*execpb.StartSessionResponse, error) {
+	f.startReq = req
 	if f.startResp != nil {
 		return f.startResp, nil
 	}
@@ -59,26 +68,35 @@ func (f *fakeExecClient) GetSession(
 
 func (f *fakeExecClient) WatchSession(
 	ctx context.Context,
-	_ *execpb.WatchSessionRequest,
+	req *execpb.WatchSessionRequest,
 ) (execution.WatchStream, error) {
+	f.watchReq = req
 	if f.watchErr != nil {
 		return nil, f.watchErr
 	}
-	return &fakeWatchStream{ctx: ctx, events: f.watchEvents}, nil
+	return &fakeWatchStream{ctx: ctx, events: f.watchEvents, recvErr: f.watchRecvErr}, nil
 }
 
 func (f *fakeExecClient) WriteSessionStdin(
 	_ context.Context,
-	_ *execpb.WriteSessionStdinRequest,
+	req *execpb.WriteSessionStdinRequest,
 ) (*execpb.WriteSessionStdinResponse, error) {
+	f.writeReq = req
+	if f.writeResp != nil {
+		return f.writeResp, nil
+	}
 	return &execpb.WriteSessionStdinResponse{}, nil
 }
 
 func (f *fakeExecClient) TerminateSession(
 	_ context.Context,
-	_ *execpb.TerminateSessionRequest,
+	req *execpb.TerminateSessionRequest,
 ) (*execpb.TerminateSessionResponse, error) {
+	f.terminateReq = req
 	f.terminateCalled = true
+	if f.terminateResp != nil {
+		return f.terminateResp, nil
+	}
 	return &execpb.TerminateSessionResponse{}, nil
 }
 
@@ -87,6 +105,7 @@ type fakeWatchStream struct {
 	events     []*execpb.WatchSessionResponse
 	index      int
 	blockUntil bool
+	recvErr    error
 }
 
 func (f *fakeWatchStream) Recv() (*execpb.WatchSessionResponse, error) {
@@ -95,6 +114,9 @@ func (f *fakeWatchStream) Recv() (*execpb.WatchSessionResponse, error) {
 		return nil, f.ctx.Err()
 	}
 	if f.index >= len(f.events) {
+		if f.recvErr != nil {
+			return nil, f.recvErr
+		}
 		return nil, io.EOF
 	}
 	event := f.events[f.index]
@@ -151,7 +173,7 @@ func TestExecRunFormatsStdoutStderrAndExitCode(t *testing.T) {
 	}
 }
 
-func TestExecRunReturnsErrorOnNonZeroExit(t *testing.T) {
+func TestExecRunReturnsOutputOnNonZeroExit(t *testing.T) {
 	t.Parallel()
 
 	tool := NewExec(&fakeExecClient{
@@ -174,12 +196,21 @@ func TestExecRunReturnsErrorOnNonZeroExit(t *testing.T) {
 		},
 	})
 
-	_, err := tool.Run(
+	out, err := tool.Run(
 		context.Background(),
 		`{"command":"false","packages":["nixpkgs#bash"]}`,
 	)
-	if err == nil || !strings.Contains(err.Error(), "Exit-Code: 1") {
-		t.Fatalf("Run() error = %v, want formatted non-zero exit", err)
+	if err != nil {
+		t.Fatalf("Run() error = %v, want normal non-zero exit output", err)
+	}
+	for _, want := range []string{
+		"Session-ID: sess-1",
+		"Timed-Out: false",
+		"Exit-Code: 1",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q:\n%s", want, out)
+		}
 	}
 }
 
@@ -289,5 +320,386 @@ func TestExecRunCancellationUsesBackgroundTerminate(t *testing.T) {
 	_, _ = tool.Run(ctx, `{"command":"sleep 10","packages":["nixpkgs#bash"]}`)
 	if !client.terminateCalled {
 		t.Fatalf("expected TerminateSession to be called")
+	}
+}
+
+func TestExecRunReturnsSessionHandleAfterWaitTimeout(t *testing.T) {
+	t.Parallel()
+
+	session := &execpb.Session{
+		SessionId: "sess-42",
+		State:     execpb.SessionState_SESSION_STATE_RUNNING,
+		StdinOpen: true,
+	}
+	client := &fakeExecClient{
+		startResp: &execpb.StartSessionResponse{Session: session},
+		getResp:   &execpb.GetSessionResponse{Session: session},
+		watchEvents: []*execpb.WatchSessionResponse{
+			eventResponse(startedEvent(1, "sess-42")),
+			eventResponse(stdoutEvent(2, "ready\n")),
+		},
+		watchRecvErr: context.DeadlineExceeded,
+	}
+
+	out, err := NewExec(client).Run(
+		context.Background(),
+		`{"command":" sleep 60 ","packages":[" nixpkgs#bash "],"wait_seconds":1,"keep_stdin_open":true}`,
+	)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if got := client.startReq.GetCommand(); got != "sleep 60" {
+		t.Fatalf("StartSession command = %q, want sleep 60", got)
+	}
+	if got := client.startReq.GetPackages(); len(got) != 1 || got[0] != "nixpkgs#bash" {
+		t.Fatalf("StartSession packages = %v, want [nixpkgs#bash]", got)
+	}
+	if !client.startReq.GetKeepStdinOpen() {
+		t.Fatalf("StartSession keep_stdin_open = false, want true")
+	}
+	if got := client.watchReq.GetSessionId(); got != "sess-42" {
+		t.Fatalf("WatchSession session_id = %q, want sess-42", got)
+	}
+	if got := client.watchReq.GetAfterEventIndex(); got != 0 {
+		t.Fatalf("WatchSession after_event_index = %d, want 0", got)
+	}
+	for _, want := range []string{
+		"Session-ID: sess-42",
+		"Timed-Out: true",
+		"State: running",
+		"Stdin-Open: true",
+		"Next-Event-Index: 2",
+		"ready",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestExecRunWaitZeroReturnsImmediately(t *testing.T) {
+	t.Parallel()
+
+	session := &execpb.Session{
+		SessionId: "sess-42",
+		State:     execpb.SessionState_SESSION_STATE_RUNNING,
+	}
+	client := &fakeExecClient{
+		startResp: &execpb.StartSessionResponse{Session: session},
+		getResp:   &execpb.GetSessionResponse{Session: session},
+	}
+
+	out, err := NewExec(client).Run(
+		context.Background(),
+		`{"command":"sleep 60","packages":["nixpkgs#bash"],"wait_seconds":0}`,
+	)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if client.watchReq != nil {
+		t.Fatalf("WatchSession request = %#v, want no watch for wait_seconds 0", client.watchReq)
+	}
+	for _, want := range []string{
+		"Session-ID: sess-42",
+		"Timed-Out: true",
+		"State: running",
+		"Next-Event-Index: 0",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestExecReadRunPollsFromCursorAndFormatsOutput(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeExecClient{
+		getResp: &execpb.GetSessionResponse{
+			Session: &execpb.Session{
+				SessionId: "sess-42",
+				State:     execpb.SessionState_SESSION_STATE_RUNNING,
+				StdinOpen: true,
+				StartedAt: timestamppb.New(time.Now().Add(-10 * time.Second)),
+			},
+		},
+		watchEvents: []*execpb.WatchSessionResponse{
+			eventResponse(stdoutEvent(3, "delta\n")),
+			eventResponse(stderrEvent(4, "warn\n")),
+		},
+	}
+
+	out, err := NewRead(client).Run(
+		context.Background(),
+		`{"session_id":"sess-42","after_event_index":2}`,
+	)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if got := client.watchReq.GetSessionId(); got != "sess-42" {
+		t.Fatalf("WatchSession session_id = %q, want sess-42", got)
+	}
+	if got := client.watchReq.GetAfterEventIndex(); got != 2 {
+		t.Fatalf("WatchSession after_event_index = %d, want 2", got)
+	}
+	for _, want := range []string{
+		"Session-ID: sess-42",
+		"Still-Running: true",
+		"State: running",
+		"Session-Age-Seconds:",
+		"Next-Event-Index: 4",
+		"delta",
+		"--- STDERR ---",
+		"warn",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestExecReadRunTreatsWatchDeadlineAsNoNewOutput(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeExecClient{
+		getResp: &execpb.GetSessionResponse{
+			Session: &execpb.Session{
+				SessionId: "sess-42",
+				State:     execpb.SessionState_SESSION_STATE_RUNNING,
+			},
+		},
+		watchRecvErr: context.DeadlineExceeded,
+	}
+
+	out, err := NewRead(client).Run(
+		context.Background(),
+		`{"session_id":"sess-42","after_event_index":5}`,
+	)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if strings.Contains(out, "Timed-Out:") {
+		t.Fatalf("exec_read output should not include Timed-Out:\n%s", out)
+	}
+	for _, want := range []string{
+		"Session-ID: sess-42",
+		"Still-Running: true",
+		"State: running",
+		"Next-Event-Index: 5",
+		"--- STDOUT ---",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestExecReadRunCanFilterStreams(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeExecClient{
+		getResp: &execpb.GetSessionResponse{
+			Session: &execpb.Session{
+				SessionId: "sess-42",
+				State:     execpb.SessionState_SESSION_STATE_RUNNING,
+			},
+		},
+		watchEvents: []*execpb.WatchSessionResponse{
+			eventResponse(stdoutEvent(3, "ignore me\n")),
+			eventResponse(stderrEvent(4, "keep me\n")),
+		},
+	}
+
+	out, err := NewRead(client).Run(
+		context.Background(),
+		`{"session_id":"sess-42","after_event_index":2,"streams":"stderr"}`,
+	)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	for _, want := range []string{
+		"--- STDERR ---",
+		"keep me",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q:\n%s", want, out)
+		}
+	}
+	for _, unwanted := range []string{
+		"--- STDOUT ---",
+		"ignore me",
+	} {
+		if strings.Contains(out, unwanted) {
+			t.Fatalf("output contains %q despite stderr filter:\n%s", unwanted, out)
+		}
+	}
+}
+
+func TestExecReadRunBoundsOutput(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeExecClient{
+		getResp: &execpb.GetSessionResponse{
+			Session: &execpb.Session{
+				SessionId: "sess-42",
+				State:     execpb.SessionState_SESSION_STATE_RUNNING,
+			},
+		},
+		watchEvents: []*execpb.WatchSessionResponse{
+			eventResponse(stdoutEvent(3, "abcdef")),
+		},
+	}
+
+	out, err := NewRead(client).Run(
+		context.Background(),
+		`{"session_id":"sess-42","after_event_index":2,"max_output_chars":3}`,
+	)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	for _, want := range []string{
+		"Output-Truncated: true",
+		"abc",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "def") {
+		t.Fatalf("output should be truncated before def:\n%s", out)
+	}
+}
+
+func TestExecWriteRunForwardsStdinAndReportsBytesWritten(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeExecClient{
+		writeResp: &execpb.WriteSessionStdinResponse{
+			Session: &execpb.Session{
+				SessionId: "sess-42",
+				State:     execpb.SessionState_SESSION_STATE_RUNNING,
+			},
+			BytesWritten: 6,
+		},
+	}
+
+	out, err := NewWrite(client).Run(
+		context.Background(),
+		`{"session_id":"sess-42","data":"hello","close_stdin":true}`,
+	)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if got := client.writeReq.GetSessionId(); got != "sess-42" {
+		t.Fatalf("WriteSessionStdin session_id = %q, want sess-42", got)
+	}
+	if got := string(client.writeReq.GetData()); got != "hello\n" {
+		t.Fatalf("WriteSessionStdin data = %q, want appended newline", got)
+	}
+	if !client.writeReq.GetCloseStdin() {
+		t.Fatalf("WriteSessionStdin close_stdin = false, want true")
+	}
+	for _, want := range []string{
+		"Session-ID: sess-42",
+		"Bytes-Written: 6",
+		"State: running",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestExecWriteRunCanDisableAppendNewline(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeExecClient{
+		writeResp: &execpb.WriteSessionStdinResponse{
+			Session: &execpb.Session{
+				SessionId: "sess-42",
+				State:     execpb.SessionState_SESSION_STATE_RUNNING,
+			},
+			BytesWritten: 5,
+		},
+	}
+
+	_, err := NewWrite(client).Run(
+		context.Background(),
+		`{"session_id":"sess-42","data":"hello","append_newline":false}`,
+	)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if got := string(client.writeReq.GetData()); got != "hello" {
+		t.Fatalf("WriteSessionStdin data = %q, want raw data", got)
+	}
+}
+
+func TestExecKillRunForwardsForceAndReportsState(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeExecClient{
+		terminateResp: &execpb.TerminateSessionResponse{
+			Session: &execpb.Session{
+				SessionId:         "sess-42",
+				State:             execpb.SessionState_SESSION_STATE_TERMINATING,
+				TerminationReason: "force kill requested",
+			},
+		},
+	}
+
+	out, err := NewKill(client).Run(
+		context.Background(),
+		`{"session_id":"sess-42","force":true}`,
+	)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if got := client.terminateReq.GetSessionId(); got != "sess-42" {
+		t.Fatalf("TerminateSession session_id = %q, want sess-42", got)
+	}
+	if !client.terminateReq.GetForce() {
+		t.Fatalf("TerminateSession force = false, want true")
+	}
+	for _, want := range []string{
+		"Session-ID: sess-42",
+		"Force: true",
+		"State: terminating",
+		"Termination-Reason: force kill requested",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func eventResponse(event *execpb.SessionEvent) *execpb.WatchSessionResponse {
+	return &execpb.WatchSessionResponse{Event: event}
+}
+
+func startedEvent(index int64, sessionID string) *execpb.SessionEvent {
+	return &execpb.SessionEvent{
+		EventIndex: index,
+		Event: &execpb.SessionEvent_Started{
+			Started: &execpb.SessionStarted{SessionId: sessionID},
+		},
+	}
+}
+
+func stdoutEvent(index int64, data string) *execpb.SessionEvent {
+	return &execpb.SessionEvent{
+		EventIndex: index,
+		Event: &execpb.SessionEvent_Stdout{
+			Stdout: &execpb.SessionOutput{Data: []byte(data)},
+		},
+	}
+}
+
+func stderrEvent(index int64, data string) *execpb.SessionEvent {
+	return &execpb.SessionEvent{
+		EventIndex: index,
+		Event: &execpb.SessionEvent_Stderr{
+			Stderr: &execpb.SessionOutput{Data: []byte(data)},
+		},
 	}
 }

@@ -3,7 +3,9 @@ package service
 import (
 	"context"
 	"errors"
+	osexec "os/exec"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -148,6 +150,20 @@ func TestManagerTerminateSessionRecordsTermination(t *testing.T) {
 	}
 	if got := snapshot.GetTerminationReason(); got != "terminate requested" {
 		t.Fatalf("termination reason = %q, want graceful termination", got)
+	}
+}
+
+func TestExitCodeFromWaitReportsNegativeSignal(t *testing.T) {
+	t.Parallel()
+
+	cmd := osexec.Command("bash", "-lc", "kill -TERM $$")
+	err := cmd.Run()
+	code, ok := exitCodeFromWait(err)
+	if !ok {
+		t.Fatalf("exitCodeFromWait() ok = false, want true")
+	}
+	if want := -int32(syscall.SIGTERM); code != want {
+		t.Fatalf("exitCodeFromWait() code = %d, want %d", code, want)
 	}
 }
 
