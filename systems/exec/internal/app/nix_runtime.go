@@ -19,6 +19,11 @@ var requiredNixRuntimeMarkers = []string{
 	"var/nix/profiles/default/bin/bash",
 }
 
+var requiredImageRuntimePaths = []string{
+	"/etc/zoneinfo",
+	"/etc/fonts/fonts.conf",
+}
+
 var requiredBootstrapSourceMarkers = []string{
 	"store",
 	"var/nix/profiles/default",
@@ -30,7 +35,11 @@ func bootstrapNixRuntime() error {
 	if err != nil {
 		return err
 	}
-	if healthy {
+	imagePathsHealthy, err := runtimePathsHealthy(requiredImageRuntimePaths)
+	if err != nil {
+		return err
+	}
+	if healthy && imagePathsHealthy {
 		return nil
 	}
 
@@ -55,6 +64,13 @@ func bootstrapNixRuntime() error {
 	}
 	if !healthy {
 		return fmt.Errorf("bootstrapped /nix is still missing required runtime markers")
+	}
+	imagePathsHealthy, err = runtimePathsHealthy(requiredImageRuntimePaths)
+	if err != nil {
+		return err
+	}
+	if !imagePathsHealthy {
+		return fmt.Errorf("bootstrapped /nix is still missing required image runtime paths")
 	}
 	return nil
 }
@@ -105,6 +121,18 @@ func nixRuntimeHealthy(root string) (bool, error) {
 		}
 		if info.Mode()&0o111 == 0 {
 			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func runtimePathsHealthy(paths []string) (bool, error) {
+	for _, path := range paths {
+		if _, err := os.Stat(path); err != nil {
+			if os.IsNotExist(err) {
+				return false, nil
+			}
+			return false, fmt.Errorf("stat %q: %w", path, err)
 		}
 	}
 	return true, nil
