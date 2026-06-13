@@ -47,6 +47,11 @@ func NewExec(client execution.Service) *exec.Exec {
 	return exec.NewExec(client)
 }
 
+// NewExecList delegates to exec.NewList.
+func NewExecList(client execution.Service) *exec.List {
+	return exec.NewList(client)
+}
+
 // NewExecRead delegates to exec.NewRead.
 func NewExecRead(client execution.Service) *exec.Read {
 	return exec.NewRead(client)

@@ -31,6 +31,42 @@ func TestManagerSupportsConcurrentSessions(t *testing.T) {
 	}
 }
 
+func TestManagerListSessionsReturnsSnapshots(t *testing.T) {
+	t.Parallel()
+
+	manager := newTestManager(t)
+	ctx := context.Background()
+
+	first, err := manager.StartSession(ctx, "printf first", []string{"ignored"}, "", false)
+	if err != nil {
+		t.Fatalf("StartSession(first) error = %v", err)
+	}
+	second, err := manager.StartSession(ctx, "sleep 10", []string{"ignored"}, "", false)
+	if err != nil {
+		t.Fatalf("StartSession(second) error = %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = manager.TerminateSession(second.GetSessionId(), true)
+	})
+
+	sessions := manager.ListSessions()
+	if len(sessions) != 2 {
+		t.Fatalf("ListSessions() returned %d sessions, want 2", len(sessions))
+	}
+	if got := sessions[0].GetSessionId(); got != first.GetSessionId() {
+		t.Fatalf("first listed session = %q, want %q", got, first.GetSessionId())
+	}
+	if got := sessions[1].GetSessionId(); got != second.GetSessionId() {
+		t.Fatalf("second listed session = %q, want %q", got, second.GetSessionId())
+	}
+	if got := sessions[0].GetCommand(); got != "printf first" {
+		t.Fatalf("first command = %q, want printf first", got)
+	}
+	if got := sessions[1].GetState(); got != execpb.SessionState_SESSION_STATE_RUNNING {
+		t.Fatalf("second state = %v, want running", got)
+	}
+}
+
 func TestManagerWatchSessionReplaysFromCursor(t *testing.T) {
 	t.Parallel()
 

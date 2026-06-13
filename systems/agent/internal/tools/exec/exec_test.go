@@ -16,12 +16,14 @@ import (
 type fakeExecClient struct {
 	startResp       *execpb.StartSessionResponse
 	getResp         *execpb.GetSessionResponse
+	listResp        *execpb.ListSessionsResponse
 	writeResp       *execpb.WriteSessionStdinResponse
 	terminateResp   *execpb.TerminateSessionResponse
 	watchEvents     []*execpb.WatchSessionResponse
 	watchErr        error
 	watchRecvErr    error
 	startReq        *execpb.StartSessionRequest
+	listReq         *execpb.ListSessionsRequest
 	watchReq        *execpb.WatchSessionRequest
 	writeReq        *execpb.WriteSessionStdinRequest
 	terminateReq    *execpb.TerminateSessionRequest
@@ -64,6 +66,17 @@ func (f *fakeExecClient) GetSession(
 			ExitCode:    0,
 		},
 	}, nil
+}
+
+func (f *fakeExecClient) ListSessions(
+	_ context.Context,
+	req *execpb.ListSessionsRequest,
+) (*execpb.ListSessionsResponse, error) {
+	f.listReq = req
+	if f.listResp != nil {
+		return f.listResp, nil
+	}
+	return &execpb.ListSessionsResponse{}, nil
 }
 
 func (f *fakeExecClient) WatchSession(
@@ -267,6 +280,13 @@ func (c *cancelAwareExecClient) GetSession(
 	return c.delegate.GetSession(ctx, req)
 }
 
+func (c *cancelAwareExecClient) ListSessions(
+	ctx context.Context,
+	req *execpb.ListSessionsRequest,
+) (*execpb.ListSessionsResponse, error) {
+	return c.delegate.ListSessions(ctx, req)
+}
+
 func (c *cancelAwareExecClient) WatchSession(
 	ctx context.Context,
 	_ *execpb.WatchSessionRequest,
@@ -408,6 +428,234 @@ func TestExecRunWaitZeroReturnsImmediately(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Fatalf("output missing %q:\n%s", want, out)
 		}
+	}
+}
+
+func TestExecListRunFormatsKnownSessions(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeExecClient{
+		listResp: &execpb.ListSessionsResponse{
+			Sessions: []*execpb.Session{
+				{
+					SessionId:      "sess-1",
+					Command:        "sleep 60",
+					Packages:       []string{"nixpkgs#bash"},
+					WorkingDir:     "/workspace",
+					StdinOpen:      true,
+					State:          execpb.SessionState_SESSION_STATE_RUNNING,
+					NextEventIndex: 3,
+					StartedAt:      timestamppb.New(time.Now().Add(-2 * time.Second)),
+				},
+				{
+					SessionId:         "sess-2",
+					Command:           "false",
+					State:             execpb.SessionState_SESSION_STATE_EXITED,
+					HasExitCode:       true,
+					ExitCode:          1,
+					TerminationReason: "non-zero exit",
+				},
+			},
+		},
+	}
+
+	out, err := NewList(client).Run(context.Background(), `{}`)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if client.listReq == nil {
+		t.Fatalf("expected ListSessions request")
+	}
+	for _, want := range []string{
+		"Sessions: 1 running, 1 exited (2 total, 2 shown)",
+		"--- Session 1 ---",
+		"Session-ID: sess-1",
+		"State: running",
+		"Command: sleep 60",
+		"Working-Dir: /workspace",
+		"Packages: nixpkgs#bash",
+		"Stdin-Open: true",
+		"Next-Event-Index: 3",
+		"Session-Age-Seconds:",
+		"--- Session 2 ---",
+		"Session-ID: sess-2",
+		"State: exited",
+		"Exit-Code: 1",
+		"Termination-Reason: non-zero exit",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestExecListRunFiltersByState(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeExecClient{
+		listResp: &execpb.ListSessionsResponse{
+			Sessions: []*execpb.Session{
+				{
+					SessionId: "sess-running",
+					Command:   "sleep 60",
+					State:     execpb.SessionState_SESSION_STATE_RUNNING,
+				},
+				{
+					SessionId:   "sess-exited",
+					Command:     "true",
+					State:       execpb.SessionState_SESSION_STATE_EXITED,
+					HasExitCode: true,
+					ExitCode:    0,
+				},
+				{
+					SessionId:         "sess-killed",
+					Command:           "sleep 600",
+					State:             execpb.SessionState_SESSION_STATE_TERMINATED,
+					TerminationReason: "terminate requested",
+				},
+			},
+		},
+	}
+
+	out, err := NewList(client).Run(context.Background(), `{"state":"running"}`)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	for _, want := range []string{
+		"Sessions: 1 running, 1 exited, 1 terminated (3 total, 1 shown, filter: running)",
+		"Session-ID: sess-running",
+		"State: running",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q:\n%s", want, out)
+		}
+	}
+	for _, unwanted := range []string{
+		"Session-ID: sess-exited",
+		"Session-ID: sess-killed",
+	} {
+		if strings.Contains(out, unwanted) {
+			t.Fatalf("output contains %q despite running filter:\n%s", unwanted, out)
+		}
+	}
+}
+
+func TestExecListRunTruncatesLongCommandsByDefault(t *testing.T) {
+	t.Parallel()
+
+	command := "python -c " + strings.Repeat("x", defaultCommandChars+25)
+	client := &fakeExecClient{
+		listResp: &execpb.ListSessionsResponse{
+			Sessions: []*execpb.Session{
+				{
+					SessionId: "sess-long",
+					Command:   command,
+					State:     execpb.SessionState_SESSION_STATE_RUNNING,
+				},
+			},
+		},
+	}
+
+	out, err := NewList(client).Run(context.Background(), `{}`)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if !strings.Contains(out, "Command: python -c ") {
+		t.Fatalf("output missing command prefix:\n%s", out)
+	}
+	if !strings.Contains(out, "...") {
+		t.Fatalf("output missing truncation suffix:\n%s", out)
+	}
+	if strings.Contains(out, strings.Repeat("x", defaultCommandChars+20)) {
+		t.Fatalf("output contains untruncated command:\n%s", out)
+	}
+}
+
+func TestExecListRunCanRaiseCommandLengthLimit(t *testing.T) {
+	t.Parallel()
+
+	command := "python -c " + strings.Repeat("x", defaultCommandChars+25)
+	client := &fakeExecClient{
+		listResp: &execpb.ListSessionsResponse{
+			Sessions: []*execpb.Session{
+				{
+					SessionId: "sess-long",
+					Command:   command,
+					State:     execpb.SessionState_SESSION_STATE_RUNNING,
+				},
+			},
+		},
+	}
+
+	out, err := NewList(client).Run(
+		context.Background(),
+		`{"max_command_chars":500}`,
+	)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if !strings.Contains(out, "Command: "+command) {
+		t.Fatalf("output missing full command:\n%s", out)
+	}
+}
+
+func TestExecListRunAppliesLimit(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeExecClient{
+		listResp: &execpb.ListSessionsResponse{
+			Sessions: []*execpb.Session{
+				{SessionId: "sess-1", State: execpb.SessionState_SESSION_STATE_RUNNING},
+				{SessionId: "sess-2", State: execpb.SessionState_SESSION_STATE_RUNNING},
+				{SessionId: "sess-3", State: execpb.SessionState_SESSION_STATE_EXITED},
+			},
+		},
+	}
+
+	out, err := NewList(client).Run(context.Background(), `{"limit":2}`)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	for _, want := range []string{
+		"Sessions: 2 running, 1 exited (3 total, 2 shown, 1 omitted by limit)",
+		"Session-ID: sess-1",
+		"Session-ID: sess-2",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "Session-ID: sess-3") {
+		t.Fatalf("output contains limited session:\n%s", out)
+	}
+}
+
+func TestExecListRunRejectsInvalidOptions(t *testing.T) {
+	t.Parallel()
+
+	tool := NewList(&fakeExecClient{})
+	for _, args := range []string{
+		`{"state":"alive"}`,
+		`{"limit":-1}`,
+		`{"max_command_chars":0}`,
+		`{"unknown":true}`,
+	} {
+		_, err := tool.Run(context.Background(), args)
+		if err == nil {
+			t.Fatalf("Run(%s) error = nil, want validation error", args)
+		}
+	}
+}
+
+func TestExecListRunHandlesNoSessions(t *testing.T) {
+	t.Parallel()
+
+	out, err := NewList(&fakeExecClient{}).Run(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if out != "Sessions: 0 total, 0 shown" {
+		t.Fatalf("output = %q, want Sessions: 0 total, 0 shown", out)
 	}
 }
 

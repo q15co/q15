@@ -226,6 +226,7 @@ func buildToolList(
 		tools.NewApplyPatch(fileExec),
 		tools.NewValidateSkill(skillManager),
 		tools.NewExec(execClient),
+		tools.NewExecList(execClient),
 		tools.NewExecRead(execClient),
 		tools.NewExecWrite(execClient),
 		tools.NewExecKill(execClient),

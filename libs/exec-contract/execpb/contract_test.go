@@ -7,5 +7,7 @@ func TestGeneratedContractTypesCompile(t *testing.T) {
 
 	_ = &StartSessionRequest{}
 	_ = &StartSessionResponse{}
+	_ = &ListSessionsRequest{}
+	_ = &ListSessionsResponse{}
 	_ = &WatchSessionResponse{}
 }

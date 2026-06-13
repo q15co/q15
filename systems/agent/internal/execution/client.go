@@ -26,6 +26,10 @@ type Service interface {
 		ctx context.Context,
 		req *execpb.GetSessionRequest,
 	) (*execpb.GetSessionResponse, error)
+	ListSessions(
+		ctx context.Context,
+		req *execpb.ListSessionsRequest,
+	) (*execpb.ListSessionsResponse, error)
 	WatchSession(ctx context.Context, req *execpb.WatchSessionRequest) (WatchStream, error)
 	WriteSessionStdin(
 		ctx context.Context,
@@ -96,6 +100,14 @@ func (c *Client) GetSession(
 	req *execpb.GetSessionRequest,
 ) (*execpb.GetSessionResponse, error) {
 	return c.client.GetSession(ctx, req)
+}
+
+// ListSessions returns snapshots for all tracked exec sessions.
+func (c *Client) ListSessions(
+	ctx context.Context,
+	req *execpb.ListSessionsRequest,
+) (*execpb.ListSessionsResponse, error) {
+	return c.client.ListSessions(ctx, req)
 }
 
 // WatchSession opens one event stream.
