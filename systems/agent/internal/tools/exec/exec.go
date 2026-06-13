@@ -3,12 +3,9 @@
 package exec
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"strings"
 	"time"
 
@@ -31,11 +28,16 @@ func NewExec(client execution.Service) *Exec {
 func (e *Exec) Definition() agent.ToolDefinition {
 	return agent.ToolDefinition{
 		Name:        "exec",
-		Description: "Execute a command through the configured execution service using session-backed command execution",
+		Description: "Run a command through the configured execution service, returning output if it finishes within the wait window or a session handle if it keeps running",
 		PromptGuidance: []string{
-			"Use for commands, builds, tests, formatting, git, and other CLI workflows.",
+			"Use for commands, builds, tests, formatting, git, dev servers, browser sessions, daemons, and interactive CLI workflows.",
 			"Every call must include a non-empty packages array of required nix installables.",
-			"The exec service starts a command session and waits for it to complete before returning stdout, stderr, and exit status.",
+			"Set wait_seconds to how long the tool should wait; if the command is still running after that window, the tool returns Session-ID and Next-Event-Index for exec_read, exec_write, or exec_kill.",
+			"Use wait_seconds 0 to start a long-running command and return immediately.",
+			"Set keep_stdin_open true when you plan to send input later with exec_write.",
+			"Non-zero process exit codes are returned as normal tool output with Exit-Code; inspect the payload rather than treating them as tool failures.",
+			"If Output-Truncated is true and you need omitted content, re-read from an earlier event cursor with a larger max_output_chars.",
+			"Long-running process output may be pipe-buffered; for Python use python -u or flush=True when you need incremental output.",
 			"If you want the model to inspect a generated image afterward, write it under a shared root like /workspace and then call load_image on that path.",
 		},
 		Parameters: map[string]any{
@@ -51,6 +53,22 @@ func (e *Exec) Definition() agent.ToolDefinition {
 					},
 					"minItems": 1,
 				},
+				"wait_seconds": map[string]any{
+					"type":    "integer",
+					"minimum": 0,
+					"maximum": maxExecWaitSeconds,
+					"default": defaultExecWaitSeconds,
+				},
+				"keep_stdin_open": map[string]any{
+					"type":    "boolean",
+					"default": false,
+				},
+				"max_output_chars": map[string]any{
+					"type":    "integer",
+					"minimum": 0,
+					"maximum": maxOutputCharsLimit,
+					"default": defaultMaxOutputChars,
+				},
 			},
 			"required": []string{"command", "packages"},
 		},
@@ -60,8 +78,11 @@ func (e *Exec) Definition() agent.ToolDefinition {
 // Run executes one shell command from raw JSON tool arguments.
 func (e *Exec) Run(ctx context.Context, arguments string) (string, error) {
 	var args struct {
-		Command  string   `json:"command"`
-		Packages []string `json:"packages"`
+		Command        string   `json:"command"`
+		Packages       []string `json:"packages"`
+		WaitSeconds    *int     `json:"wait_seconds"`
+		KeepStdinOpen  bool     `json:"keep_stdin_open"`
+		MaxOutputChars *int     `json:"max_output_chars"`
 	}
 	if err := json.Unmarshal([]byte(arguments), &args); err != nil {
 		return "", fmt.Errorf("invalid arguments JSON: %w", err)
@@ -74,6 +95,14 @@ func (e *Exec) Run(ctx context.Context, arguments string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	waitSeconds, err := normalizeWaitSeconds(args.WaitSeconds)
+	if err != nil {
+		return "", err
+	}
+	maxOutputChars, err := normalizeMaxOutputChars(args.MaxOutputChars)
+	if err != nil {
+		return "", err
+	}
 	if e.client == nil {
 		return "", fmt.Errorf("no exec service client configured")
 	}
@@ -81,12 +110,18 @@ func (e *Exec) Run(ctx context.Context, arguments string) (string, error) {
 	started, err := e.client.StartSession(ctx, &execpb.StartSessionRequest{
 		Command:       args.Command,
 		Packages:      packages,
-		KeepStdinOpen: false,
+		KeepStdinOpen: args.KeepStdinOpen,
 	})
 	if err != nil {
 		return "", fmt.Errorf("start exec session: %w", err)
 	}
-	sessionID := started.GetSession().GetSessionId()
+	if started == nil || started.GetSession() == nil {
+		return "", fmt.Errorf("start exec session: response missing session")
+	}
+	sessionID := strings.TrimSpace(started.GetSession().GetSessionId())
+	if sessionID == "" {
+		return "", fmt.Errorf("start exec session: response missing session_id")
+	}
 	defer func() {
 		if ctx.Err() == nil || sessionID == "" {
 			return
@@ -99,59 +134,76 @@ func (e *Exec) Run(ctx context.Context, arguments string) (string, error) {
 		})
 	}()
 
-	stream, err := e.client.WatchSession(ctx, &execpb.WatchSessionRequest{
-		SessionId: sessionID,
-	})
+	collector := newSessionOutputCollector(maxOutputChars)
+	watched, err := watchSessionInto(
+		ctx,
+		e.client,
+		sessionID,
+		0,
+		time.Duration(waitSeconds)*time.Second,
+		collector,
+	)
 	if err != nil {
-		return "", fmt.Errorf("watch exec session %q: %w", sessionID, err)
-	}
-
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	var sawTerminal bool
-	for {
-		resp, err := stream.Recv()
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			return "", fmt.Errorf("watch exec session %q: %w", sessionID, err)
-		}
-		event := resp.GetEvent()
-		if event == nil {
-			continue
-		}
-		if chunk := event.GetStdout(); chunk != nil {
-			stdout.Write(chunk.GetData())
-		}
-		if chunk := event.GetStderr(); chunk != nil {
-			stderr.Write(chunk.GetData())
-		}
-		if event.GetExited() != nil || event.GetTerminated() != nil {
-			sawTerminal = true
-		}
+		return "", err
 	}
 
 	finalSession, err := e.client.GetSession(ctx, &execpb.GetSessionRequest{SessionId: sessionID})
 	if err != nil {
 		return "", fmt.Errorf("get exec session %q: %w", sessionID, err)
 	}
-
-	result := formatExecSessionResult(
-		finalSession.GetSession().GetHasExitCode(),
-		finalSession.GetSession().GetExitCode(),
-		finalSession.GetSession().GetTerminationReason(),
-		stdout.String(),
-		stderr.String(),
-	)
-	if finalSession.GetSession().GetState() == execpb.SessionState_SESSION_STATE_TERMINATED &&
-		sawTerminal {
-		return "", fmt.Errorf("%s", result)
+	session := finalSession.GetSession()
+	if session == nil {
+		return "", fmt.Errorf("get exec session %q: response missing session", sessionID)
 	}
-	if finalSession.GetSession().GetHasExitCode() && finalSession.GetSession().GetExitCode() != 0 {
-		return "", fmt.Errorf("%s", result)
+
+	if watched.TimedOut && isTerminalSession(session) {
+		watched, err = watchSessionInto(
+			ctx,
+			e.client,
+			sessionID,
+			watched.NextEventIndex,
+			finalDrainTimeout,
+			collector,
+		)
+		if err != nil {
+			return "", err
+		}
+	}
+
+	timedOut := !isTerminalSession(session)
+	stderr := watched.Stderr
+	if session.GetHasExitCode() {
+		stderr = filterNixBootstrapStderr(stderr, session.GetExitCode())
+	}
+	result := formatSessionToolResult(sessionToolResult{
+		SessionID:          sessionID,
+		Session:            session,
+		IncludeTimedOut:    true,
+		TimedOut:           timedOut,
+		IncludeEventCursor: true,
+		NextEventIndex:     watched.NextEventIndex,
+		OutputTruncated:    watched.OutputTruncated,
+		IncludeOutput:      true,
+		Stdout:             watched.Stdout,
+		Stderr:             stderr,
+	})
+	if timedOut {
+		return result, nil
 	}
 	return result, nil
+}
+
+func normalizeWaitSeconds(value *int) (int, error) {
+	if value == nil {
+		return defaultExecWaitSeconds, nil
+	}
+	if *value < 0 {
+		return 0, fmt.Errorf("wait_seconds must be >= 0")
+	}
+	if *value > maxExecWaitSeconds {
+		return 0, fmt.Errorf("wait_seconds must be <= %d", maxExecWaitSeconds)
+	}
+	return *value, nil
 }
 
 func formatExecSessionResult(

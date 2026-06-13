@@ -226,6 +226,9 @@ func buildToolList(
 		tools.NewApplyPatch(fileExec),
 		tools.NewValidateSkill(skillManager),
 		tools.NewExec(execClient),
+		tools.NewExecRead(execClient),
+		tools.NewExecWrite(execClient),
+		tools.NewExecKill(execClient),
 		tools.NewLoadImage(fileSettings, mediaStore),
 		tools.NewWebFetch(),
 	}

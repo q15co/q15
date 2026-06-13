@@ -47,6 +47,21 @@ func NewExec(client execution.Service) *exec.Exec {
 	return exec.NewExec(client)
 }
 
+// NewExecRead delegates to exec.NewRead.
+func NewExecRead(client execution.Service) *exec.Read {
+	return exec.NewRead(client)
+}
+
+// NewExecWrite delegates to exec.NewWrite.
+func NewExecWrite(client execution.Service) *exec.Write {
+	return exec.NewWrite(client)
+}
+
+// NewExecKill delegates to exec.NewKill.
+func NewExecKill(client execution.Service) *exec.Kill {
+	return exec.NewKill(client)
+}
+
 // NewLoadImage delegates to media.NewLoadImage.
 func NewLoadImage(paths fileops.Settings, mediaStore q15media.Store) *mediatools.LoadImage {
 	return mediatools.NewLoadImage(paths, mediaStore)
