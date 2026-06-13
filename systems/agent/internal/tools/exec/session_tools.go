@@ -22,9 +22,113 @@ const (
 	maxExecWaitSeconds      = 300
 	defaultMaxOutputChars   = 20000
 	maxOutputCharsLimit     = 200000
+	defaultListLimit        = 100
+	maxListLimit            = 500
+	defaultCommandChars     = 200
+	maxCommandCharsLimit    = 5000
 	readSessionWatchTimeout = time.Second
 	finalDrainTimeout       = 100 * time.Millisecond
 )
+
+// List enumerates tracked exec sessions.
+type List struct {
+	client execution.Service
+}
+
+// NewList constructs an exec_list tool backed by the provided session client.
+func NewList(client execution.Service) *List {
+	return &List{client: client}
+}
+
+// Definition returns the tool schema exposed to the model.
+func (l *List) Definition() agent.ToolDefinition {
+	return agent.ToolDefinition{
+		Name:        "exec_list",
+		Description: "List all tracked exec sessions known to the execution service",
+		PromptGuidance: []string{
+			"Use to discover running, orphaned, or recently finished exec sessions when the session ID is not in context.",
+			"Use state running to focus on live sessions; leave state as all when you need the full session history.",
+			"Commands are truncated by default for readability; raise max_command_chars only when the command text itself matters.",
+			"Use returned Session-ID values with exec_read, exec_write, or exec_kill.",
+		},
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"state": map[string]any{
+					"type": "string",
+					"enum": []string{
+						"all",
+						"active",
+						"terminal",
+						"starting",
+						"running",
+						"terminating",
+						"exited",
+						"terminated",
+						"failed",
+					},
+					"default": "all",
+				},
+				"limit": map[string]any{
+					"type":    "integer",
+					"minimum": 0,
+					"maximum": maxListLimit,
+					"default": defaultListLimit,
+				},
+				"max_command_chars": map[string]any{
+					"type":    "integer",
+					"minimum": 1,
+					"maximum": maxCommandCharsLimit,
+					"default": defaultCommandChars,
+				},
+			},
+			"additionalProperties": false,
+		},
+	}
+}
+
+// Run lists all sessions from raw JSON arguments.
+func (l *List) Run(ctx context.Context, arguments string) (string, error) {
+	arguments = strings.TrimSpace(arguments)
+	if arguments == "" {
+		arguments = "{}"
+	}
+	var args struct {
+		State           string `json:"state"`
+		Limit           *int   `json:"limit"`
+		MaxCommandChars *int   `json:"max_command_chars"`
+	}
+	dec := json.NewDecoder(strings.NewReader(arguments))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&args); err != nil {
+		return "", fmt.Errorf("invalid arguments JSON: %w", err)
+	}
+	stateFilter, err := normalizeListStateFilter(args.State)
+	if err != nil {
+		return "", err
+	}
+	limit, err := normalizeListLimit(args.Limit)
+	if err != nil {
+		return "", err
+	}
+	maxCommandChars, err := normalizeCommandChars(args.MaxCommandChars)
+	if err != nil {
+		return "", err
+	}
+	if l.client == nil {
+		return "", fmt.Errorf("no exec service client configured")
+	}
+
+	resp, err := l.client.ListSessions(ctx, &execpb.ListSessionsRequest{})
+	if err != nil {
+		return "", fmt.Errorf("list exec sessions: %w", err)
+	}
+	return formatSessionListResult(resp.GetSessions(), sessionListOptions{
+		StateFilter:     stateFilter,
+		Limit:           limit,
+		MaxCommandChars: maxCommandChars,
+	}), nil
+}
 
 // Read polls output and state from an existing exec session.
 type Read struct {
@@ -551,6 +655,240 @@ type sessionToolResult struct {
 	Stderr        string
 }
 
+type sessionListOptions struct {
+	StateFilter     listStateFilter
+	Limit           int
+	MaxCommandChars int
+}
+
+type listStateFilter string
+
+const (
+	listStateFilterAll         listStateFilter = "all"
+	listStateFilterActive      listStateFilter = "active"
+	listStateFilterTerminal    listStateFilter = "terminal"
+	listStateFilterStarting    listStateFilter = "starting"
+	listStateFilterRunning     listStateFilter = "running"
+	listStateFilterTerminating listStateFilter = "terminating"
+	listStateFilterExited      listStateFilter = "exited"
+	listStateFilterTerminated  listStateFilter = "terminated"
+	listStateFilterFailed      listStateFilter = "failed"
+)
+
+func formatSessionListResult(sessions []*execpb.Session, opts sessionListOptions) string {
+	nonNilSessions := make([]*execpb.Session, 0, len(sessions))
+	for _, session := range sessions {
+		if session != nil {
+			nonNilSessions = append(nonNilSessions, session)
+		}
+	}
+
+	filtered := filterSessions(nonNilSessions, opts.StateFilter)
+	shown := limitedSessions(filtered, opts.Limit)
+	omitted := len(filtered) - len(shown)
+
+	lines := []string{formatSessionListSummary(
+		nonNilSessions,
+		len(shown),
+		opts.StateFilter,
+		omitted,
+	)}
+	for i, session := range shown {
+		lines = append(lines, fmt.Sprintf("--- Session %d ---", i+1))
+		lines = append(lines, "Session-ID: "+session.GetSessionId())
+		lines = append(lines, "State: "+formatSessionState(session.GetState()))
+		if command := strings.TrimSpace(session.GetCommand()); command != "" {
+			lines = append(
+				lines,
+				"Command: "+truncateCommand(singleLine(command), opts.MaxCommandChars),
+			)
+		}
+		if workingDir := strings.TrimSpace(session.GetWorkingDir()); workingDir != "" {
+			lines = append(lines, "Working-Dir: "+workingDir)
+		}
+		if packages := session.GetPackages(); len(packages) > 0 {
+			lines = append(lines, "Packages: "+strings.Join(packages, ", "))
+		}
+		lines = append(lines, fmt.Sprintf("Stdin-Open: %t", session.GetStdinOpen()))
+		lines = append(lines, fmt.Sprintf("Next-Event-Index: %d", session.GetNextEventIndex()))
+		if age, ok := sessionAgeSeconds(session); ok {
+			lines = append(lines, fmt.Sprintf("Session-Age-Seconds: %d", age))
+		}
+		if session.GetHasExitCode() {
+			lines = append(lines, fmt.Sprintf("Exit-Code: %d", session.GetExitCode()))
+		}
+		if reason := strings.TrimSpace(session.GetTerminationReason()); reason != "" {
+			lines = append(lines, "Termination-Reason: "+singleLine(reason))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func normalizeListStateFilter(value string) (listStateFilter, error) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return listStateFilterAll, nil
+	}
+	filter := listStateFilter(value)
+	switch filter {
+	case listStateFilterAll,
+		listStateFilterActive,
+		listStateFilterTerminal,
+		listStateFilterStarting,
+		listStateFilterRunning,
+		listStateFilterTerminating,
+		listStateFilterExited,
+		listStateFilterTerminated,
+		listStateFilterFailed:
+		return filter, nil
+	default:
+		return "", fmt.Errorf(
+			"state must be one of: all, active, terminal, starting, running, terminating, exited, terminated, failed",
+		)
+	}
+}
+
+func normalizeListLimit(value *int) (int, error) {
+	if value == nil {
+		return defaultListLimit, nil
+	}
+	if *value < 0 {
+		return 0, fmt.Errorf("limit must be >= 0")
+	}
+	if *value > maxListLimit {
+		return 0, fmt.Errorf("limit must be <= %d", maxListLimit)
+	}
+	return *value, nil
+}
+
+func normalizeCommandChars(value *int) (int, error) {
+	if value == nil {
+		return defaultCommandChars, nil
+	}
+	if *value < 1 {
+		return 0, fmt.Errorf("max_command_chars must be >= 1")
+	}
+	if *value > maxCommandCharsLimit {
+		return 0, fmt.Errorf("max_command_chars must be <= %d", maxCommandCharsLimit)
+	}
+	return *value, nil
+}
+
+func filterSessions(sessions []*execpb.Session, filter listStateFilter) []*execpb.Session {
+	if filter == "" {
+		filter = listStateFilterAll
+	}
+	out := make([]*execpb.Session, 0, len(sessions))
+	for _, session := range sessions {
+		if sessionMatchesFilter(session, filter) {
+			out = append(out, session)
+		}
+	}
+	return out
+}
+
+func limitedSessions(sessions []*execpb.Session, limit int) []*execpb.Session {
+	if limit < 0 || limit >= len(sessions) {
+		return sessions
+	}
+	return sessions[:limit]
+}
+
+func sessionMatchesFilter(session *execpb.Session, filter listStateFilter) bool {
+	if session == nil {
+		return false
+	}
+	state := session.GetState()
+	switch filter {
+	case listStateFilterAll:
+		return true
+	case listStateFilterActive:
+		return !isTerminalSession(session)
+	case listStateFilterTerminal:
+		return isTerminalSession(session)
+	case listStateFilterStarting:
+		return state == execpb.SessionState_SESSION_STATE_STARTING
+	case listStateFilterRunning:
+		return state == execpb.SessionState_SESSION_STATE_RUNNING
+	case listStateFilterTerminating:
+		return state == execpb.SessionState_SESSION_STATE_TERMINATING
+	case listStateFilterExited:
+		return state == execpb.SessionState_SESSION_STATE_EXITED
+	case listStateFilterTerminated:
+		return state == execpb.SessionState_SESSION_STATE_TERMINATED
+	case listStateFilterFailed:
+		return state == execpb.SessionState_SESSION_STATE_FAILED
+	default:
+		return true
+	}
+}
+
+func formatSessionListSummary(
+	sessions []*execpb.Session,
+	shown int,
+	filter listStateFilter,
+	omitted int,
+) string {
+	total := len(sessions)
+	if filter == "" {
+		filter = listStateFilterAll
+	}
+	if total == 0 {
+		if filter == listStateFilterAll {
+			return "Sessions: 0 total, 0 shown"
+		}
+		return fmt.Sprintf("Sessions: 0 total, 0 shown (filter: %s)", filter)
+	}
+	stateParts := sessionStateSummaryParts(sessions)
+
+	suffix := fmt.Sprintf("(%d total, %d shown", total, shown)
+	if filter != listStateFilterAll {
+		suffix += fmt.Sprintf(", filter: %s", filter)
+	}
+	if omitted > 0 {
+		suffix += fmt.Sprintf(", %d omitted by limit", omitted)
+	}
+	suffix += ")"
+	return "Sessions: " + strings.Join(stateParts, ", ") + " " + suffix
+}
+
+func sessionStateSummaryParts(sessions []*execpb.Session) []string {
+	counts := map[execpb.SessionState]int{}
+	for _, session := range sessions {
+		if session == nil {
+			continue
+		}
+		counts[session.GetState()]++
+	}
+
+	orderedStates := []execpb.SessionState{
+		execpb.SessionState_SESSION_STATE_STARTING,
+		execpb.SessionState_SESSION_STATE_RUNNING,
+		execpb.SessionState_SESSION_STATE_TERMINATING,
+		execpb.SessionState_SESSION_STATE_EXITED,
+		execpb.SessionState_SESSION_STATE_TERMINATED,
+		execpb.SessionState_SESSION_STATE_FAILED,
+		execpb.SessionState_SESSION_STATE_UNSPECIFIED,
+	}
+	parts := make([]string, 0, len(orderedStates))
+	for _, state := range orderedStates {
+		if count := counts[state]; count > 0 {
+			parts = append(parts, fmt.Sprintf("%d %s", count, formatSessionState(state)))
+		}
+	}
+	return parts
+}
+
+func truncateCommand(command string, maxChars int) string {
+	if maxChars <= 0 || len(command) <= maxChars {
+		return command
+	}
+	if maxChars <= 3 {
+		return command[:maxChars]
+	}
+	return command[:maxChars-3] + "..."
+}
+
 func formatSessionToolResult(result sessionToolResult) string {
 	lines := make([]string, 0, 12)
 	lines = append(lines, "Session-ID: "+result.SessionID)
@@ -620,4 +958,8 @@ func sessionAgeSeconds(session *execpb.Session) (int64, bool) {
 		return 0, true
 	}
 	return int64(age.Seconds()), true
+}
+
+func singleLine(value string) string {
+	return strings.Join(strings.Fields(value), " ")
 }

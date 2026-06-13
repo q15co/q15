@@ -10,6 +10,7 @@ service ExecutionService {
   rpc GetRuntimeInfo(GetRuntimeInfoRequest) returns (GetRuntimeInfoResponse);
   rpc StartSession(StartSessionRequest) returns (StartSessionResponse);
   rpc GetSession(GetSessionRequest) returns (GetSessionResponse);
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
   rpc WatchSession(WatchSessionRequest) returns (stream WatchSessionResponse);
   rpc WriteSessionStdin(WriteSessionStdinRequest) returns (WriteSessionStdinResponse);
   rpc TerminateSession(TerminateSessionRequest) returns (TerminateSessionResponse);
@@ -76,6 +77,12 @@ message GetSessionRequest {
 
 message GetSessionResponse {
   Session session = 1;
+}
+
+message ListSessionsRequest {}
+
+message ListSessionsResponse {
+  repeated Session sessions = 1;
 }
 
 message WatchSessionRequest {

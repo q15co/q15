@@ -611,6 +611,86 @@ func (x *GetSessionResponse) GetSession() *Session {
 	return nil
 }
 
+type ListSessionsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListSessionsRequest) Reset() {
+	*x = ListSessionsRequest{}
+	mi := &file_q15_exec_v1_execution_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListSessionsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListSessionsRequest) ProtoMessage() {}
+
+func (x *ListSessionsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_q15_exec_v1_execution_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListSessionsRequest.ProtoReflect.Descriptor instead.
+func (*ListSessionsRequest) Descriptor() ([]byte, []int) {
+	return file_q15_exec_v1_execution_proto_rawDescGZIP(), []int{8}
+}
+
+type ListSessionsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Sessions      []*Session             `protobuf:"bytes,1,rep,name=sessions,proto3" json:"sessions,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListSessionsResponse) Reset() {
+	*x = ListSessionsResponse{}
+	mi := &file_q15_exec_v1_execution_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListSessionsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListSessionsResponse) ProtoMessage() {}
+
+func (x *ListSessionsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_q15_exec_v1_execution_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListSessionsResponse.ProtoReflect.Descriptor instead.
+func (*ListSessionsResponse) Descriptor() ([]byte, []int) {
+	return file_q15_exec_v1_execution_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *ListSessionsResponse) GetSessions() []*Session {
+	if x != nil {
+		return x.Sessions
+	}
+	return nil
+}
+
 type WatchSessionRequest struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	SessionId       string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
@@ -621,7 +701,7 @@ type WatchSessionRequest struct {
 
 func (x *WatchSessionRequest) Reset() {
 	*x = WatchSessionRequest{}
-	mi := &file_q15_exec_v1_execution_proto_msgTypes[8]
+	mi := &file_q15_exec_v1_execution_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -633,7 +713,7 @@ func (x *WatchSessionRequest) String() string {
 func (*WatchSessionRequest) ProtoMessage() {}
 
 func (x *WatchSessionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_q15_exec_v1_execution_proto_msgTypes[8]
+	mi := &file_q15_exec_v1_execution_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -646,7 +726,7 @@ func (x *WatchSessionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchSessionRequest.ProtoReflect.Descriptor instead.
 func (*WatchSessionRequest) Descriptor() ([]byte, []int) {
-	return file_q15_exec_v1_execution_proto_rawDescGZIP(), []int{8}
+	return file_q15_exec_v1_execution_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *WatchSessionRequest) GetSessionId() string {
@@ -672,7 +752,7 @@ type WatchSessionResponse struct {
 
 func (x *WatchSessionResponse) Reset() {
 	*x = WatchSessionResponse{}
-	mi := &file_q15_exec_v1_execution_proto_msgTypes[9]
+	mi := &file_q15_exec_v1_execution_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -684,7 +764,7 @@ func (x *WatchSessionResponse) String() string {
 func (*WatchSessionResponse) ProtoMessage() {}
 
 func (x *WatchSessionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_q15_exec_v1_execution_proto_msgTypes[9]
+	mi := &file_q15_exec_v1_execution_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -697,7 +777,7 @@ func (x *WatchSessionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchSessionResponse.ProtoReflect.Descriptor instead.
 func (*WatchSessionResponse) Descriptor() ([]byte, []int) {
-	return file_q15_exec_v1_execution_proto_rawDescGZIP(), []int{9}
+	return file_q15_exec_v1_execution_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *WatchSessionResponse) GetEvent() *SessionEvent {
@@ -718,7 +798,7 @@ type WriteSessionStdinRequest struct {
 
 func (x *WriteSessionStdinRequest) Reset() {
 	*x = WriteSessionStdinRequest{}
-	mi := &file_q15_exec_v1_execution_proto_msgTypes[10]
+	mi := &file_q15_exec_v1_execution_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -730,7 +810,7 @@ func (x *WriteSessionStdinRequest) String() string {
 func (*WriteSessionStdinRequest) ProtoMessage() {}
 
 func (x *WriteSessionStdinRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_q15_exec_v1_execution_proto_msgTypes[10]
+	mi := &file_q15_exec_v1_execution_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -743,7 +823,7 @@ func (x *WriteSessionStdinRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WriteSessionStdinRequest.ProtoReflect.Descriptor instead.
 func (*WriteSessionStdinRequest) Descriptor() ([]byte, []int) {
-	return file_q15_exec_v1_execution_proto_rawDescGZIP(), []int{10}
+	return file_q15_exec_v1_execution_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *WriteSessionStdinRequest) GetSessionId() string {
@@ -777,7 +857,7 @@ type WriteSessionStdinResponse struct {
 
 func (x *WriteSessionStdinResponse) Reset() {
 	*x = WriteSessionStdinResponse{}
-	mi := &file_q15_exec_v1_execution_proto_msgTypes[11]
+	mi := &file_q15_exec_v1_execution_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -789,7 +869,7 @@ func (x *WriteSessionStdinResponse) String() string {
 func (*WriteSessionStdinResponse) ProtoMessage() {}
 
 func (x *WriteSessionStdinResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_q15_exec_v1_execution_proto_msgTypes[11]
+	mi := &file_q15_exec_v1_execution_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -802,7 +882,7 @@ func (x *WriteSessionStdinResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WriteSessionStdinResponse.ProtoReflect.Descriptor instead.
 func (*WriteSessionStdinResponse) Descriptor() ([]byte, []int) {
-	return file_q15_exec_v1_execution_proto_rawDescGZIP(), []int{11}
+	return file_q15_exec_v1_execution_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *WriteSessionStdinResponse) GetSession() *Session {
@@ -829,7 +909,7 @@ type TerminateSessionRequest struct {
 
 func (x *TerminateSessionRequest) Reset() {
 	*x = TerminateSessionRequest{}
-	mi := &file_q15_exec_v1_execution_proto_msgTypes[12]
+	mi := &file_q15_exec_v1_execution_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -841,7 +921,7 @@ func (x *TerminateSessionRequest) String() string {
 func (*TerminateSessionRequest) ProtoMessage() {}
 
 func (x *TerminateSessionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_q15_exec_v1_execution_proto_msgTypes[12]
+	mi := &file_q15_exec_v1_execution_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -854,7 +934,7 @@ func (x *TerminateSessionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TerminateSessionRequest.ProtoReflect.Descriptor instead.
 func (*TerminateSessionRequest) Descriptor() ([]byte, []int) {
-	return file_q15_exec_v1_execution_proto_rawDescGZIP(), []int{12}
+	return file_q15_exec_v1_execution_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *TerminateSessionRequest) GetSessionId() string {
@@ -880,7 +960,7 @@ type TerminateSessionResponse struct {
 
 func (x *TerminateSessionResponse) Reset() {
 	*x = TerminateSessionResponse{}
-	mi := &file_q15_exec_v1_execution_proto_msgTypes[13]
+	mi := &file_q15_exec_v1_execution_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -892,7 +972,7 @@ func (x *TerminateSessionResponse) String() string {
 func (*TerminateSessionResponse) ProtoMessage() {}
 
 func (x *TerminateSessionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_q15_exec_v1_execution_proto_msgTypes[13]
+	mi := &file_q15_exec_v1_execution_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -905,7 +985,7 @@ func (x *TerminateSessionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TerminateSessionResponse.ProtoReflect.Descriptor instead.
 func (*TerminateSessionResponse) Descriptor() ([]byte, []int) {
-	return file_q15_exec_v1_execution_proto_rawDescGZIP(), []int{13}
+	return file_q15_exec_v1_execution_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *TerminateSessionResponse) GetSession() *Session {
@@ -934,7 +1014,7 @@ type SessionEvent struct {
 
 func (x *SessionEvent) Reset() {
 	*x = SessionEvent{}
-	mi := &file_q15_exec_v1_execution_proto_msgTypes[14]
+	mi := &file_q15_exec_v1_execution_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -946,7 +1026,7 @@ func (x *SessionEvent) String() string {
 func (*SessionEvent) ProtoMessage() {}
 
 func (x *SessionEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_q15_exec_v1_execution_proto_msgTypes[14]
+	mi := &file_q15_exec_v1_execution_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -959,7 +1039,7 @@ func (x *SessionEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionEvent.ProtoReflect.Descriptor instead.
 func (*SessionEvent) Descriptor() ([]byte, []int) {
-	return file_q15_exec_v1_execution_proto_rawDescGZIP(), []int{14}
+	return file_q15_exec_v1_execution_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *SessionEvent) GetEventIndex() int64 {
@@ -1086,7 +1166,7 @@ type SessionStarted struct {
 
 func (x *SessionStarted) Reset() {
 	*x = SessionStarted{}
-	mi := &file_q15_exec_v1_execution_proto_msgTypes[15]
+	mi := &file_q15_exec_v1_execution_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1098,7 +1178,7 @@ func (x *SessionStarted) String() string {
 func (*SessionStarted) ProtoMessage() {}
 
 func (x *SessionStarted) ProtoReflect() protoreflect.Message {
-	mi := &file_q15_exec_v1_execution_proto_msgTypes[15]
+	mi := &file_q15_exec_v1_execution_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1111,7 +1191,7 @@ func (x *SessionStarted) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionStarted.ProtoReflect.Descriptor instead.
 func (*SessionStarted) Descriptor() ([]byte, []int) {
-	return file_q15_exec_v1_execution_proto_rawDescGZIP(), []int{15}
+	return file_q15_exec_v1_execution_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *SessionStarted) GetSessionId() string {
@@ -1130,7 +1210,7 @@ type SessionOutput struct {
 
 func (x *SessionOutput) Reset() {
 	*x = SessionOutput{}
-	mi := &file_q15_exec_v1_execution_proto_msgTypes[16]
+	mi := &file_q15_exec_v1_execution_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1142,7 +1222,7 @@ func (x *SessionOutput) String() string {
 func (*SessionOutput) ProtoMessage() {}
 
 func (x *SessionOutput) ProtoReflect() protoreflect.Message {
-	mi := &file_q15_exec_v1_execution_proto_msgTypes[16]
+	mi := &file_q15_exec_v1_execution_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1155,7 +1235,7 @@ func (x *SessionOutput) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionOutput.ProtoReflect.Descriptor instead.
 func (*SessionOutput) Descriptor() ([]byte, []int) {
-	return file_q15_exec_v1_execution_proto_rawDescGZIP(), []int{16}
+	return file_q15_exec_v1_execution_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *SessionOutput) GetData() []byte {
@@ -1173,7 +1253,7 @@ type SessionStdinClosed struct {
 
 func (x *SessionStdinClosed) Reset() {
 	*x = SessionStdinClosed{}
-	mi := &file_q15_exec_v1_execution_proto_msgTypes[17]
+	mi := &file_q15_exec_v1_execution_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1185,7 +1265,7 @@ func (x *SessionStdinClosed) String() string {
 func (*SessionStdinClosed) ProtoMessage() {}
 
 func (x *SessionStdinClosed) ProtoReflect() protoreflect.Message {
-	mi := &file_q15_exec_v1_execution_proto_msgTypes[17]
+	mi := &file_q15_exec_v1_execution_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1198,7 +1278,7 @@ func (x *SessionStdinClosed) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionStdinClosed.ProtoReflect.Descriptor instead.
 func (*SessionStdinClosed) Descriptor() ([]byte, []int) {
-	return file_q15_exec_v1_execution_proto_rawDescGZIP(), []int{17}
+	return file_q15_exec_v1_execution_proto_rawDescGZIP(), []int{19}
 }
 
 type SessionExited struct {
@@ -1210,7 +1290,7 @@ type SessionExited struct {
 
 func (x *SessionExited) Reset() {
 	*x = SessionExited{}
-	mi := &file_q15_exec_v1_execution_proto_msgTypes[18]
+	mi := &file_q15_exec_v1_execution_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1222,7 +1302,7 @@ func (x *SessionExited) String() string {
 func (*SessionExited) ProtoMessage() {}
 
 func (x *SessionExited) ProtoReflect() protoreflect.Message {
-	mi := &file_q15_exec_v1_execution_proto_msgTypes[18]
+	mi := &file_q15_exec_v1_execution_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1235,7 +1315,7 @@ func (x *SessionExited) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionExited.ProtoReflect.Descriptor instead.
 func (*SessionExited) Descriptor() ([]byte, []int) {
-	return file_q15_exec_v1_execution_proto_rawDescGZIP(), []int{18}
+	return file_q15_exec_v1_execution_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *SessionExited) GetExitCode() int32 {
@@ -1255,7 +1335,7 @@ type SessionTerminated struct {
 
 func (x *SessionTerminated) Reset() {
 	*x = SessionTerminated{}
-	mi := &file_q15_exec_v1_execution_proto_msgTypes[19]
+	mi := &file_q15_exec_v1_execution_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1267,7 +1347,7 @@ func (x *SessionTerminated) String() string {
 func (*SessionTerminated) ProtoMessage() {}
 
 func (x *SessionTerminated) ProtoReflect() protoreflect.Message {
-	mi := &file_q15_exec_v1_execution_proto_msgTypes[19]
+	mi := &file_q15_exec_v1_execution_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1280,7 +1360,7 @@ func (x *SessionTerminated) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionTerminated.ProtoReflect.Descriptor instead.
 func (*SessionTerminated) Descriptor() ([]byte, []int) {
-	return file_q15_exec_v1_execution_proto_rawDescGZIP(), []int{19}
+	return file_q15_exec_v1_execution_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *SessionTerminated) GetReason() string {
@@ -1349,7 +1429,10 @@ const file_q15_exec_v1_execution_proto_rawDesc = "" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\"D\n" +
 	"\x12GetSessionResponse\x12.\n" +
-	"\asession\x18\x01 \x01(\v2\x14.q15.exec.v1.SessionR\asession\"`\n" +
+	"\asession\x18\x01 \x01(\v2\x14.q15.exec.v1.SessionR\asession\"\x15\n" +
+	"\x13ListSessionsRequest\"H\n" +
+	"\x14ListSessionsResponse\x120\n" +
+	"\bsessions\x18\x01 \x03(\v2\x14.q15.exec.v1.SessionR\bsessions\"`\n" +
 	"\x13WatchSessionRequest\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12*\n" +
@@ -1403,12 +1486,13 @@ const file_q15_exec_v1_execution_proto_rawDesc = "" +
 	"\x14SESSION_STATE_EXITED\x10\x03\x12\x1d\n" +
 	"\x19SESSION_STATE_TERMINATING\x10\x04\x12\x1c\n" +
 	"\x18SESSION_STATE_TERMINATED\x10\x05\x12\x18\n" +
-	"\x14SESSION_STATE_FAILED\x10\x062\xad\x04\n" +
+	"\x14SESSION_STATE_FAILED\x10\x062\x82\x05\n" +
 	"\x10ExecutionService\x12Y\n" +
 	"\x0eGetRuntimeInfo\x12\".q15.exec.v1.GetRuntimeInfoRequest\x1a#.q15.exec.v1.GetRuntimeInfoResponse\x12S\n" +
 	"\fStartSession\x12 .q15.exec.v1.StartSessionRequest\x1a!.q15.exec.v1.StartSessionResponse\x12M\n" +
 	"\n" +
-	"GetSession\x12\x1e.q15.exec.v1.GetSessionRequest\x1a\x1f.q15.exec.v1.GetSessionResponse\x12U\n" +
+	"GetSession\x12\x1e.q15.exec.v1.GetSessionRequest\x1a\x1f.q15.exec.v1.GetSessionResponse\x12S\n" +
+	"\fListSessions\x12 .q15.exec.v1.ListSessionsRequest\x1a!.q15.exec.v1.ListSessionsResponse\x12U\n" +
 	"\fWatchSession\x12 .q15.exec.v1.WatchSessionRequest\x1a!.q15.exec.v1.WatchSessionResponse0\x01\x12b\n" +
 	"\x11WriteSessionStdin\x12%.q15.exec.v1.WriteSessionStdinRequest\x1a&.q15.exec.v1.WriteSessionStdinResponse\x12_\n" +
 	"\x10TerminateSession\x12$.q15.exec.v1.TerminateSessionRequest\x1a%.q15.exec.v1.TerminateSessionResponseB7Z5github.com/q15co/q15/libs/exec-contract/execpb;execpbb\x06proto3"
@@ -1426,7 +1510,7 @@ func file_q15_exec_v1_execution_proto_rawDescGZIP() []byte {
 }
 
 var file_q15_exec_v1_execution_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_q15_exec_v1_execution_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
+var file_q15_exec_v1_execution_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
 var file_q15_exec_v1_execution_proto_goTypes = []any{
 	(SessionState)(0),                 // 0: q15.exec.v1.SessionState
 	(*GetRuntimeInfoRequest)(nil),     // 1: q15.exec.v1.GetRuntimeInfoRequest
@@ -1437,54 +1521,59 @@ var file_q15_exec_v1_execution_proto_goTypes = []any{
 	(*StartSessionResponse)(nil),      // 6: q15.exec.v1.StartSessionResponse
 	(*GetSessionRequest)(nil),         // 7: q15.exec.v1.GetSessionRequest
 	(*GetSessionResponse)(nil),        // 8: q15.exec.v1.GetSessionResponse
-	(*WatchSessionRequest)(nil),       // 9: q15.exec.v1.WatchSessionRequest
-	(*WatchSessionResponse)(nil),      // 10: q15.exec.v1.WatchSessionResponse
-	(*WriteSessionStdinRequest)(nil),  // 11: q15.exec.v1.WriteSessionStdinRequest
-	(*WriteSessionStdinResponse)(nil), // 12: q15.exec.v1.WriteSessionStdinResponse
-	(*TerminateSessionRequest)(nil),   // 13: q15.exec.v1.TerminateSessionRequest
-	(*TerminateSessionResponse)(nil),  // 14: q15.exec.v1.TerminateSessionResponse
-	(*SessionEvent)(nil),              // 15: q15.exec.v1.SessionEvent
-	(*SessionStarted)(nil),            // 16: q15.exec.v1.SessionStarted
-	(*SessionOutput)(nil),             // 17: q15.exec.v1.SessionOutput
-	(*SessionStdinClosed)(nil),        // 18: q15.exec.v1.SessionStdinClosed
-	(*SessionExited)(nil),             // 19: q15.exec.v1.SessionExited
-	(*SessionTerminated)(nil),         // 20: q15.exec.v1.SessionTerminated
-	(*timestamppb.Timestamp)(nil),     // 21: google.protobuf.Timestamp
+	(*ListSessionsRequest)(nil),       // 9: q15.exec.v1.ListSessionsRequest
+	(*ListSessionsResponse)(nil),      // 10: q15.exec.v1.ListSessionsResponse
+	(*WatchSessionRequest)(nil),       // 11: q15.exec.v1.WatchSessionRequest
+	(*WatchSessionResponse)(nil),      // 12: q15.exec.v1.WatchSessionResponse
+	(*WriteSessionStdinRequest)(nil),  // 13: q15.exec.v1.WriteSessionStdinRequest
+	(*WriteSessionStdinResponse)(nil), // 14: q15.exec.v1.WriteSessionStdinResponse
+	(*TerminateSessionRequest)(nil),   // 15: q15.exec.v1.TerminateSessionRequest
+	(*TerminateSessionResponse)(nil),  // 16: q15.exec.v1.TerminateSessionResponse
+	(*SessionEvent)(nil),              // 17: q15.exec.v1.SessionEvent
+	(*SessionStarted)(nil),            // 18: q15.exec.v1.SessionStarted
+	(*SessionOutput)(nil),             // 19: q15.exec.v1.SessionOutput
+	(*SessionStdinClosed)(nil),        // 20: q15.exec.v1.SessionStdinClosed
+	(*SessionExited)(nil),             // 21: q15.exec.v1.SessionExited
+	(*SessionTerminated)(nil),         // 22: q15.exec.v1.SessionTerminated
+	(*timestamppb.Timestamp)(nil),     // 23: google.protobuf.Timestamp
 }
 var file_q15_exec_v1_execution_proto_depIdxs = []int32{
 	2,  // 0: q15.exec.v1.GetRuntimeInfoResponse.capabilities:type_name -> q15.exec.v1.RuntimeCapability
 	0,  // 1: q15.exec.v1.Session.state:type_name -> q15.exec.v1.SessionState
-	21, // 2: q15.exec.v1.Session.started_at:type_name -> google.protobuf.Timestamp
-	21, // 3: q15.exec.v1.Session.finished_at:type_name -> google.protobuf.Timestamp
+	23, // 2: q15.exec.v1.Session.started_at:type_name -> google.protobuf.Timestamp
+	23, // 3: q15.exec.v1.Session.finished_at:type_name -> google.protobuf.Timestamp
 	4,  // 4: q15.exec.v1.StartSessionResponse.session:type_name -> q15.exec.v1.Session
 	4,  // 5: q15.exec.v1.GetSessionResponse.session:type_name -> q15.exec.v1.Session
-	15, // 6: q15.exec.v1.WatchSessionResponse.event:type_name -> q15.exec.v1.SessionEvent
-	4,  // 7: q15.exec.v1.WriteSessionStdinResponse.session:type_name -> q15.exec.v1.Session
-	4,  // 8: q15.exec.v1.TerminateSessionResponse.session:type_name -> q15.exec.v1.Session
-	21, // 9: q15.exec.v1.SessionEvent.occurred_at:type_name -> google.protobuf.Timestamp
-	16, // 10: q15.exec.v1.SessionEvent.started:type_name -> q15.exec.v1.SessionStarted
-	17, // 11: q15.exec.v1.SessionEvent.stdout:type_name -> q15.exec.v1.SessionOutput
-	17, // 12: q15.exec.v1.SessionEvent.stderr:type_name -> q15.exec.v1.SessionOutput
-	18, // 13: q15.exec.v1.SessionEvent.stdin_closed:type_name -> q15.exec.v1.SessionStdinClosed
-	19, // 14: q15.exec.v1.SessionEvent.exited:type_name -> q15.exec.v1.SessionExited
-	20, // 15: q15.exec.v1.SessionEvent.terminated:type_name -> q15.exec.v1.SessionTerminated
-	1,  // 16: q15.exec.v1.ExecutionService.GetRuntimeInfo:input_type -> q15.exec.v1.GetRuntimeInfoRequest
-	5,  // 17: q15.exec.v1.ExecutionService.StartSession:input_type -> q15.exec.v1.StartSessionRequest
-	7,  // 18: q15.exec.v1.ExecutionService.GetSession:input_type -> q15.exec.v1.GetSessionRequest
-	9,  // 19: q15.exec.v1.ExecutionService.WatchSession:input_type -> q15.exec.v1.WatchSessionRequest
-	11, // 20: q15.exec.v1.ExecutionService.WriteSessionStdin:input_type -> q15.exec.v1.WriteSessionStdinRequest
-	13, // 21: q15.exec.v1.ExecutionService.TerminateSession:input_type -> q15.exec.v1.TerminateSessionRequest
-	3,  // 22: q15.exec.v1.ExecutionService.GetRuntimeInfo:output_type -> q15.exec.v1.GetRuntimeInfoResponse
-	6,  // 23: q15.exec.v1.ExecutionService.StartSession:output_type -> q15.exec.v1.StartSessionResponse
-	8,  // 24: q15.exec.v1.ExecutionService.GetSession:output_type -> q15.exec.v1.GetSessionResponse
-	10, // 25: q15.exec.v1.ExecutionService.WatchSession:output_type -> q15.exec.v1.WatchSessionResponse
-	12, // 26: q15.exec.v1.ExecutionService.WriteSessionStdin:output_type -> q15.exec.v1.WriteSessionStdinResponse
-	14, // 27: q15.exec.v1.ExecutionService.TerminateSession:output_type -> q15.exec.v1.TerminateSessionResponse
-	22, // [22:28] is the sub-list for method output_type
-	16, // [16:22] is the sub-list for method input_type
-	16, // [16:16] is the sub-list for extension type_name
-	16, // [16:16] is the sub-list for extension extendee
-	0,  // [0:16] is the sub-list for field type_name
+	4,  // 6: q15.exec.v1.ListSessionsResponse.sessions:type_name -> q15.exec.v1.Session
+	17, // 7: q15.exec.v1.WatchSessionResponse.event:type_name -> q15.exec.v1.SessionEvent
+	4,  // 8: q15.exec.v1.WriteSessionStdinResponse.session:type_name -> q15.exec.v1.Session
+	4,  // 9: q15.exec.v1.TerminateSessionResponse.session:type_name -> q15.exec.v1.Session
+	23, // 10: q15.exec.v1.SessionEvent.occurred_at:type_name -> google.protobuf.Timestamp
+	18, // 11: q15.exec.v1.SessionEvent.started:type_name -> q15.exec.v1.SessionStarted
+	19, // 12: q15.exec.v1.SessionEvent.stdout:type_name -> q15.exec.v1.SessionOutput
+	19, // 13: q15.exec.v1.SessionEvent.stderr:type_name -> q15.exec.v1.SessionOutput
+	20, // 14: q15.exec.v1.SessionEvent.stdin_closed:type_name -> q15.exec.v1.SessionStdinClosed
+	21, // 15: q15.exec.v1.SessionEvent.exited:type_name -> q15.exec.v1.SessionExited
+	22, // 16: q15.exec.v1.SessionEvent.terminated:type_name -> q15.exec.v1.SessionTerminated
+	1,  // 17: q15.exec.v1.ExecutionService.GetRuntimeInfo:input_type -> q15.exec.v1.GetRuntimeInfoRequest
+	5,  // 18: q15.exec.v1.ExecutionService.StartSession:input_type -> q15.exec.v1.StartSessionRequest
+	7,  // 19: q15.exec.v1.ExecutionService.GetSession:input_type -> q15.exec.v1.GetSessionRequest
+	9,  // 20: q15.exec.v1.ExecutionService.ListSessions:input_type -> q15.exec.v1.ListSessionsRequest
+	11, // 21: q15.exec.v1.ExecutionService.WatchSession:input_type -> q15.exec.v1.WatchSessionRequest
+	13, // 22: q15.exec.v1.ExecutionService.WriteSessionStdin:input_type -> q15.exec.v1.WriteSessionStdinRequest
+	15, // 23: q15.exec.v1.ExecutionService.TerminateSession:input_type -> q15.exec.v1.TerminateSessionRequest
+	3,  // 24: q15.exec.v1.ExecutionService.GetRuntimeInfo:output_type -> q15.exec.v1.GetRuntimeInfoResponse
+	6,  // 25: q15.exec.v1.ExecutionService.StartSession:output_type -> q15.exec.v1.StartSessionResponse
+	8,  // 26: q15.exec.v1.ExecutionService.GetSession:output_type -> q15.exec.v1.GetSessionResponse
+	10, // 27: q15.exec.v1.ExecutionService.ListSessions:output_type -> q15.exec.v1.ListSessionsResponse
+	12, // 28: q15.exec.v1.ExecutionService.WatchSession:output_type -> q15.exec.v1.WatchSessionResponse
+	14, // 29: q15.exec.v1.ExecutionService.WriteSessionStdin:output_type -> q15.exec.v1.WriteSessionStdinResponse
+	16, // 30: q15.exec.v1.ExecutionService.TerminateSession:output_type -> q15.exec.v1.TerminateSessionResponse
+	24, // [24:31] is the sub-list for method output_type
+	17, // [17:24] is the sub-list for method input_type
+	17, // [17:17] is the sub-list for extension type_name
+	17, // [17:17] is the sub-list for extension extendee
+	0,  // [0:17] is the sub-list for field type_name
 }
 
 func init() { file_q15_exec_v1_execution_proto_init() }
@@ -1492,7 +1581,7 @@ func file_q15_exec_v1_execution_proto_init() {
 	if File_q15_exec_v1_execution_proto != nil {
 		return
 	}
-	file_q15_exec_v1_execution_proto_msgTypes[14].OneofWrappers = []any{
+	file_q15_exec_v1_execution_proto_msgTypes[16].OneofWrappers = []any{
 		(*SessionEvent_Started)(nil),
 		(*SessionEvent_Stdout)(nil),
 		(*SessionEvent_Stderr)(nil),
@@ -1506,7 +1595,7 @@ func file_q15_exec_v1_execution_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_q15_exec_v1_execution_proto_rawDesc), len(file_q15_exec_v1_execution_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   20,
+			NumMessages:   22,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -150,6 +151,25 @@ func (m *Manager) GetSession(sessionID string) (*execpb.Session, error) {
 		return nil, err
 	}
 	return session.snapshot(), nil
+}
+
+// ListSessions returns current snapshots for all tracked sessions.
+func (m *Manager) ListSessions() []*execpb.Session {
+	m.mu.RLock()
+	sessions := make([]*managedSession, 0, len(m.sessions))
+	for _, session := range m.sessions {
+		sessions = append(sessions, session)
+	}
+	m.mu.RUnlock()
+
+	snapshots := make([]*execpb.Session, 0, len(sessions))
+	for _, session := range sessions {
+		snapshots = append(snapshots, session.snapshot())
+	}
+	sort.Slice(snapshots, func(i, j int) bool {
+		return snapshots[i].GetSessionId() < snapshots[j].GetSessionId()
+	})
+	return snapshots
 }
 
 // WatchSession returns all events after the provided cursor and blocks until completion.

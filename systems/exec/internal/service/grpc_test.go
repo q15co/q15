@@ -84,6 +84,17 @@ func TestGRPCServerRunsSessionsEndToEnd(t *testing.T) {
 		t.Fatalf("StartSession() error = %v", err)
 	}
 
+	listed, err := client.ListSessions(ctx, &execpb.ListSessionsRequest{})
+	if err != nil {
+		t.Fatalf("ListSessions() error = %v", err)
+	}
+	if got := len(listed.GetSessions()); got != 1 {
+		t.Fatalf("ListSessions() returned %d sessions, want 1", got)
+	}
+	if got := listed.GetSessions()[0].GetSessionId(); got != started.GetSession().GetSessionId() {
+		t.Fatalf("listed session id = %q, want %q", got, started.GetSession().GetSessionId())
+	}
+
 	watch, err := client.WatchSession(ctx, &execpb.WatchSessionRequest{
 		SessionId: started.GetSession().GetSessionId(),
 	})

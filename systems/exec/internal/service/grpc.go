@@ -68,6 +68,7 @@ func (s *GRPCServer) GetRuntimeInfo(
 		ProxyPolicyRevision: s.info.ProxyPolicyRevision,
 		Capabilities: []*execpb.RuntimeCapability{
 			{Name: "sessions", Enabled: true},
+			{Name: "list_sessions", Enabled: true},
 			{Name: "watch", Enabled: true},
 			{Name: "stdin", Enabled: true},
 			{Name: "terminate", Enabled: true},
@@ -109,6 +110,17 @@ func (s *GRPCServer) GetSession(
 		return nil, mapError(err)
 	}
 	return &execpb.GetSessionResponse{Session: session}, nil
+}
+
+// ListSessions returns current snapshots for all tracked sessions.
+func (s *GRPCServer) ListSessions(
+	_ context.Context,
+	req *execpb.ListSessionsRequest,
+) (*execpb.ListSessionsResponse, error) {
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "request is required")
+	}
+	return &execpb.ListSessionsResponse{Sessions: s.manager.ListSessions()}, nil
 }
 
 // WatchSession streams session events from the requested cursor.

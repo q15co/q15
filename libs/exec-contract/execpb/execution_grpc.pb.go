@@ -22,6 +22,7 @@ const (
 	ExecutionService_GetRuntimeInfo_FullMethodName    = "/q15.exec.v1.ExecutionService/GetRuntimeInfo"
 	ExecutionService_StartSession_FullMethodName      = "/q15.exec.v1.ExecutionService/StartSession"
 	ExecutionService_GetSession_FullMethodName        = "/q15.exec.v1.ExecutionService/GetSession"
+	ExecutionService_ListSessions_FullMethodName      = "/q15.exec.v1.ExecutionService/ListSessions"
 	ExecutionService_WatchSession_FullMethodName      = "/q15.exec.v1.ExecutionService/WatchSession"
 	ExecutionService_WriteSessionStdin_FullMethodName = "/q15.exec.v1.ExecutionService/WriteSessionStdin"
 	ExecutionService_TerminateSession_FullMethodName  = "/q15.exec.v1.ExecutionService/TerminateSession"
@@ -34,6 +35,7 @@ type ExecutionServiceClient interface {
 	GetRuntimeInfo(ctx context.Context, in *GetRuntimeInfoRequest, opts ...grpc.CallOption) (*GetRuntimeInfoResponse, error)
 	StartSession(ctx context.Context, in *StartSessionRequest, opts ...grpc.CallOption) (*StartSessionResponse, error)
 	GetSession(ctx context.Context, in *GetSessionRequest, opts ...grpc.CallOption) (*GetSessionResponse, error)
+	ListSessions(ctx context.Context, in *ListSessionsRequest, opts ...grpc.CallOption) (*ListSessionsResponse, error)
 	WatchSession(ctx context.Context, in *WatchSessionRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchSessionResponse], error)
 	WriteSessionStdin(ctx context.Context, in *WriteSessionStdinRequest, opts ...grpc.CallOption) (*WriteSessionStdinResponse, error)
 	TerminateSession(ctx context.Context, in *TerminateSessionRequest, opts ...grpc.CallOption) (*TerminateSessionResponse, error)
@@ -71,6 +73,16 @@ func (c *executionServiceClient) GetSession(ctx context.Context, in *GetSessionR
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetSessionResponse)
 	err := c.cc.Invoke(ctx, ExecutionService_GetSession_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *executionServiceClient) ListSessions(ctx context.Context, in *ListSessionsRequest, opts ...grpc.CallOption) (*ListSessionsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListSessionsResponse)
+	err := c.cc.Invoke(ctx, ExecutionService_ListSessions_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -123,6 +135,7 @@ type ExecutionServiceServer interface {
 	GetRuntimeInfo(context.Context, *GetRuntimeInfoRequest) (*GetRuntimeInfoResponse, error)
 	StartSession(context.Context, *StartSessionRequest) (*StartSessionResponse, error)
 	GetSession(context.Context, *GetSessionRequest) (*GetSessionResponse, error)
+	ListSessions(context.Context, *ListSessionsRequest) (*ListSessionsResponse, error)
 	WatchSession(*WatchSessionRequest, grpc.ServerStreamingServer[WatchSessionResponse]) error
 	WriteSessionStdin(context.Context, *WriteSessionStdinRequest) (*WriteSessionStdinResponse, error)
 	TerminateSession(context.Context, *TerminateSessionRequest) (*TerminateSessionResponse, error)
@@ -144,6 +157,9 @@ func (UnimplementedExecutionServiceServer) StartSession(context.Context, *StartS
 }
 func (UnimplementedExecutionServiceServer) GetSession(context.Context, *GetSessionRequest) (*GetSessionResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetSession not implemented")
+}
+func (UnimplementedExecutionServiceServer) ListSessions(context.Context, *ListSessionsRequest) (*ListSessionsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListSessions not implemented")
 }
 func (UnimplementedExecutionServiceServer) WatchSession(*WatchSessionRequest, grpc.ServerStreamingServer[WatchSessionResponse]) error {
 	return status.Errorf(codes.Unimplemented, "method WatchSession not implemented")
@@ -229,6 +245,24 @@ func _ExecutionService_GetSession_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ExecutionService_ListSessions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListSessionsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ExecutionServiceServer).ListSessions(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ExecutionService_ListSessions_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ExecutionServiceServer).ListSessions(ctx, req.(*ListSessionsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _ExecutionService_WatchSession_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(WatchSessionRequest)
 	if err := stream.RecvMsg(m); err != nil {
@@ -294,6 +328,10 @@ var ExecutionService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetSession",
 			Handler:    _ExecutionService_GetSession_Handler,
+		},
+		{
+			MethodName: "ListSessions",
+			Handler:    _ExecutionService_ListSessions_Handler,
 		},
 		{
 			MethodName: "WriteSessionStdin",

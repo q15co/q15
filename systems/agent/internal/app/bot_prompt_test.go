@@ -129,6 +129,7 @@ func TestBuildToolListIncludesOnlyCurrentRuntimeTools(t *testing.T) {
 		"apply_patch",
 		"validate_skill",
 		"exec",
+		"exec_list",
 		"exec_read",
 		"exec_write",
 		"exec_kill",
@@ -174,6 +175,7 @@ func TestBuildToolListAppendsWebSearchWhenConfigured(t *testing.T) {
 		"apply_patch",
 		"validate_skill",
 		"exec",
+		"exec_list",
 		"exec_read",
 		"exec_write",
 		"exec_kill",
@@ -220,6 +222,7 @@ func TestBuildToolListAppendsEmbeddingToolsWhenConfigured(t *testing.T) {
 		"apply_patch",
 		"validate_skill",
 		"exec",
+		"exec_list",
 		"exec_read",
 		"exec_write",
 		"exec_kill",
@@ -260,6 +263,13 @@ func (stubExecutionService) GetSession(
 	*execpb.GetSessionRequest,
 ) (*execpb.GetSessionResponse, error) {
 	return &execpb.GetSessionResponse{}, nil
+}
+
+func (stubExecutionService) ListSessions(
+	context.Context,
+	*execpb.ListSessionsRequest,
+) (*execpb.ListSessionsResponse, error) {
+	return &execpb.ListSessionsResponse{}, nil
 }
 
 func (stubExecutionService) WatchSession(
