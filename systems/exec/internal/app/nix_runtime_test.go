@@ -43,6 +43,55 @@ func TestNixRuntimeHealthyRejectsMissingMarkers(t *testing.T) {
 	}
 }
 
+func TestRuntimePathsHealthyAcceptsExistingSymlinkTargets(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	target := filepath.Join(root, "store", "fonts.conf")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatalf("MkdirAll(target dir) error = %v", err)
+	}
+	if err := os.WriteFile(target, []byte("<fontconfig/>"), 0o644); err != nil {
+		t.Fatalf("WriteFile(target) error = %v", err)
+	}
+	link := filepath.Join(root, "etc", "fonts.conf")
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatalf("MkdirAll(link dir) error = %v", err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatalf("Symlink(link) error = %v", err)
+	}
+
+	healthy, err := runtimePathsHealthy([]string{link})
+	if err != nil {
+		t.Fatalf("runtimePathsHealthy() error = %v", err)
+	}
+	if !healthy {
+		t.Fatalf("expected runtime paths to be healthy")
+	}
+}
+
+func TestRuntimePathsHealthyRejectsBrokenSymlinkTargets(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	link := filepath.Join(root, "etc", "fonts.conf")
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatalf("MkdirAll(link dir) error = %v", err)
+	}
+	if err := os.Symlink(filepath.Join(root, "missing", "fonts.conf"), link); err != nil {
+		t.Fatalf("Symlink(link) error = %v", err)
+	}
+
+	healthy, err := runtimePathsHealthy([]string{link})
+	if err != nil {
+		t.Fatalf("runtimePathsHealthy() error = %v", err)
+	}
+	if healthy {
+		t.Fatalf("expected runtime paths to be unhealthy")
+	}
+}
+
 func TestNixBootstrapSourceAvailableAcceptsProfileSymlinks(t *testing.T) {
 	t.Parallel()
 
