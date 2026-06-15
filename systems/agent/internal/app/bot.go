@@ -21,6 +21,7 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/fileops"
 	q15media "github.com/q15co/q15/systems/agent/internal/media"
 	"github.com/q15co/q15/systems/agent/internal/memory"
+	"github.com/q15co/q15/systems/agent/internal/provider/ollama"
 	"github.com/q15co/q15/systems/agent/internal/provider/openaicodex"
 	"github.com/q15co/q15/systems/agent/internal/provider/openaicompatible"
 	q15skills "github.com/q15co/q15/systems/agent/internal/skills"
@@ -681,6 +682,12 @@ func defaultModelClientFactory(
 	mediaStore q15media.Store,
 ) (agent.ModelClient, error) {
 	switch strings.ToLower(strings.TrimSpace(modelCfg.ProviderType)) {
+	case "ollama":
+		return ollama.NewClient(
+			modelCfg.ProviderBaseURL,
+			modelCfg.ProviderAPIKey,
+			mediaStore,
+		)
 	case "openai-compatible":
 		return openaicompatible.NewClient(
 			modelCfg.ProviderBaseURL,

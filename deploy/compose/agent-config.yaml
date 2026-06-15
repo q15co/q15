@@ -1,40 +1,67 @@
 providers:
-  - name: openai
-    type: openai-codex
-
-  - name: moonshot
-    type: openai-compatible
-    base_url: https://api.moonshot.ai/v1
-    key_env: MOONSHOT_API_KEY
-
-  - name: zai
-    type: openai-compatible
-    base_url: https://api.z.ai/api/coding/paas/v4
-    key_env: ZAI_API_KEY
+  - name: ollama-cloud
+    type: ollama
+    base_url: https://ollama.com
+    key_env: OLLAMA_API_KEY
 
 models:
-  - name: gpt-5.5
-    provider: openai
+  - name: kimi-k2.7-code
+    provider: ollama-cloud
+    provider_model: kimi-k2.7-code:cloud
     capabilities: [text, tool_calling, reasoning, image_input]
 
-  - name: glm-5-turbo
-    provider: zai
+  - name: nemotron-3-ultra
+    provider: ollama-cloud
+    provider_model: nemotron-3-ultra:cloud
+    capabilities: [text, tool_calling, reasoning]
+
+  - name: minimax-m3
+    provider: ollama-cloud
+    provider_model: minimax-m3:cloud
+    capabilities: [text, tool_calling, reasoning, image_input]
+
+  - name: deepseek-v4-flash
+    provider: ollama-cloud
+    provider_model: deepseek-v4-flash:cloud
+    capabilities: [text, tool_calling, reasoning]
+
+  - name: deepseek-v4-pro
+    provider: ollama-cloud
+    provider_model: deepseek-v4-pro:cloud
     capabilities: [text, tool_calling, reasoning]
 
   - name: kimi-k2.6
-    provider: moonshot
+    provider: ollama-cloud
+    provider_model: kimi-k2.6:cloud
     capabilities: [text, tool_calling, reasoning, image_input]
+
+  - name: glm-5.1
+    provider: ollama-cloud
+    provider_model: glm-5.1:cloud
+    capabilities: [text, tool_calling, reasoning]
+
+  - name: minimax-m2.7
+    provider: ollama-cloud
+    provider_model: minimax-m2.7:cloud
+    capabilities: [text, tool_calling, reasoning]
 
 agent:
   name: Q15
   models:
-    - glm-5-turbo
-    - gpt-5.5
+    - minimax-m3
+    - kimi-k2.7-code
+    - nemotron-3-ultra
+    - deepseek-v4-flash
+    - deepseek-v4-pro
     - kimi-k2.6
+    - glm-5.1
+    - minimax-m2.7
   cognition:
     models:
-      - kimi-k2.6
-      - gpt-5.5
+      - kimi-k2.7-code
+      - nemotron-3-ultra
+      - minimax-m3
+      - deepseek-v4-flash
   memory_recent_turns: 6
   tools:
     web_search:

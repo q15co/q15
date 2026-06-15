@@ -11,6 +11,7 @@ Rules:
 - Edit the local files, not the `*.example` templates.
 - The generic tracked templates are:
   - `moonshot_api_key.example`
+  - `ollama_api_key.example`
   - `zai_api_key.example`
   - `brave_api_key.example`
   - `gemini_api_key.example`

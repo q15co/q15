@@ -31,6 +31,15 @@ func testOpenAICodexProvider(name string) Provider {
 	}
 }
 
+func testOllamaProvider(name, baseURL, keyEnv string) Provider {
+	return Provider{
+		Name:    name,
+		Type:    "ollama",
+		BaseURL: baseURL,
+		KeyEnv:  keyEnv,
+	}
+}
+
 func testAgent(name string, modelRefs ...string) *Agent {
 	return &Agent{
 		Name:   name,
@@ -563,6 +572,100 @@ func TestResolveAgentRuntimeResolvesOpenAICodexProviderWithoutAPIKey(t *testing.
 	}
 	if got := runtime.CognitionModels[0].ProviderAPIKey; got != "" {
 		t.Fatalf("ProviderAPIKey = %q, want empty string", got)
+	}
+}
+
+func TestResolveAgentRuntimeResolvesLocalOllamaProviderWithoutAPIKey(t *testing.T) {
+	t.Setenv("TEST_TELEGRAM_TOKEN", "tg-123")
+
+	cfg := Config{
+		Providers: []Provider{
+			testOllamaProvider("ollama-local", "", ""),
+		},
+		Models: []Model{
+			{
+				Name:          "gpt-oss-20b",
+				Provider:      "ollama-local",
+				ProviderModel: "gpt-oss:20b",
+				Capabilities:  []string{"text", "tool_calling", "reasoning", "image_input"},
+			},
+		},
+		Agent: testAgent("Q15", "gpt-oss-20b"),
+	}
+
+	runtime, err := cfg.ResolveAgentRuntime()
+	if err != nil {
+		t.Fatalf("ResolveAgentRuntime() error = %v", err)
+	}
+	if runtime == nil {
+		t.Fatal("ResolveAgentRuntime() returned nil runtime")
+	}
+	model := runtime.InteractiveModels[0]
+	if model.ProviderType != "ollama" {
+		t.Fatalf("ProviderType = %q, want ollama", model.ProviderType)
+	}
+	if model.ProviderBaseURL != "" {
+		t.Fatalf("ProviderBaseURL = %q, want empty default", model.ProviderBaseURL)
+	}
+	if model.ProviderAPIKey != "" {
+		t.Fatalf("ProviderAPIKey = %q, want empty string", model.ProviderAPIKey)
+	}
+	if model.ProviderModel != "gpt-oss:20b" {
+		t.Fatalf("ProviderModel = %q, want gpt-oss:20b", model.ProviderModel)
+	}
+}
+
+func TestResolveAgentRuntimeResolvesOllamaCloudAPIKey(t *testing.T) {
+	t.Setenv("TEST_TELEGRAM_TOKEN", "tg-123")
+	t.Setenv("OLLAMA_API_KEY", "ollama-key")
+
+	cfg := Config{
+		Providers: []Provider{
+			testOllamaProvider("ollama-cloud", "https://ollama.com", "OLLAMA_API_KEY"),
+		},
+		Models: []Model{
+			{
+				Name:          "gpt-oss-120b",
+				Provider:      "ollama-cloud",
+				ProviderModel: "gpt-oss:120b",
+				Capabilities:  []string{"text", "tool_calling", "reasoning"},
+			},
+		},
+		Agent: testAgent("Q15", "gpt-oss-120b"),
+	}
+
+	runtime, err := cfg.ResolveAgentRuntime()
+	if err != nil {
+		t.Fatalf("ResolveAgentRuntime() error = %v", err)
+	}
+	model := runtime.InteractiveModels[0]
+	if model.ProviderType != "ollama" {
+		t.Fatalf("ProviderType = %q, want ollama", model.ProviderType)
+	}
+	if model.ProviderBaseURL != "https://ollama.com" {
+		t.Fatalf("ProviderBaseURL = %q, want https://ollama.com", model.ProviderBaseURL)
+	}
+	if model.ProviderAPIKey != "ollama-key" {
+		t.Fatalf("ProviderAPIKey = %q, want ollama-key", model.ProviderAPIKey)
+	}
+}
+
+func TestValidateRequiresKeyEnvForOllamaCloudProvider(t *testing.T) {
+	cfg := Config{
+		Providers: []Provider{
+			testOllamaProvider("ollama-cloud", "https://ollama.com", ""),
+		},
+		Models: []Model{
+			testModel("gpt-oss-120b", "ollama-cloud", "text"),
+		},
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected validation error for missing Ollama Cloud key_env")
+	}
+	if !strings.Contains(err.Error(), "key_env is required for Ollama Cloud providers") {
+		t.Fatalf("unexpected validation error: %v", err)
 	}
 }
 
