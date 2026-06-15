@@ -67,6 +67,7 @@ services:
       GOMAXPROCS: "1"
       TZ: Europe/Berlin
       MOONSHOT_API_KEY_FILE: /run/q15-secrets/moonshot_api_key
+      OLLAMA_API_KEY_FILE: /run/q15-secrets/ollama_api_key
       ZAI_API_KEY_FILE: /run/q15-secrets/zai_api_key
       Q15_TELEGRAM_TOKEN_FILE: /run/q15-secrets/q15_telegram_token
       Q15_TELEGRAM_ALLOWED_USER_IDS_FILE: /run/q15-secrets/q15_telegram_allowed_user_ids
@@ -84,6 +85,10 @@ services:
       - type: bind
         source: ./secrets/moonshot_api_key
         target: /run/q15-secrets/moonshot_api_key
+        read_only: true
+      - type: bind
+        source: ./secrets/ollama_api_key
+        target: /run/q15-secrets/ollama_api_key
         read_only: true
       - type: bind
         source: ./secrets/zai_api_key

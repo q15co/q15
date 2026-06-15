@@ -228,6 +228,14 @@ providers:
     base_url: https://api.moonshot.ai/v1
     key_env: MOONSHOT_API_KEY
 
+  - name: ollama-local
+    type: ollama
+
+  - name: ollama-cloud
+    type: ollama
+    base_url: https://ollama.com
+    key_env: OLLAMA_API_KEY
+
 models:
   - name: gpt-5.4
     provider: openai
@@ -243,11 +251,21 @@ models:
       - tool_calling
       - reasoning
 
+  - name: gpt-oss-120b
+    provider: ollama-cloud
+    provider_model: gpt-oss:120b
+    capabilities:
+      - text
+      - tool_calling
+      - reasoning
+      - image_input
+
 agent:
   name: Q15
   models:
     - gpt-5.4
     - kimi-k2.5
+    - gpt-oss-120b
   cognition:
     models:
       - kimi-k2.5
@@ -272,6 +290,11 @@ Notes:
   `NAME` or `NAME_FILE`
 - `openai-codex` uses `/etc/q15/auth/auth.json` from `q15-auth`; `openai-compatible` providers use
   `key_env`
+- `ollama` defaults to local `http://localhost:11434` when `base_url` is omitted; set
+  `base_url: https://ollama.com` plus `key_env: OLLAMA_API_KEY` for direct Ollama Cloud API access
+- For Ollama Cloud, create an API key from the Ollama account settings, expose it as
+  `OLLAMA_API_KEY` or `OLLAMA_API_KEY_FILE`, and use native Ollama model names such as
+  `gpt-oss:120b`; browse the current cloud model catalog at `https://ollama.com/search`
 - `agent.tools.web_search.brave_api_key_env` is optional; omit it to disable `web_search`; when it
   is set, q15 resolves that env var through `NAME` or `NAME_FILE`
 - `agent.tools.embeddings` is optional; omit it to disable `embed_sources`, `embed_sync`,

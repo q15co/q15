@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -463,6 +464,13 @@ func (c Config) validate() error {
 		if normalizedType == "openai-compatible" && strings.TrimSpace(provider.KeyEnv) == "" {
 			return fmt.Errorf("providers[%d].key_env is required", i)
 		}
+		if normalizedType == "ollama" && strings.TrimSpace(provider.KeyEnv) == "" &&
+			isOllamaCloudBaseURL(provider.BaseURL) {
+			return fmt.Errorf(
+				"providers[%d].key_env is required for Ollama Cloud providers",
+				i,
+			)
+		}
 	}
 
 	models := make(map[string]struct{}, len(c.Models))
@@ -615,6 +623,8 @@ func normalizeModelCapabilities(names []string) (ModelCapabilities, error) {
 
 func normalizeProviderType(providerType string) string {
 	switch strings.ToLower(strings.TrimSpace(providerType)) {
+	case "ollama":
+		return "ollama"
 	case "moonshot", "openai-compatible", "openai_compatible":
 		return "openai-compatible"
 	case "openai-codex", "openai_codex":
@@ -622,6 +632,18 @@ func normalizeProviderType(providerType string) string {
 	default:
 		return ""
 	}
+}
+
+func isOllamaCloudBaseURL(raw string) bool {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return false
+	}
+	base, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(base.Hostname(), "ollama.com")
 }
 
 func normalizeAllowedUserIDs(ids []int64) ([]int64, error) {
@@ -681,6 +703,13 @@ func (c Config) resolveAgentModelRuntimes(
 		var apiKey string
 		var err error
 		switch providerType {
+		case "ollama":
+			if strings.TrimSpace(provider.KeyEnv) != "" {
+				apiKey, err = resolveSecretEnvValue(provider.KeyEnv)
+				if err != nil {
+					return nil, fmt.Errorf("provider %q requires %w", provider.Name, err)
+				}
+			}
 		case "openai-compatible":
 			apiKey, err = resolveSecretEnvValue(provider.KeyEnv)
 			if err != nil {
