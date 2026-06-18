@@ -894,132 +894,6 @@ func TestHandleMessage_UnauthorizedUserSkipsMediaIngest(t *testing.T) {
 	}
 }
 
-func TestHandleMessage_StoresAudioAsTypedAttachment(t *testing.T) {
-	store, err := q15media.NewFileStore(filepath.Join(t.TempDir(), "media"))
-	if err != nil {
-		t.Fatalf("NewFileStore() error = %v", err)
-	}
-
-	caller := &mockAPICaller{
-		responses: []*ta.Response{
-			{
-				Ok: true,
-				Result: []byte(
-					`{"file_id":"audio","file_unique_id":"u1","file_path":"audio/song.mp3"}`,
-				),
-			},
-		},
-	}
-	ch := newTestChannelWithCaller(t, caller)
-	ch.mediaStore = store
-	ch.downloadClient = &http.Client{
-		Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
-			return &http.Response{
-				StatusCode: http.StatusOK,
-				Status:     "200 OK",
-				Body:       io.NopCloser(strings.NewReader("audio bytes")),
-				Header:     make(http.Header),
-			}, nil
-		}),
-	}
-
-	var got IncomingMessage
-	ch.onMessage = func(msg IncomingMessage) {
-		got = msg
-	}
-
-	err = ch.handleMessage(context.Background(), &telego.Message{
-		MessageID: 8,
-		Caption:   "listen",
-		Audio: &telego.Audio{
-			FileID:   "audio",
-			FileName: "song.mp3",
-			MimeType: "audio/mpeg",
-		},
-		Chat: telego.Chat{ID: 123},
-	})
-	if err != nil {
-		t.Fatalf("handleMessage() error = %v", err)
-	}
-
-	if got.Text != "listen" {
-		t.Fatalf("Text = %q, want caption", got.Text)
-	}
-	if len(got.Attachments) != 1 {
-		t.Fatalf("Attachments = %#v, want one audio attachment", got.Attachments)
-	}
-	if got.Attachments[0].Type != conversation.AudioPartType {
-		t.Fatalf("attachment type = %q, want audio", got.Attachments[0].Type)
-	}
-	if got.Attachments[0].MediaRef == "" {
-		t.Fatal("audio attachment MediaRef is empty")
-	}
-}
-
-func TestHandleMessage_StoresVoiceAsOggAudioAttachment(t *testing.T) {
-	store, err := q15media.NewFileStore(filepath.Join(t.TempDir(), "media"))
-	if err != nil {
-		t.Fatalf("NewFileStore() error = %v", err)
-	}
-
-	caller := &mockAPICaller{
-		responses: []*ta.Response{
-			{
-				Ok: true,
-				Result: []byte(
-					`{"file_id":"voice","file_unique_id":"u1","file_path":"voice/file_1"}`,
-				),
-			},
-		},
-	}
-	ch := newTestChannelWithCaller(t, caller)
-	ch.mediaStore = store
-	ch.downloadClient = &http.Client{
-		Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
-			return &http.Response{
-				StatusCode: http.StatusOK,
-				Status:     "200 OK",
-				Body:       io.NopCloser(strings.NewReader("ogg opus bytes")),
-				Header:     make(http.Header),
-			}, nil
-		}),
-	}
-
-	var got IncomingMessage
-	ch.onMessage = func(msg IncomingMessage) {
-		got = msg
-	}
-
-	err = ch.handleMessage(context.Background(), &telego.Message{
-		MessageID: 8,
-		Voice: &telego.Voice{
-			FileID:   "voice",
-			MimeType: "audio/ogg",
-		},
-		Chat: telego.Chat{ID: 123},
-	})
-	if err != nil {
-		t.Fatalf("handleMessage() error = %v", err)
-	}
-
-	if len(got.Attachments) != 1 {
-		t.Fatalf("Attachments = %#v, want one audio attachment", got.Attachments)
-	}
-	if got.Attachments[0].Type != conversation.AudioPartType {
-		t.Fatalf("attachment type = %q, want audio", got.Attachments[0].Type)
-	}
-	_, meta, err := store.Resolve(got.Attachments[0].MediaRef)
-	if err != nil {
-		t.Fatalf("Resolve() error = %v", err)
-	}
-	if meta.ContentType != "audio/ogg" {
-		t.Fatalf("ContentType = %q, want audio/ogg", meta.ContentType)
-	}
-	if !strings.HasSuffix(meta.Filename, ".ogg") {
-		t.Fatalf("Filename = %q, want .ogg suffix", meta.Filename)
-	}
-}
-
 func TestHandleMessage_UnsupportedAttachmentsBecomeSyntheticTextOnlyMessages(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -1032,6 +906,14 @@ func TestHandleMessage_UnsupportedAttachmentsBecomeSyntheticTextOnlyMessages(t *
 			message: telego.Message{
 				Animation: &telego.Animation{FileID: "anim"},
 				Caption:   "check this",
+			},
+		},
+		{
+			name: "audio",
+			kind: "audio",
+			message: telego.Message{
+				Audio:   &telego.Audio{FileID: "audio"},
+				Caption: "check this",
 			},
 		},
 		{
@@ -1095,7 +977,7 @@ func TestHandleMessage_UnsupportedAttachmentsBecomeSyntheticTextOnlyMessages(t *
 
 			if !strings.Contains(
 				got.Text,
-				"Telegram currently supports photos/images and audio only.",
+				"Telegram currently forwards photos/images only; inbound audio awaits agent/provider support.",
 			) {
 				t.Fatalf("Text = %q, want support warning", got.Text)
 			}

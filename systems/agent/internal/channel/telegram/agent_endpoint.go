@@ -833,5 +833,5 @@ func canAttachCaptionToOnlyPhoto(attachments []telegramAttachment, text string) 
 
 func canUseTelegramPhotoCaption(text string) bool {
 	text = strings.TrimSpace(text)
-	return utf8.RuneCountInString(text) <= telegramPhotoCaptionRunes
+	return utf8.RuneCountInString(text) <= telegramCaptionRunes
 }
