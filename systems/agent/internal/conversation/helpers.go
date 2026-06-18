@@ -103,6 +103,8 @@ func NormalizePart(part Part) Part {
 	case ImagePartType:
 		part.MediaRef = strings.TrimSpace(part.MediaRef)
 		part.DataURL = strings.TrimSpace(part.DataURL)
+	case AudioPartType:
+		part.MediaRef = strings.TrimSpace(part.MediaRef)
 	case ReasoningPartType:
 	case ToolCallPartType:
 		part.ID = strings.TrimSpace(part.ID)
@@ -121,6 +123,8 @@ func shouldKeepPart(part Part) bool {
 		return strings.TrimSpace(part.Text) != ""
 	case ImagePartType:
 		return strings.TrimSpace(part.MediaRef) != "" || strings.TrimSpace(part.DataURL) != ""
+	case AudioPartType:
+		return strings.TrimSpace(part.MediaRef) != ""
 	case ReasoningPartType:
 		return strings.TrimSpace(part.Text) != "" || len(part.Replay) > 0
 	case ToolCallPartType:

@@ -47,11 +47,24 @@ type agentRunChannel interface {
 	SendText(context.Context, string, string) error
 	SendTextMessage(context.Context, string, string) (string, error)
 	SendPhoto(context.Context, string, string, string) error
+	SendAudio(context.Context, string, string, string) error
 	EditText(context.Context, string, string, string) error
 	DeleteMessage(context.Context, string, string) error
 	StartTyping(context.Context, string) (func(), error)
 	SetReaction(context.Context, string, string, string) error
 	ClearReaction(context.Context, string, string) error
+}
+
+type telegramAttachmentKind string
+
+const (
+	telegramAttachmentPhoto telegramAttachmentKind = "photo"
+	telegramAttachmentAudio telegramAttachmentKind = "audio"
+)
+
+type telegramAttachment struct {
+	kind telegramAttachmentKind
+	ref  string
 }
 
 // AgentEndpoint adapts the Telegram transport to the generic app worker.
@@ -85,7 +98,7 @@ func (e *AgentEndpoint) OpenSession(
 	msg bus.InboundMessage,
 ) (channelport.AgentSession, error) {
 	text := strings.TrimSpace(msg.Text)
-	if text == "" && len(msg.Media) == 0 {
+	if text == "" && len(msg.Attachments) == 0 {
 		return nil, nil
 	}
 
@@ -277,17 +290,17 @@ func (s *agentRunSession) Finish(ctx context.Context, result agent.ReplyResult) 
 	}
 
 	finalText := strings.TrimSpace(result.Text)
-	mediaRefs := normalizeTelegramPhotoRefs(result)
+	attachments := normalizeTelegramAttachments(result)
 
 	s.opMu.Lock()
-	if len(mediaRefs) == 0 {
+	if len(attachments) == 0 {
 		if finalText == "" {
 			finalText = "(assistant returned no text)"
 		}
 		s.sendFinalText(ctx, statusMessageID, finalText)
 	} else {
-		if statusMessageID == "" && len(mediaRefs) == 1 && canUseTelegramPhotoCaption(finalText) {
-			if err := s.channel.SendPhoto(ctx, s.chatID, mediaRefs[0], finalText); err != nil {
+		if statusMessageID == "" && canAttachCaptionToOnlyPhoto(attachments, finalText) {
+			if err := s.channel.SendPhoto(ctx, s.chatID, attachments[0].ref, finalText); err != nil {
 				s.logError("telegram photo send error: %v", err)
 				if finalText != "" {
 					s.sendFinalText(ctx, "", finalText)
@@ -301,15 +314,13 @@ func (s *agentRunSession) Finish(ctx context.Context, result agent.ReplyResult) 
 			} else {
 				s.deleteStatusMessage(ctx, statusMessageID)
 			}
-			sentPhotos := 0
-			for _, ref := range mediaRefs {
-				if err := s.channel.SendPhoto(ctx, s.chatID, ref, ""); err != nil {
-					s.logError("telegram photo send error: %v", err)
-					continue
+			sentAttachments := 0
+			for _, attachment := range attachments {
+				if s.sendAttachment(ctx, attachment) {
+					sentAttachments++
 				}
-				sentPhotos++
 			}
-			if sentPhotos == 0 && finalText == "" {
+			if sentAttachments == 0 && finalText == "" {
 				if err := s.channel.SendText(ctx, s.chatID, imageSendFailureText); err != nil {
 					s.logError("telegram image fallback send error: %v", err)
 				}
@@ -323,6 +334,24 @@ func (s *agentRunSession) Finish(ctx context.Context, result agent.ReplyResult) 
 			s.logError("telegram reaction clear error: %v", err)
 		}
 	}
+}
+
+func (s *agentRunSession) sendAttachment(ctx context.Context, attachment telegramAttachment) bool {
+	switch attachment.kind {
+	case telegramAttachmentPhoto:
+		if err := s.channel.SendPhoto(ctx, s.chatID, attachment.ref, ""); err != nil {
+			s.logError("telegram photo send error: %v", err)
+			return false
+		}
+	case telegramAttachmentAudio:
+		if err := s.channel.SendAudio(ctx, s.chatID, attachment.ref, ""); err != nil {
+			s.logError("telegram audio send error: %v", err)
+			return false
+		}
+	default:
+		return false
+	}
+	return true
 }
 
 func (s *agentRunSession) sendFinalText(ctx context.Context, statusMessageID, finalText string) {
@@ -734,18 +763,19 @@ func normalizeDisplayPath(path string) string {
 	return filepath.ToSlash(filepath.Clean(path))
 }
 
-func normalizeTelegramPhotoRefs(result agent.ReplyResult) []string {
-	if refs := imageMediaRefs(result.Attachments); len(refs) > 0 {
-		return refs
+func normalizeTelegramAttachments(result agent.ReplyResult) []telegramAttachment {
+	if attachments := typedTelegramAttachments(result.Attachments); len(attachments) > 0 {
+		return attachments
 	}
-	return uniqueMediaRefs(result.MediaRefs)
+	return imageRefTelegramAttachments(result.MediaRefs)
 }
 
-func imageMediaRefs(parts []conversation.Part) []string {
+func typedTelegramAttachments(parts []conversation.Part) []telegramAttachment {
 	seen := make(map[string]struct{})
-	out := make([]string, 0, len(parts))
+	out := make([]telegramAttachment, 0, len(parts))
 	for _, part := range conversation.NormalizeParts(parts) {
-		if part.Type != conversation.ImagePartType {
+		kind, ok := telegramAttachmentKindForPart(part.Type)
+		if !ok {
 			continue
 		}
 		ref := strings.TrimSpace(part.MediaRef)
@@ -756,7 +786,7 @@ func imageMediaRefs(parts []conversation.Part) []string {
 			continue
 		}
 		seen[ref] = struct{}{}
-		out = append(out, ref)
+		out = append(out, telegramAttachment{kind: kind, ref: ref})
 	}
 	if len(out) == 0 {
 		return nil
@@ -764,9 +794,20 @@ func imageMediaRefs(parts []conversation.Part) []string {
 	return out
 }
 
-func uniqueMediaRefs(refs []string) []string {
+func telegramAttachmentKindForPart(partType conversation.PartType) (telegramAttachmentKind, bool) {
+	switch partType {
+	case conversation.ImagePartType:
+		return telegramAttachmentPhoto, true
+	case conversation.AudioPartType:
+		return telegramAttachmentAudio, true
+	default:
+		return "", false
+	}
+}
+
+func imageRefTelegramAttachments(refs []string) []telegramAttachment {
 	seen := make(map[string]struct{})
-	out := make([]string, 0, len(refs))
+	out := make([]telegramAttachment, 0, len(refs))
 	for _, ref := range refs {
 		ref = strings.TrimSpace(ref)
 		if ref == "" {
@@ -776,12 +817,18 @@ func uniqueMediaRefs(refs []string) []string {
 			continue
 		}
 		seen[ref] = struct{}{}
-		out = append(out, ref)
+		out = append(out, telegramAttachment{kind: telegramAttachmentPhoto, ref: ref})
 	}
 	if len(out) == 0 {
 		return nil
 	}
 	return out
+}
+
+func canAttachCaptionToOnlyPhoto(attachments []telegramAttachment, text string) bool {
+	return len(attachments) == 1 &&
+		attachments[0].kind == telegramAttachmentPhoto &&
+		canUseTelegramPhotoCaption(text)
 }
 
 func canUseTelegramPhotoCaption(text string) bool {

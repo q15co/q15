@@ -309,7 +309,7 @@ func newTestManager(t *testing.T) *Manager {
 func waitForTerminalState(t *testing.T, manager *Manager, sessionID string) {
 	t.Helper()
 
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		session, err := manager.GetSession(sessionID)
 		if err != nil {

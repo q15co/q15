@@ -35,6 +35,7 @@ type PartType string
 const (
 	TextPartType       PartType = "text"
 	ImagePartType      PartType = "image"
+	AudioPartType      PartType = "audio"
 	ReasoningPartType  PartType = "reasoning"
 	ToolCallPartType   PartType = "tool_call"
 	ToolResultPartType PartType = "tool_result"
@@ -125,7 +126,7 @@ type Part struct {
 	// Text and Reasoning parts.
 	Text        string          `json:"text,omitempty"`
 	Disposition TextDisposition `json:"disposition,omitempty"`
-	// Image parts.
+	// Image and audio parts.
 	MediaRef string `json:"media_ref,omitempty"`
 	DataURL  string `json:"data_url,omitempty"`
 	// Replay stores provider-specific reconstruction metadata for a reasoning
@@ -160,6 +161,14 @@ func Image(mediaRef, dataURL string) Part {
 		Type:     ImagePartType,
 		MediaRef: strings.TrimSpace(mediaRef),
 		DataURL:  strings.TrimSpace(dataURL),
+	}
+}
+
+// Audio creates one audio part backed by a media ref.
+func Audio(mediaRef string) Part {
+	return Part{
+		Type:     AudioPartType,
+		MediaRef: strings.TrimSpace(mediaRef),
 	}
 }
 

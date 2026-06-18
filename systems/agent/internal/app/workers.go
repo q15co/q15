@@ -76,18 +76,12 @@ func runAgentWorker(
 }
 
 func userMessageFromInbound(in bus.InboundMessage) conversation.Message {
-	parts := make([]conversation.Part, 0, 1+len(in.Media))
+	parts := make([]conversation.Part, 0, 1+len(in.Attachments))
 
 	if text := strings.TrimSpace(in.Text); text != "" {
 		parts = append(parts, conversation.Text(text, ""))
 	}
-	for _, ref := range in.Media {
-		ref = strings.TrimSpace(ref)
-		if ref == "" {
-			continue
-		}
-		parts = append(parts, conversation.Image(ref, ""))
-	}
+	parts = append(parts, conversation.NormalizeParts(in.Attachments)...)
 
 	sentAt := in.SentAt
 	if sentAt.IsZero() {

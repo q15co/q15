@@ -87,6 +87,19 @@ func (f *fakeAgentRunChannel) SendPhoto(
 	return f.sendPhotoErr
 }
 
+func (f *fakeAgentRunChannel) SendAudio(
+	ctx context.Context,
+	chatID string,
+	mediaRef string,
+	caption string,
+) error {
+	_ = ctx
+	_ = chatID
+	_ = mediaRef
+	_ = caption
+	return nil
+}
+
 func (f *fakeAgentRunChannel) EditText(
 	ctx context.Context,
 	chatID string,
