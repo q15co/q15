@@ -22,9 +22,10 @@ import (
 )
 
 type apiCall struct {
-	url   string
-	body  map[string]any
-	files map[string]int
+	url       string
+	body      map[string]any
+	files     map[string]int
+	fileNames map[string]string
 }
 
 type mockAPICaller struct {
@@ -59,10 +60,11 @@ func (m *mockAPICaller) Call(
 
 	body := map[string]any{}
 	files := map[string]int{}
+	fileNames := map[string]string{}
 	if len(bodyRaw) > 0 {
 		if strings.HasPrefix(strings.ToLower(data.ContentType), "multipart/form-data") {
 			var err error
-			body, files, err = parseMultipartAPICall(bodyRaw, data.ContentType)
+			body, files, fileNames, err = parseMultipartAPICall(bodyRaw, data.ContentType)
 			if err != nil {
 				return nil, err
 			}
@@ -71,9 +73,10 @@ func (m *mockAPICaller) Call(
 		}
 	}
 	m.calls = append(m.calls, apiCall{
-		url:   url,
-		body:  body,
-		files: files,
+		url:       url,
+		body:      body,
+		files:     files,
+		fileNames: fileNames,
 	})
 
 	if len(m.responses) == 0 {
@@ -91,33 +94,35 @@ func (m *mockAPICaller) Call(
 func parseMultipartAPICall(
 	bodyRaw []byte,
 	contentType string,
-) (map[string]any, map[string]int, error) {
+) (map[string]any, map[string]int, map[string]string, error) {
 	mediaType, params, err := mime.ParseMediaType(contentType)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if mediaType != "multipart/form-data" {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 
 	reader := multipart.NewReader(bytes.NewReader(bodyRaw), params["boundary"])
 	body := make(map[string]any)
 	files := make(map[string]int)
+	fileNames := make(map[string]string)
 	for {
 		part, err := reader.NextPart()
 		if err == io.EOF {
-			return body, files, nil
+			return body, files, fileNames, nil
 		}
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		data, err := io.ReadAll(part)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		if name := part.FormName(); name != "" {
 			if part.FileName() != "" {
 				files[name] = len(data)
+				fileNames[name] = part.FileName()
 			} else {
 				body[name] = string(data)
 			}
@@ -435,6 +440,7 @@ func TestSendPhoto_UsesHTMLCaptionAndMultipart(t *testing.T) {
 func TestSendAudio_UsesHTMLCaptionAndMultipart(t *testing.T) {
 	audioBytes := []byte("audio bytes")
 	store, ref := mustStoreMediaRef(t, audioBytes, q15media.Meta{
+		Filename:    "song.mp3",
 		ContentType: "audio/mpeg",
 	})
 	caller := &mockAPICaller{}
@@ -460,6 +466,9 @@ func TestSendAudio_UsesHTMLCaptionAndMultipart(t *testing.T) {
 	}
 	if got := caller.calls[0].files["audio"]; got != len(audioBytes) {
 		t.Fatalf("audio bytes = %d, want %d", got, len(audioBytes))
+	}
+	if got := caller.calls[0].fileNames["audio"]; got != "song.mp3" {
+		t.Fatalf("audio filename = %q, want song.mp3", got)
 	}
 }
 
@@ -489,6 +498,9 @@ func TestSendAudio_SendsOggAsTelegramVoice(t *testing.T) {
 	}
 	if got := caller.calls[0].files["voice"]; got != len(voiceBytes) {
 		t.Fatalf("voice bytes = %d, want %d", got, len(voiceBytes))
+	}
+	if got := caller.calls[0].fileNames["voice"]; got != "voice.ogg" {
+		t.Fatalf("voice filename = %q, want voice.ogg", got)
 	}
 }
 

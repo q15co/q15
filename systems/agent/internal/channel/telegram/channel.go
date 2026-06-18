@@ -415,7 +415,13 @@ func (c *Channel) SendAudio(ctx context.Context, chatID, mediaRef, caption strin
 		return err
 	}
 	if isTelegramVoiceAudio(localPath, meta) {
-		return c.sendVoiceFile(ctx, chatValue, localPath, caption)
+		return c.sendVoiceFile(
+			ctx,
+			chatValue,
+			localPath,
+			telegramAudioFilenameForSend(meta, localPath),
+			caption,
+		)
 	}
 
 	file, err := os.Open(localPath)
@@ -426,7 +432,7 @@ func (c *Channel) SendAudio(ctx context.Context, chatID, mediaRef, caption strin
 
 	params := &telego.SendAudioParams{
 		ChatID: telego.ChatID{ID: chatValue},
-		Audio:  telego.InputFile{File: file},
+		Audio:  tu.FileFromReader(file, telegramAudioFilenameForSend(meta, localPath)),
 	}
 	if caption == "" {
 		if _, err := c.bot.SendAudio(ctx, params); err != nil {
@@ -459,6 +465,7 @@ func (c *Channel) sendVoiceFile(
 	ctx context.Context,
 	chatValue int64,
 	localPath string,
+	filename string,
 	caption string,
 ) error {
 	file, err := os.Open(localPath)
@@ -469,7 +476,7 @@ func (c *Channel) sendVoiceFile(
 
 	params := &telego.SendVoiceParams{
 		ChatID: telego.ChatID{ID: chatValue},
-		Voice:  telego.InputFile{File: file},
+		Voice:  tu.FileFromReader(file, filename),
 	}
 	if caption == "" {
 		if _, err := c.bot.SendVoice(ctx, params); err != nil {
@@ -1077,6 +1084,13 @@ func normalizeTelegramVoiceContentType(mimeType string) string {
 		return mimeType
 	}
 	return "audio/ogg"
+}
+
+func telegramAudioFilenameForSend(meta q15media.Meta, localPath string) string {
+	if name := strings.TrimSpace(meta.Filename); name != "" {
+		return filepath.Base(name)
+	}
+	return normalizeFilename(localPath, "audio")
 }
 
 func isTelegramVoiceAudio(localPath string, meta q15media.Meta) bool {
