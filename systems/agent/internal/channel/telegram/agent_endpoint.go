@@ -37,10 +37,10 @@ const (
 const telegramAckReaction = "👀"
 
 const (
-	thinkingStatus       = "🧠 Thinking…"
-	stillThinkingStatus  = "🧠 Still thinking…"
-	stoppedStatusPrefix  = "⏹️ Stopped:"
-	imageSendFailureText = "I couldn't send the generated image."
+	thinkingStatus            = "🧠 Thinking…"
+	stillThinkingStatus       = "🧠 Still thinking…"
+	stoppedStatusPrefix       = "⏹️ Stopped:"
+	attachmentSendFailureText = "I couldn't send the generated attachment."
 )
 
 type agentRunChannel interface {
@@ -304,8 +304,8 @@ func (s *agentRunSession) Finish(ctx context.Context, result agent.ReplyResult) 
 				s.logError("telegram photo send error: %v", err)
 				if finalText != "" {
 					s.sendFinalText(ctx, "", finalText)
-				} else if err := s.channel.SendText(ctx, s.chatID, imageSendFailureText); err != nil {
-					s.logError("telegram image fallback send error: %v", err)
+				} else if err := s.channel.SendText(ctx, s.chatID, attachmentSendFailureText); err != nil {
+					s.logError("telegram attachment fallback send error: %v", err)
 				}
 			}
 		} else {
@@ -321,8 +321,8 @@ func (s *agentRunSession) Finish(ctx context.Context, result agent.ReplyResult) 
 				}
 			}
 			if sentAttachments == 0 && finalText == "" {
-				if err := s.channel.SendText(ctx, s.chatID, imageSendFailureText); err != nil {
-					s.logError("telegram image fallback send error: %v", err)
+				if err := s.channel.SendText(ctx, s.chatID, attachmentSendFailureText); err != nil {
+					s.logError("telegram attachment fallback send error: %v", err)
 				}
 			}
 		}

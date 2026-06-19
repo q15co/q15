@@ -956,6 +956,8 @@ func telegramAudioFilenameForSend(meta q15media.Meta, localPath string) string {
 	return normalizeFilename(localPath, "audio")
 }
 
+// conversation.Audio is transport-neutral, so Telegram voice notes are
+// inferred from OGG/Opus content when sending back through Telegram.
 func isTelegramVoiceAudio(localPath string, meta q15media.Meta) bool {
 	contentType := strings.ToLower(strings.TrimSpace(meta.ContentType))
 	if contentType == "audio/ogg" || contentType == "audio/opus" {
