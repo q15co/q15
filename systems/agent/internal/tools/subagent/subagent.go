@@ -433,6 +433,9 @@ func (t *Write) Definition() agent.ToolDefinition {
 	return agent.ToolDefinition{
 		Name:        "subagent_write",
 		Description: "Append a follow-up message to a running sub-agent session",
+		PromptGuidance: []string{
+			"The follow-up text goes in the `message` field; do not use `data` or `input`.",
+		},
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -449,8 +452,9 @@ func (t *Write) Definition() agent.ToolDefinition {
 // Run appends a follow-up message to a session.
 func (t *Write) Run(_ context.Context, args string) (string, error) {
 	var a struct {
-		SessionID, Message string
-		Close              bool `json:"close"`
+		SessionID string `json:"session_id"`
+		Message   string `json:"message"`
+		Close     bool   `json:"close"`
 	}
 	if err := json.Unmarshal([]byte(args), &a); err != nil {
 		return "", fmt.Errorf("invalid arguments JSON: %w", err)

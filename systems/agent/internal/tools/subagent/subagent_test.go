@@ -162,6 +162,126 @@ func TestSessionWriteQueuesFollowUpForRunningSubAgent(t *testing.T) {
 	}
 }
 
+func TestWriteToolRunAppendsMessageToRunningSession(t *testing.T) {
+	firstCallStarted := make(chan struct{})
+	releaseFirstCall := make(chan struct{})
+	model := &recordingModel{
+		complete: func(
+			ctx context.Context,
+			_ string,
+			_ []conversation.Message,
+			_ []agent.ToolDefinition,
+			call int,
+		) (agent.ModelClientResult, error) {
+			if call == 1 {
+				close(firstCallStarted)
+				select {
+				case <-releaseFirstCall:
+				case <-ctx.Done():
+					return agent.ModelClientResult{}, ctx.Err()
+				}
+				return assistantResult("first answer"), nil
+			}
+			return assistantResult("second answer"), nil
+		},
+	}
+	manager := newTestManager(t, model)
+
+	session, err := manager.Start(context.Background(), "child", "initial task", "", nil, 0)
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	select {
+	case <-firstCallStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first model call did not start")
+	}
+
+	args := `{"session_id":"` + session.ID + `","message":"hi"}`
+	out, err := NewWrite(manager).Run(context.Background(), args)
+	if err != nil {
+		t.Fatalf("Write.Run() error = %v", err)
+	}
+	if !strings.Contains(out, "Message-Appended: true") {
+		t.Fatalf("Write.Run() output = %q, want Message-Appended: true", out)
+	}
+
+	close(releaseFirstCall)
+	waitDone(t, session)
+
+	calls := model.snapshotCalls()
+	if len(calls) != 2 {
+		t.Fatalf("model calls = %d, want 2", len(calls))
+	}
+	if !messagesContainText(calls[1], "hi") {
+		t.Fatalf("second model call did not include appended message: %#v", calls[1])
+	}
+}
+
+func TestWriteToolRunRejectsUnknownSession(t *testing.T) {
+	manager := newTestManager(t, &recordingModel{})
+	_, err := NewWrite(manager).Run(
+		context.Background(),
+		`{"session_id":"subagent-bogus","message":"hi"}`,
+	)
+	if err == nil {
+		t.Fatal("Write.Run() error = nil, want unknown session error")
+	}
+	if !strings.Contains(err.Error(), `unknown subagent session "subagent-bogus"`) {
+		t.Fatalf("Write.Run() error = %v, want error naming the bogus session id", err)
+	}
+}
+
+func TestWriteToolRunRejectsEmptyMessage(t *testing.T) {
+	firstCallStarted := make(chan struct{})
+	releaseFirstCall := make(chan struct{})
+	model := &recordingModel{
+		complete: func(
+			ctx context.Context,
+			_ string,
+			_ []conversation.Message,
+			_ []agent.ToolDefinition,
+			call int,
+		) (agent.ModelClientResult, error) {
+			if call == 1 {
+				close(firstCallStarted)
+				select {
+				case <-releaseFirstCall:
+				case <-ctx.Done():
+					return agent.ModelClientResult{}, ctx.Err()
+				}
+				return assistantResult("first answer"), nil
+			}
+			return assistantResult("second answer"), nil
+		},
+	}
+	manager := newTestManager(t, model)
+
+	session, err := manager.Start(context.Background(), "child", "initial task", "", nil, 0)
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	select {
+	case <-firstCallStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first model call did not start")
+	}
+
+	// Also guards the {"data":"..."} shape: unknown fields are silently
+	// ignored by encoding/json, so Message stays empty.
+	args := `{"session_id":"` + session.ID + `","message":""}`
+	_, err = NewWrite(manager).Run(context.Background(), args)
+	if err == nil {
+		t.Fatal("Write.Run() error = nil, want message is required error")
+	}
+	if !strings.Contains(err.Error(), "message is required") {
+		t.Fatalf("Write.Run() error = %v, want message is required", err)
+	}
+
+	close(releaseFirstCall)
+	waitDone(t, session)
+}
+
 func TestWorkspaceOnlyPolicyDeniesMemory(t *testing.T) {
 	err := workspaceOnlyPolicy{}.CheckToolCall(agent.ToolCall{
 		Name:      "read_file",
