@@ -166,11 +166,16 @@ func TestEngineRun_ToolProducedImageRequiresImageInputOnNextTurn(t *testing.T) {
 	if result.FinalText != "done" {
 		t.Fatalf("result.FinalText = %q, want %q", result.FinalText, "done")
 	}
-	if got := result.MediaRefs; len(got) != 1 || got[0] != "media://sha256/abc" {
-		t.Fatalf("result.MediaRefs = %#v, want tool image ref", got)
+	// MediaRefs are no longer converted to image parts in tool results
+	// (see https://github.com/q15co/q15/issues/84)
+	if got := result.MediaRefs; len(got) != 0 {
+		t.Fatalf("result.MediaRefs = %#v, want empty (no image promotion from tool MediaRefs)", got)
 	}
-	if got := result.Attachments; len(got) != 1 || got[0].MediaRef != "media://sha256/abc" {
-		t.Fatalf("result.Attachments = %#v, want final image attachment", got)
+	if got := result.Attachments; len(got) != 0 {
+		t.Fatalf(
+			"result.Attachments = %#v, want empty (no image promotion from tool MediaRefs)",
+			got,
+		)
 	}
 	if len(result.Messages) != 3 {
 		t.Fatalf("result.Messages len = %d, want 3", len(result.Messages))
@@ -180,12 +185,8 @@ func TestEngineRun_ToolProducedImageRequiresImageInputOnNextTurn(t *testing.T) {
 		t.Fatalf("result.Messages[1].Parts = %#v, want tool_result only", toolParts)
 	}
 	last := result.Messages[2]
-	if last.Role != conversation.AssistantRole || len(last.Parts) != 2 {
-		t.Fatalf("result.Messages[2] = %#v, want final assistant text plus image", last)
-	}
-	if last.Parts[1].Type != conversation.ImagePartType ||
-		last.Parts[1].MediaRef != "media://sha256/abc" {
-		t.Fatalf("result.Messages[2].Parts[1] = %#v, want promoted image", last.Parts[1])
+	if last.Role != conversation.AssistantRole || len(last.Parts) != 1 {
+		t.Fatalf("result.Messages[2] = %#v, want final assistant text only", last)
 	}
 	if len(planner.plannedRequirements) != 2 {
 		t.Fatalf("planned requirements len = %d, want 2", len(planner.plannedRequirements))
@@ -193,9 +194,9 @@ func TestEngineRun_ToolProducedImageRequiresImageInputOnNextTurn(t *testing.T) {
 	if planner.plannedRequirements[0].ImageInput {
 		t.Fatalf("first turn requirements = %#v, want text-only", planner.plannedRequirements[0])
 	}
-	if !planner.plannedRequirements[1].ImageInput {
+	if planner.plannedRequirements[1].ImageInput {
 		t.Fatalf(
-			"second turn requirements = %#v, want image_input",
+			"second turn requirements = %#v, want text-only (no image promotion from tool MediaRefs)",
 			planner.plannedRequirements[1],
 		)
 	}
@@ -243,25 +244,22 @@ func TestEngineRun_PromotesOnlyTrailingToolBatchAttachments(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if got := result.MediaRefs; len(got) != 1 || got[0] != "media://sha256/final" {
-		t.Fatalf("result.MediaRefs = %#v, want only final image", got)
+	if got := result.MediaRefs; len(got) != 0 {
+		t.Fatalf("result.MediaRefs = %#v, want empty (no image promotion from tool MediaRefs)", got)
 	}
 	if len(result.Messages) != 5 {
 		t.Fatalf("result.Messages len = %d, want 5", len(result.Messages))
 	}
-	if previewParts := result.Messages[1].Parts; len(previewParts) != 2 {
-		t.Fatalf("preview tool parts = %#v, want preview tool result plus image", previewParts)
+	if previewParts := result.Messages[1].Parts; len(previewParts) != 1 {
+		t.Fatalf("preview tool parts = %#v, want preview tool result only", previewParts)
 	}
 	if finalToolParts := result.Messages[3].Parts; len(finalToolParts) != 1 ||
 		finalToolParts[0].Type != conversation.ToolResultPartType {
 		t.Fatalf("final tool parts = %#v, want tool_result only", finalToolParts)
 	}
 	final := result.Messages[4]
-	if final.Role != conversation.AssistantRole || len(final.Parts) != 2 {
-		t.Fatalf("final assistant = %#v, want text plus image", final)
-	}
-	if final.Parts[1].MediaRef != "media://sha256/final" {
-		t.Fatalf("final attachment = %#v, want final image", final.Parts[1])
+	if final.Role != conversation.AssistantRole || len(final.Parts) != 1 {
+		t.Fatalf("final assistant = %#v, want text only", final)
 	}
 }
 
@@ -307,6 +305,7 @@ func TestEngineRun_PrefersAssistantImageRefsOverToolFallback(t *testing.T) {
 	if result.FinalText != "done" {
 		t.Fatalf("result.FinalText = %q, want done", result.FinalText)
 	}
+	// Assistant-provided images are still promoted (not tool MediaRefs)
 	if got, want := result.MediaRefs, []string{
 		"media://sha256/assistant-1",
 		"media://sha256/assistant-2",
@@ -316,10 +315,10 @@ func TestEngineRun_PrefersAssistantImageRefsOverToolFallback(t *testing.T) {
 	if len(result.Messages) != 3 {
 		t.Fatalf("result.Messages len = %d, want 3", len(result.Messages))
 	}
-	if toolParts := result.Messages[1].Parts; len(toolParts) != 3 ||
+	if toolParts := result.Messages[1].Parts; len(toolParts) != 1 ||
 		toolParts[0].Type != conversation.ToolResultPartType {
 		t.Fatalf(
-			"result.Messages[1].Parts = %#v, want tool result plus original duplicate images",
+			"result.Messages[1].Parts = %#v, want tool result only (no image from MediaRefs)",
 			toolParts,
 		)
 	}

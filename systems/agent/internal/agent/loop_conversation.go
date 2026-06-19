@@ -93,25 +93,12 @@ func toolResultAttachments(result ToolResult) []conversation.Part {
 	if len(result.Attachments) > 0 {
 		return conversation.CloneParts(conversation.NormalizeParts(result.Attachments))
 	}
-	return imagePartsFromMediaRefs(result.MediaRefs)
-}
-
-func imagePartsFromMediaRefs(refs []string) []conversation.Part {
-	if len(refs) == 0 {
-		return nil
-	}
-	out := make([]conversation.Part, 0, len(refs))
-	for _, ref := range refs {
-		ref = strings.TrimSpace(ref)
-		if ref == "" {
-			continue
-		}
-		out = append(out, conversation.Image(ref, ""))
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
+	// NOTE: MediaRefs are intentionally not converted to Image parts here.
+	// Converting them causes image parts to be embedded in tool result messages,
+	// which then get stripped by Canonicalize()/compactMessages(), leaving
+	// orphaned tool calls that providers like Kimi reject with 400 errors.
+	// See https://github.com/q15co/q15/issues/84
+	return nil
 }
 
 func mediaRefsFromAttachments(parts []conversation.Part) []string {
