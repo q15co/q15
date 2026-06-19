@@ -222,9 +222,9 @@ func TestRunAgentWorker_FinishesSessionAndForwardsEvents(t *testing.T) {
 func TestUserMessageFromInboundBuildsOrderedTextAndImageParts(t *testing.T) {
 	sentAt := time.Date(2026, time.April, 12, 10, 11, 12, 0, time.FixedZone("UTC+2", 2*60*60))
 	got := userMessageFromInbound(bus.InboundMessage{
-		SentAt: sentAt,
-		Text:   "hello",
-		Media:  []string{"media://sha256/abc"},
+		SentAt:      sentAt,
+		Text:        "hello",
+		Attachments: []conversation.Part{conversation.Image("media://sha256/abc", "")},
 	})
 
 	if got.Role != conversation.UserRole {
@@ -246,6 +246,26 @@ func TestUserMessageFromInboundBuildsOrderedTextAndImageParts(t *testing.T) {
 	}
 }
 
+func TestUserMessageFromInboundPreservesTypedAttachments(t *testing.T) {
+	got := userMessageFromInbound(bus.InboundMessage{
+		Text: "listen",
+		Attachments: []conversation.Part{
+			conversation.Audio(" media://sha256/audio "),
+		},
+	})
+
+	if len(got.Parts) != 2 {
+		t.Fatalf("parts len = %d, want 2", len(got.Parts))
+	}
+	if got.Parts[0].Type != conversation.TextPartType || got.Parts[0].Text != "listen" {
+		t.Fatalf("parts[0] = %#v", got.Parts[0])
+	}
+	if got.Parts[1].Type != conversation.AudioPartType ||
+		got.Parts[1].MediaRef != "media://sha256/audio" {
+		t.Fatalf("parts[1] = %#v", got.Parts[1])
+	}
+}
+
 func TestUserMessageFromInboundDefaultsMissingSentAt(t *testing.T) {
 	got := userMessageFromInbound(bus.InboundMessage{
 		Text: "hello",
@@ -260,7 +280,7 @@ func TestUserMessageFromInboundDefaultsMissingSentAt(t *testing.T) {
 	}
 }
 
-func TestRunAgentWorker_AcceptsMediaOnlyInboundMessage(t *testing.T) {
+func TestRunAgentWorker_AcceptsAttachmentOnlyInboundMessage(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -291,9 +311,9 @@ func TestRunAgentWorker_AcceptsMediaOnlyInboundMessage(t *testing.T) {
 	}()
 
 	if err := messageBus.PublishInbound(ctx, bus.InboundMessage{
-		Channel: bus.ChannelTelegram,
-		ChatID:  "123",
-		Media:   []string{"media://sha256/abc"},
+		Channel:     bus.ChannelTelegram,
+		ChatID:      "123",
+		Attachments: []conversation.Part{conversation.Image("media://sha256/abc", "")},
 	}); err != nil {
 		t.Fatalf("PublishInbound() error = %v", err)
 	}

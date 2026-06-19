@@ -17,17 +17,18 @@ import (
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
 	tu "github.com/mymmrac/telego/telegoutil"
+	"github.com/q15co/q15/systems/agent/internal/conversation"
 	q15media "github.com/q15co/q15/systems/agent/internal/media"
 )
 
 // IncomingMessage is a normalized Telegram update delivered to the app layer.
 type IncomingMessage struct {
-	ChatID    string
-	UserID    string
-	MessageID string
-	SentAt    time.Time
-	Text      string
-	Media     []string
+	ChatID      string
+	UserID      string
+	MessageID   string
+	SentAt      time.Time
+	Text        string
+	Attachments []conversation.Part
 }
 
 // MessageHandler processes one inbound Telegram message.
@@ -48,7 +49,7 @@ type Channel struct {
 var (
 	telegramTypingKeepaliveInterval = 4 * time.Second
 	telegramTextChunkRunes          = 3800
-	telegramPhotoCaptionRunes       = 1024
+	telegramCaptionRunes            = 1024
 	telegramLongPollTimeoutSeconds  = 30
 	telegramLongPollRequestTimeout  = 45 * time.Second
 	telegramLongPollRetryTimeout    = 8 * time.Second
@@ -221,19 +222,17 @@ func (c *Channel) handleMessage(ctx context.Context, message *telego.Message) er
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "telegram photo ingest error: %v\n", err)
 			msg.Text = attachmentFailureText("photo", text)
-			msg.Media = nil
 			c.onMessage(msg)
 			return nil
 		}
-		msg.Media = []string{ref}
+		msg.Attachments = []conversation.Part{conversation.Image(ref, "")}
 	} else if kind := unsupportedTelegramAttachmentKind(message); kind != "" {
 		msg.Text = unsupportedAttachmentText(kind, text)
-		msg.Media = nil
 		c.onMessage(msg)
 		return nil
 	}
 
-	if msg.Text == "" && len(msg.Media) == 0 {
+	if msg.Text == "" && len(msg.Attachments) == 0 {
 		return nil
 	}
 
@@ -312,8 +311,8 @@ func (c *Channel) SendPhoto(ctx context.Context, chatID, mediaRef, caption strin
 	if c.mediaStore == nil {
 		return errors.New("telegram media store is not configured")
 	}
-	if caption != "" && utf8.RuneCountInString(caption) > telegramPhotoCaptionRunes {
-		return fmt.Errorf("telegram photo caption exceeds %d runes", telegramPhotoCaptionRunes)
+	if caption != "" && utf8.RuneCountInString(caption) > telegramCaptionRunes {
+		return fmt.Errorf("telegram photo caption exceeds %d runes", telegramCaptionRunes)
 	}
 
 	chatValue, err := parseChatID(chatID)
@@ -347,7 +346,7 @@ func (c *Channel) SendPhoto(ctx context.Context, chatID, mediaRef, caption strin
 	}
 
 	formatted := markdownToTelegramHTML(caption)
-	if formatted != "" && utf8.RuneCountInString(formatted) <= telegramPhotoCaptionRunes {
+	if formatted != "" && utf8.RuneCountInString(formatted) <= telegramCaptionRunes {
 		params.Caption = formatted
 		params.ParseMode = telego.ModeHTML
 		if _, err := c.bot.SendPhoto(ctx, params); err == nil {
@@ -362,6 +361,128 @@ func (c *Channel) SendPhoto(ctx context.Context, chatID, mediaRef, caption strin
 	params.ParseMode = ""
 	if _, err := c.bot.SendPhoto(ctx, params); err != nil {
 		return fmt.Errorf("send telegram photo: %w", err)
+	}
+	return nil
+}
+
+// SendAudio sends one Telegram audio file resolved from a media-store ref.
+func (c *Channel) SendAudio(ctx context.Context, chatID, mediaRef, caption string) error {
+	chatID = strings.TrimSpace(chatID)
+	mediaRef = strings.TrimSpace(mediaRef)
+	caption = strings.TrimSpace(caption)
+
+	if chatID == "" {
+		return errors.New("chat id is required")
+	}
+	if mediaRef == "" {
+		return errors.New("media ref is required")
+	}
+	if c.mediaStore == nil {
+		return errors.New("telegram media store is not configured")
+	}
+	if caption != "" && utf8.RuneCountInString(caption) > telegramCaptionRunes {
+		return fmt.Errorf("telegram audio caption exceeds %d runes", telegramCaptionRunes)
+	}
+
+	chatValue, err := parseChatID(chatID)
+	if err != nil {
+		return fmt.Errorf("invalid chat id %q: %w", chatID, err)
+	}
+
+	localPath, meta, err := c.mediaStore.Resolve(mediaRef)
+	if err != nil {
+		return fmt.Errorf("resolve telegram audio %q: %w", mediaRef, err)
+	}
+	if err := ensureTelegramAudio(localPath, meta); err != nil {
+		return err
+	}
+	if isTelegramVoiceAudio(localPath, meta) {
+		return c.sendVoiceFile(
+			ctx,
+			chatValue,
+			localPath,
+			telegramAudioFilenameForSend(meta, localPath),
+			caption,
+		)
+	}
+
+	file, err := os.Open(localPath)
+	if err != nil {
+		return fmt.Errorf("open telegram audio %q: %w", localPath, err)
+	}
+	defer file.Close()
+
+	params := &telego.SendAudioParams{
+		ChatID: telego.ChatID{ID: chatValue},
+		Audio:  tu.FileFromReader(file, telegramAudioFilenameForSend(meta, localPath)),
+	}
+	if caption == "" {
+		if _, err := c.bot.SendAudio(ctx, params); err != nil {
+			return fmt.Errorf("send telegram audio: %w", err)
+		}
+		return nil
+	}
+
+	formatted := markdownToTelegramHTML(caption)
+	if formatted != "" && utf8.RuneCountInString(formatted) <= telegramCaptionRunes {
+		params.Caption = formatted
+		params.ParseMode = telego.ModeHTML
+		if _, err := c.bot.SendAudio(ctx, params); err == nil {
+			return nil
+		}
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			return fmt.Errorf("rewind telegram audio %q: %w", localPath, err)
+		}
+	}
+
+	params.Caption = caption
+	params.ParseMode = ""
+	if _, err := c.bot.SendAudio(ctx, params); err != nil {
+		return fmt.Errorf("send telegram audio: %w", err)
+	}
+	return nil
+}
+
+func (c *Channel) sendVoiceFile(
+	ctx context.Context,
+	chatValue int64,
+	localPath string,
+	filename string,
+	caption string,
+) error {
+	file, err := os.Open(localPath)
+	if err != nil {
+		return fmt.Errorf("open telegram voice %q: %w", localPath, err)
+	}
+	defer file.Close()
+
+	params := &telego.SendVoiceParams{
+		ChatID: telego.ChatID{ID: chatValue},
+		Voice:  tu.FileFromReader(file, filename),
+	}
+	if caption == "" {
+		if _, err := c.bot.SendVoice(ctx, params); err != nil {
+			return fmt.Errorf("send telegram voice: %w", err)
+		}
+		return nil
+	}
+
+	formatted := markdownToTelegramHTML(caption)
+	if formatted != "" && utf8.RuneCountInString(formatted) <= telegramCaptionRunes {
+		params.Caption = formatted
+		params.ParseMode = telego.ModeHTML
+		if _, err := c.bot.SendVoice(ctx, params); err == nil {
+			return nil
+		}
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			return fmt.Errorf("rewind telegram voice %q: %w", localPath, err)
+		}
+	}
+
+	params.Caption = caption
+	params.ParseMode = ""
+	if _, err := c.bot.SendVoice(ctx, params); err != nil {
+		return fmt.Errorf("send telegram voice: %w", err)
 	}
 	return nil
 }
@@ -599,7 +720,7 @@ func attachmentFailureText(kind, originalText string) string {
 func attachmentNotice(summary, originalText string) string {
 	lines := []string{
 		"System note: " + strings.TrimSpace(summary),
-		"Telegram currently supports photos/images only.",
+		"Telegram currently forwards photos/images only; inbound audio awaits agent/provider support.",
 		"The agent must not pretend it saw the attachment.",
 	}
 	originalText = strings.TrimSpace(originalText)
@@ -652,6 +773,27 @@ func ensureTelegramPhoto(localPath string, meta q15media.Meta) error {
 	return nil
 }
 
+func ensureTelegramAudio(localPath string, meta q15media.Meta) error {
+	info, err := os.Stat(localPath)
+	if err != nil {
+		return fmt.Errorf("stat telegram audio %q: %w", localPath, err)
+	}
+	if info.IsDir() {
+		return fmt.Errorf("telegram audio %q must be a file", localPath)
+	}
+
+	if contentType := strings.ToLower(strings.TrimSpace(meta.ContentType)); contentType != "" {
+		if !strings.HasPrefix(contentType, "audio/") {
+			return fmt.Errorf(
+				"media object %q is not audio (content type %q)",
+				localPath,
+				contentType,
+			)
+		}
+	}
+	return nil
+}
+
 func (c *Channel) storePhoto(ctx context.Context, fileID, scope string) (string, error) {
 	if c.mediaStore == nil {
 		return "", fmt.Errorf("telegram media store is not configured")
@@ -671,6 +813,8 @@ func (c *Channel) storePhoto(ctx context.Context, fileID, scope string) (string,
 	if err != nil {
 		return "", err
 	}
+	// FileStore copies before returning; keep temporary cleanup here so failed or
+	// completed ingests do not leak downloaded Telegram files.
 	defer func() {
 		_ = os.Remove(localPath)
 	}()
@@ -690,6 +834,22 @@ func (c *Channel) downloadPhoto(
 	ctx context.Context,
 	file *telego.File,
 ) (localPath string, contentType string, filename string, err error) {
+	return c.downloadTelegramFile(
+		ctx,
+		file,
+		"photo",
+		"",
+		normalizeFilename(file.FilePath, "photo.jpg"),
+	)
+}
+
+func (c *Channel) downloadTelegramFile(
+	ctx context.Context,
+	file *telego.File,
+	kind string,
+	expectedContentType string,
+	filename string,
+) (localPath string, contentType string, outFilename string, err error) {
 	if file == nil {
 		return "", "", "", fmt.Errorf("telegram file is required")
 	}
@@ -721,9 +881,9 @@ func (c *Channel) downloadPhoto(
 		)
 	}
 
-	tmp, err := os.CreateTemp("", "q15-telegram-photo-*")
+	tmp, err := os.CreateTemp("", "q15-telegram-"+kind+"-*")
 	if err != nil {
-		return "", "", "", fmt.Errorf("create temp file for telegram photo: %w", err)
+		return "", "", "", fmt.Errorf("create temp file for telegram %s: %w", kind, err)
 	}
 	defer func() {
 		if err != nil {
@@ -733,17 +893,20 @@ func (c *Channel) downloadPhoto(
 
 	if _, err = io.Copy(tmp, resp.Body); err != nil {
 		_ = tmp.Close()
-		return "", "", "", fmt.Errorf("write telegram photo to temp file: %w", err)
+		return "", "", "", fmt.Errorf("write telegram %s to temp file: %w", kind, err)
 	}
 	if err = tmp.Close(); err != nil {
-		return "", "", "", fmt.Errorf("close telegram temp photo file: %w", err)
+		return "", "", "", fmt.Errorf("close telegram temp %s file: %w", kind, err)
 	}
 
-	contentType, err = detectImageContentType(tmp.Name())
-	if err != nil {
-		return "", "", "", err
+	if expectedContentType != "" {
+		contentType = expectedContentType
+	} else {
+		contentType, err = detectImageContentType(tmp.Name())
+		if err != nil {
+			return "", "", "", err
+		}
 	}
-	filename = normalizeFilename(file.FilePath, "photo.jpg")
 	return tmp.Name(), contentType, filename, nil
 }
 
@@ -784,6 +947,27 @@ func normalizeFilename(filePath, fallback string) string {
 		return fallback
 	}
 	return name
+}
+
+func telegramAudioFilenameForSend(meta q15media.Meta, localPath string) string {
+	if name := strings.TrimSpace(meta.Filename); name != "" {
+		return filepath.Base(name)
+	}
+	return normalizeFilename(localPath, "audio")
+}
+
+// conversation.Audio is transport-neutral, so Telegram voice notes are
+// inferred from OGG/Opus content when sending back through Telegram.
+func isTelegramVoiceAudio(localPath string, meta q15media.Meta) bool {
+	contentType := strings.ToLower(strings.TrimSpace(meta.ContentType))
+	if contentType == "audio/ogg" || contentType == "audio/opus" {
+		return true
+	}
+	ext := strings.ToLower(filepath.Ext(strings.TrimSpace(meta.Filename)))
+	if ext == "" {
+		ext = strings.ToLower(filepath.Ext(localPath))
+	}
+	return ext == ".ogg" || ext == ".oga" || ext == ".opus"
 }
 
 // SplitText splits text into Telegram-safe chunks.

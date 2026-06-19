@@ -20,6 +20,7 @@ type fakeAgentRunChannel struct {
 	sendTexts        []string
 	sendMessageTexts []string
 	sendPhotos       []fakeSentPhoto
+	sendAudios       []fakeSentAudio
 	editTexts        []string
 	deletedMessages  []string
 	reactions        []string
@@ -32,9 +33,16 @@ type fakeAgentRunChannel struct {
 	sendErr          error
 	sendMessageErr   error
 	sendPhotoErr     error
+	sendAudioErr     error
 }
 
 type fakeSentPhoto struct {
+	chatID   string
+	mediaRef string
+	caption  string
+}
+
+type fakeSentAudio struct {
 	chatID   string
 	mediaRef string
 	caption  string
@@ -85,6 +93,23 @@ func (f *fakeAgentRunChannel) SendPhoto(
 		caption:  caption,
 	})
 	return f.sendPhotoErr
+}
+
+func (f *fakeAgentRunChannel) SendAudio(
+	ctx context.Context,
+	chatID string,
+	mediaRef string,
+	caption string,
+) error {
+	_ = ctx
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sendAudios = append(f.sendAudios, fakeSentAudio{
+		chatID:   chatID,
+		mediaRef: mediaRef,
+		caption:  caption,
+	})
+	return f.sendAudioErr
 }
 
 func (f *fakeAgentRunChannel) EditText(
@@ -532,6 +557,32 @@ func TestAgentRunSession_MultiImageReplySendsTextAndPhotosSeparately(t *testing.
 	}
 }
 
+func TestAgentRunSession_AudioReplySendsTextAndAudioSeparately(t *testing.T) {
+	channel := &fakeAgentRunChannel{}
+	session := newAgentRunSession(channel, "123", "", progressModeProgress)
+
+	session.Finish(context.Background(), agent.ReplyResult{
+		Text:        "done",
+		Attachments: []conversation.Part{conversation.Audio("media://sha256/audio")},
+	})
+
+	channel.mu.Lock()
+	defer channel.mu.Unlock()
+	if len(channel.sendTexts) != 1 || channel.sendTexts[0] != "done" {
+		t.Fatalf("sendTexts = %#v, want [done]", channel.sendTexts)
+	}
+	if len(channel.sendAudios) != 1 {
+		t.Fatalf("sendAudios len = %d, want 1", len(channel.sendAudios))
+	}
+	if got := channel.sendAudios[0]; got.mediaRef != "media://sha256/audio" ||
+		got.caption != "" {
+		t.Fatalf("sendAudios[0] = %#v, want uncaptained audio", got)
+	}
+	if len(channel.sendPhotos) != 0 {
+		t.Fatalf("sendPhotos = %#v, want none", channel.sendPhotos)
+	}
+}
+
 func TestAgentRunSession_ImageOnlyReplyDeletesPlaceholderBeforeSendingPhoto(t *testing.T) {
 	withTelegramProgressDurations(
 		5*time.Millisecond,
@@ -649,8 +700,34 @@ func TestAgentRunSession_PhotoSendFailureFallsBackToTextNotice(t *testing.T) {
 	if len(channel.sendPhotos) != 1 {
 		t.Fatalf("sendPhotos len = %d, want 1", len(channel.sendPhotos))
 	}
-	if len(channel.sendTexts) != 1 || channel.sendTexts[0] != imageSendFailureText {
-		t.Fatalf("sendTexts = %#v, want [%q]", channel.sendTexts, imageSendFailureText)
+	if len(channel.sendTexts) != 1 || channel.sendTexts[0] != attachmentSendFailureText {
+		t.Fatalf(
+			"sendTexts = %#v, want [%q]",
+			channel.sendTexts,
+			attachmentSendFailureText,
+		)
+	}
+}
+
+func TestAgentRunSession_AudioSendFailureFallsBackToTextNotice(t *testing.T) {
+	channel := &fakeAgentRunChannel{sendAudioErr: errors.New("boom")}
+	session := newAgentRunSession(channel, "123", "", progressModeProgress)
+
+	session.Finish(context.Background(), agent.ReplyResult{
+		Attachments: []conversation.Part{conversation.Audio("media://sha256/audio")},
+	})
+
+	channel.mu.Lock()
+	defer channel.mu.Unlock()
+	if len(channel.sendAudios) != 1 {
+		t.Fatalf("sendAudios len = %d, want 1", len(channel.sendAudios))
+	}
+	if len(channel.sendTexts) != 1 || channel.sendTexts[0] != attachmentSendFailureText {
+		t.Fatalf(
+			"sendTexts = %#v, want [%q]",
+			channel.sendTexts,
+			attachmentSendFailureText,
+		)
 	}
 }
 

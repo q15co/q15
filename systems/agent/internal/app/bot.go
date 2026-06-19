@@ -201,13 +201,13 @@ func cognitionJobs() []cognition.JobRegistration {
 
 func telegramInboundMessage(msg telegram.IncomingMessage) bus.InboundMessage {
 	return bus.InboundMessage{
-		Channel:   bus.ChannelTelegram,
-		ChatID:    msg.ChatID,
-		UserID:    msg.UserID,
-		MessageID: msg.MessageID,
-		SentAt:    msg.SentAt,
-		Text:      msg.Text,
-		Media:     append([]string(nil), msg.Media...),
+		Channel:     bus.ChannelTelegram,
+		ChatID:      msg.ChatID,
+		UserID:      msg.UserID,
+		MessageID:   msg.MessageID,
+		SentAt:      msg.SentAt,
+		Text:        msg.Text,
+		Attachments: conversation.CloneParts(msg.Attachments),
 	}
 }
 

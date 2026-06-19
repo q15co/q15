@@ -17,13 +17,15 @@ import (
 
 	"github.com/mymmrac/telego"
 	ta "github.com/mymmrac/telego/telegoapi"
+	"github.com/q15co/q15/systems/agent/internal/conversation"
 	q15media "github.com/q15co/q15/systems/agent/internal/media"
 )
 
 type apiCall struct {
-	url   string
-	body  map[string]any
-	files map[string]int
+	url       string
+	body      map[string]any
+	files     map[string]int
+	fileNames map[string]string
 }
 
 type mockAPICaller struct {
@@ -58,10 +60,11 @@ func (m *mockAPICaller) Call(
 
 	body := map[string]any{}
 	files := map[string]int{}
+	fileNames := map[string]string{}
 	if len(bodyRaw) > 0 {
 		if strings.HasPrefix(strings.ToLower(data.ContentType), "multipart/form-data") {
 			var err error
-			body, files, err = parseMultipartAPICall(bodyRaw, data.ContentType)
+			body, files, fileNames, err = parseMultipartAPICall(bodyRaw, data.ContentType)
 			if err != nil {
 				return nil, err
 			}
@@ -70,9 +73,10 @@ func (m *mockAPICaller) Call(
 		}
 	}
 	m.calls = append(m.calls, apiCall{
-		url:   url,
-		body:  body,
-		files: files,
+		url:       url,
+		body:      body,
+		files:     files,
+		fileNames: fileNames,
 	})
 
 	if len(m.responses) == 0 {
@@ -90,33 +94,35 @@ func (m *mockAPICaller) Call(
 func parseMultipartAPICall(
 	bodyRaw []byte,
 	contentType string,
-) (map[string]any, map[string]int, error) {
+) (map[string]any, map[string]int, map[string]string, error) {
 	mediaType, params, err := mime.ParseMediaType(contentType)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if mediaType != "multipart/form-data" {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 
 	reader := multipart.NewReader(bytes.NewReader(bodyRaw), params["boundary"])
 	body := make(map[string]any)
 	files := make(map[string]int)
+	fileNames := make(map[string]string)
 	for {
 		part, err := reader.NextPart()
 		if err == io.EOF {
-			return body, files, nil
+			return body, files, fileNames, nil
 		}
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		data, err := io.ReadAll(part)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		if name := part.FormName(); name != "" {
 			if part.FileName() != "" {
 				files[name] = len(data)
+				fileNames[name] = part.FileName()
 			} else {
 				body[name] = string(data)
 			}
@@ -431,6 +437,73 @@ func TestSendPhoto_UsesHTMLCaptionAndMultipart(t *testing.T) {
 	}
 }
 
+func TestSendAudio_UsesHTMLCaptionAndMultipart(t *testing.T) {
+	audioBytes := []byte("audio bytes")
+	store, ref := mustStoreMediaRef(t, audioBytes, q15media.Meta{
+		Filename:    "song.mp3",
+		ContentType: "audio/mpeg",
+	})
+	caller := &mockAPICaller{}
+	ch := newTestChannelWithCaller(t, caller)
+	ch.mediaStore = store
+
+	err := ch.SendAudio(t.Context(), "12345", ref, "**bold**")
+	if err != nil {
+		t.Fatalf("SendAudio() error = %v", err)
+	}
+
+	if len(caller.calls) != 1 {
+		t.Fatalf("calls = %d, want 1", len(caller.calls))
+	}
+	if !strings.HasSuffix(caller.calls[0].url, "/sendAudio") {
+		t.Fatalf("first URL = %q, want suffix /sendAudio", caller.calls[0].url)
+	}
+	if got := caller.calls[0].body["caption"]; got != "<b>bold</b>" {
+		t.Fatalf("caption = %#v, want %q", got, "<b>bold</b>")
+	}
+	if got := caller.calls[0].body["parse_mode"]; got != telego.ModeHTML {
+		t.Fatalf("parse_mode = %#v, want %q", got, telego.ModeHTML)
+	}
+	if got := caller.calls[0].files["audio"]; got != len(audioBytes) {
+		t.Fatalf("audio bytes = %d, want %d", got, len(audioBytes))
+	}
+	if got := caller.calls[0].fileNames["audio"]; got != "song.mp3" {
+		t.Fatalf("audio filename = %q, want song.mp3", got)
+	}
+}
+
+func TestSendAudio_SendsOggAsTelegramVoice(t *testing.T) {
+	voiceBytes := []byte("ogg opus bytes")
+	store, ref := mustStoreMediaRef(t, voiceBytes, q15media.Meta{
+		Filename:    "voice.ogg",
+		ContentType: "audio/ogg",
+	})
+	caller := &mockAPICaller{}
+	ch := newTestChannelWithCaller(t, caller)
+	ch.mediaStore = store
+
+	err := ch.SendAudio(t.Context(), "12345", ref, "**bold**")
+	if err != nil {
+		t.Fatalf("SendAudio() error = %v", err)
+	}
+
+	if len(caller.calls) != 1 {
+		t.Fatalf("calls = %d, want 1", len(caller.calls))
+	}
+	if !strings.HasSuffix(caller.calls[0].url, "/sendVoice") {
+		t.Fatalf("first URL = %q, want suffix /sendVoice", caller.calls[0].url)
+	}
+	if got := caller.calls[0].body["caption"]; got != "<b>bold</b>" {
+		t.Fatalf("caption = %#v, want %q", got, "<b>bold</b>")
+	}
+	if got := caller.calls[0].files["voice"]; got != len(voiceBytes) {
+		t.Fatalf("voice bytes = %d, want %d", got, len(voiceBytes))
+	}
+	if got := caller.calls[0].fileNames["voice"]; got != "voice.ogg" {
+		t.Fatalf("voice filename = %q, want voice.ogg", got)
+	}
+}
+
 func TestSendPhoto_FallbacksToPlainCaption(t *testing.T) {
 	store, ref := mustStoreMediaRef(t, testTelegramPNGBytes, q15media.Meta{
 		ContentType: "image/png",
@@ -686,11 +759,12 @@ func TestHandleMessage_PhotoStoresMediaPreservesCaptionAndUsesExpectedScope(t *t
 	if got.Text != "describe this" {
 		t.Fatalf("Text = %q, want %q", got.Text, "describe this")
 	}
-	if len(got.Media) != 1 {
-		t.Fatalf("Media len = %d, want 1", len(got.Media))
+	if len(got.Attachments) != 1 {
+		t.Fatalf("Attachments len = %d, want 1", len(got.Attachments))
 	}
-	if !strings.HasPrefix(got.Media[0], "media://sha256/") {
-		t.Fatalf("Media[0] = %q, want media ref", got.Media[0])
+	if got.Attachments[0].Type != conversation.ImagePartType ||
+		!strings.HasPrefix(got.Attachments[0].MediaRef, "media://sha256/") {
+		t.Fatalf("Attachments[0] = %#v, want image media ref", got.Attachments[0])
 	}
 	if len(caller.calls) != 1 {
 		t.Fatalf("API calls = %d, want 1", len(caller.calls))
@@ -702,7 +776,7 @@ func TestHandleMessage_PhotoStoresMediaPreservesCaptionAndUsesExpectedScope(t *t
 		t.Fatalf("getFile file_id = %#v, want %q", gotFileID, "high")
 	}
 
-	localPath, meta, err := store.Resolve(got.Media[0])
+	localPath, meta, err := store.Resolve(got.Attachments[0].MediaRef)
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
@@ -725,7 +799,7 @@ func TestHandleMessage_PhotoStoresMediaPreservesCaptionAndUsesExpectedScope(t *t
 	if err := store.ReleaseAll("telegram:123:42"); err != nil {
 		t.Fatalf("ReleaseAll() error = %v", err)
 	}
-	if _, _, err := store.Resolve(got.Media[0]); err == nil {
+	if _, _, err := store.Resolve(got.Attachments[0].MediaRef); err == nil {
 		t.Fatal("Resolve() error = nil after releasing expected scope, want non-nil")
 	}
 }
@@ -774,8 +848,8 @@ func TestHandleMessage_PhotoOnlyProducesMediaOnlyMessage(t *testing.T) {
 	if got.Text != "" {
 		t.Fatalf("Text = %q, want empty", got.Text)
 	}
-	if len(got.Media) != 1 {
-		t.Fatalf("Media len = %d, want 1", len(got.Media))
+	if len(got.Attachments) != 1 {
+		t.Fatalf("Attachments len = %d, want 1", len(got.Attachments))
 	}
 }
 
@@ -901,10 +975,10 @@ func TestHandleMessage_UnsupportedAttachmentsBecomeSyntheticTextOnlyMessages(t *
 				t.Fatalf("handleMessage() error = %v", err)
 			}
 
-			if len(got.Media) != 0 {
-				t.Fatalf("Media = %#v, want empty", got.Media)
-			}
-			if !strings.Contains(got.Text, "Telegram currently supports photos/images only.") {
+			if !strings.Contains(
+				got.Text,
+				"Telegram currently forwards photos/images only; inbound audio awaits agent/provider support.",
+			) {
 				t.Fatalf("Text = %q, want support warning", got.Text)
 			}
 			if !strings.Contains(got.Text, "must not pretend it saw the attachment") {
@@ -963,9 +1037,6 @@ func TestHandleMessage_PhotoIngestFailureBecomesSyntheticTextOnlyMessage(t *test
 		t.Fatalf("handleMessage() error = %v", err)
 	}
 
-	if len(got.Media) != 0 {
-		t.Fatalf("Media = %#v, want empty", got.Media)
-	}
 	if !strings.Contains(got.Text, "could not load it") {
 		t.Fatalf("Text = %q, want ingest failure notice", got.Text)
 	}

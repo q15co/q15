@@ -542,15 +542,15 @@ func TestRoutedModelAdapterPlanSelectionReturnsEmptyPlanWhenNoCandidatesMatch(t 
 	}
 }
 
-func TestTelegramInboundMessagePreservesMediaRefs(t *testing.T) {
+func TestTelegramInboundMessagePreservesTypedAttachments(t *testing.T) {
 	sentAt := time.Date(2026, time.April, 12, 10, 11, 12, 0, time.FixedZone("UTC+2", 2*60*60))
 	got := telegramInboundMessage(telegram.IncomingMessage{
-		ChatID:    "chat-1",
-		UserID:    "user-1",
-		MessageID: "msg-1",
-		SentAt:    sentAt,
-		Text:      "describe this",
-		Media:     []string{"media://sha256/abc"},
+		ChatID:      "chat-1",
+		UserID:      "user-1",
+		MessageID:   "msg-1",
+		SentAt:      sentAt,
+		Text:        "describe this",
+		Attachments: []conversation.Part{conversation.Image("media://sha256/abc", "")},
 	})
 
 	if got.Channel != bus.ChannelTelegram {
@@ -565,7 +565,8 @@ func TestTelegramInboundMessagePreservesMediaRefs(t *testing.T) {
 	if got.Text != "describe this" {
 		t.Fatalf("Text = %q, want describe this", got.Text)
 	}
-	if len(got.Media) != 1 || got.Media[0] != "media://sha256/abc" {
-		t.Fatalf("Media = %#v, want telegram media ref", got.Media)
+	if len(got.Attachments) != 1 || got.Attachments[0].Type != conversation.ImagePartType ||
+		got.Attachments[0].MediaRef != "media://sha256/abc" {
+		t.Fatalf("Attachments = %#v, want telegram image attachment", got.Attachments)
 	}
 }

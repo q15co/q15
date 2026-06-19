@@ -5,6 +5,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"github.com/q15co/q15/systems/agent/internal/conversation"
 )
 
 const (
@@ -16,13 +18,13 @@ const (
 
 // InboundMessage is a user-originated message entering the runtime.
 type InboundMessage struct {
-	Channel   string
-	ChatID    string
-	UserID    string
-	MessageID string
-	SentAt    time.Time
-	Text      string
-	Media     []string
+	Channel     string
+	ChatID      string
+	UserID      string
+	MessageID   string
+	SentAt      time.Time
+	Text        string
+	Attachments []conversation.Part
 }
 
 // OutboundMessage is a transport-bound message leaving the runtime.
