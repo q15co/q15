@@ -301,6 +301,7 @@ func (t *Spawn) Definition() agent.ToolDefinition {
 		Description: "Start a delegated sub-agent on a configured model",
 		PromptGuidance: []string{
 			"Use for isolated delegated work; provide only sanitized context.",
+			"Use a vision-capable model when delegating analysis of media refs such as media://sha256/... attachments.",
 			"Default tools allowlist is empty; explicitly grant only needed tools.",
 		},
 		Parameters: map[string]any{
