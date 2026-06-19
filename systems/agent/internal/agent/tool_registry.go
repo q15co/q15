@@ -90,14 +90,20 @@ func (r *Registry) Run(ctx context.Context, call ToolCall) (ToolResult, error) {
 	return ToolResult{Output: output}, err
 }
 
-func filterToolRegistry(base ToolRegistry, allowed []string) ToolRegistry {
+// FilterToolRegistry returns a registry view exposing only allowed tool names.
+// An empty allowlist exposes no tools.
+func FilterToolRegistry(base ToolRegistry, allowed []string) ToolRegistry {
 	if base == nil {
 		return nil
 	}
 
 	allowedSet := normalizeAllowedTools(allowed)
 	if len(allowedSet) == 0 {
-		return base
+		return &filteredRegistry{
+			base:        base,
+			definitions: nil,
+			allowed:     map[string]struct{}{},
+		}
 	}
 
 	definitions := base.Definitions()
@@ -118,6 +124,14 @@ func filterToolRegistry(base ToolRegistry, allowed []string) ToolRegistry {
 		definitions: filtered,
 		allowed:     allowedSet,
 	}
+}
+
+func filterToolRegistry(base ToolRegistry, allowed []string) ToolRegistry {
+	allowedSet := normalizeAllowedTools(allowed)
+	if len(allowedSet) == 0 {
+		return base
+	}
+	return FilterToolRegistry(base, allowed)
 }
 
 func normalizeAllowedTools(in []string) map[string]struct{} {

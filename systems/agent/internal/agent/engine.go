@@ -71,6 +71,14 @@ func NewEngineWithPlanner(
 	}
 }
 
+// SetMaxTurns overrides the maximum model/tool turns for a run.
+func (e *Engine) SetMaxTurns(maxTurns int) {
+	if e == nil || maxTurns <= 0 {
+		return
+	}
+	e.maxTurns = maxTurns
+}
+
 // Run executes one model/tool cycle over the provided initial messages.
 func (e *Engine) Run(ctx context.Context, req EngineRequest) (EngineResult, error) {
 	messages := conversation.NormalizeMessages(copyMessages(req.Messages))

@@ -26,6 +26,7 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/provider/openaicompatible"
 	q15skills "github.com/q15co/q15/systems/agent/internal/skills"
 	"github.com/q15co/q15/systems/agent/internal/tools"
+	"github.com/q15co/q15/systems/agent/internal/tools/subagent"
 )
 
 type runtimeEnvironmentInfo struct {
@@ -109,6 +110,24 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 	if err != nil {
 		return fmt.Errorf("configure tools for agent %q: %w", rt.Name, err)
 	}
+	baseToolRegistry, err := agent.NewToolRegistry(toolList...)
+	if err != nil {
+		return fmt.Errorf("build base tool registry for agent %q: %w", rt.Name, err)
+	}
+	subAgentManager := subagent.NewManager(
+		mergeModelRuntimes(rt.InteractiveModels, rt.CognitionModels),
+		defaultModelClientFactory,
+		baseToolRegistry,
+		mediaStore,
+	)
+	toolList = append(
+		toolList,
+		subagent.NewSpawn(subAgentManager),
+		subagent.NewRead(subAgentManager),
+		subagent.NewWrite(subAgentManager),
+		subagent.NewList(subAgentManager),
+		subagent.NewKill(subAgentManager),
+	)
 
 	toolRegistry, err := agent.NewToolRegistry(toolList...)
 	if err != nil {
