@@ -49,6 +49,7 @@ type Session struct {
 
 	mu       sync.Mutex
 	messages []conversation.Message
+	pending  []conversation.Message
 	events   []Event
 	cancel   context.CancelFunc
 	result   *agent.EngineResult
@@ -157,30 +158,42 @@ func (m *Manager) run(
 		}
 		s.addEvent(string(ev.Type), text, ev.Err)
 	})
-	result, err := engine.Run(
-		ctx,
-		agent.EngineRequest{
-			Messages:       s.snapshotMessages(),
-			UseTools:       true,
-			ToolCallPolicy: workspaceOnlyPolicy{},
-			Observer:       observer,
-		},
-	)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.Status == "killed" {
-		return
+
+	for {
+		result, err := engine.Run(
+			ctx,
+			agent.EngineRequest{
+				Messages:       s.snapshotMessages(),
+				UseTools:       true,
+				ToolCallPolicy: workspaceOnlyPolicy{},
+				Observer:       observer,
+			},
+		)
+		s.mu.Lock()
+		if s.Status == "killed" {
+			s.mu.Unlock()
+			return
+		}
+		if err != nil {
+			s.Status = "failed"
+			s.err = err
+			s.addEventLocked("failed", "", err)
+			s.mu.Unlock()
+			return
+		}
+		s.result = &result
+		s.messages = append(s.messages, result.Messages...)
+		if len(s.pending) == 0 {
+			s.Status = "completed"
+			s.addEventLocked("completed", result.FinalText, nil)
+			s.mu.Unlock()
+			return
+		}
+		s.addEventLocked("continued", result.FinalText, nil)
+		s.messages = append(s.messages, s.pending...)
+		s.pending = nil
+		s.mu.Unlock()
 	}
-	if err != nil {
-		s.Status = "failed"
-		s.err = err
-		s.addEventLocked("failed", "", err)
-		return
-	}
-	s.Status = "completed"
-	s.result = &result
-	s.messages = append(s.messages, result.Messages...)
-	s.addEventLocked("completed", result.FinalText, nil)
 }
 
 func (s *Session) addEvent(typ, text string, err error) {
@@ -270,7 +283,7 @@ func (s *Session) Write(message string) error {
 	if strings.TrimSpace(message) == "" {
 		return fmt.Errorf("message is required")
 	}
-	s.messages = append(s.messages, conversation.UserMessage(message))
+	s.pending = append(s.pending, conversation.UserMessage(message))
 	s.addEventLocked("parent_message", message, nil)
 	return nil
 }
