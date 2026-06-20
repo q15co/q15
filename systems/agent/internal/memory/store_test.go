@@ -754,7 +754,7 @@ func TestStoreAppendTurnPromotesFinalReplyMediaToAssistant(t *testing.T) {
 	}
 }
 
-func TestStoreAppendTurnPromotesOnlyTrailingToolBatchToAssistant(t *testing.T) {
+func TestStoreAppendTurnPromotesAllToolAttachmentsAcrossTurn(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "memory")
 	store := NewStore(root, "Jared", &fakeCommitter{})
 
@@ -763,7 +763,7 @@ func TestStoreAppendTurnPromotesOnlyTrailingToolBatchToAssistant(t *testing.T) {
 	}
 
 	if err := store.AppendTurn(context.Background(), []conversation.Message{
-		conversation.UserMessage("send the final image"),
+		conversation.UserMessage("send the preview then the final image"),
 		conversation.AssistantMessage(
 			conversation.ToolCall("call-1", "load_image", `{"path":"preview.png"}`),
 		),
@@ -796,17 +796,28 @@ func TestStoreAppendTurnPromotesOnlyTrailingToolBatchToAssistant(t *testing.T) {
 	if len(got) != 6 {
 		t.Fatalf("LoadRecentMessages len = %d, want 6", len(got))
 	}
-	if previewParts := got[2].Parts; len(previewParts) != 2 {
-		t.Fatalf("preview tool parts = %#v, want preview tool result plus image", previewParts)
+	if previewParts := got[2].Parts; len(previewParts) != 1 ||
+		previewParts[0].Type != conversation.ToolResultPartType {
+		t.Fatalf("preview tool parts = %#v, want tool_result only", previewParts)
 	}
 	if finalToolParts := got[4].Parts; len(finalToolParts) != 1 ||
 		finalToolParts[0].Type != conversation.ToolResultPartType {
 		t.Fatalf("final tool parts = %#v, want tool_result only", finalToolParts)
 	}
-	if final := got[5]; len(final.Parts) != 2 ||
-		final.Parts[1].Type != conversation.ImagePartType ||
-		final.Parts[1].MediaRef != "media://sha256/final" {
-		t.Fatalf("replayed final assistant = %#v, want text plus final image", final)
+	final := got[5]
+	if len(final.Parts) != 3 {
+		t.Fatalf("replayed final assistant = %#v, want text plus preview and final image", final)
+	}
+	if final.Parts[0].Type != conversation.TextPartType {
+		t.Fatalf("replayed final assistant part[0] = %#v, want text", final.Parts[0])
+	}
+	if final.Parts[1].Type != conversation.ImagePartType ||
+		final.Parts[1].MediaRef != "media://sha256/preview" {
+		t.Fatalf("replayed final attachment[0] = %#v, want preview image", final.Parts[1])
+	}
+	if final.Parts[2].Type != conversation.ImagePartType ||
+		final.Parts[2].MediaRef != "media://sha256/final" {
+		t.Fatalf("replayed final attachment[1] = %#v, want final image", final.Parts[2])
 	}
 }
 

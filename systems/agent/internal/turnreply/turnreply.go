@@ -17,8 +17,10 @@ type Selection struct {
 
 // Extract returns the final assistant-facing reply from one completed turn.
 // Assistant-owned attachments in the trailing assistant block take precedence.
-// When no assistant-owned attachments exist there, the trailing tool block is
-// treated as the fallback delivery batch.
+// When no assistant-owned attachments exist there, attachments produced by any
+// tool result in the turn are treated as the fallback delivery batch,
+// deduplicated by media ref so a later unrelated tool call cannot drop an
+// attachment produced earlier in the same turn.
 func Extract(messages []conversation.Message) Selection {
 	normalized := conversation.NormalizeMessages(conversation.CloneMessages(messages))
 	return Selection{
@@ -29,7 +31,10 @@ func Extract(messages []conversation.Message) Selection {
 
 // Canonicalize rewrites one completed turn so the terminal assistant reply owns
 // its delivered attachments. Older turns may have stored the delivered
-// attachments on the trailing tool batch instead.
+// attachments on a tool batch instead. Attachments are gathered from every tool
+// result in the turn (not only the trailing tool batch), deduplicated by media
+// ref, and promoted onto the terminal assistant reply so a later unrelated tool
+// call can no longer drop an attachment produced earlier in the same turn.
 func Canonicalize(messages []conversation.Message) []conversation.Message {
 	normalized := conversation.NormalizeMessages(conversation.CloneMessages(messages))
 	if len(normalized) == 0 {
@@ -42,8 +47,7 @@ func Canonicalize(messages []conversation.Message) []conversation.Message {
 		return compactMessages(normalized)
 	}
 
-	toolStart, toolEnd := trailingToolBlockBefore(normalized, assistantStart)
-	toolAttachments := collectReplyAttachments(normalized, toolStart, toolEnd)
+	toolAttachments := collectToolAttachments(normalized)
 	if len(toolAttachments) == 0 {
 		return compactMessages(normalized)
 	}
@@ -57,7 +61,7 @@ func Canonicalize(messages []conversation.Message) []conversation.Message {
 		attachmentKeys[attachment.key] = struct{}{}
 	}
 
-	for i := toolStart; i < toolEnd; i++ {
+	for i := range normalized {
 		if normalized[i].Role != conversation.ToolRole {
 			continue
 		}
@@ -92,8 +96,7 @@ func selectAttachments(messages []conversation.Message) []conversation.Part {
 		return partsFromAttachments(attachments)
 	}
 
-	toolStart, toolEnd := trailingToolBlockBefore(messages, assistantStart)
-	return partsFromAttachments(collectReplyAttachments(messages, toolStart, toolEnd))
+	return partsFromAttachments(collectToolAttachments(messages))
 }
 
 func collectReplyAttachments(
@@ -183,15 +186,34 @@ func trailingRoleBlockStart(messages []conversation.Message, role conversation.R
 	return start
 }
 
-func trailingToolBlockBefore(messages []conversation.Message, end int) (int, int) {
-	if end > len(messages) {
-		end = len(messages)
+// collectToolAttachments scans every tool-role message in the turn for reply
+// attachments, deduplicating by media ref. Attachments produced by any tool
+// result (not only the trailing tool batch) are considered for delivery, so a
+// later unrelated tool call can no longer drop an attachment produced earlier
+// in the same turn.
+func collectToolAttachments(messages []conversation.Message) []replyAttachment {
+	seen := make(map[string]struct{})
+	out := make([]replyAttachment, 0)
+	for _, msg := range messages {
+		if msg.Role != conversation.ToolRole {
+			continue
+		}
+		for _, part := range conversation.NormalizeParts(msg.Parts) {
+			attachment, ok := normalizeReplyAttachment(part)
+			if !ok {
+				continue
+			}
+			if _, dup := seen[attachment.key]; dup {
+				continue
+			}
+			seen[attachment.key] = struct{}{}
+			out = append(out, attachment)
+		}
 	}
-	start := end
-	for start > 0 && messages[start-1].Role == conversation.ToolRole {
-		start--
+	if len(out) == 0 {
+		return nil
 	}
-	return start, end
+	return out
 }
 
 func stripReplyAttachments(
