@@ -3,6 +3,8 @@ package app
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -366,6 +368,93 @@ func TestRoutedModelAdapterPlanSelectionFiltersByCapabilitiesAndPreservesOrder(t
 	}
 }
 
+func TestRoutedModelAdapterAdaptsMediaPerParentModelCapabilities(t *testing.T) {
+	store := newBotTestMediaStore(t)
+	imageRef := storeBotTestMedia(t, store, "photo.png", []byte{
+		0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n',
+		0x00, 0x00, 0x00, 0x0d, 'I', 'H', 'D', 'R',
+		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+		0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+		0x89, 0x00, 0x00, 0x00, 0x0d, 'I', 'D', 'A', 'T',
+		0x78, 0x9c, 0x63, 0xf8, 0xcf, 0xc0, 0x00, 0x00,
+		0x03, 0x01, 0x01, 0x00, 0xc9, 0xfe, 0x92, 0xef,
+		0x00, 0x00, 0x00, 0x00, 'I', 'E', 'N', 'D',
+		0xae, 0x42, 0x60, 0x82,
+	}, q15media.Meta{ContentType: "image/png", Source: "telegram"})
+	audioRef := storeBotTestMedia(t, store, "voice.ogg", []byte{
+		'O', 'g', 'g', 'S', 0x00, 0x02,
+		0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00,
+		0x01, 0x13,
+		'O', 'p', 'u', 's', 'H', 'e', 'a', 'd',
+	}, q15media.Meta{ContentType: "audio/ogg", Source: "telegram"})
+
+	clients := map[string]*fakeModelClient{
+		"text-only-provider": {},
+		"vision-provider":    {},
+	}
+	adapter, err := newModelAdapterWithFactory([]config.AgentModelRuntime{
+		{
+			Ref:           "text-only",
+			ProviderName:  "text-only-provider",
+			ProviderModel: "text-model",
+			Capabilities:  config.ModelCapabilities{Text: true},
+		},
+		{
+			Ref:           "vision",
+			ProviderName:  "vision-provider",
+			ProviderModel: "vision-model",
+			Capabilities: config.ModelCapabilities{
+				Text:       true,
+				ImageInput: true,
+			},
+		},
+	}, store, func(modelCfg config.AgentModelRuntime, _ q15media.Store) (agent.ModelClient, error) {
+		return clients[modelCfg.ProviderName], nil
+	})
+	if err != nil {
+		t.Fatalf("newModelAdapterWithFactory() error = %v", err)
+	}
+
+	messages := []conversation.Message{conversation.UserMessageParts(
+		conversation.Text("inspect these", ""),
+		conversation.Image(imageRef, ""),
+		conversation.Audio(audioRef),
+	)}
+	if _, err := adapter.Complete(context.Background(), "text-only", messages, nil); err != nil {
+		t.Fatalf("Complete(text-only) error = %v", err)
+	}
+	if _, err := adapter.Complete(context.Background(), "vision", messages, nil); err != nil {
+		t.Fatalf("Complete(vision) error = %v", err)
+	}
+
+	textOnly := clients["text-only-provider"].calls[0].messages[0]
+	if appTestHasPartType(textOnly, conversation.ImagePartType) ||
+		appTestHasPartType(textOnly, conversation.AudioPartType) {
+		t.Fatalf("text-only parent received inline media: %#v", textOnly.Parts)
+	}
+	if !appTestTextContains(textOnly, "[Media: image]") ||
+		!appTestTextContains(textOnly, "[Media: audio]") {
+		t.Fatalf("text-only parent parts = %#v, want image and audio hints", textOnly.Parts)
+	}
+
+	vision := clients["vision-provider"].calls[0].messages[0]
+	if !appTestHasPartType(vision, conversation.ImagePartType) {
+		t.Fatalf("vision parent parts = %#v, want image retained", vision.Parts)
+	}
+	if appTestHasPartType(vision, conversation.AudioPartType) ||
+		!appTestTextContains(vision, "[Media: audio]") {
+		t.Fatalf("vision parent parts = %#v, want audio downgraded", vision.Parts)
+	}
+
+	if messages[0].Parts[1].Type != conversation.ImagePartType ||
+		messages[0].Parts[2].Type != conversation.AudioPartType {
+		t.Fatalf("canonical parent transcript mutated: %#v", messages[0].Parts)
+	}
+}
+
 func TestRoutedModelAdapterPlanSelectionRejectsUnknownModelRef(t *testing.T) {
 	adapter, err := newModelAdapterWithFactory([]config.AgentModelRuntime{
 		{
@@ -390,6 +479,53 @@ func TestRoutedModelAdapterPlanSelectionRejectsUnknownModelRef(t *testing.T) {
 	); err == nil {
 		t.Fatal("Plan() error = nil, want unknown model error")
 	}
+}
+
+func newBotTestMediaStore(t *testing.T) *q15media.FileStore {
+	t.Helper()
+	store, err := q15media.NewFileStore(filepath.Join(t.TempDir(), "media"))
+	if err != nil {
+		t.Fatalf("NewFileStore() error = %v", err)
+	}
+	return store
+}
+
+func storeBotTestMedia(
+	t *testing.T,
+	store *q15media.FileStore,
+	filename string,
+	content []byte,
+	meta q15media.Meta,
+) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), filename)
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	meta.Filename = filename
+	ref, err := store.Store(path, meta, "test")
+	if err != nil {
+		t.Fatalf("Store() error = %v", err)
+	}
+	return ref
+}
+
+func appTestHasPartType(message conversation.Message, partType conversation.PartType) bool {
+	for _, part := range message.Parts {
+		if part.Type == partType {
+			return true
+		}
+	}
+	return false
+}
+
+func appTestTextContains(message conversation.Message, text string) bool {
+	for _, part := range message.Parts {
+		if part.Type == conversation.TextPartType && strings.Contains(part.Text, text) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestCognitionJobsRegistersBuiltInCognitionJobs(t *testing.T) {
