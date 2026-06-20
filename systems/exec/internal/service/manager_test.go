@@ -31,6 +31,62 @@ func TestManagerSupportsConcurrentSessions(t *testing.T) {
 	}
 }
 
+func TestManagerStartSessionAllowsEmptyPackages(t *testing.T) {
+	t.Parallel()
+
+	manager := newTestManager(t)
+	session, err := manager.StartSession(
+		context.Background(),
+		"printf empty-packages",
+		nil,
+		"",
+		false,
+	)
+	if err != nil {
+		t.Fatalf("StartSession() error = %v, want empty packages accepted", err)
+	}
+	if got := session.GetPackages(); len(got) != 0 {
+		t.Fatalf("session packages = %v, want empty", got)
+	}
+
+	var stdout strings.Builder
+	if err := manager.WatchSession(
+		context.Background(),
+		session.GetSessionId(),
+		0,
+		func(event *execpb.SessionEvent) error {
+			if chunk := event.GetStdout(); chunk != nil {
+				stdout.Write(chunk.GetData())
+			}
+			return nil
+		},
+	); err != nil {
+		t.Fatalf("WatchSession() error = %v", err)
+	}
+	if got := stdout.String(); got != "empty-packages" {
+		t.Fatalf("stdout = %q, want empty-packages", got)
+	}
+}
+
+func TestManagerStartSessionNormalizesOptionalPackages(t *testing.T) {
+	t.Parallel()
+
+	manager := newTestManager(t)
+	session, err := manager.StartSession(
+		context.Background(),
+		"printf normalized",
+		[]string{" ", " nixpkgs#git ", ""},
+		"",
+		false,
+	)
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+	if got := session.GetPackages(); len(got) != 1 || got[0] != "nixpkgs#git" {
+		t.Fatalf("session packages = %v, want [nixpkgs#git]", got)
+	}
+}
+
 func TestManagerListSessionsReturnsSnapshots(t *testing.T) {
 	t.Parallel()
 

@@ -31,7 +31,7 @@ func (e *Exec) Definition() agent.ToolDefinition {
 		Description: "Run a command through the configured execution service, returning output if it finishes within the wait window or a session handle if it keeps running",
 		PromptGuidance: []string{
 			"Use for commands, builds, tests, formatting, git, dev servers, browser sessions, daemons, and interactive CLI workflows.",
-			"Every call must include a non-empty packages array of required nix installables.",
+			"The packages array is optional; omit it or pass [] when the command only needs the runtime shell, and include nix installables only when extra tools are needed.",
 			"Set wait_seconds to how long the tool should wait; if the command is still running after that window, the tool returns Session-ID and Next-Event-Index for exec_read, exec_write, or exec_kill.",
 			"Use wait_seconds 0 to start a long-running command and return immediately.",
 			"Set keep_stdin_open true when you plan to send input later with exec_write.",
@@ -51,7 +51,7 @@ func (e *Exec) Definition() agent.ToolDefinition {
 					"items": map[string]string{
 						"type": "string",
 					},
-					"minItems": 1,
+					"default": []string{},
 				},
 				"wait_seconds": map[string]any{
 					"type":    "integer",
@@ -70,7 +70,7 @@ func (e *Exec) Definition() agent.ToolDefinition {
 					"default": defaultMaxOutputChars,
 				},
 			},
-			"required": []string{"command", "packages"},
+			"required": []string{"command"},
 		},
 	}
 }
@@ -91,10 +91,7 @@ func (e *Exec) Run(ctx context.Context, arguments string) (string, error) {
 	if args.Command == "" {
 		return "", fmt.Errorf("missing required argument: command")
 	}
-	packages, err := normalizePackages(args.Packages)
-	if err != nil {
-		return "", err
-	}
+	packages := normalizePackages(args.Packages)
 	waitSeconds, err := normalizeWaitSeconds(args.WaitSeconds)
 	if err != nil {
 		return "", err
@@ -232,17 +229,14 @@ func formatExecSessionResult(
 	return strings.Join(lines, "\n")
 }
 
-func normalizePackages(packages []string) ([]string, error) {
-	if len(packages) == 0 {
-		return nil, fmt.Errorf("missing required argument: packages")
-	}
+func normalizePackages(packages []string) []string {
 	out := make([]string, 0, len(packages))
-	for i, pkg := range packages {
+	for _, pkg := range packages {
 		pkg = strings.TrimSpace(pkg)
 		if pkg == "" {
-			return nil, fmt.Errorf("packages[%d] must not be empty", i)
+			continue
 		}
 		out = append(out, pkg)
 	}
-	return out, nil
+	return out
 }

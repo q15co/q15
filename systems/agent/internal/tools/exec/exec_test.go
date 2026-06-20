@@ -137,6 +137,54 @@ func (f *fakeWatchStream) Recv() (*execpb.WatchSessionResponse, error) {
 	return event, nil
 }
 
+func TestExecDefinitionPackagesAreOptional(t *testing.T) {
+	t.Parallel()
+
+	def := NewExec(nil).Definition()
+	required, ok := def.Parameters["required"].([]string)
+	if !ok {
+		t.Fatalf("required schema field = %#v, want []string", def.Parameters["required"])
+	}
+	var commandRequired bool
+	for _, field := range required {
+		if field == "command" {
+			commandRequired = true
+		}
+		if field == "packages" {
+			t.Fatalf("packages should not be required: %#v", required)
+		}
+	}
+	if !commandRequired {
+		t.Fatalf("command should remain required: %#v", required)
+	}
+
+	properties, ok := def.Parameters["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("properties schema field = %#v, want map", def.Parameters["properties"])
+	}
+	packageSchema, ok := properties["packages"].(map[string]any)
+	if !ok {
+		t.Fatalf("packages schema field = %#v, want map", properties["packages"])
+	}
+	if _, ok := packageSchema["minItems"]; ok {
+		t.Fatalf("packages schema should not set minItems: %#v", packageSchema)
+	}
+	defaultPackages, ok := packageSchema["default"].([]string)
+	if !ok || len(defaultPackages) != 0 {
+		t.Fatalf("packages default = %#v, want empty []string", packageSchema["default"])
+	}
+
+	guidance := strings.ToLower(strings.Join(def.PromptGuidance, "\n"))
+	if !strings.Contains(guidance, "optional") {
+		t.Fatalf("exec guidance should say packages are optional: %q", guidance)
+	}
+	for _, unwanted := range []string{"must include", "non-empty packages"} {
+		if strings.Contains(guidance, unwanted) {
+			t.Fatalf("exec guidance still contains %q: %q", unwanted, guidance)
+		}
+	}
+}
+
 func TestExecRunFormatsStdoutStderrAndExitCode(t *testing.T) {
 	t.Parallel()
 
@@ -183,6 +231,54 @@ func TestExecRunFormatsStdoutStderrAndExitCode(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Fatalf("output missing %q:\n%s", want, out)
 		}
+	}
+}
+
+func TestExecRunAllowsOmittedPackages(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeExecClient{}
+	out, err := NewExec(client).Run(context.Background(), `{"command":"echo ok"}`)
+	if err != nil {
+		t.Fatalf("Run() error = %v, want omitted packages accepted", err)
+	}
+	if got := client.startReq.GetPackages(); len(got) != 0 {
+		t.Fatalf("StartSession packages = %v, want empty", got)
+	}
+	if !strings.Contains(out, "Session-ID: sess-1") {
+		t.Fatalf("output missing session id:\n%s", out)
+	}
+}
+
+func TestExecRunAllowsEmptyPackages(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeExecClient{}
+	out, err := NewExec(client).Run(context.Background(), `{"command":"echo ok","packages":[]}`)
+	if err != nil {
+		t.Fatalf("Run() error = %v, want empty packages accepted", err)
+	}
+	if got := client.startReq.GetPackages(); len(got) != 0 {
+		t.Fatalf("StartSession packages = %v, want empty", got)
+	}
+	if !strings.Contains(out, "Session-ID: sess-1") {
+		t.Fatalf("output missing session id:\n%s", out)
+	}
+}
+
+func TestExecRunTrimsAndDropsEmptyPackages(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeExecClient{}
+	_, err := NewExec(client).Run(
+		context.Background(),
+		`{"command":"git status","packages":[" nixpkgs#git "," ",""]}`,
+	)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if got := client.startReq.GetPackages(); len(got) != 1 || got[0] != "nixpkgs#git" {
+		t.Fatalf("StartSession packages = %v, want [nixpkgs#git]", got)
 	}
 }
 

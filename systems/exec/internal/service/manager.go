@@ -91,9 +91,6 @@ func (m *Manager) StartSession(
 		return nil, fmt.Errorf("command is required")
 	}
 	packages = normalizePackages(packages)
-	if len(packages) == 0 {
-		return nil, fmt.Errorf("packages are required")
-	}
 	workingDir = strings.TrimSpace(workingDir)
 	if workingDir == "" {
 		workingDir = m.defaultWorkingDir

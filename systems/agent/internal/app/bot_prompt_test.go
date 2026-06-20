@@ -72,6 +72,7 @@ func TestComposeSystemPromptIncludesRuntimeAndExecGuidance(t *testing.T) {
 		"- Command runtime: q15-exec sessions via local-nix-shell",
 		"- Proxy-mediated exec env injection is enabled (policy revision: rev-1).",
 		"- Prefer exec for commands, builds, tests, formatting, git, and other CLI workflows, not for routine file reads or edits.",
+		"- The exec `packages` array is optional; omit it or pass `[]` for commands that only need the runtime shell, and include nix installables only when the command needs extra tools (for example `[\"nixpkgs#git\"]`).",
 		"- Browser-specific command presets are not built in; use exec directly with explicit browser packages when needed.",
 		"- Use web_fetch for known web page URLs: it returns cleaned markdown plus slice metadata and is preferred over using exec with curl for ordinary webpage reads.",
 		"<tool_advice>",
@@ -79,6 +80,15 @@ func TestComposeSystemPromptIncludesRuntimeAndExecGuidance(t *testing.T) {
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, prompt)
+		}
+	}
+
+	for _, unwanted := range []string{
+		"Every exec call must include a non-empty `packages` array",
+		"Every call must include a non-empty packages array",
+	} {
+		if strings.Contains(prompt, unwanted) {
+			t.Fatalf("prompt contains stale exec packages guidance %q:\n%s", unwanted, prompt)
 		}
 	}
 
