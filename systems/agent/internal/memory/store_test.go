@@ -711,7 +711,7 @@ func TestStoreAppendAndLoadRecentMessagesWithImageParts(t *testing.T) {
 	}
 }
 
-func TestStoreAppendTurnPromotesFinalReplyMediaToAssistant(t *testing.T) {
+func TestStoreAppendTurnPreservesAssistantOwnedAttachments(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "memory")
 	store := NewStore(root, "Jared", &fakeCommitter{})
 
@@ -719,19 +719,20 @@ func TestStoreAppendTurnPromotesFinalReplyMediaToAssistant(t *testing.T) {
 		t.Fatalf("Init() error = %v", err)
 	}
 
+	// The engine canonicalizes (promoting deliver-tool attachments onto the
+	// assistant reply) before persisting, so the stored turn already owns its
+	// delivered image on the assistant and the tool message carries only its
+	// tool_result. The store must round-trip that shape unchanged.
 	if err := store.AppendTurn(context.Background(), []conversation.Message{
 		conversation.UserMessage("send the image"),
 		conversation.AssistantMessage(
-			conversation.ToolCall("call-1", "load_image", `{"path":"cat.png"}`),
+			conversation.ToolCall("call-1", "attach_image", `{"path":"cat.png"}`),
 		),
-		{
-			Role: conversation.ToolRole,
-			Parts: []conversation.Part{
-				conversation.ToolResult("call-1", "Loaded image: /workspace/cat.png", false),
-				conversation.Image("media://sha256/cat", ""),
-			},
-		},
-		conversation.AssistantMessage(conversation.Text("done", "")),
+		conversation.ToolResultMessage("call-1", "Attached image: /workspace/cat.png", false),
+		conversation.AssistantMessage(
+			conversation.Text("done", ""),
+			conversation.Image("media://sha256/cat", ""),
+		),
 	}); err != nil {
 		t.Fatalf("AppendTurn() error = %v", err)
 	}
@@ -754,7 +755,7 @@ func TestStoreAppendTurnPromotesFinalReplyMediaToAssistant(t *testing.T) {
 	}
 }
 
-func TestStoreAppendTurnPromotesOnlyTrailingToolBatchToAssistant(t *testing.T) {
+func TestStoreAppendTurnDoesNotReDeriveDeliveryFromToolMessages(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "memory")
 	store := NewStore(root, "Jared", &fakeCommitter{})
 
@@ -762,6 +763,11 @@ func TestStoreAppendTurnPromotesOnlyTrailingToolBatchToAssistant(t *testing.T) {
 		t.Fatalf("Init() error = %v", err)
 	}
 
+	// Sanitization must not re-derive delivery intent. Delivery is the engine's
+	// responsibility (it has the tool registry / deliver set); the memory layer
+	// only preserves structure. A raw, un-canonicalized turn with images still on
+	// the tool messages must round-trip with those images left in place rather
+	// than being promoted onto the assistant reply.
 	if err := store.AppendTurn(context.Background(), []conversation.Message{
 		conversation.UserMessage("send the final image"),
 		conversation.AssistantMessage(
@@ -796,17 +802,19 @@ func TestStoreAppendTurnPromotesOnlyTrailingToolBatchToAssistant(t *testing.T) {
 	if len(got) != 6 {
 		t.Fatalf("LoadRecentMessages len = %d, want 6", len(got))
 	}
-	if previewParts := got[2].Parts; len(previewParts) != 2 {
-		t.Fatalf("preview tool parts = %#v, want preview tool result plus image", previewParts)
+	// Both tool messages keep their images (no promotion); the assistant reply
+	// stays text-only.
+	if previewParts := got[2].Parts; len(previewParts) != 2 ||
+		previewParts[1].Type != conversation.ImagePartType {
+		t.Fatalf("preview tool parts = %#v, want tool_result plus image retained", previewParts)
 	}
-	if finalToolParts := got[4].Parts; len(finalToolParts) != 1 ||
-		finalToolParts[0].Type != conversation.ToolResultPartType {
-		t.Fatalf("final tool parts = %#v, want tool_result only", finalToolParts)
+	if finalToolParts := got[4].Parts; len(finalToolParts) != 2 ||
+		finalToolParts[1].Type != conversation.ImagePartType {
+		t.Fatalf("final tool parts = %#v, want tool_result plus image retained", finalToolParts)
 	}
-	if final := got[5]; len(final.Parts) != 2 ||
-		final.Parts[1].Type != conversation.ImagePartType ||
-		final.Parts[1].MediaRef != "media://sha256/final" {
-		t.Fatalf("replayed final assistant = %#v, want text plus final image", final)
+	if final := got[5]; len(final.Parts) != 1 ||
+		final.Parts[0].Type != conversation.TextPartType {
+		t.Fatalf("replayed final assistant = %#v, want text-only (no promotion)", final)
 	}
 }
 
@@ -1166,7 +1174,7 @@ func TestStoreInitSanitizesExistingV2TurnsIntoCurrentSchema(t *testing.T) {
 	}
 }
 
-func TestStoreInitPromotesStoredToolReplyImagesToFinalAssistant(t *testing.T) {
+func TestStoreInitKeepsVisionImageOnToolMessageOnLoad(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "memory")
 	turnPath := filepath.Join(
 		root,
@@ -1181,13 +1189,18 @@ func TestStoreInitPromotesStoredToolReplyImagesToFinalAssistant(t *testing.T) {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
 
+	// A v3 turn persisted with a load_image (agent-internal vision) image on the
+	// tool message. Delivery intent is derived by the engine (which owns the
+	// tool registry / deliver set), not by the memory layer, so loading or
+	// migrating this turn must NOT promote the vision image onto the assistant
+	// reply. The image is preserved on the tool message for model inspection.
 	record := turnRecord{
 		SchemaVersion: conversation.SchemaVersion,
 		ID:            "turn-00000000000000000005",
 		Seq:           5,
 		CreatedAt:     time.Date(2026, time.March, 29, 12, 0, 0, 0, time.UTC),
 		Messages: []conversation.Message{
-			conversation.UserMessage("send the image"),
+			conversation.UserMessage("inspect the image"),
 			conversation.AssistantMessage(
 				conversation.ToolCall("call-1", "load_image", `{"path":"cat.png"}`),
 			),
@@ -1205,17 +1218,9 @@ func TestStoreInitPromotesStoredToolReplyImagesToFinalAssistant(t *testing.T) {
 		t.Fatalf("writeJSONFileAtomic() error = %v", err)
 	}
 
-	committer := &fakeCommitter{}
-	store := NewStore(root, "Jared", committer)
+	store := NewStore(root, "Jared", &fakeCommitter{})
 	if err := store.Init(context.Background()); err != nil {
 		t.Fatalf("Init() error = %v", err)
-	}
-	if committer.lastMessage != "memory: upgrade transcript history to v3" {
-		t.Fatalf(
-			"commit message = %q, want %q",
-			committer.lastMessage,
-			"memory: upgrade transcript history to v3",
-		)
 	}
 
 	turn, err := store.readTurn(turnPath)
@@ -1225,14 +1230,16 @@ func TestStoreInitPromotesStoredToolReplyImagesToFinalAssistant(t *testing.T) {
 	if len(turn.Messages) != 4 {
 		t.Fatalf("messages len = %d, want 4", len(turn.Messages))
 	}
-	if toolParts := turn.Messages[2].Parts; len(toolParts) != 1 ||
-		toolParts[0].Type != conversation.ToolResultPartType {
-		t.Fatalf("tool parts = %#v, want tool_result only", toolParts)
+	// The vision image stays on the tool message for model inspection.
+	if toolParts := turn.Messages[2].Parts; len(toolParts) != 2 ||
+		toolParts[1].Type != conversation.ImagePartType ||
+		toolParts[1].MediaRef != "media://sha256/cat" {
+		t.Fatalf("tool parts = %#v, want tool_result plus retained vision image", toolParts)
 	}
-	if final := turn.Messages[3]; len(final.Parts) != 2 ||
-		final.Parts[1].Type != conversation.ImagePartType ||
-		final.Parts[1].MediaRef != "media://sha256/cat" {
-		t.Fatalf("final assistant = %#v, want text plus image", final)
+	// The assistant reply is text-only: the vision image is not promoted.
+	if final := turn.Messages[3]; len(final.Parts) != 1 ||
+		final.Parts[0].Type != conversation.TextPartType {
+		t.Fatalf("final assistant = %#v, want text-only (no promotion)", final)
 	}
 }
 

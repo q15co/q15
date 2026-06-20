@@ -1,11 +1,9 @@
-// Package media provides media registration tools for the agent.
 package media
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 	"strings"
 
@@ -15,34 +13,36 @@ import (
 	q15media "github.com/q15co/q15/systems/agent/internal/media"
 )
 
-const loadImageScope = "tool:load_image"
+const attachImageScope = "tool:attach_image"
 
-// LoadImage registers a shared-root local image in the media store so the
-// model can inspect it on the next turn.
-type LoadImage struct {
+// AttachImage registers a shared-root local image in the media store so it is
+// sent to the user as an image message. It is the explicit delivery counterpart
+// to load_image: load_image is agent-internal vision only, while attach_image
+// is the deliberate "send this image to the user" action.
+type AttachImage struct {
 	paths      fileops.Settings
 	mediaStore q15media.Store
 }
 
-// NewLoadImage constructs a load_image tool.
-func NewLoadImage(paths fileops.Settings, mediaStore q15media.Store) *LoadImage {
-	return &LoadImage{
+// NewAttachImage constructs an attach_image tool.
+func NewAttachImage(paths fileops.Settings, mediaStore q15media.Store) *AttachImage {
+	return &AttachImage{
 		paths:      paths,
 		mediaStore: mediaStore,
 	}
 }
 
 // Definition returns the tool schema exposed to the model.
-func (l *LoadImage) Definition() agent.ToolDefinition {
+func (a *AttachImage) Definition() agent.ToolDefinition {
 	return agent.ToolDefinition{
-		Name:        "load_image",
-		Description: "Register a local image file or an already-stored inbound media image so the model can inspect it with vision on the next turn",
+		Name:        "attach_image",
+		Description: "Register a local image file from a shared runtime root so it is sent to the user as an image message",
 		PromptGuidance: []string{
-			"Use after exec or another tool creates an image file you need to inspect.",
+			"Use to send an image to the user after exec or another tool creates one you want to deliver.",
+			"For agent-internal vision inspection (the model looking at an image), use load_image instead.",
 			"Generated images must be written under a shared root like /workspace, not /tmp, so this tool can access them.",
-			"For an inbound Telegram image, pass its media_ref (from the attachment notice) instead of a path.",
-			"Images loaded here are for your own inspection and are NOT sent to the user. Use attach_image to deliver an image to the user.",
 		},
+		DeliversAttachments: true,
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -52,31 +52,32 @@ func (l *LoadImage) Definition() agent.ToolDefinition {
 				},
 				"media_ref": map[string]any{
 					"type":        "string",
-					"description": "A media://sha256/... ref for an already-stored image (e.g. from an inbound Telegram attachment notice). Mutually exclusive with path.",
+					"description": "A media://sha256/... ref for an already-stored image (e.g. from an inbound Telegram attachment). Mutually exclusive with path.",
 				},
 			},
 		},
 	}
 }
 
-// Run executes one load_image tool call from raw JSON arguments.
-func (l *LoadImage) Run(ctx context.Context, arguments string) (string, error) {
-	result, err := l.RunResult(ctx, arguments)
+// Run executes one attach_image tool call from raw JSON arguments.
+func (a *AttachImage) Run(ctx context.Context, arguments string) (string, error) {
+	result, err := a.RunResult(ctx, arguments)
 	if err != nil {
 		return "", err
 	}
 	return result.Output, nil
 }
 
-// RunResult executes one load_image tool call and returns a structured tool result.
-func (l *LoadImage) RunResult(ctx context.Context, arguments string) (agent.ToolResult, error) {
+// RunResult executes one attach_image tool call and returns a structured tool
+// result.
+func (a *AttachImage) RunResult(ctx context.Context, arguments string) (agent.ToolResult, error) {
 	_ = ctx
 
-	var args loadImageArgs
+	var args attachImageArgs
 	if err := json.Unmarshal([]byte(arguments), &args); err != nil {
 		return agent.ToolResult{}, fmt.Errorf("invalid arguments JSON: %w", err)
 	}
-	if l.mediaStore == nil {
+	if a.mediaStore == nil {
 		return agent.ToolResult{}, fmt.Errorf("media store is not configured")
 	}
 
@@ -93,7 +94,7 @@ func (l *LoadImage) RunResult(ctx context.Context, arguments string) (agent.Tool
 	var ref string
 	var displayPath string
 	if args.MediaRef != "" {
-		localPath, meta, err := l.mediaStore.Resolve(args.MediaRef)
+		localPath, meta, err := a.mediaStore.Resolve(args.MediaRef)
 		if err != nil {
 			return agent.ToolResult{}, fmt.Errorf("resolve media_ref %q: %w", args.MediaRef, err)
 		}
@@ -103,7 +104,7 @@ func (l *LoadImage) RunResult(ctx context.Context, arguments string) (agent.Tool
 		ref = args.MediaRef
 		displayPath = args.MediaRef
 	} else {
-		localPath, runtimePath, err := fileops.ResolveLocalPath(l.paths, args.Path)
+		localPath, runtimePath, err := fileops.ResolveLocalPath(a.paths, args.Path)
 		if err != nil {
 			return agent.ToolResult{}, err
 		}
@@ -128,11 +129,11 @@ func (l *LoadImage) RunResult(ctx context.Context, arguments string) (agent.Tool
 			return agent.ToolResult{}, fmt.Errorf("detect image type for %q: %w", runtimePath, err)
 		}
 
-		ref, err = l.mediaStore.Store(localPath, q15media.Meta{
+		ref, err = a.mediaStore.Store(localPath, q15media.Meta{
 			Filename:    info.Name(),
 			ContentType: contentType,
-			Source:      "tool:load_image",
-		}, loadImageScope)
+			Source:      "tool:attach_image",
+		}, attachImageScope)
 		if err != nil {
 			return agent.ToolResult{}, fmt.Errorf("register image %q: %w", runtimePath, err)
 		}
@@ -140,48 +141,12 @@ func (l *LoadImage) RunResult(ctx context.Context, arguments string) (agent.Tool
 	}
 
 	return agent.ToolResult{
-		Output:      fmt.Sprintf("Loaded image: %s\nMedia-Ref: %s", displayPath, ref),
+		Output:      fmt.Sprintf("Attached image: %s\nMedia-Ref: %s", displayPath, ref),
 		Attachments: []conversation.Part{conversation.Image(ref, "")},
 	}, nil
 }
 
-type loadImageArgs struct {
+type attachImageArgs struct {
 	Path     string `json:"path"`
 	MediaRef string `json:"media_ref"`
-}
-
-func detectImageContentType(localPath string) (string, error) {
-	f, err := os.Open(localPath)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-
-	header := make([]byte, 512)
-	n, err := f.Read(header)
-	if err != nil {
-		return "", err
-	}
-	contentType := strings.ToLower(http.DetectContentType(header[:n]))
-	if !strings.HasPrefix(contentType, "image/") {
-		return "", fmt.Errorf("file does not appear to be an image (detected %q)", contentType)
-	}
-	return contentType, nil
-}
-
-func validateImageMeta(localPath string, meta q15media.Meta) error {
-	if contentType := strings.TrimSpace(meta.ContentType); contentType != "" {
-		if !strings.HasPrefix(strings.ToLower(contentType), "image/") {
-			return fmt.Errorf(
-				"media object %q is not an image (content type %q)",
-				localPath,
-				contentType,
-			)
-		}
-		return nil
-	}
-	if _, err := detectImageContentType(localPath); err != nil {
-		return err
-	}
-	return nil
 }

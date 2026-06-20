@@ -202,7 +202,7 @@ func TestEngineRun_ToolProducedImageDoesNotInferImageRequirement(t *testing.T) {
 	}
 }
 
-func TestEngineRun_PromotesOnlyTrailingToolBatchAttachments(t *testing.T) {
+func TestEngineRun_DoesNotPromoteToolMediaRefs(t *testing.T) {
 	model := &fakeModelClient{
 		results: []ModelClientResult{
 			toolCallResult("call-1", "load_image", `{"path":"preview.png"}`),
