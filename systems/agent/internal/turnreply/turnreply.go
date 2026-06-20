@@ -15,22 +15,60 @@ type Selection struct {
 	Attachments []conversation.Part
 }
 
+// Extractor derives and canonicalizes the final assistant-facing reply for one
+// completed turn, honoring explicit attachment-delivery intent.
+//
+// Delivery is opt-in: only attachments produced by a tool whose name is in the
+// deliver set are promoted onto the terminal assistant reply. Tool identity —
+// not tool-call position — decides what reaches the user, so an agent-internal
+// vision tool (e.g. load_image) can never leak its media to the user, and a
+// later unrelated tool call can never drop a deliberately attached one (issue
+// #110). A nil/empty deliver set promotes nothing (leak-safe default).
+type Extractor struct {
+	deliverTools map[string]struct{}
+}
+
+// NewExtractor constructs an Extractor that promotes attachments only from the
+// named deliver tools. A nil or empty map promotes nothing. The set is copied
+// so later mutation of the caller's map cannot affect this extractor.
+func NewExtractor(deliverTools map[string]struct{}) *Extractor {
+	if len(deliverTools) == 0 {
+		return &Extractor{}
+	}
+	out := make(map[string]struct{}, len(deliverTools))
+	for name := range deliverTools {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		out[name] = struct{}{}
+	}
+	if len(out) == 0 {
+		return &Extractor{}
+	}
+	return &Extractor{deliverTools: out}
+}
+
 // Extract returns the final assistant-facing reply from one completed turn.
 // Assistant-owned attachments in the trailing assistant block take precedence.
-// When no assistant-owned attachments exist there, the trailing tool block is
-// treated as the fallback delivery batch.
-func Extract(messages []conversation.Message) Selection {
+// When no assistant-owned attachments exist there, attachments produced by any
+// deliver-tool result anywhere in the turn are treated as the fallback delivery
+// batch, deduplicated by media ref.
+func (e *Extractor) Extract(messages []conversation.Message) Selection {
 	normalized := conversation.NormalizeMessages(conversation.CloneMessages(messages))
 	return Selection{
 		Text:        conversation.FinalAnswer(normalized),
-		Attachments: selectAttachments(normalized),
+		Attachments: e.selectAttachments(normalized),
 	}
 }
 
 // Canonicalize rewrites one completed turn so the terminal assistant reply owns
-// its delivered attachments. Older turns may have stored the delivered
-// attachments on the trailing tool batch instead.
-func Canonicalize(messages []conversation.Message) []conversation.Message {
+// its delivered attachments. Attachments produced by deliver tools anywhere in
+// the turn (not only the trailing tool batch) are gathered, deduplicated by
+// media ref, stripped from their tool messages, and appended onto the terminal
+// assistant reply. Agent-internal (non-deliver) attachments remain on their
+// tool messages so the model still sees them on the next turn.
+func (e *Extractor) Canonicalize(messages []conversation.Message) []conversation.Message {
 	normalized := conversation.NormalizeMessages(conversation.CloneMessages(messages))
 	if len(normalized) == 0 {
 		return nil
@@ -42,8 +80,7 @@ func Canonicalize(messages []conversation.Message) []conversation.Message {
 		return compactMessages(normalized)
 	}
 
-	toolStart, toolEnd := trailingToolBlockBefore(normalized, assistantStart)
-	toolAttachments := collectReplyAttachments(normalized, toolStart, toolEnd)
+	toolAttachments := e.collectDeliveredAttachments(normalized)
 	if len(toolAttachments) == 0 {
 		return compactMessages(normalized)
 	}
@@ -57,7 +94,7 @@ func Canonicalize(messages []conversation.Message) []conversation.Message {
 		attachmentKeys[attachment.key] = struct{}{}
 	}
 
-	for i := toolStart; i < toolEnd; i++ {
+	for i := range normalized {
 		if normalized[i].Role != conversation.ToolRole {
 			continue
 		}
@@ -75,12 +112,26 @@ func Canonicalize(messages []conversation.Message) []conversation.Message {
 	return compactMessages(normalized)
 }
 
+// Extract is the package-level leak-safe default: it behaves as an Extractor
+// with an empty deliver set, so no tool attachments are promoted. Callers that
+// honor explicit delivery intent (the engine, with a tool registry) should use
+// NewExtractor instead.
+func Extract(messages []conversation.Message) Selection {
+	return (&Extractor{}).Extract(messages)
+}
+
+// Canonicalize is the package-level leak-safe default: it behaves as an
+// Extractor with an empty deliver set, so no tool attachments are promoted.
+func Canonicalize(messages []conversation.Message) []conversation.Message {
+	return (&Extractor{}).Canonicalize(messages)
+}
+
 type replyAttachment struct {
 	key  string
 	part conversation.Part
 }
 
-func selectAttachments(messages []conversation.Message) []conversation.Part {
+func (e *Extractor) selectAttachments(messages []conversation.Message) []conversation.Part {
 	if len(messages) == 0 {
 		return nil
 	}
@@ -92,8 +143,101 @@ func selectAttachments(messages []conversation.Message) []conversation.Part {
 		return partsFromAttachments(attachments)
 	}
 
-	toolStart, toolEnd := trailingToolBlockBefore(messages, assistantStart)
-	return partsFromAttachments(collectReplyAttachments(messages, toolStart, toolEnd))
+	return partsFromAttachments(e.collectDeliveredAttachments(messages))
+}
+
+// collectDeliveredAttachments scans every tool-role message in the turn for
+// attachments whose originating tool call resolves to a deliver tool, deduping
+// by media ref. An attachment part carries no call id of its own; the call id
+// is taken from the tool_result part(s) in the same message. Tool messages
+// whose call id cannot be resolved (orphaned results) or whose tool is not a
+// deliver tool contribute nothing — the safe default that keeps
+// vision/internal media off the user-facing reply.
+func (e *Extractor) collectDeliveredAttachments(
+	messages []conversation.Message,
+) []replyAttachment {
+	if len(e.deliverTools) == 0 {
+		return nil
+	}
+
+	names := resolveToolCallNames(messages)
+	seen := make(map[string]struct{})
+	out := make([]replyAttachment, 0)
+	for _, msg := range messages {
+		if msg.Role != conversation.ToolRole {
+			continue
+		}
+		parts := conversation.NormalizeParts(msg.Parts)
+		if !messageDelivers(parts, names, e.deliverTools) {
+			continue
+		}
+		for _, part := range parts {
+			attachment, ok := normalizeReplyAttachment(part)
+			if !ok {
+				continue
+			}
+			if _, dup := seen[attachment.key]; dup {
+				continue
+			}
+			seen[attachment.key] = struct{}{}
+			out = append(out, attachment)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// resolveToolCallNames maps each tool-call id to its tool name across all
+// assistant messages. Call ids are unique per turn, so a global map correctly
+// resolves a tool result back to the earlier assistant tool call that produced
+// it (the basis for tool-identity-based delivery).
+func resolveToolCallNames(messages []conversation.Message) map[string]string {
+	names := make(map[string]string)
+	for _, msg := range messages {
+		if msg.Role != conversation.AssistantRole {
+			continue
+		}
+		for _, part := range conversation.NormalizeParts(msg.Parts) {
+			if part.Type != conversation.ToolCallPartType {
+				continue
+			}
+			id := strings.TrimSpace(part.ID)
+			name := strings.TrimSpace(part.Name)
+			if id == "" || name == "" {
+				continue
+			}
+			if _, exists := names[id]; !exists {
+				names[id] = name
+			}
+		}
+	}
+	return names
+}
+
+// messageDelivers reports whether a tool message originated from a deliver
+// tool. The tool name is resolved from the message's tool_result part(s); the
+// attachment parts themselves carry no call id. A tool message with no
+// resolvable tool_result is treated as non-delivering (orphan-safe).
+func messageDelivers(
+	parts []conversation.Part,
+	names map[string]string,
+	deliverTools map[string]struct{},
+) bool {
+	for _, part := range parts {
+		if part.Type != conversation.ToolResultPartType {
+			continue
+		}
+		name, ok := names[strings.TrimSpace(part.ToolCallID)]
+		if !ok {
+			continue
+		}
+		if _, delivers := deliverTools[name]; delivers {
+			return true
+		}
+	}
+	return false
 }
 
 func collectReplyAttachments(
@@ -183,17 +327,6 @@ func trailingRoleBlockStart(messages []conversation.Message, role conversation.R
 	return start
 }
 
-func trailingToolBlockBefore(messages []conversation.Message, end int) (int, int) {
-	if end > len(messages) {
-		end = len(messages)
-	}
-	start := end
-	for start > 0 && messages[start-1].Role == conversation.ToolRole {
-		start--
-	}
-	return start, end
-}
-
 func stripReplyAttachments(
 	parts []conversation.Part,
 	keys map[string]struct{},
@@ -213,7 +346,7 @@ func stripReplyAttachments(
 func compactMessages(messages []conversation.Message) []conversation.Message {
 	out := make([]conversation.Message, 0, len(messages))
 	for _, msg := range messages {
-		if len(msg.Parts) == 0 {
+		if !messageSurvivesCompaction(msg.Parts) {
 			continue
 		}
 		out = append(out, msg)
@@ -222,4 +355,20 @@ func compactMessages(messages []conversation.Message) []conversation.Message {
 		return nil
 	}
 	return out
+}
+
+// messageSurvivesCompaction reports whether a message must be retained after
+// canonicalization. A message carrying any tool_result or tool_call part always
+// survives: dropping it would orphan tool results from their calls (issue #84)
+// and break the tool-call-id resolution that deliver-attachment promotion
+// depends on. Otherwise the message survives iff it has any part after
+// normalization.
+func messageSurvivesCompaction(parts []conversation.Part) bool {
+	for _, part := range parts {
+		switch conversation.NormalizePart(part).Type {
+		case conversation.ToolResultPartType, conversation.ToolCallPartType:
+			return true
+		}
+	}
+	return len(conversation.NormalizeParts(parts)) > 0
 }

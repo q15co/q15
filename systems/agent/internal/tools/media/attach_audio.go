@@ -40,6 +40,7 @@ func (a *AttachAudio) Definition() agent.ToolDefinition {
 			"Use after exec or TTS produces an audio file (e.g. /workspace/out.ogg) you want to send as voice.",
 			"Telegram voice notes should be OGG/Opus; other formats are sent as audio files.",
 		},
+		DeliversAttachments: true,
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

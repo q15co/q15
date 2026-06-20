@@ -91,6 +91,8 @@ func (e *Engine) Run(ctx context.Context, req EngineRequest) (EngineResult, erro
 		toolDefs = toolRegistry.Definitions()
 	}
 
+	extractor := turnreply.NewExtractor(deliverToolNames(toolRegistry))
+
 	loopDetector := newToolLoopDetector()
 	emptyAssistantRetries := 0
 
@@ -121,7 +123,7 @@ func (e *Engine) Run(ctx context.Context, req EngineRequest) (EngineResult, erro
 
 		resultMessages := conversation.NormalizeMessages(copyMessages(result.Messages))
 		toolCalls := resultToolCalls(resultMessages)
-		reply := finalReply(resultMessages)
+		reply := finalReply(resultMessages, extractor)
 		if len(toolCalls) == 0 && strings.TrimSpace(reply.Text) == "" &&
 			len(reply.MediaRefs) == 0 &&
 			emptyAssistantRetries < maxEmptyAssistantRetries {
@@ -133,8 +135,8 @@ func (e *Engine) Run(ctx context.Context, req EngineRequest) (EngineResult, erro
 		messages = append(messages, resultMessages...)
 
 		if len(toolCalls) == 0 {
-			finalMessages := turnreply.Canonicalize(messages[start:])
-			reply = finalReply(finalMessages)
+			finalMessages := extractor.Canonicalize(messages[start:])
+			reply = finalReply(finalMessages, extractor)
 			if strings.TrimSpace(reply.Text) == "" && len(reply.MediaRefs) == 0 {
 				reply.Text = "(assistant returned no text)"
 			}
@@ -190,8 +192,8 @@ func (e *Engine) Run(ctx context.Context, req EngineRequest) (EngineResult, erro
 						assessment.NoProgressCount,
 					),
 				}
-				finalMessages := turnreply.Canonicalize(messages[start:])
-				reply := finalReply(finalMessages)
+				finalMessages := extractor.Canonicalize(messages[start:])
+				reply := finalReply(finalMessages, extractor)
 				return EngineResult{
 					Messages:    copyMessages(finalMessages),
 					FinalText:   stopSummary,
@@ -215,8 +217,8 @@ func (e *Engine) Run(ctx context.Context, req EngineRequest) (EngineResult, erro
 		Reason: StopReasonToolTurnLimit,
 		Detail: fmt.Sprintf("max tool-call turns reached (%d)", e.maxTurns),
 	}
-	finalMessages := turnreply.Canonicalize(messages[start:])
-	reply := finalReply(finalMessages)
+	finalMessages := extractor.Canonicalize(messages[start:])
+	reply := finalReply(finalMessages, extractor)
 	return EngineResult{
 		Messages:    copyMessages(finalMessages),
 		FinalText:   stopSummary,

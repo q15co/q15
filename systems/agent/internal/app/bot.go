@@ -252,6 +252,7 @@ func buildToolList(
 		tools.NewExecKill(execClient),
 		tools.NewLoadImage(fileSettings, mediaStore),
 		tools.NewAttachAudio(fileSettings, mediaStore),
+		tools.NewAttachImage(fileSettings, mediaStore),
 		tools.NewWebFetch(),
 	}
 

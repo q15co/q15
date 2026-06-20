@@ -78,13 +78,36 @@ func resultToolCalls(messages []conversation.Message) []ToolCall {
 	return out
 }
 
-func finalReply(messages []conversation.Message) ReplyResult {
-	selection := turnreply.Extract(messages)
+func finalReply(
+	messages []conversation.Message,
+	extractor *turnreply.Extractor,
+) ReplyResult {
+	selection := extractor.Extract(messages)
 	return ReplyResult{
 		Text:        selection.Text,
 		Attachments: conversation.CloneParts(selection.Attachments),
 		MediaRefs:   mediaRefsFromAttachments(selection.Attachments),
 	}
+}
+
+// deliverToolNames derives the set of tool names whose attachments are
+// candidates for user-facing delivery, built fresh from the registry snapshot.
+// Tool identity — not tool-call position — decides what reaches the user.
+func deliverToolNames(reg ToolRegistry) map[string]struct{} {
+	set := make(map[string]struct{})
+	if reg == nil {
+		return set
+	}
+	for _, def := range reg.Definitions() {
+		if !def.DeliversAttachments {
+			continue
+		}
+		name := strings.TrimSpace(def.Name)
+		if name != "" {
+			set[name] = struct{}{}
+		}
+	}
+	return set
 }
 
 func toolResultAttachments(result ToolResult) []conversation.Part {

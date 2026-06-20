@@ -27,6 +27,14 @@ type ToolDefinition struct {
 	PromptGuidance []string
 	// Parameters is the JSON-schema-like parameter definition.
 	Parameters map[string]any
+	// DeliversAttachments indicates whether this tool's attachments are
+	// candidates for user-facing delivery. The default (false) marks a tool as
+	// vision/internal only: its attachments feed the model but are never
+	// promoted onto the terminal assistant reply. Only tools whose explicit
+	// purpose is to send media to the user (e.g. attach_audio, attach_image)
+	// set this true. The engine derives the live deliver set from the registry
+	// so tool identity — not tool-call position — decides delivery.
+	DeliversAttachments bool
 }
 
 // ToolResult is the structured result of one tool invocation.
