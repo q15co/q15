@@ -32,6 +32,22 @@ func TestBuildNixShellArgsUsesBashAndInjectsRuntimePackage(t *testing.T) {
 	}
 }
 
+func TestBuildNixShellArgsInjectsRuntimePackageWithNoPackages(t *testing.T) {
+	t.Parallel()
+
+	args := buildNixShellArgs("printf alpha", nil, "/certs/ca.pem")
+
+	var bashCount int
+	for _, arg := range args {
+		if arg == runtimeBashPackage {
+			bashCount++
+		}
+	}
+	if bashCount != 1 {
+		t.Fatalf("runtime bash package count = %d, want 1 in %#v", bashCount, args)
+	}
+}
+
 func TestBuildNixShellArgsDoesNotDuplicateRuntimePackage(t *testing.T) {
 	t.Parallel()
 
