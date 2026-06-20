@@ -348,8 +348,80 @@ func TestWorkspaceOnlyPolicyDeniesMemory(t *testing.T) {
 		Name:      "read_file",
 		Arguments: `{"path":"/memory/core/AGENT.md"}`,
 	})
-	if err == nil || !strings.Contains(err.Error(), "denies /memory access") {
-		t.Fatalf("CheckToolCall() error = %v, want /memory denial", err)
+	if err == nil {
+		t.Fatal("CheckToolCall() error = nil, want /memory denial")
+	}
+	msg := err.Error()
+	for _, want := range []string{
+		"/memory/core/AGENT.md",
+		"/workspace/",
+		"persistent memory root",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("CheckToolCall() error = %q, want %q in denial", msg, want)
+		}
+	}
+}
+
+func TestWorkspaceOnlyPolicyAllowsWorkspaceInternalMemoryPath(t *testing.T) {
+	// Regression for #117: "/memory" as a trailing segment of a workspace
+	// source path (the Go package internal/memory) must NOT be denied.
+	err := workspaceOnlyPolicy{}.CheckToolCall(agent.ToolCall{
+		Name:      "edit_file",
+		Arguments: `{"path":"/workspace/systems/agent/internal/memory/sanitize.go"}`,
+	})
+	if err != nil {
+		t.Fatalf("CheckToolCall() error = %v, want nil for workspace source path", err)
+	}
+}
+
+func TestWorkspaceOnlyPolicyDeniesMemoryRootInExecCommand(t *testing.T) {
+	err := workspaceOnlyPolicy{}.CheckToolCall(agent.ToolCall{
+		Name:      "exec",
+		Arguments: `{"command":"ls /memory"}`,
+	})
+	if err == nil || !strings.Contains(err.Error(), "/memory") {
+		t.Fatalf("CheckToolCall() error = %v, want /memory denial for exec command", err)
+	}
+}
+
+// TestWorkspaceOnlyPolicyMemoryRootBoundaries locks in the leading-and-trailing
+// path-boundary matching: sibling roots such as /memoryx and workspace source
+// under /workspace/.../internal/memory or /workspace/memory/... stay allowed,
+// while the persistent /memory root (with or without trailing slash) is denied.
+func TestWorkspaceOnlyPolicyMemoryRootBoundaries(t *testing.T) {
+	tests := []struct {
+		name      string
+		arguments string
+		deny      bool
+	}{
+		{"bare root denied", `{"path":"/memory"}`, true},
+		{"trailing slash denied", `{"path":"/memory/"}`, true},
+		{"nested memory path denied", `{"path":"/memory/core/AGENT.md"}`, true},
+		{"memory in exec command denied", `{"command":"cd /memory && pwd"}`, true},
+		{"sibling memoryx allowed", `{"path":"/memoryx/foo"}`, false},
+		{"sibling memoryback allowed", `{"path":"/memoryback"}`, false},
+		{"skills path allowed (memory-only scope)", `{"path":"/skills/AGENT.md"}`, false},
+		{"workspace memory subdir allowed", `{"path":"/workspace/memory/foo"}`, false},
+		{
+			"workspace internal memory package allowed",
+			`{"path":"/workspace/systems/agent/internal/memory/sanitize.go"}`,
+			false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := workspaceOnlyPolicy{}.CheckToolCall(agent.ToolCall{
+				Name:      "read_file",
+				Arguments: tt.arguments,
+			})
+			if tt.deny && err == nil {
+				t.Fatalf("CheckToolCall() error = nil, want denial for %s", tt.arguments)
+			}
+			if !tt.deny && err != nil {
+				t.Fatalf("CheckToolCall() error = %v, want nil for %s", err, tt.arguments)
+			}
+		})
 	}
 }
 
