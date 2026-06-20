@@ -91,6 +91,7 @@ type Telegram struct {
 type ModelCapabilities struct {
 	Text        bool
 	ImageInput  bool
+	AudioInput  bool
 	ToolCalling bool
 	Reasoning   bool
 }
@@ -609,6 +610,8 @@ func normalizeModelCapabilities(names []string) (ModelCapabilities, error) {
 			capabilities.Text = true
 		case "image_input":
 			capabilities.ImageInput = true
+		case "audio_input":
+			capabilities.AudioInput = true
 		case "tool_calling":
 			capabilities.ToolCalling = true
 		case "reasoning":

@@ -756,15 +756,20 @@ func TestHandleMessage_PhotoStoresMediaPreservesCaptionAndUsesExpectedScope(t *t
 		t.Fatalf("handleMessage() error = %v", err)
 	}
 
-	if got.Text != "describe this" {
-		t.Fatalf("Text = %q, want %q", got.Text, "describe this")
+	if !strings.Contains(got.Text, "describe this") {
+		t.Fatalf("Text = %q, want caption preserved", got.Text)
 	}
-	if len(got.Attachments) != 1 {
-		t.Fatalf("Attachments len = %d, want 1", len(got.Attachments))
+	if len(got.Attachments) != 1 || got.Attachments[0].Type != conversation.ImagePartType {
+		t.Fatalf(
+			"Attachments = %#v, want 1 image part (capability-adaptive rendering)",
+			got.Attachments,
+		)
 	}
-	if got.Attachments[0].Type != conversation.ImagePartType ||
-		!strings.HasPrefix(got.Attachments[0].MediaRef, "media://sha256/") {
-		t.Fatalf("Attachments[0] = %#v, want image media ref", got.Attachments[0])
+	if !strings.Contains(got.Text, "Media-Ref: media://sha256/") {
+		t.Fatalf("Text = %q, want media ref in notice", got.Text)
+	}
+	if !strings.Contains(got.Text, "Call load_image") {
+		t.Fatalf("Text = %q, want load_image hint", got.Text)
 	}
 	if len(caller.calls) != 1 {
 		t.Fatalf("API calls = %d, want 1", len(caller.calls))
@@ -776,7 +781,8 @@ func TestHandleMessage_PhotoStoresMediaPreservesCaptionAndUsesExpectedScope(t *t
 		t.Fatalf("getFile file_id = %#v, want %q", gotFileID, "high")
 	}
 
-	localPath, meta, err := store.Resolve(got.Attachments[0].MediaRef)
+	mediaRef := extractMediaRef(t, got.Text)
+	localPath, meta, err := store.Resolve(mediaRef)
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
@@ -795,11 +801,14 @@ func TestHandleMessage_PhotoStoresMediaPreservesCaptionAndUsesExpectedScope(t *t
 	) {
 		t.Fatalf("localPath = %q, want stored object path", localPath)
 	}
+	if !strings.Contains(got.Text, localPath) {
+		t.Fatalf("Text = %q, want notice to contain exec path %q", got.Text, localPath)
+	}
 
 	if err := store.ReleaseAll("telegram:123:42"); err != nil {
 		t.Fatalf("ReleaseAll() error = %v", err)
 	}
-	if _, _, err := store.Resolve(got.Attachments[0].MediaRef); err == nil {
+	if _, _, err := store.Resolve(mediaRef); err == nil {
 		t.Fatal("Resolve() error = nil after releasing expected scope, want non-nil")
 	}
 }
@@ -845,11 +854,14 @@ func TestHandleMessage_PhotoOnlyProducesMediaOnlyMessage(t *testing.T) {
 		t.Fatalf("handleMessage() error = %v", err)
 	}
 
-	if got.Text != "" {
-		t.Fatalf("Text = %q, want empty", got.Text)
+	if !strings.Contains(got.Text, "Media-Ref: media://sha256/") {
+		t.Fatalf("Text = %q, want media ref notice", got.Text)
 	}
-	if len(got.Attachments) != 1 {
-		t.Fatalf("Attachments len = %d, want 1", len(got.Attachments))
+	if len(got.Attachments) != 1 || got.Attachments[0].Type != conversation.ImagePartType {
+		t.Fatalf(
+			"Attachments = %#v, want 1 image part (capability-adaptive rendering)",
+			got.Attachments,
+		)
 	}
 }
 
@@ -901,58 +913,10 @@ func TestHandleMessage_UnsupportedAttachmentsBecomeSyntheticTextOnlyMessages(t *
 		message telego.Message
 	}{
 		{
-			name: "animation",
-			kind: "animation",
-			message: telego.Message{
-				Animation: &telego.Animation{FileID: "anim"},
-				Caption:   "check this",
-			},
-		},
-		{
-			name: "audio",
-			kind: "audio",
-			message: telego.Message{
-				Audio:   &telego.Audio{FileID: "audio"},
-				Caption: "check this",
-			},
-		},
-		{
-			name: "document",
-			kind: "document",
-			message: telego.Message{
-				Document: &telego.Document{FileID: "doc"},
-				Caption:  "check this",
-			},
-		},
-		{
 			name: "sticker",
 			kind: "sticker",
 			message: telego.Message{
 				Sticker: &telego.Sticker{FileID: "sticker"},
-			},
-		},
-		{
-			name: "video",
-			kind: "video",
-			message: telego.Message{
-				Video:   &telego.Video{FileID: "video"},
-				Caption: "check this",
-			},
-		},
-		{
-			name: "video note",
-			kind: "video note",
-			message: telego.Message{
-				VideoNote: &telego.VideoNote{FileID: "video-note"},
-				Caption:   "check this",
-			},
-		},
-		{
-			name: "voice",
-			kind: "voice",
-			message: telego.Message{
-				Voice:   &telego.Voice{FileID: "voice"},
-				Caption: "check this",
 			},
 		},
 	}
@@ -977,7 +941,7 @@ func TestHandleMessage_UnsupportedAttachmentsBecomeSyntheticTextOnlyMessages(t *
 
 			if !strings.Contains(
 				got.Text,
-				"Telegram currently forwards photos/images only; inbound audio awaits agent/provider support.",
+				"Telegram currently forwards only supported media types to q15.",
 			) {
 				t.Fatalf("Text = %q, want support warning", got.Text)
 			}
@@ -986,10 +950,6 @@ func TestHandleMessage_UnsupportedAttachmentsBecomeSyntheticTextOnlyMessages(t *
 			}
 			if !strings.Contains(got.Text, tt.kind) {
 				t.Fatalf("Text = %q, want attachment kind %q", got.Text, tt.kind)
-			}
-			if strings.Contains(msg.Caption, "check this") &&
-				!strings.Contains(got.Text, "Original user text: check this") {
-				t.Fatalf("Text = %q, want original caption preserved", got.Text)
 			}
 		})
 	}
@@ -1014,9 +974,9 @@ func TestHandleMessage_PhotoIngestFailureBecomesSyntheticTextOnlyMessage(t *test
 	ch.downloadClient = &http.Client{
 		Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
 			return &http.Response{
-				StatusCode: http.StatusOK,
-				Status:     "200 OK",
-				Body:       io.NopCloser(strings.NewReader("not an image")),
+				StatusCode: http.StatusNotFound,
+				Status:     "404 Not Found",
+				Body:       io.NopCloser(strings.NewReader("")),
 				Header:     make(http.Header),
 			}, nil
 		}),
@@ -1084,5 +1044,247 @@ func TestSendText_ValidationErrors(t *testing.T) {
 				t.Fatalf("error = %q, want substring %q", err.Error(), tt.want)
 			}
 		})
+	}
+}
+
+// testTelegramOGGOpusBytes is a minimal OGG header so
+// http.DetectContentType returns application/ogg.
+var testTelegramOGGOpusBytes = []byte{
+	'O', 'g', 'g', 'S', // OGG capture pattern
+	0x00,                   // stream structure version (0 for sniff)
+	0x02,                   // header type flag
+	0x00, 0x00, 0x00, 0x00, // granule position
+	0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, // serial number
+	0x00, 0x00, 0x00, 0x00, // page sequence
+	0x00, 0x00, 0x00, 0x00, // checksum
+	0x01, // segment count
+	0x13, // segment size (OpusHead magic)
+	'O', 'p', 'u', 's', 'H', 'e', 'a', 'd',
+}
+
+// extractMediaRef pulls the media:// ref from a generated attachment notice.
+func extractMediaRef(t *testing.T, text string) string {
+	t.Helper()
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "Media-Ref: ") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "Media-Ref: "))
+		}
+	}
+	t.Fatalf("text %q does not contain a Media-Ref line", text)
+	return ""
+}
+
+func TestHandleMessage_VoiceStoresMediaProducesTextNoticeOnly(t *testing.T) {
+	store, err := q15media.NewFileStore(filepath.Join(t.TempDir(), "media"))
+	if err != nil {
+		t.Fatalf("NewFileStore() error = %v", err)
+	}
+
+	caller := &mockAPICaller{
+		responses: []*ta.Response{
+			{
+				Ok: true,
+				Result: []byte(
+					`{"file_id":"voice","file_unique_id":"u1","file_path":"voice/file_1.ogg"}`,
+				),
+			},
+		},
+	}
+	ch := newTestChannelWithCaller(t, caller)
+	ch.mediaStore = store
+	ch.downloadClient = &http.Client{
+		Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Status:     "200 OK",
+				Body:       io.NopCloser(bytes.NewReader(testTelegramOGGOpusBytes)),
+				Header:     make(http.Header),
+			}, nil
+		}),
+	}
+
+	var got IncomingMessage
+	ch.onMessage = func(msg IncomingMessage) {
+		got = msg
+	}
+
+	err = ch.handleMessage(context.Background(), &telego.Message{
+		MessageID: 42,
+		Caption:   "transcribe this",
+		Voice:     &telego.Voice{FileID: "voice"},
+		Chat:      telego.Chat{ID: 123},
+		From:      &telego.User{ID: 7},
+	})
+	if err != nil {
+		t.Fatalf("handleMessage() error = %v", err)
+	}
+
+	if len(got.Attachments) != 1 || got.Attachments[0].Type != conversation.AudioPartType {
+		t.Fatalf("Attachments = %#v, want 1 audio part", got.Attachments)
+	}
+	if !strings.Contains(got.Text, "transcribe this") {
+		t.Fatalf("Text = %q, want caption preserved", got.Text)
+	}
+	if !strings.Contains(got.Text, "Media-Ref: media://sha256/") {
+		t.Fatalf("Text = %q, want media ref", got.Text)
+	}
+	if !strings.Contains(got.Text, "usable from exec") {
+		t.Fatalf("Text = %q, want exec hint", got.Text)
+	}
+	if !strings.Contains(got.Text, "voice attachment") {
+		t.Fatalf("Text = %q, want voice kind in notice", got.Text)
+	}
+
+	mediaRef := extractMediaRef(t, got.Text)
+	localPath, meta, err := store.Resolve(mediaRef)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if meta.Source != "telegram" {
+		t.Fatalf("meta.Source = %q, want telegram", meta.Source)
+	}
+	if !strings.HasPrefix(meta.ContentType, "audio/") && meta.ContentType != "application/ogg" {
+		t.Fatalf("meta.ContentType = %q, want audio/* or application/ogg", meta.ContentType)
+	}
+	if !strings.Contains(got.Text, localPath) {
+		t.Fatalf("Text = %q, want notice to contain exec path %q", got.Text, localPath)
+	}
+	if err := store.ReleaseAll("telegram:123:42"); err != nil {
+		t.Fatalf("ReleaseAll() error = %v", err)
+	}
+}
+
+func TestHandleMessage_AudioStoresMediaProducesTextNoticeOnly(t *testing.T) {
+	store, err := q15media.NewFileStore(filepath.Join(t.TempDir(), "media"))
+	if err != nil {
+		t.Fatalf("NewFileStore() error = %v", err)
+	}
+
+	caller := &mockAPICaller{
+		responses: []*ta.Response{
+			{
+				Ok: true,
+				Result: []byte(
+					`{"file_id":"audio","file_unique_id":"u1","file_path":"audio/file_1.mp3"}`,
+				),
+			},
+		},
+	}
+	ch := newTestChannelWithCaller(t, caller)
+	ch.mediaStore = store
+	ch.downloadClient = &http.Client{
+		Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Status:     "200 OK",
+				// ID3 tag header makes http.DetectContentType return audio/mpeg
+				Body: io.NopCloser(
+					bytes.NewReader([]byte("ID3\x03\x00\x00\x00\x00\x00\x00audio")),
+				),
+				Header: make(http.Header),
+			}, nil
+		}),
+	}
+
+	var got IncomingMessage
+	ch.onMessage = func(msg IncomingMessage) {
+		got = msg
+	}
+
+	err = ch.handleMessage(context.Background(), &telego.Message{
+		MessageID: 42,
+		Audio:     &telego.Audio{FileID: "audio"},
+		Chat:      telego.Chat{ID: 123},
+	})
+	if err != nil {
+		t.Fatalf("handleMessage() error = %v", err)
+	}
+
+	if len(got.Attachments) != 1 || got.Attachments[0].Type != conversation.AudioPartType {
+		t.Fatalf("Attachments = %#v, want 1 audio part", got.Attachments)
+	}
+	if !strings.Contains(got.Text, "Media-Ref: media://sha256/") {
+		t.Fatalf("Text = %q, want media ref", got.Text)
+	}
+	if !strings.Contains(got.Text, "audio attachment") {
+		t.Fatalf("Text = %q, want audio kind in notice", got.Text)
+	}
+	if !strings.Contains(got.Text, "usable from exec") {
+		t.Fatalf("Text = %q, want exec hint", got.Text)
+	}
+
+	mediaRef := extractMediaRef(t, got.Text)
+	if _, _, err := store.Resolve(mediaRef); err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if err := store.ReleaseAll("telegram:123:42"); err != nil {
+		t.Fatalf("ReleaseAll() error = %v", err)
+	}
+}
+
+func TestHandleMessage_VideoStoresMediaProducesTextNoticeOnly(t *testing.T) {
+	store, err := q15media.NewFileStore(filepath.Join(t.TempDir(), "media"))
+	if err != nil {
+		t.Fatalf("NewFileStore() error = %v", err)
+	}
+
+	caller := &mockAPICaller{
+		responses: []*ta.Response{
+			{
+				Ok: true,
+				Result: []byte(
+					`{"file_id":"video","file_unique_id":"u1","file_path":"video/file_1.mp4"}`,
+				),
+			},
+		},
+	}
+	ch := newTestChannelWithCaller(t, caller)
+	ch.mediaStore = store
+	ch.downloadClient = &http.Client{
+		Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Status:     "200 OK",
+				Body:       io.NopCloser(bytes.NewReader([]byte("video bytes here"))),
+				Header:     make(http.Header),
+			}, nil
+		}),
+	}
+
+	var got IncomingMessage
+	ch.onMessage = func(msg IncomingMessage) {
+		got = msg
+	}
+
+	err = ch.handleMessage(context.Background(), &telego.Message{
+		MessageID: 42,
+		Video:     &telego.Video{FileID: "video"},
+		Chat:      telego.Chat{ID: 123},
+	})
+	if err != nil {
+		t.Fatalf("handleMessage() error = %v", err)
+	}
+
+	if len(got.Attachments) != 0 {
+		t.Fatalf("Attachments len = %d, want 0 (inbound media is text-only)", len(got.Attachments))
+	}
+	if !strings.Contains(got.Text, "Media-Ref: media://sha256/") {
+		t.Fatalf("Text = %q, want media ref", got.Text)
+	}
+	if !strings.Contains(got.Text, "video attachment") {
+		t.Fatalf("Text = %q, want video kind in notice", got.Text)
+	}
+	if !strings.Contains(got.Text, "usable from exec") {
+		t.Fatalf("Text = %q, want exec hint", got.Text)
+	}
+
+	mediaRef := extractMediaRef(t, got.Text)
+	if _, _, err := store.Resolve(mediaRef); err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if err := store.ReleaseAll("telegram:123:42"); err != nil {
+		t.Fatalf("ReleaseAll() error = %v", err)
 	}
 }

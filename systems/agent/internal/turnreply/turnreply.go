@@ -146,6 +146,15 @@ func normalizeReplyAttachment(part conversation.Part) (replyAttachment, bool) {
 			) + "\x00" + normalized.MediaRef + "\x00" + normalized.DataURL,
 			part: normalized,
 		}, true
+	case conversation.AudioPartType:
+		if strings.TrimSpace(part.MediaRef) == "" {
+			return replyAttachment{}, false
+		}
+		normalized := conversation.Audio(part.MediaRef)
+		return replyAttachment{
+			key:  string(normalized.Type) + "\x00" + normalized.MediaRef,
+			part: normalized,
+		}, true
 	default:
 		return replyAttachment{}, false
 	}

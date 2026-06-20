@@ -341,23 +341,28 @@ func TestRoutedModelAdapterPlanSelectionFiltersByCapabilitiesAndPreservesOrder(t
 	plan, err := planner.Plan(
 		[]string{"text-only", "vision", "vision-tools"},
 		modelselection.Requirements{
-			Text:       true,
-			ImageInput: true,
+			Text:        true,
+			ToolCalling: true,
 		},
 	)
 	if err != nil {
 		t.Fatalf("Plan() error = %v", err)
 	}
-	if got, want := plan.EligibleRefs, []string{"vision", "vision-tools"}; len(got) != len(want) ||
-		got[0] != want[0] || got[1] != want[1] {
+	if got, want := plan.EligibleRefs, []string{"vision-tools"}; len(got) != len(want) ||
+		got[0] != want[0] {
 		t.Fatalf("eligible refs = %#v, want %#v", got, want)
 	}
-	if len(plan.Skipped) != 1 {
-		t.Fatalf("skipped len = %d, want 1", len(plan.Skipped))
+	if len(plan.Skipped) != 2 {
+		t.Fatalf("skipped len = %d, want 2", len(plan.Skipped))
 	}
-	if plan.Skipped[0].Ref != "text-only" ||
-		plan.Skipped[0].Reason != "missing capabilities [image_input]" {
-		t.Fatalf("skipped[0] = %#v", plan.Skipped[0])
+	for _, skip := range plan.Skipped {
+		if skip.Reason != "missing capabilities [tool_calling]" {
+			t.Fatalf(
+				"skipped reason = %q, want %q",
+				skip.Reason,
+				"missing capabilities [tool_calling]",
+			)
+		}
 	}
 }
 
@@ -524,7 +529,6 @@ func TestRoutedModelAdapterPlanSelectionReturnsEmptyPlanWhenNoCandidatesMatch(t 
 		[]string{"text-only"},
 		modelselection.Requirements{
 			Text:        true,
-			ImageInput:  true,
 			ToolCalling: true,
 		},
 	)
@@ -537,7 +541,7 @@ func TestRoutedModelAdapterPlanSelectionReturnsEmptyPlanWhenNoCandidatesMatch(t 
 	if len(plan.Skipped) != 1 {
 		t.Fatalf("skipped len = %d, want 1", len(plan.Skipped))
 	}
-	if plan.Skipped[0].Reason != "missing capabilities [image_input, tool_calling]" {
+	if plan.Skipped[0].Reason != "missing capabilities [tool_calling]" {
 		t.Fatalf("skip reason = %q", plan.Skipped[0].Reason)
 	}
 }

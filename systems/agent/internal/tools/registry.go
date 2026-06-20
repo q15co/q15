@@ -75,6 +75,11 @@ func NewLoadImage(paths fileops.Settings, mediaStore q15media.Store) *mediatools
 	return mediatools.NewLoadImage(paths, mediaStore)
 }
 
+// NewAttachAudio delegates to media.NewAttachAudio.
+func NewAttachAudio(paths fileops.Settings, mediaStore q15media.Store) *mediatools.AttachAudio {
+	return mediatools.NewAttachAudio(paths, mediaStore)
+}
+
 // NewValidateSkill delegates to skills.NewValidateSkill.
 func NewValidateSkill(validator skills.SkillValidator) *skills.ValidateSkill {
 	return skills.NewValidateSkill(validator)

@@ -12,19 +12,14 @@ type Request struct {
 	ToolCount int
 }
 
-// InferRequirements derives the model capabilities required for one request
-// from the canonical transcript and the currently visible tool set.
+// InferRequirements derives the model capabilities required for one request.
+//
+// Only text is a hard requirement. Media (image/audio) is handled by adaptive
+// rendering at the provider boundary — a text-only model receives media as text
+// hints instead of being excluded from selection.
 //
 // Tool calling is not auto-required yet because existing behavior allows
 // fallback to eligible non-tool models by omitting tools.
-func InferRequirements(request Request) Requirements {
-	_ = request.ToolCount
-
-	requirements := Requirements{
-		Text: true,
-	}
-	if conversation.HasImageParts(request.Messages) {
-		requirements.ImageInput = true
-	}
-	return requirements
+func InferRequirements(_ Request) Requirements {
+	return Requirements{Text: true}
 }

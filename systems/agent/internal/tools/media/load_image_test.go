@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/q15co/q15/systems/agent/internal/conversation"
 	"github.com/q15co/q15/systems/agent/internal/fileops"
 	q15media "github.com/q15co/q15/systems/agent/internal/media"
 )
@@ -38,8 +39,12 @@ func TestLoadImageRegistersImageAndReturnsMediaRef(t *testing.T) {
 	if !strings.Contains(result.Output, "Loaded image: /workspace/artifact.png") {
 		t.Fatalf("Output = %q", result.Output)
 	}
-	if len(result.MediaRefs) != 1 || !strings.HasPrefix(result.MediaRefs[0], "media://sha256/") {
-		t.Fatalf("MediaRefs = %#v", result.MediaRefs)
+	if len(result.Attachments) != 1 || result.Attachments[0].Type != conversation.ImagePartType ||
+		!strings.HasPrefix(result.Attachments[0].MediaRef, "media://sha256/") {
+		t.Fatalf("Attachments = %#v, want one image attachment", result.Attachments)
+	}
+	if len(result.MediaRefs) != 0 {
+		t.Fatalf("MediaRefs = %#v, want empty (legacy field not used)", result.MediaRefs)
 	}
 }
 
@@ -77,4 +82,80 @@ func writeTestImage(path string) error {
 		0x00, 0x00, 0x00, 0x00, 'I', 'E', 'N', 'D',
 		0xae, 0x42, 0x60, 0x82,
 	}, 0o644)
+}
+
+func TestLoadImageMediaRefInjectsVisionAttachment(t *testing.T) {
+	workspace := t.TempDir()
+	store, err := q15media.NewFileStore(filepath.Join(t.TempDir(), "media"))
+	if err != nil {
+		t.Fatalf("NewFileStore() error = %v", err)
+	}
+
+	// Seed the store with an image via the store directly.
+	sourcePath := filepath.Join(workspace, "inbound.png")
+	if err := writeTestImage(sourcePath); err != nil {
+		t.Fatalf("writeTestImage() error = %v", err)
+	}
+	seededRef, err := store.Store(sourcePath, q15media.Meta{
+		Filename:    "inbound.png",
+		ContentType: "image/png",
+		Source:      "telegram",
+	}, "telegram:1:1")
+	if err != nil {
+		t.Fatalf("Store() error = %v", err)
+	}
+
+	tool := NewLoadImage(fileops.Settings{
+		WorkspaceLocalDir:   workspace,
+		WorkspaceRuntimeDir: "/workspace",
+	}, store)
+
+	result, err := tool.RunResult(context.Background(), `{"media_ref":"`+seededRef+`"}`)
+	if err != nil {
+		t.Fatalf("RunResult() error = %v", err)
+	}
+	if !strings.Contains(result.Output, seededRef) {
+		t.Fatalf("Output = %q, want seeded ref %q", result.Output, seededRef)
+	}
+	if len(result.Attachments) != 1 || result.Attachments[0].Type != conversation.ImagePartType ||
+		result.Attachments[0].MediaRef != seededRef {
+		t.Fatalf("Attachments = %#v, want image attachment with seeded ref", result.Attachments)
+	}
+}
+
+func TestLoadImageRejectsBothPathAndMediaRef(t *testing.T) {
+	workspace := t.TempDir()
+	store, err := q15media.NewFileStore(filepath.Join(t.TempDir(), "media"))
+	if err != nil {
+		t.Fatalf("NewFileStore() error = %v", err)
+	}
+	tool := NewLoadImage(fileops.Settings{
+		WorkspaceLocalDir:   workspace,
+		WorkspaceRuntimeDir: "/workspace",
+	}, store)
+
+	_, err = tool.RunResult(
+		context.Background(),
+		`{"path":"img.png","media_ref":"media://sha256/abc"}`,
+	)
+	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("RunResult() error = %v, want mutually exclusive failure", err)
+	}
+}
+
+func TestLoadImageRejectsNeitherPathNorMediaRef(t *testing.T) {
+	workspace := t.TempDir()
+	store, err := q15media.NewFileStore(filepath.Join(t.TempDir(), "media"))
+	if err != nil {
+		t.Fatalf("NewFileStore() error = %v", err)
+	}
+	tool := NewLoadImage(fileops.Settings{
+		WorkspaceLocalDir:   workspace,
+		WorkspaceRuntimeDir: "/workspace",
+	}, store)
+
+	_, err = tool.RunResult(context.Background(), `{}`)
+	if err == nil || !strings.Contains(err.Error(), "exactly one of") {
+		t.Fatalf("RunResult() error = %v, want exactly one failure", err)
+	}
 }

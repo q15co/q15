@@ -63,7 +63,6 @@ func filterCandidatesByRequirements(
 	for _, candidate := range candidates {
 		capabilities := modelselection.Capabilities{
 			Text:        candidate.endpoint.capabilities.Text,
-			ImageInput:  candidate.endpoint.capabilities.ImageInput,
 			ToolCalling: candidate.endpoint.capabilities.ToolCalling,
 		}
 		if reason := capabilities.MissingReason(requirements); reason != "" {
