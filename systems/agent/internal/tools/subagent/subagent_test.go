@@ -2,6 +2,8 @@ package subagent
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -96,6 +98,65 @@ func TestManagerStartDefaultsToNoTools(t *testing.T) {
 	}
 	if got := session.Read(0, defaultMaxOutput); !strings.Contains(got, "completed: done") {
 		t.Fatalf("session read = %q, want completed result", got)
+	}
+}
+
+func TestMediaAdaptiveClientDocumentsSubagentMediaBehavior(t *testing.T) {
+	store := newSubagentTestMediaStore(t)
+	imageRef := storeSubagentTestMedia(t, store, "image.jpg", []byte{
+		0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43, 0x00,
+		0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+		0xff, 0xd9,
+	}, q15media.Meta{ContentType: "image/jpeg", Source: "telegram"})
+	audioRef := storeSubagentTestMedia(t, store, "speech.mp3", []byte(
+		"ID3\x03\x00\x00\x00\x00\x00\x00q15 mp3 fixture",
+	), q15media.Meta{ContentType: "audio/mpeg", Source: "telegram"})
+
+	messages := []conversation.Message{conversation.UserMessageParts(
+		conversation.Text("inspect this media", ""),
+		conversation.Image(imageRef, ""),
+		conversation.Audio(audioRef),
+	)}
+
+	textOnlyModel := &recordingModel{}
+	textOnlyClient := &mediaAdaptiveClient{
+		inner: textOnlyModel,
+		store: store,
+	}
+	if _, err := textOnlyClient.Complete(context.Background(), "child", messages, nil); err != nil {
+		t.Fatalf("Complete(text-only) error = %v", err)
+	}
+	textOnly := textOnlyModel.snapshotCalls()[0][0]
+	if subagentTestHasPartType(textOnly, conversation.ImagePartType) ||
+		subagentTestHasPartType(textOnly, conversation.AudioPartType) {
+		t.Fatalf("text-only subagent received inline media: %#v", textOnly.Parts)
+	}
+	if !subagentTestTextContains(textOnly, "[Media: image]") ||
+		!subagentTestTextContains(textOnly, "[Media: audio]") {
+		t.Fatalf("text-only subagent parts = %#v, want image and audio hints", textOnly.Parts)
+	}
+
+	visionModel := &recordingModel{}
+	visionClient := &mediaAdaptiveClient{
+		inner:   visionModel,
+		support: q15media.Support{Image: true},
+		store:   store,
+	}
+	if _, err := visionClient.Complete(context.Background(), "child", messages, nil); err != nil {
+		t.Fatalf("Complete(vision) error = %v", err)
+	}
+	vision := visionModel.snapshotCalls()[0][0]
+	if !subagentTestHasPartType(vision, conversation.ImagePartType) {
+		t.Fatalf("vision subagent parts = %#v, want image retained", vision.Parts)
+	}
+	if subagentTestHasPartType(vision, conversation.AudioPartType) ||
+		!subagentTestTextContains(vision, "[Media: audio]") {
+		t.Fatalf("vision subagent parts = %#v, want audio downgraded", vision.Parts)
+	}
+
+	if messages[0].Parts[1].Type != conversation.ImagePartType ||
+		messages[0].Parts[2].Type != conversation.AudioPartType {
+		t.Fatalf("canonical subagent transcript mutated: %#v", messages[0].Parts)
 	}
 }
 
@@ -306,6 +367,53 @@ func newTestManager(t *testing.T, model agent.ModelClient) *Manager {
 		registry,
 		nil,
 	)
+}
+
+func newSubagentTestMediaStore(t *testing.T) *q15media.FileStore {
+	t.Helper()
+	store, err := q15media.NewFileStore(filepath.Join(t.TempDir(), "media"))
+	if err != nil {
+		t.Fatalf("NewFileStore() error = %v", err)
+	}
+	return store
+}
+
+func storeSubagentTestMedia(
+	t *testing.T,
+	store *q15media.FileStore,
+	filename string,
+	content []byte,
+	meta q15media.Meta,
+) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), filename)
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	meta.Filename = filename
+	ref, err := store.Store(path, meta, "test")
+	if err != nil {
+		t.Fatalf("Store() error = %v", err)
+	}
+	return ref
+}
+
+func subagentTestHasPartType(message conversation.Message, partType conversation.PartType) bool {
+	for _, part := range message.Parts {
+		if part.Type == partType {
+			return true
+		}
+	}
+	return false
+}
+
+func subagentTestTextContains(message conversation.Message, text string) bool {
+	for _, part := range message.Parts {
+		if part.Type == conversation.TextPartType && strings.Contains(part.Text, text) {
+			return true
+		}
+	}
+	return false
 }
 
 func waitDone(t *testing.T, session *Session) {
