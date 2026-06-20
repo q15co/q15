@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -344,6 +345,7 @@ func (t *Spawn) Definition() agent.ToolDefinition {
 			"Use for isolated delegated work; provide only sanitized context.",
 			"Use a vision-capable model when delegating analysis of media refs such as media://sha256/... attachments.",
 			"Default tools allowlist is empty; explicitly grant only needed tools.",
+			"Give the sub-agent full /workspace/... paths for files in packages whose names collide with runtime roots (memory, skills); /memory and /skills are persistent runtime roots, not Go package paths.",
 		},
 		Parameters: map[string]any{
 			"type": "object",
@@ -602,11 +604,40 @@ func (t *Kill) Run(_ context.Context, args string) (string, error) {
 
 type workspaceOnlyPolicy struct{}
 
+// memoryRootPattern matches /memory only as a leading path component (the
+// persistent memory filesystem root), never as a trailing segment of another
+// path. This avoids false positives on legitimate workspace source paths such
+// as /workspace/systems/agent/internal/memory/sanitize.go, where "/memory" is
+// preceded by "internal".
+var memoryRootPattern = regexp.MustCompile(`(?:^|[\s"'])(/memory(?:/[^\s"']*)?)(?:[\s"']|$)`)
+
+// CheckToolCall blocks delegated sub-agents from touching the persistent
+// /memory filesystem root. /memory is the runtime memory root, not the Go
+// package internal/memory; workspace source lives under /workspace/...
 func (workspaceOnlyPolicy) CheckToolCall(call agent.ToolCall) error {
-	if strings.Contains(call.Arguments, "/memory") {
-		return fmt.Errorf("sub-agent filesystem policy denies /memory access")
+	blocked := memoryRootAccess(call.Arguments)
+	if blocked == "" {
+		return nil
 	}
-	return nil
+	return fmt.Errorf(
+		"sub-agent filesystem policy denies access to %q: "+
+			"/memory is the persistent memory root, not a Go package or workspace source path; "+
+			"reference repo/workspace files under /workspace/... "+
+			"(e.g. /workspace/systems/agent/internal/memory)",
+		blocked,
+	)
+}
+
+// memoryRootAccess returns the first /memory-rooted path token in arguments,
+// or "" when no /memory filesystem-root path is referenced. The pattern anchors
+// /memory to path boundaries on both sides, so sibling roots such as /memoryx
+// and workspace source like /workspace/systems/agent/internal/memory are not
+// mistaken for the persistent memory filesystem root.
+func memoryRootAccess(arguments string) string {
+	if match := memoryRootPattern.FindStringSubmatch(arguments); len(match) >= 2 {
+		return match[1]
+	}
+	return ""
 }
 func truncate(s string, n int) string {
 	if n <= 0 || len(s) <= n {
