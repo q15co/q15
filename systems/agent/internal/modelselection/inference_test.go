@@ -15,12 +15,12 @@ func TestInferRequirements_TextOnlyMessagesRequireTextOnly(t *testing.T) {
 		ToolCount: 1,
 	})
 
-	if !got.Text || got.ImageInput || got.ToolCalling {
+	if !got.Text || got.ToolCalling {
 		t.Fatalf("InferRequirements() = %#v, want text-only requirements", got)
 	}
 }
 
-func TestInferRequirements_ImagePartsRequireImageInput(t *testing.T) {
+func TestInferRequirements_ImagePartsDoNotRequireImageInput(t *testing.T) {
 	got := InferRequirements(Request{
 		Messages: []conversation.Message{
 			conversation.SystemMessage("system"),
@@ -31,8 +31,11 @@ func TestInferRequirements_ImagePartsRequireImageInput(t *testing.T) {
 		},
 	})
 
-	if !got.Text || !got.ImageInput || got.ToolCalling {
-		t.Fatalf("InferRequirements() = %#v, want text + image_input requirements", got)
+	if !got.Text || got.ToolCalling {
+		t.Fatalf(
+			"InferRequirements() = %#v, want text-only (image parts do not gate selection)",
+			got,
+		)
 	}
 }
 
@@ -67,10 +70,9 @@ func TestPassthroughPreservesOrderAndDropsEmptyRefs(t *testing.T) {
 func TestCapabilitiesMissingReasonUsesStableOrder(t *testing.T) {
 	reason := (Capabilities{}).MissingReason(Requirements{
 		Text:        true,
-		ImageInput:  true,
 		ToolCalling: true,
 	})
-	if reason != "missing capabilities [text, image_input, tool_calling]" {
+	if reason != "missing capabilities [text, tool_calling]" {
 		t.Fatalf("MissingReason() = %q", reason)
 	}
 }

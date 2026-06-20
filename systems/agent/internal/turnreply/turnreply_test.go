@@ -109,3 +109,26 @@ func TestCanonicalizeSynthesizesImageOnlyAssistant(t *testing.T) {
 		t.Fatalf("last assistant parts = %#v, want image-only assistant", last.Parts)
 	}
 }
+
+func TestExtractCarriesAudioAttachmentFromToolResult(t *testing.T) {
+	got := Extract([]conversation.Message{
+		conversation.UserMessage("send the audio"),
+		conversation.AssistantMessage(
+			conversation.ToolCall("call-1", "attach_audio", `{"path":"out.ogg"}`),
+		),
+		{
+			Role: conversation.ToolRole,
+			Parts: []conversation.Part{
+				conversation.ToolResult("call-1", "Attached audio: /workspace/out.ogg", false),
+				conversation.Audio("media://sha256/au"),
+			},
+		},
+		conversation.AssistantMessage(conversation.Text("done", "")),
+	})
+
+	if len(got.Attachments) != 1 ||
+		got.Attachments[0].Type != conversation.AudioPartType ||
+		got.Attachments[0].MediaRef != "media://sha256/au" {
+		t.Fatalf("Extract().Attachments = %#v, want audio attachment", got.Attachments)
+	}
+}

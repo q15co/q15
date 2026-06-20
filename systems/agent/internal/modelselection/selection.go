@@ -9,25 +9,20 @@ import (
 // model turn.
 type Requirements struct {
 	Text        bool
-	ImageInput  bool
 	ToolCalling bool
 }
 
 // Capabilities describes the capability set available for one candidate model.
 type Capabilities struct {
 	Text        bool
-	ImageInput  bool
 	ToolCalling bool
 }
 
 // String returns a stable, human-readable requirement list for logs/errors.
 func (r Requirements) String() string {
-	names := make([]string, 0, 3)
+	names := make([]string, 0, 2)
 	if r.Text {
 		names = append(names, "text")
-	}
-	if r.ImageInput {
-		names = append(names, "image_input")
 	}
 	if r.ToolCalling {
 		names = append(names, "tool_calling")
@@ -86,12 +81,9 @@ func (Passthrough) Plan(modelRefs []string, _ Requirements) (Plan, error) {
 
 // Missing returns the unmet capability names in stable order.
 func (c Capabilities) Missing(requirements Requirements) []string {
-	missing := make([]string, 0, 3)
+	missing := make([]string, 0, 2)
 	if requirements.Text && !c.Text {
 		missing = append(missing, "text")
-	}
-	if requirements.ImageInput && !c.ImageInput {
-		missing = append(missing, "image_input")
 	}
 	if requirements.ToolCalling && !c.ToolCalling {
 		missing = append(missing, "tool_calling")

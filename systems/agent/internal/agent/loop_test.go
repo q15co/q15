@@ -616,7 +616,7 @@ func TestLoopReply_UsesEligibleFallbackCandidatesOnly(t *testing.T) {
 			if len(modelRefs) != 2 || modelRefs[0] != "m1" || modelRefs[1] != "m2" {
 				t.Fatalf("planned model refs = %#v, want [m1 m2]", modelRefs)
 			}
-			if !requirements.Text || requirements.ImageInput || requirements.ToolCalling {
+			if !requirements.Text || requirements.ToolCalling {
 				t.Fatalf("requirements = %#v, want text-only", requirements)
 			}
 			return modelselection.Plan{
@@ -694,7 +694,7 @@ func TestLoopReply_FailsBeforeProviderCallsWhenNoEligibleModels(t *testing.T) {
 	}
 }
 
-func TestLoopReply_ToolProducedImageRequiresImageInputOnNextTurn(t *testing.T) {
+func TestLoopReply_ToolProducedImageDoesNotRequireImageInput(t *testing.T) {
 	store := &fakeConversationStore{}
 	planner := &fakePlanner{}
 	model := &fakeModelClient{
@@ -758,10 +758,10 @@ func TestLoopReply_ToolProducedImageRequiresImageInputOnNextTurn(t *testing.T) {
 	if len(planner.plannedRequirements) != 2 {
 		t.Fatalf("plannedRequirements len = %d, want 2", len(planner.plannedRequirements))
 	}
-	if planner.plannedRequirements[0].ImageInput {
+	if !planner.plannedRequirements[0].Text || planner.plannedRequirements[0].ToolCalling {
 		t.Fatalf("first turn requirements = %#v, want text-only", planner.plannedRequirements[0])
 	}
-	if planner.plannedRequirements[1].ImageInput {
+	if !planner.plannedRequirements[1].Text || planner.plannedRequirements[1].ToolCalling {
 		t.Fatalf(
 			"second turn requirements = %#v, want text-only (no image promotion from tool MediaRefs)",
 			planner.plannedRequirements[1],
@@ -850,16 +850,16 @@ func TestLoopReply_ExecThenLoadImageCarriesFinalMediaRefs(t *testing.T) {
 	if len(planner.plannedRequirements) != 3 {
 		t.Fatalf("plannedRequirements len = %d, want 3", len(planner.plannedRequirements))
 	}
-	if planner.plannedRequirements[0].ImageInput {
+	if !planner.plannedRequirements[0].Text || planner.plannedRequirements[0].ToolCalling {
 		t.Fatalf("first turn requirements = %#v, want text-only", planner.plannedRequirements[0])
 	}
-	if planner.plannedRequirements[1].ImageInput {
+	if !planner.plannedRequirements[1].Text || planner.plannedRequirements[1].ToolCalling {
 		t.Fatalf(
 			"second turn requirements = %#v, want text-only after exec",
 			planner.plannedRequirements[1],
 		)
 	}
-	if planner.plannedRequirements[2].ImageInput {
+	if !planner.plannedRequirements[2].Text || planner.plannedRequirements[2].ToolCalling {
 		t.Fatalf(
 			"third turn requirements = %#v, want text-only (no image promotion from tool MediaRefs)",
 			planner.plannedRequirements[2],

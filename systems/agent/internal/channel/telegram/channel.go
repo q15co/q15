@@ -213,19 +213,21 @@ func (c *Channel) handleMessage(ctx context.Context, message *telego.Message) er
 		msg.UserID = strconv.FormatInt(message.From.ID, 10)
 	}
 
-	if len(message.Photo) > 0 {
-		ref, err := c.storePhoto(
+	if kind, fileID, ok := detectInboundAttachment(message); ok {
+		ref, localPath, err := c.storeAttachment(
 			ctx,
-			message.Photo[len(message.Photo)-1].FileID,
+			fileID,
+			kind,
 			mediaScope(msg.ChatID, msg.MessageID),
 		)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "telegram photo ingest error: %v\n", err)
-			msg.Text = attachmentFailureText("photo", text)
+			fmt.Fprintf(os.Stderr, "telegram %s ingest error: %v\n", kind, err)
+			msg.Text = attachmentFailureText(kind, text)
 			c.onMessage(msg)
 			return nil
 		}
-		msg.Attachments = []conversation.Part{conversation.Image(ref, "")}
+		msg.Text = joinCaptionAndNotice(text, buildInboundAttachmentNotice(kind, ref, localPath))
+		msg.Attachments = inboundAttachmentParts(kind, ref)
 	} else if kind := unsupportedTelegramAttachmentKind(message); kind != "" {
 		msg.Text = unsupportedAttachmentText(kind, text)
 		c.onMessage(msg)
@@ -681,20 +683,8 @@ func unsupportedTelegramAttachmentKind(message *telego.Message) string {
 	}
 
 	switch {
-	case message.Animation != nil:
-		return "animation"
-	case message.Audio != nil:
-		return "audio"
-	case message.Document != nil:
-		return "document"
 	case message.Sticker != nil:
 		return "sticker"
-	case message.Video != nil:
-		return "video"
-	case message.VideoNote != nil:
-		return "video note"
-	case message.Voice != nil:
-		return "voice"
 	default:
 		return ""
 	}
@@ -720,7 +710,7 @@ func attachmentFailureText(kind, originalText string) string {
 func attachmentNotice(summary, originalText string) string {
 	lines := []string{
 		"System note: " + strings.TrimSpace(summary),
-		"Telegram currently forwards photos/images only; inbound audio awaits agent/provider support.",
+		"Telegram currently forwards only supported media types to q15.",
 		"The agent must not pretend it saw the attachment.",
 	}
 	originalText = strings.TrimSpace(originalText)
@@ -794,24 +784,35 @@ func ensureTelegramAudio(localPath string, meta q15media.Meta) error {
 	return nil
 }
 
-func (c *Channel) storePhoto(ctx context.Context, fileID, scope string) (string, error) {
+func (c *Channel) storeAttachment(
+	ctx context.Context,
+	fileID string,
+	kind string,
+	scope string,
+) (ref string, objectPath string, err error) {
 	if c.mediaStore == nil {
-		return "", fmt.Errorf("telegram media store is not configured")
+		return "", "", fmt.Errorf("telegram media store is not configured")
 	}
 
 	fileID = strings.TrimSpace(fileID)
 	if fileID == "" {
-		return "", fmt.Errorf("telegram file id is required")
+		return "", "", fmt.Errorf("telegram file id is required")
 	}
 
 	file, err := c.bot.GetFile(ctx, &telego.GetFileParams{FileID: fileID})
 	if err != nil {
-		return "", fmt.Errorf("get telegram file %q: %w", fileID, err)
+		return "", "", fmt.Errorf("get telegram file %q: %w", fileID, err)
 	}
 
-	localPath, contentType, filename, err := c.downloadPhoto(ctx, file)
+	localPath, contentType, filename, err := c.downloadTelegramFile(
+		ctx,
+		file,
+		kind,
+		"",
+		normalizeFilename(file.FilePath, defaultFilenameForKind(kind)),
+	)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	// FileStore copies before returning; keep temporary cleanup here so failed or
 	// completed ingests do not leak downloaded Telegram files.
@@ -819,28 +820,20 @@ func (c *Channel) storePhoto(ctx context.Context, fileID, scope string) (string,
 		_ = os.Remove(localPath)
 	}()
 
-	ref, err := c.mediaStore.Store(localPath, q15media.Meta{
+	ref, err = c.mediaStore.Store(localPath, q15media.Meta{
 		Filename:    filename,
 		ContentType: contentType,
 		Source:      "telegram",
 	}, scope)
 	if err != nil {
-		return "", fmt.Errorf("store telegram photo %q: %w", filename, err)
+		return "", "", fmt.Errorf("store telegram %s %q: %w", kind, filename, err)
 	}
-	return ref, nil
-}
 
-func (c *Channel) downloadPhoto(
-	ctx context.Context,
-	file *telego.File,
-) (localPath string, contentType string, filename string, err error) {
-	return c.downloadTelegramFile(
-		ctx,
-		file,
-		"photo",
-		"",
-		normalizeFilename(file.FilePath, "photo.jpg"),
-	)
+	resolvedPath, _, resolveErr := c.mediaStore.Resolve(ref)
+	if resolveErr != nil {
+		return "", "", fmt.Errorf("resolve stored telegram %s ref: %w", kind, resolveErr)
+	}
+	return ref, resolvedPath, nil
 }
 
 func (c *Channel) downloadTelegramFile(
@@ -902,7 +895,7 @@ func (c *Channel) downloadTelegramFile(
 	if expectedContentType != "" {
 		contentType = expectedContentType
 	} else {
-		contentType, err = detectImageContentType(tmp.Name())
+		contentType, err = detectFileContentType(tmp.Name())
 		if err != nil {
 			return "", "", "", err
 		}
@@ -917,7 +910,7 @@ func (c *Channel) httpClient() *http.Client {
 	return http.DefaultClient
 }
 
-func detectImageContentType(localPath string) (string, error) {
+func detectFileContentType(localPath string) (string, error) {
 	f, err := os.Open(localPath)
 	if err != nil {
 		return "", fmt.Errorf("open telegram media file %q: %w", localPath, err)
@@ -930,15 +923,7 @@ func detectImageContentType(localPath string) (string, error) {
 		return "", fmt.Errorf("read telegram media header %q: %w", localPath, err)
 	}
 
-	contentType := strings.ToLower(http.DetectContentType(header[:n]))
-	if !strings.HasPrefix(contentType, "image/") {
-		return "", fmt.Errorf(
-			"telegram media file %q is not an image (detected %q)",
-			localPath,
-			contentType,
-		)
-	}
-	return contentType, nil
+	return strings.ToLower(http.DetectContentType(header[:n])), nil
 }
 
 func normalizeFilename(filePath, fallback string) string {
@@ -947,6 +932,99 @@ func normalizeFilename(filePath, fallback string) string {
 		return fallback
 	}
 	return name
+}
+
+func detectInboundAttachment(message *telego.Message) (kind string, fileID string, ok bool) {
+	if message == nil {
+		return "", "", false
+	}
+	switch {
+	case len(message.Photo) > 0:
+		return "photo", message.Photo[len(message.Photo)-1].FileID, true
+	case message.Voice != nil:
+		return "voice", message.Voice.FileID, true
+	case message.Audio != nil:
+		return "audio", message.Audio.FileID, true
+	case message.Video != nil:
+		return "video", message.Video.FileID, true
+	case message.Document != nil:
+		return "document", message.Document.FileID, true
+	case message.Animation != nil:
+		return "animation", message.Animation.FileID, true
+	case message.VideoNote != nil:
+		return "video note", message.VideoNote.FileID, true
+	default:
+		return "", "", false
+	}
+}
+
+func defaultFilenameForKind(kind string) string {
+	switch kind {
+	case "photo":
+		return "photo.jpg"
+	case "voice":
+		return "voice.ogg"
+	case "audio":
+		return "audio.mp3"
+	case "video":
+		return "video.mp4"
+	case "animation":
+		return "animation.mp4"
+	case "video note":
+		return "video_note.mp4"
+	default:
+		return "file"
+	}
+}
+
+func buildInboundAttachmentNotice(kind, ref, localPath string) string {
+	lines := []string{
+		"System note: The user sent a Telegram " + strings.TrimSpace(kind) + " attachment.",
+		"Media-Ref: " + strings.TrimSpace(ref),
+		"File: " + strings.TrimSpace(localPath),
+		attachmentHintForKind(kind),
+	}
+	return strings.Join(lines, "\n")
+}
+
+func attachmentHintForKind(kind string) string {
+	switch kind {
+	case "photo":
+		return "Call load_image with this media_ref to inspect it with vision on the next turn."
+	case "voice", "audio":
+		return "The file is usable from exec at the path above (e.g. transcribe with whisper, transcode with ffmpeg)."
+	case "video":
+		return "The file is usable from exec at the path above (e.g. extract frames or audio with ffmpeg)."
+	default:
+		return "The file is usable from exec at the path above."
+	}
+}
+
+func joinCaptionAndNotice(caption, notice string) string {
+	caption = strings.TrimSpace(caption)
+	notice = strings.TrimSpace(notice)
+	if caption == "" {
+		return notice
+	}
+	if notice == "" {
+		return caption
+	}
+	return caption + "\n\n" + notice
+}
+
+// inboundAttachmentParts returns the typed conversation parts for an inbound
+// attachment so capability-adaptive rendering can inline it for capable models.
+func inboundAttachmentParts(kind, ref string) []conversation.Part {
+	switch kind {
+	case "photo":
+		return []conversation.Part{conversation.Image(ref, "")}
+	case "voice", "audio":
+		return []conversation.Part{conversation.Audio(ref)}
+	default:
+		// video, document, animation, video note — no typed part yet;
+		// the text notice is the sole representation.
+		return nil
+	}
 }
 
 func telegramAudioFilenameForSend(meta q15media.Meta, localPath string) string {

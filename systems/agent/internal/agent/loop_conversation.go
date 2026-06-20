@@ -25,9 +25,7 @@ func normalizeUserMessage(msg conversation.Message) (conversation.Message, error
 	hasInput := false
 	for _, part := range msg.Parts {
 		switch part.Type {
-		case conversation.TextPartType:
-			hasInput = true
-		case conversation.ImagePartType:
+		case conversation.TextPartType, conversation.ImagePartType, conversation.AudioPartType:
 			hasInput = true
 		default:
 			return conversation.Message{}, fmt.Errorf(

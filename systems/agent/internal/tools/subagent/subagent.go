@@ -28,6 +28,26 @@ const (
 // ModelFactory constructs model clients for delegated agents.
 type ModelFactory func(config.AgentModelRuntime, q15media.Store) (agent.ModelClient, error)
 
+// mediaAdaptiveClient wraps a ModelClient so that media parts are adapted to
+// the delegated model's capabilities before each completion call. Subagents
+// build a fresh client per Start (unlike the parent's provider-cached client),
+// so the capability is bound here at construction time.
+type mediaAdaptiveClient struct {
+	inner   agent.ModelClient
+	support q15media.Support
+	store   q15media.Store
+}
+
+func (c *mediaAdaptiveClient) Complete(
+	ctx context.Context,
+	model string,
+	messages []conversation.Message,
+	tools []agent.ToolDefinition,
+) (agent.ModelClientResult, error) {
+	adapted := q15media.AdaptMediaToCapabilities(messages, c.support, c.store)
+	return c.inner.Complete(ctx, model, adapted, tools)
+}
+
 // Manager tracks delegated sub-agent sessions.
 type Manager struct {
 	mu       sync.Mutex
@@ -108,6 +128,14 @@ func (m *Manager) Start(
 	client, err := m.factory(modelCfg, m.media)
 	if err != nil {
 		return nil, fmt.Errorf("configure subagent model %q: %w", modelRef, err)
+	}
+	client = &mediaAdaptiveClient{
+		inner: client,
+		support: q15media.Support{
+			Image: modelCfg.Capabilities.ImageInput,
+			Audio: modelCfg.Capabilities.AudioInput,
+		},
+		store: m.media,
 	}
 	registry := agent.FilterToolRegistry(m.tools, allowedTools)
 	engine := agent.NewEngine(client, registry, []string{modelCfg.Ref})

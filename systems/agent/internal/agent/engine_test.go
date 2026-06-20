@@ -132,7 +132,7 @@ func TestEngineRun_RequiresToolCallingWhenRequested(t *testing.T) {
 	}
 }
 
-func TestEngineRun_ToolProducedImageRequiresImageInputOnNextTurn(t *testing.T) {
+func TestEngineRun_ToolProducedImageDoesNotInferImageRequirement(t *testing.T) {
 	planner := &fakePlanner{}
 	model := &fakeModelClient{
 		results: []ModelClientResult{
@@ -191,10 +191,10 @@ func TestEngineRun_ToolProducedImageRequiresImageInputOnNextTurn(t *testing.T) {
 	if len(planner.plannedRequirements) != 2 {
 		t.Fatalf("planned requirements len = %d, want 2", len(planner.plannedRequirements))
 	}
-	if planner.plannedRequirements[0].ImageInput {
+	if !planner.plannedRequirements[0].Text || planner.plannedRequirements[0].ToolCalling {
 		t.Fatalf("first turn requirements = %#v, want text-only", planner.plannedRequirements[0])
 	}
-	if planner.plannedRequirements[1].ImageInput {
+	if !planner.plannedRequirements[1].Text || planner.plannedRequirements[1].ToolCalling {
 		t.Fatalf(
 			"second turn requirements = %#v, want text-only (no image promotion from tool MediaRefs)",
 			planner.plannedRequirements[1],

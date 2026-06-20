@@ -251,6 +251,7 @@ func buildToolList(
 		tools.NewExecWrite(execClient),
 		tools.NewExecKill(execClient),
 		tools.NewLoadImage(fileSettings, mediaStore),
+		tools.NewAttachAudio(fileSettings, mediaStore),
 		tools.NewWebFetch(),
 	}
 
@@ -607,7 +608,8 @@ func resolveRuntimeEnvironment(
 }
 
 type routedModelAdapter struct {
-	endpoints map[string]routedModelEndpoint
+	endpoints  map[string]routedModelEndpoint
+	mediaStore q15media.Store
 }
 
 type routedModelEndpoint struct {
@@ -636,7 +638,19 @@ func (r *routedModelAdapter) Complete(
 		tools = nil
 	}
 
-	return endpoint.client.Complete(ctx, endpoint.providerModel, messages, tools)
+	adapted := q15media.AdaptMediaToCapabilities(
+		messages,
+		mediaSupportFromCaps(endpoint.capabilities),
+		r.mediaStore,
+	)
+	return endpoint.client.Complete(ctx, endpoint.providerModel, adapted, tools)
+}
+
+func mediaSupportFromCaps(caps config.ModelCapabilities) q15media.Support {
+	return q15media.Support{
+		Image: caps.ImageInput,
+		Audio: caps.AudioInput,
+	}
 }
 
 func newModelAdapter(
@@ -693,7 +707,7 @@ func newModelAdapterWithFactory(
 		}
 	}
 
-	return &routedModelAdapter{endpoints: endpoints}, nil
+	return &routedModelAdapter{endpoints: endpoints, mediaStore: mediaStore}, nil
 }
 
 func defaultModelClientFactory(
