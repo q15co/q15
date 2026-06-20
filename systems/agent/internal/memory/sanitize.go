@@ -14,7 +14,7 @@ func sanitizeStoredMessages(in []conversation.Message) []conversation.Message {
 	}
 
 	backfillPortableReasoningForToolReplay(normalized)
-	normalized = turnreply.Canonicalize(normalized)
+	normalized = turnreply.NewExtractor(nil).Canonicalize(normalized)
 
 	out := make([]conversation.Message, 0, len(normalized))
 	for _, msg := range normalized {

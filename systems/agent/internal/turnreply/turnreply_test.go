@@ -386,30 +386,3 @@ func TestCanonicalizeSynthesizesImageOnlyAssistant(t *testing.T) {
 		t.Fatalf("last assistant parts = %#v, want image-only assistant", last.Parts)
 	}
 }
-
-// TestPackageLevelExtractIsLeakSafe confirms the standalone helpers used by
-// non-engine callers (e.g. memory sanitization) promote nothing from tool
-// messages, preserving only assistant-owned attachments.
-func TestPackageLevelExtractIsLeakSafe(t *testing.T) {
-	got := Extract([]conversation.Message{
-		conversation.UserMessage("send the audio"),
-		conversation.AssistantMessage(
-			conversation.ToolCall("call-1", "attach_audio", `{"path":"out.ogg"}`),
-		),
-		{
-			Role: conversation.ToolRole,
-			Parts: []conversation.Part{
-				conversation.ToolResult("call-1", "Attached audio", false),
-				conversation.Audio("media://sha256/au"),
-			},
-		},
-		conversation.AssistantMessage(conversation.Text("done", "")),
-	})
-
-	if len(got.Attachments) != 0 {
-		t.Fatalf(
-			"package Extract().Attachments = %#v, want none (leak-safe default)",
-			got.Attachments,
-		)
-	}
-}

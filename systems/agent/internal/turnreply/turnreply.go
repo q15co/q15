@@ -112,20 +112,6 @@ func (e *Extractor) Canonicalize(messages []conversation.Message) []conversation
 	return compactMessages(normalized)
 }
 
-// Extract is the package-level leak-safe default: it behaves as an Extractor
-// with an empty deliver set, so no tool attachments are promoted. Callers that
-// honor explicit delivery intent (the engine, with a tool registry) should use
-// NewExtractor instead.
-func Extract(messages []conversation.Message) Selection {
-	return (&Extractor{}).Extract(messages)
-}
-
-// Canonicalize is the package-level leak-safe default: it behaves as an
-// Extractor with an empty deliver set, so no tool attachments are promoted.
-func Canonicalize(messages []conversation.Message) []conversation.Message {
-	return (&Extractor{}).Canonicalize(messages)
-}
-
 type replyAttachment struct {
 	key  string
 	part conversation.Part
