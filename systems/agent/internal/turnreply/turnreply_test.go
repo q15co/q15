@@ -386,4 +386,3 @@ func TestCanonicalizeSynthesizesImageOnlyAssistant(t *testing.T) {
 		t.Fatalf("last assistant parts = %#v, want image-only assistant", last.Parts)
 	}
 }
-
