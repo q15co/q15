@@ -1,4 +1,4 @@
-// Package ollama implements the native Ollama model client.
+// Package ollama implements Ollama completion and model-roster adapters.
 package ollama
 
 import (

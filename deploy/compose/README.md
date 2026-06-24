@@ -10,6 +10,7 @@ This directory contains the checked-in Compose-facing config, policy, and secret
   keeps `build:` enabled and uses a named `q15_workspace` volume for `/workspace`; it is not the
   image-first deployment example for downstream consumers.
 - [agent-config.yaml](/deploy/compose/agent-config.yaml),
+  [agent-config.discovery.example.yaml](/deploy/compose/agent-config.discovery.example.yaml),
   [proxy-policy.yaml](/deploy/compose/proxy-policy.yaml), and
   [secrets/\*.example](/deploy/compose/secrets) are generic templates that downstream repos can copy
   or adapt.
@@ -54,3 +55,36 @@ Notes:
 - GHCR runtime images are intended to be publicly pullable without registry auth for normal
   self-hosted consumption. Maintain the package visibility for these GHCR packages as public outside
   this repo.
+
+## Self-managed model discovery
+
+Provider discovery is **mandatory**: the provider roster IS the model config. There is no hand-typed
+`models:` list. The agent queries each provider's roster endpoint at startup (Ollama `/api/tags` +
+`/api/show`, OpenAI-compatible `/v1/models`), enriches models from [models.dev](https://models.dev),
+and refreshes periodically so roster changes are picked up without restart.
+
+`agent.model` names the current model — the tag-stripped provider model id (e.g. `kimi-k2.7-code`).
+The agent tries this model first each turn, then falls through to other eligible roster models if
+it's unavailable.
+
+```yaml
+providers:
+  - name: ollama-cloud
+    type: ollama
+    base_url: https://ollama.com
+    key_env: OLLAMA_API_KEY
+    discovery:
+      models_dev: true
+      exclude: ["*-embed"]
+agent:
+  name: Q15
+  model: kimi-k2.7-code
+  ...
+```
+
+A provider that is unreachable at startup contributes nothing to the roster (the agent starts with
+the remaining providers). If the total roster is empty, startup fails. A model that leaves the
+roster (deprecated) stops being selected.
+
+See [agent-config.discovery.example.yaml](/deploy/compose/agent-config.discovery.example.yaml) for a
+working example with include/exclude glob filters.

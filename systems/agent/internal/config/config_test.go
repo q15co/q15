@@ -3,47 +3,22 @@ package config
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
-func testModel(name, provider string, capabilities ...string) Model {
-	return Model{
-		Name:         name,
-		Provider:     provider,
-		Capabilities: capabilities,
-	}
-}
-
-func testOpenAICompatibleProvider(name, baseURL, keyEnv string) Provider {
+func testProvider(name, typ, baseURL, keyEnv string) Provider {
 	return Provider{
 		Name:    name,
-		Type:    "openai-compatible",
+		Type:    typ,
 		BaseURL: baseURL,
 		KeyEnv:  keyEnv,
 	}
 }
 
-func testOpenAICodexProvider(name string) Provider {
-	return Provider{
-		Name: name,
-		Type: "openai-codex",
-	}
-}
-
-func testOllamaProvider(name, baseURL, keyEnv string) Provider {
-	return Provider{
-		Name:    name,
-		Type:    "ollama",
-		BaseURL: baseURL,
-		KeyEnv:  keyEnv,
-	}
-}
-
-func testAgent(name string, modelRefs ...string) *Agent {
+func testAgent(name, model string) *Agent {
 	return &Agent{
-		Name:   name,
-		Models: append([]string(nil), modelRefs...),
+		Name:  name,
+		Model: model,
 		Telegram: Telegram{
 			TokenEnv:       "TEST_TELEGRAM_TOKEN",
 			AllowedUserIDs: []int64{123456789},
@@ -62,22 +37,12 @@ providers:
     type: openai-compatible
     base_url: https://api.moonshot.ai/v1
     key_env: MOONSHOT_API_KEY
-
-models:
-  - name: kimi-k2.5
-    provider: moonshot
-  - name: kimi-k2
-    provider: moonshot
-
 agent:
   name: Q15
-  models:
-    - kimi-k2.5
-    - kimi-k2
+  model: kimi-k2.7-code
   telegram:
     token_env: Q15_TELEGRAM_TOKEN
-    allowed_user_ids:
-      - 123456789
+    allowed_user_ids: [123456789]
 `), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -89,228 +54,351 @@ agent:
 	if runtime == nil {
 		t.Fatal("LoadAgentRuntime() returned nil runtime")
 	}
+	if runtime.CurrentModelRef != "kimi-k2.7-code" {
+		t.Fatalf("CurrentModelRef = %q, want kimi-k2.7-code", runtime.CurrentModelRef)
+	}
 	if runtime.Name != "Q15" {
-		t.Fatalf("Name = %q, want %q", runtime.Name, "Q15")
-	}
-	if len(runtime.InteractiveModels) != 2 {
-		t.Fatalf("InteractiveModels len = %d, want 2", len(runtime.InteractiveModels))
-	}
-	if runtime.InteractiveModels[0].ProviderAPIKey != "api-123" {
-		t.Fatalf(
-			"ProviderAPIKey = %q, want %q",
-			runtime.InteractiveModels[0].ProviderAPIKey,
-			"api-123",
-		)
-	}
-	if len(runtime.CognitionModels) != 2 {
-		t.Fatalf("CognitionModels len = %d, want 2", len(runtime.CognitionModels))
-	}
-	if runtime.CognitionModels[0].Ref != "kimi-k2.5" ||
-		runtime.CognitionModels[1].Ref != "kimi-k2" {
-		t.Fatalf("CognitionModels = %#v, want interactive fallback order", runtime.CognitionModels)
-	}
-	if runtime.WorkspaceLocalDir != "/workspace" {
-		t.Fatalf("WorkspaceLocalDir = %q, want %q", runtime.WorkspaceLocalDir, "/workspace")
-	}
-	if runtime.MemoryLocalDir != "/memory" {
-		t.Fatalf("MemoryLocalDir = %q, want %q", runtime.MemoryLocalDir, "/memory")
-	}
-	if runtime.MediaLocalDir != "/media" {
-		t.Fatalf("MediaLocalDir = %q, want %q", runtime.MediaLocalDir, "/media")
-	}
-	if runtime.SkillsLocalDir != "/skills" {
-		t.Fatalf("SkillsLocalDir = %q, want %q", runtime.SkillsLocalDir, "/skills")
-	}
-	if runtime.Execution.ServiceAddress != "q15-exec:50051" {
-		t.Fatalf(
-			"Execution.ServiceAddress = %q, want %q",
-			runtime.Execution.ServiceAddress,
-			"q15-exec:50051",
-		)
+		t.Fatalf("Name = %q, want Q15", runtime.Name)
 	}
 	if runtime.TelegramToken != "tg-123" {
-		t.Fatalf("TelegramToken = %q, want %q", runtime.TelegramToken, "tg-123")
+		t.Fatalf("TelegramToken = %q, want tg-123", runtime.TelegramToken)
 	}
-	if got, want := runtime.TelegramAllowedUserIDs, []int64{123456789}; len(got) != len(want) ||
-		got[0] != want[0] {
-		t.Fatalf("TelegramAllowedUserIDs = %#v, want %#v", got, want)
+}
+
+func TestLoadAgentRuntimeEmptyConfigReturnsNilRuntime(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(``), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	runtime, err := LoadAgentRuntime(path)
+	if err != nil {
+		t.Fatalf("LoadAgentRuntime() error = %v", err)
+	}
+	if runtime != nil {
+		t.Fatal("expected nil runtime for empty config")
+	}
+}
+
+func TestLoadRejectsUnknownField(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+providers:
+  - name: p
+    type: ollama
+agent:
+  name: a
+  model: m
+  unknown_field: true
+  telegram:
+    token_env: T
+    allowed_user_ids: [1]
+`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected error for unknown field")
+	}
+}
+
+func TestValidateRequiresProviderWhenAgentConfigured(t *testing.T) {
+	cfg := Config{
+		Agent: testAgent("a", "m"),
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error when no providers with agent")
+	}
+}
+
+func TestValidateRequiresAgentModel(t *testing.T) {
+	cfg := Config{
+		Providers: []Provider{testProvider("p", "ollama", "", "")},
+		Agent: &Agent{
+			Name: "a",
+			Telegram: Telegram{
+				TokenEnv:       "T",
+				AllowedUserIDs: []int64{1},
+			},
+		},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error when agent.model is missing")
+	}
+}
+
+func TestValidateRejectsUnsupportedProviderType(t *testing.T) {
+	cfg := Config{
+		Providers: []Provider{{Name: "p", Type: "imaginary"}},
+		Agent:     testAgent("a", "m"),
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error for unsupported provider type")
+	}
+}
+
+func TestValidateRequiresKeyEnvForOpenAICompatible(t *testing.T) {
+	cfg := Config{
+		Providers: []Provider{{Name: "p", Type: "openai-compatible", BaseURL: "https://x"}},
+		Agent:     testAgent("a", "m"),
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error for missing key_env")
+	}
+}
+
+func TestValidateRequiresBaseURLForOpenAICompatible(t *testing.T) {
+	cfg := Config{
+		Providers: []Provider{{Name: "p", Type: "openai-compatible", KeyEnv: "K"}},
+		Agent:     testAgent("a", "m"),
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error for missing base_url")
+	}
+}
+
+func TestValidateRequiresKeyEnvForOllamaCloud(t *testing.T) {
+	cfg := Config{
+		Providers: []Provider{{Name: "p", Type: "ollama", BaseURL: "https://ollama.com"}},
+		Agent:     testAgent("a", "m"),
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error for missing key_env on Ollama Cloud")
+	}
+}
+
+func TestValidateAcceptsDiscoveryGlobs(t *testing.T) {
+	cfg := Config{
+		Providers: []Provider{{
+			Name:    "p",
+			Type:    "ollama",
+			BaseURL: "http://localhost:11434",
+			Discovery: ProviderDiscovery{
+				Include: []string{"kimi-*"},
+				Exclude: []string{"*-embed"},
+			},
+		}},
+		Agent: testAgent("a", "m"),
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestValidateRejectsBadDiscoveryGlob(t *testing.T) {
+	cfg := Config{
+		Providers: []Provider{{
+			Name:    "p",
+			Type:    "ollama",
+			BaseURL: "http://localhost:11434",
+			Discovery: ProviderDiscovery{
+				Include: []string{"["},
+			},
+		}},
+		Agent: testAgent("a", "m"),
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error for invalid glob")
+	}
+}
+
+func TestValidateRequiresTelegramToken(t *testing.T) {
+	cfg := Config{
+		Providers: []Provider{testProvider("p", "ollama", "", "")},
+		Agent: &Agent{
+			Name:  "a",
+			Model: "m",
+			Telegram: Telegram{
+				AllowedUserIDs: []int64{1},
+			},
+		},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error for missing telegram token")
+	}
+}
+
+func TestValidateRequiresTelegramAllowedUsers(t *testing.T) {
+	cfg := Config{
+		Providers: []Provider{testProvider("p", "ollama", "", "")},
+		Agent: &Agent{
+			Name:  "a",
+			Model: "m",
+			Telegram: Telegram{
+				TokenEnv: "T",
+			},
+		},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error for missing allowed_user_ids")
+	}
+}
+
+func TestValidateRejectsBothTelegramAllowedUserIDSources(t *testing.T) {
+	cfg := Config{
+		Providers: []Provider{testProvider("p", "ollama", "", "")},
+		Agent: &Agent{
+			Name:  "a",
+			Model: "m",
+			Telegram: Telegram{
+				TokenEnv:          "T",
+				AllowedUserIDs:    []int64{1},
+				AllowedUserIDsEnv: "U",
+			},
+		},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error for both allowed_user_ids sources")
+	}
+}
+
+func TestResolveAgentRuntimeResolvesLocalOllamaProviderWithoutAPIKey(t *testing.T) {
+	t.Setenv("Q15_TELEGRAM_TOKEN", "t")
+	cfg := Config{
+		Providers: []Provider{testProvider("local", "ollama", "http://localhost:11434", "")},
+		Agent: &Agent{
+			Name:  "a",
+			Model: "m",
+			Telegram: Telegram{
+				TokenEnv:       "Q15_TELEGRAM_TOKEN",
+				AllowedUserIDs: []int64{1},
+			},
+		},
+	}
+	rt, err := cfg.ResolveAgentRuntime()
+	if err != nil {
+		t.Fatalf("ResolveAgentRuntime() error = %v", err)
+	}
+	if rt.CurrentModelRef != "m" {
+		t.Fatalf("CurrentModelRef = %q, want m", rt.CurrentModelRef)
+	}
+}
+
+func TestResolveAgentRuntimeResolvesOpenAICodexProviderWithoutAPIKey(t *testing.T) {
+	t.Setenv("Q15_TELEGRAM_TOKEN", "t")
+	cfg := Config{
+		Providers: []Provider{{Name: "codex", Type: "openai-codex"}},
+		Agent: &Agent{
+			Name:  "a",
+			Model: "m",
+			Telegram: Telegram{
+				TokenEnv:       "Q15_TELEGRAM_TOKEN",
+				AllowedUserIDs: []int64{1},
+			},
+		},
+	}
+	rt, err := cfg.ResolveAgentRuntime()
+	if err != nil {
+		t.Fatalf("ResolveAgentRuntime() error = %v", err)
+	}
+	if rt.CurrentModelRef != "m" {
+		t.Fatalf("CurrentModelRef = %q, want m", rt.CurrentModelRef)
 	}
 }
 
 func TestLoadAgentRuntimeYAMLResolvesTelegramAllowedUserIDsFromEnvFile(t *testing.T) {
-	t.Setenv("MOONSHOT_API_KEY", "api-123")
-	t.Setenv("Q15_TELEGRAM_TOKEN", "tg-123")
-	idsPath := filepath.Join(t.TempDir(), "allowed_user_ids")
-	if err := os.WriteFile(idsPath, []byte("123456789\n987654321\n"), 0o644); err != nil {
-		t.Fatalf("write allowed_user_ids file: %v", err)
+	t.Setenv("Q15_TELEGRAM_TOKEN", "tg")
+	dir := t.TempDir()
+	idsFile := filepath.Join(dir, "ids")
+	if err := os.WriteFile(idsFile, []byte("111, 222"), 0o644); err != nil {
+		t.Fatalf("write ids file: %v", err)
 	}
-	t.Setenv("Q15_TELEGRAM_ALLOWED_USER_IDS_FILE", idsPath)
+	t.Setenv("Q15_TELEGRAM_ALLOWED_USER_IDS_FILE", idsFile)
 
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(`
 providers:
-  - name: moonshot
-    type: openai-compatible
-    base_url: https://api.moonshot.ai/v1
-    key_env: MOONSHOT_API_KEY
-
-models:
-  - name: kimi-k2.5
-    provider: moonshot
-
+  - name: p
+    type: ollama
 agent:
-  name: Q15
-  models:
-    - kimi-k2.5
+  name: a
+  model: m
   telegram:
     token_env: Q15_TELEGRAM_TOKEN
     allowed_user_ids_env: Q15_TELEGRAM_ALLOWED_USER_IDS
 `), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
-
-	runtime, err := LoadAgentRuntime(path)
+	rt, err := LoadAgentRuntime(path)
 	if err != nil {
 		t.Fatalf("LoadAgentRuntime() error = %v", err)
 	}
-	if runtime == nil {
-		t.Fatal("LoadAgentRuntime() returned nil runtime")
-	}
-	want := []int64{123456789, 987654321}
-	if len(runtime.TelegramAllowedUserIDs) != len(want) {
-		t.Fatalf(
-			"TelegramAllowedUserIDs len = %d, want %d",
-			len(runtime.TelegramAllowedUserIDs),
-			len(want),
-		)
-	}
-	for i := range want {
-		if runtime.TelegramAllowedUserIDs[i] != want[i] {
-			t.Fatalf("TelegramAllowedUserIDs = %#v, want %#v", runtime.TelegramAllowedUserIDs, want)
-		}
+	if len(rt.TelegramAllowedUserIDs) != 2 || rt.TelegramAllowedUserIDs[0] != 111 ||
+		rt.TelegramAllowedUserIDs[1] != 222 {
+		t.Fatalf("TelegramAllowedUserIDs = %v, want [111 222]", rt.TelegramAllowedUserIDs)
 	}
 }
 
 func TestLoadAgentRuntimeYAMLResolvesBraveAPIKeyFromConfiguredEnvFile(t *testing.T) {
-	t.Setenv("MOONSHOT_API_KEY", "api-123")
-	t.Setenv("Q15_TELEGRAM_TOKEN", "tg-123")
-	bravePath := filepath.Join(t.TempDir(), "brave_api_key")
-	if err := os.WriteFile(bravePath, []byte("brave-123\n"), 0o600); err != nil {
-		t.Fatalf("write brave api key: %v", err)
+	t.Setenv("Q15_TELEGRAM_TOKEN", "tg")
+	dir := t.TempDir()
+	braveFile := filepath.Join(dir, "brave")
+	if err := os.WriteFile(braveFile, []byte("brave-key"), 0o644); err != nil {
+		t.Fatalf("write brave file: %v", err)
 	}
-	t.Setenv("BRAVE_API_KEY_FILE", bravePath)
+	t.Setenv("BRAVE_API_KEY_FILE", braveFile)
 
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(`
 providers:
-  - name: moonshot
-    type: openai-compatible
-    base_url: https://api.moonshot.ai/v1
-    key_env: MOONSHOT_API_KEY
-
-models:
-  - name: kimi-k2.5
-    provider: moonshot
-
+  - name: p
+    type: ollama
 agent:
-  name: Q15
-  models:
-    - kimi-k2.5
+  name: a
+  model: m
   tools:
     web_search:
       brave_api_key_env: BRAVE_API_KEY
   telegram:
     token_env: Q15_TELEGRAM_TOKEN
-    allowed_user_ids:
-      - 123456789
+    allowed_user_ids: [1]
 `), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
-
-	runtime, err := LoadAgentRuntime(path)
+	rt, err := LoadAgentRuntime(path)
 	if err != nil {
 		t.Fatalf("LoadAgentRuntime() error = %v", err)
 	}
-	if runtime.Tools.WebSearch.BraveAPIKey != "brave-123" {
-		t.Fatalf(
-			"Tools.WebSearch.BraveAPIKey = %q, want %q",
-			runtime.Tools.WebSearch.BraveAPIKey,
-			"brave-123",
-		)
+	if rt.Tools.WebSearch.BraveAPIKey != "brave-key" {
+		t.Fatalf("BraveAPIKey = %q, want brave-key", rt.Tools.WebSearch.BraveAPIKey)
 	}
 }
 
 func TestLoadAgentRuntimeYAMLRequiresConfiguredBraveAPIKeyEnv(t *testing.T) {
-	t.Setenv("MOONSHOT_API_KEY", "api-123")
-	t.Setenv("Q15_TELEGRAM_TOKEN", "tg-123")
-
+	t.Setenv("Q15_TELEGRAM_TOKEN", "tg")
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(`
 providers:
-  - name: moonshot
-    type: openai-compatible
-    base_url: https://api.moonshot.ai/v1
-    key_env: MOONSHOT_API_KEY
-
-models:
-  - name: kimi-k2.5
-    provider: moonshot
-
+  - name: p
+    type: ollama
 agent:
-  name: Q15
-  models:
-    - kimi-k2.5
+  name: a
+  model: m
   tools:
     web_search:
-      brave_api_key_env: BRAVE_API_KEY
+      brave_api_key_env: MISSING_BRAVE
   telegram:
     token_env: Q15_TELEGRAM_TOKEN
-    allowed_user_ids:
-      - 123456789
+    allowed_user_ids: [1]
 `), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
-
-	_, err := LoadAgentRuntime(path)
-	if err == nil ||
-		!strings.Contains(
-			err.Error(),
-			`env var "BRAVE_API_KEY" or "BRAVE_API_KEY_FILE" is required`,
-		) {
-		t.Fatalf("LoadAgentRuntime() error = %v, want missing BRAVE_API_KEY", err)
+	if _, err := LoadAgentRuntime(path); err == nil {
+		t.Fatal("expected error for missing BRAVE_API_KEY")
 	}
 }
 
 func TestLoadAgentRuntimeYAMLResolvesEmbeddingsFromConfiguredEnvFiles(t *testing.T) {
-	t.Setenv("MOONSHOT_API_KEY", "api-123")
-	t.Setenv("Q15_TELEGRAM_TOKEN", "tg-123")
-	qdrantPath := filepath.Join(t.TempDir(), "qdrant_url")
-	if err := os.WriteFile(qdrantPath, []byte("http://q15-qdrant:6334\n"), 0o600); err != nil {
-		t.Fatalf("write qdrant url: %v", err)
-	}
-	geminiPath := filepath.Join(t.TempDir(), "gemini_api_key")
-	if err := os.WriteFile(geminiPath, []byte("gemini-123\n"), 0o600); err != nil {
-		t.Fatalf("write gemini api key: %v", err)
-	}
-	t.Setenv("Q15_QDRANT_URL_FILE", qdrantPath)
-	t.Setenv("Q15_GEMINI_API_KEY_FILE", geminiPath)
+	t.Setenv("Q15_TELEGRAM_TOKEN", "tg")
+	t.Setenv("Q15_QDRANT_URL", "http://qdrant:6333")
+	t.Setenv("Q15_GEMINI_API_KEY", "gemini-key")
 
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(`
 providers:
-  - name: moonshot
-    type: openai-compatible
-    base_url: https://api.moonshot.ai/v1
-    key_env: MOONSHOT_API_KEY
-
-models:
-  - name: kimi-k2.5
-    provider: moonshot
-
+  - name: p
+    type: ollama
 agent:
-  name: Q15
-  models:
-    - kimi-k2.5
+  name: a
+  model: m
   tools:
     embeddings:
       qdrant_url_env: Q15_QDRANT_URL
@@ -319,443 +407,45 @@ agent:
       dimensions: 768
   telegram:
     token_env: Q15_TELEGRAM_TOKEN
-    allowed_user_ids:
-      - 123456789
+    allowed_user_ids: [1]
 `), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
-
-	runtime, err := LoadAgentRuntime(path)
+	rt, err := LoadAgentRuntime(path)
 	if err != nil {
 		t.Fatalf("LoadAgentRuntime() error = %v", err)
 	}
-	if !runtime.Tools.Embeddings.Enabled {
-		t.Fatal("Tools.Embeddings.Enabled = false, want true")
+	if !rt.Tools.Embeddings.Enabled {
+		t.Fatal("Embeddings not enabled")
 	}
-	if runtime.Tools.Embeddings.QdrantURL != "http://q15-qdrant:6334" {
-		t.Fatalf("QdrantURL = %q", runtime.Tools.Embeddings.QdrantURL)
-	}
-	if runtime.Tools.Embeddings.GeminiAPIKey != "gemini-123" {
-		t.Fatalf("GeminiAPIKey = %q", runtime.Tools.Embeddings.GeminiAPIKey)
-	}
-	if runtime.Tools.Embeddings.Model != "gemini-embedding-2" {
-		t.Fatalf("Model = %q", runtime.Tools.Embeddings.Model)
-	}
-	if runtime.Tools.Embeddings.Dimensions != 768 {
-		t.Fatalf("Dimensions = %d, want 768", runtime.Tools.Embeddings.Dimensions)
+	if rt.Tools.Embeddings.Model != "gemini-embedding-2" {
+		t.Fatalf("Embeddings.Model = %q, want gemini-embedding-2", rt.Tools.Embeddings.Model)
 	}
 }
 
 func TestLoadAgentRuntimeYAMLRequiresConfiguredEmbeddingsEnv(t *testing.T) {
-	t.Setenv("MOONSHOT_API_KEY", "api-123")
-	t.Setenv("Q15_TELEGRAM_TOKEN", "tg-123")
-	t.Setenv("Q15_QDRANT_URL", "http://q15-qdrant:6334")
-
+	t.Setenv("Q15_TELEGRAM_TOKEN", "tg")
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(`
 providers:
-  - name: moonshot
-    type: openai-compatible
-    base_url: https://api.moonshot.ai/v1
-    key_env: MOONSHOT_API_KEY
-
-models:
-  - name: kimi-k2.5
-    provider: moonshot
-
+  - name: p
+    type: ollama
 agent:
-  name: Q15
-  models:
-    - kimi-k2.5
+  name: a
+  model: m
   tools:
     embeddings:
-      qdrant_url_env: Q15_QDRANT_URL
+      qdrant_url_env: MISSING_QDRANT
       gemini_api_key_env: Q15_GEMINI_API_KEY
+      model: gemini-embedding-2
+      dimensions: 768
   telegram:
     token_env: Q15_TELEGRAM_TOKEN
-    allowed_user_ids:
-      - 123456789
+    allowed_user_ids: [1]
 `), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
-
-	_, err := LoadAgentRuntime(path)
-	if err == nil || !strings.Contains(
-		err.Error(),
-		`env var "Q15_GEMINI_API_KEY" or "Q15_GEMINI_API_KEY_FILE" is required`,
-	) {
-		t.Fatalf("LoadAgentRuntime() error = %v, want missing Q15_GEMINI_API_KEY", err)
-	}
-}
-
-func TestLoadAgentRuntimeYAMLResolvesSeparateCognitionModels(t *testing.T) {
-	t.Setenv("OPENAI_API_KEY", "api-openai")
-	t.Setenv("MOONSHOT_API_KEY", "api-moonshot")
-	t.Setenv("Q15_TELEGRAM_TOKEN", "tg-123")
-
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(path, []byte(`
-providers:
-  - name: openai
-    type: openai-compatible
-    base_url: https://api.openai.example/v1
-    key_env: OPENAI_API_KEY
-
-  - name: moonshot
-    type: openai-compatible
-    base_url: https://api.moonshot.ai/v1
-    key_env: MOONSHOT_API_KEY
-
-models:
-  - name: gpt-5.4
-    provider: openai
-  - name: kimi-k2.5
-    provider: moonshot
-  - name: kimi-k2
-    provider: moonshot
-
-agent:
-  name: Q15
-  models:
-    - gpt-5.4
-    - kimi-k2.5
-  cognition:
-    models:
-      - kimi-k2
-      - gpt-5.4
-  telegram:
-    token_env: Q15_TELEGRAM_TOKEN
-    allowed_user_ids:
-      - 123456789
-`), 0o644); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-
-	runtime, err := LoadAgentRuntime(path)
-	if err != nil {
-		t.Fatalf("LoadAgentRuntime() error = %v", err)
-	}
-	if runtime == nil {
-		t.Fatal("LoadAgentRuntime() returned nil runtime")
-	}
-	if got, want := len(runtime.InteractiveModels), 2; got != want {
-		t.Fatalf("InteractiveModels len = %d, want %d", got, want)
-	}
-	if runtime.InteractiveModels[0].Ref != "gpt-5.4" ||
-		runtime.InteractiveModels[1].Ref != "kimi-k2.5" {
-		t.Fatalf("InteractiveModels = %#v", runtime.InteractiveModels)
-	}
-	if got, want := len(runtime.CognitionModels), 2; got != want {
-		t.Fatalf("CognitionModels len = %d, want %d", got, want)
-	}
-	if runtime.CognitionModels[0].Ref != "kimi-k2" || runtime.CognitionModels[1].Ref != "gpt-5.4" {
-		t.Fatalf("CognitionModels = %#v", runtime.CognitionModels)
-	}
-}
-
-func TestLoadAgentRuntimeEmptyConfigReturnsNilRuntime(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(path, []byte("# empty\n"), 0o644); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-
-	runtime, err := LoadAgentRuntime(path)
-	if err != nil {
-		t.Fatalf("LoadAgentRuntime() error = %v", err)
-	}
-	if runtime != nil {
-		t.Fatalf("expected nil runtime, got %#v", runtime)
-	}
-}
-
-func TestLoadRejectsUnknownField(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(path, []byte(`
-agent:
-  name: Q15
-  unknown_runtime: true
-`), 0o644); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-
-	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "unknown_runtime") {
-		t.Fatalf("Load() error = %v, want unknown field error", err)
-	}
-}
-
-func TestValidateRequiresProviderWhenAgentConfigured(t *testing.T) {
-	cfg := Config{
-		Agent: testAgent("missing-provider", "kimi-k2.5"),
-	}
-
-	err := cfg.Validate()
-	if err == nil {
-		t.Fatal("expected validation error when providers are missing")
-	}
-	if !strings.Contains(err.Error(), "providers cannot be empty") {
-		t.Fatalf("unexpected validation error: %v", err)
-	}
-}
-
-func TestValidateRejectsUnknownAgentModel(t *testing.T) {
-	cfg := Config{
-		Providers: []Provider{
-			testOpenAICompatibleProvider(
-				"moonshot",
-				"https://api.moonshot.ai/v1",
-				"MOONSHOT_API_KEY",
-			),
-		},
-		Models: []Model{
-			testModel("kimi-k2.5", "moonshot"),
-		},
-		Agent: testAgent("legacy", "missing-model"),
-	}
-
-	err := cfg.Validate()
-	if err == nil {
-		t.Fatal("expected validation error for unknown model")
-	}
-	if !strings.Contains(err.Error(), `model "missing-model" is not defined in models`) {
-		t.Fatalf("unexpected validation error: %v", err)
-	}
-}
-
-func TestValidateRejectsUnsupportedModelCapability(t *testing.T) {
-	cfg := Config{
-		Providers: []Provider{
-			testOpenAICompatibleProvider(
-				"moonshot",
-				"https://api.moonshot.ai/v1",
-				"MOONSHOT_API_KEY",
-			),
-		},
-		Models: []Model{
-			testModel("kimi-k2.5", "moonshot", "text", "video_input"),
-		},
-	}
-
-	err := cfg.Validate()
-	if err == nil {
-		t.Fatal("expected validation error for unsupported capability")
-	}
-	if !strings.Contains(
-		err.Error(),
-		`models[0].capabilities: [1] "video_input" is not supported`,
-	) {
-		t.Fatalf("unexpected validation error: %v", err)
-	}
-}
-
-func TestResolveAgentRuntimeResolvesOpenAICodexProviderWithoutAPIKey(t *testing.T) {
-	t.Setenv("TEST_TELEGRAM_TOKEN", "tg-123")
-
-	cfg := Config{
-		Providers: []Provider{
-			testOpenAICodexProvider("openai"),
-		},
-		Models: []Model{
-			testModel("gpt-5", "openai", "text", "tool_calling", "reasoning"),
-		},
-		Agent: testAgent("Codex", "gpt-5"),
-	}
-
-	runtime, err := cfg.ResolveAgentRuntime()
-	if err != nil {
-		t.Fatalf("ResolveAgentRuntime() error = %v", err)
-	}
-	if runtime == nil {
-		t.Fatal("ResolveAgentRuntime() returned nil runtime")
-	}
-	if got := runtime.InteractiveModels[0].ProviderAPIKey; got != "" {
-		t.Fatalf("ProviderAPIKey = %q, want empty string", got)
-	}
-	if got := runtime.CognitionModels[0].ProviderAPIKey; got != "" {
-		t.Fatalf("ProviderAPIKey = %q, want empty string", got)
-	}
-}
-
-func TestResolveAgentRuntimeResolvesLocalOllamaProviderWithoutAPIKey(t *testing.T) {
-	t.Setenv("TEST_TELEGRAM_TOKEN", "tg-123")
-
-	cfg := Config{
-		Providers: []Provider{
-			testOllamaProvider("ollama-local", "", ""),
-		},
-		Models: []Model{
-			{
-				Name:          "gpt-oss-20b",
-				Provider:      "ollama-local",
-				ProviderModel: "gpt-oss:20b",
-				Capabilities:  []string{"text", "tool_calling", "reasoning", "image_input"},
-			},
-		},
-		Agent: testAgent("Q15", "gpt-oss-20b"),
-	}
-
-	runtime, err := cfg.ResolveAgentRuntime()
-	if err != nil {
-		t.Fatalf("ResolveAgentRuntime() error = %v", err)
-	}
-	if runtime == nil {
-		t.Fatal("ResolveAgentRuntime() returned nil runtime")
-	}
-	model := runtime.InteractiveModels[0]
-	if model.ProviderType != "ollama" {
-		t.Fatalf("ProviderType = %q, want ollama", model.ProviderType)
-	}
-	if model.ProviderBaseURL != "" {
-		t.Fatalf("ProviderBaseURL = %q, want empty default", model.ProviderBaseURL)
-	}
-	if model.ProviderAPIKey != "" {
-		t.Fatalf("ProviderAPIKey = %q, want empty string", model.ProviderAPIKey)
-	}
-	if model.ProviderModel != "gpt-oss:20b" {
-		t.Fatalf("ProviderModel = %q, want gpt-oss:20b", model.ProviderModel)
-	}
-}
-
-func TestResolveAgentRuntimeResolvesOllamaCloudAPIKey(t *testing.T) {
-	t.Setenv("TEST_TELEGRAM_TOKEN", "tg-123")
-	t.Setenv("OLLAMA_API_KEY", "ollama-key")
-
-	cfg := Config{
-		Providers: []Provider{
-			testOllamaProvider("ollama-cloud", "https://ollama.com", "OLLAMA_API_KEY"),
-		},
-		Models: []Model{
-			{
-				Name:          "gpt-oss-120b",
-				Provider:      "ollama-cloud",
-				ProviderModel: "gpt-oss:120b",
-				Capabilities:  []string{"text", "tool_calling", "reasoning"},
-			},
-		},
-		Agent: testAgent("Q15", "gpt-oss-120b"),
-	}
-
-	runtime, err := cfg.ResolveAgentRuntime()
-	if err != nil {
-		t.Fatalf("ResolveAgentRuntime() error = %v", err)
-	}
-	model := runtime.InteractiveModels[0]
-	if model.ProviderType != "ollama" {
-		t.Fatalf("ProviderType = %q, want ollama", model.ProviderType)
-	}
-	if model.ProviderBaseURL != "https://ollama.com" {
-		t.Fatalf("ProviderBaseURL = %q, want https://ollama.com", model.ProviderBaseURL)
-	}
-	if model.ProviderAPIKey != "ollama-key" {
-		t.Fatalf("ProviderAPIKey = %q, want ollama-key", model.ProviderAPIKey)
-	}
-}
-
-func TestValidateRequiresKeyEnvForOllamaCloudProvider(t *testing.T) {
-	cfg := Config{
-		Providers: []Provider{
-			testOllamaProvider("ollama-cloud", "https://ollama.com", ""),
-		},
-		Models: []Model{
-			testModel("gpt-oss-120b", "ollama-cloud", "text"),
-		},
-	}
-
-	err := cfg.Validate()
-	if err == nil {
-		t.Fatal("expected validation error for missing Ollama Cloud key_env")
-	}
-	if !strings.Contains(err.Error(), "key_env is required for Ollama Cloud providers") {
-		t.Fatalf("unexpected validation error: %v", err)
-	}
-}
-
-func TestValidateRejectsUnknownCognitionModel(t *testing.T) {
-	cfg := Config{
-		Providers: []Provider{
-			testOpenAICodexProvider("openai"),
-		},
-		Models: []Model{
-			testModel("gpt-5", "openai", "text"),
-		},
-		Agent: &Agent{
-			Name:   "Q15",
-			Models: []string{"gpt-5"},
-			Cognition: Cognition{
-				Models: []string{"missing-model"},
-			},
-			Telegram: Telegram{
-				TokenEnv:       "TEST_TELEGRAM_TOKEN",
-				AllowedUserIDs: []int64{123456789},
-			},
-		},
-	}
-
-	err := cfg.Validate()
-	if err == nil {
-		t.Fatal("expected validation error for unknown cognition model")
-	}
-	if !strings.Contains(
-		err.Error(),
-		`agent.cognition.models[0] model "missing-model" is not defined in models`,
-	) {
-		t.Fatalf("unexpected validation error: %v", err)
-	}
-}
-
-func TestValidateRejectsEmptyCognitionModelRef(t *testing.T) {
-	cfg := Config{
-		Providers: []Provider{
-			testOpenAICodexProvider("openai"),
-		},
-		Models: []Model{
-			testModel("gpt-5", "openai", "text"),
-		},
-		Agent: &Agent{
-			Name:   "Q15",
-			Models: []string{"gpt-5"},
-			Cognition: Cognition{
-				Models: []string{" "},
-			},
-			Telegram: Telegram{
-				TokenEnv:       "TEST_TELEGRAM_TOKEN",
-				AllowedUserIDs: []int64{123456789},
-			},
-		},
-	}
-
-	err := cfg.Validate()
-	if err == nil {
-		t.Fatal("expected validation error for empty cognition model ref")
-	}
-	if !strings.Contains(err.Error(), "agent.cognition.models: [0] must not be empty") {
-		t.Fatalf("unexpected validation error: %v", err)
-	}
-}
-
-func TestValidateRejectsBothTelegramAllowedUserIDSources(t *testing.T) {
-	cfg := Config{
-		Providers: []Provider{
-			testOpenAICodexProvider("openai"),
-		},
-		Models: []Model{
-			testModel("gpt-5", "openai", "text"),
-		},
-		Agent: &Agent{
-			Name:   "Q15",
-			Models: []string{"gpt-5"},
-			Telegram: Telegram{
-				TokenEnv:          "TEST_TELEGRAM_TOKEN",
-				AllowedUserIDs:    []int64{123456789},
-				AllowedUserIDsEnv: "Q15_TELEGRAM_ALLOWED_USER_IDS",
-			},
-		},
-	}
-
-	err := cfg.Validate()
-	if err == nil {
-		t.Fatal("expected validation error for mixed allowed user id sources")
-	}
-	if !strings.Contains(err.Error(), "allowed_user_ids_env are mutually exclusive") {
-		t.Fatalf("unexpected validation error: %v", err)
+	if _, err := LoadAgentRuntime(path); err == nil {
+		t.Fatal("expected error for missing QDRANT URL")
 	}
 }

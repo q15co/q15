@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
-	"github.com/q15co/q15/systems/agent/internal/config"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
 	q15media "github.com/q15co/q15/systems/agent/internal/media"
+	"github.com/q15co/q15/systems/agent/internal/modelcatalog"
 )
 
 const (
@@ -27,7 +27,7 @@ const (
 )
 
 // ModelFactory constructs model clients for delegated agents.
-type ModelFactory func(config.AgentModelRuntime, q15media.Store) (agent.ModelClient, error)
+type ModelFactory func(modelcatalog.Model, q15media.Store) (agent.ModelClient, error)
 
 // mediaAdaptiveClient wraps a ModelClient so that media parts are adapted to
 // the delegated model's capabilities before each completion call. Subagents
@@ -53,7 +53,7 @@ func (c *mediaAdaptiveClient) Complete(
 type Manager struct {
 	mu       sync.Mutex
 	sessions map[string]*Session
-	models   map[string]config.AgentModelRuntime
+	registry *modelcatalog.Registry
 	factory  ModelFactory
 	tools    agent.ToolRegistry
 	media    q15media.Store
@@ -86,27 +86,20 @@ type Event struct {
 	Error string `json:"error,omitempty"`
 }
 
-// NewManager constructs a sub-agent manager.
+// NewManager constructs a sub-agent manager backed by the live model registry.
 func NewManager(
-	models []config.AgentModelRuntime,
+	registry *modelcatalog.Registry,
 	factory ModelFactory,
 	tools agent.ToolRegistry,
 	media q15media.Store,
 ) *Manager {
-	m := &Manager{
+	return &Manager{
 		sessions: map[string]*Session{},
-		models:   map[string]config.AgentModelRuntime{},
+		registry: registry,
 		factory:  factory,
 		tools:    tools,
 		media:    media,
 	}
-	for _, model := range models {
-		ref := strings.TrimSpace(model.Ref)
-		if ref != "" {
-			m.models[ref] = model
-		}
-	}
-	return m
 }
 
 // Start creates and runs a delegated sub-agent session.
@@ -119,7 +112,7 @@ func (m *Manager) Start(
 	if m == nil {
 		return nil, fmt.Errorf("subagent manager is not configured")
 	}
-	modelCfg, ok := m.models[strings.TrimSpace(modelRef)]
+	modelCfg, ok := m.registry.LookupByRef(strings.TrimSpace(modelRef))
 	if !ok {
 		return nil, fmt.Errorf("unknown subagent model %q", modelRef)
 	}

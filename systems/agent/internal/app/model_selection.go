@@ -1,79 +1,52 @@
 package app
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/q15co/q15/systems/agent/internal/modelselection"
 )
 
-type resolvedModelCandidate struct {
-	ref      string
-	endpoint routedModelEndpoint
-}
-
 var _ modelselection.Planner = (*routedModelAdapter)(nil)
 
+// Plan resolves model refs against the live registry, filters by hard
+// capability requirements, and returns the eligible refs in their original
+// order (current model first, then roster order). Refs not in the current
+// roster are skipped with a clear reason.
 func (r *routedModelAdapter) Plan(
 	modelRefs []string,
 	requirements modelselection.Requirements,
 ) (modelselection.Plan, error) {
-	candidates, err := r.resolveCandidates(modelRefs)
-	if err != nil {
-		return modelselection.Plan{}, err
-	}
-	return filterCandidatesByRequirements(candidates, requirements), nil
-}
-
-func (r *routedModelAdapter) resolveCandidates(
-	modelRefs []string,
-) ([]resolvedModelCandidate, error) {
-	if len(modelRefs) == 0 {
-		return nil, nil
-	}
-
-	candidates := make([]resolvedModelCandidate, 0, len(modelRefs))
-	for _, modelRef := range modelRefs {
-		modelRef = strings.TrimSpace(modelRef)
-		if modelRef == "" {
-			continue
-		}
-
-		endpoint, ok := r.endpoints[modelRef]
-		if !ok {
-			return nil, fmt.Errorf("unknown configured fallback model %q", modelRef)
-		}
-		candidates = append(candidates, resolvedModelCandidate{
-			ref:      modelRef,
-			endpoint: endpoint,
-		})
-	}
-	return candidates, nil
-}
-
-func filterCandidatesByRequirements(
-	candidates []resolvedModelCandidate,
-	requirements modelselection.Requirements,
-) modelselection.Plan {
 	plan := modelselection.Plan{
-		EligibleRefs: make([]string, 0, len(candidates)),
+		EligibleRefs: make([]string, 0, len(modelRefs)),
 		Skipped:      make([]modelselection.Skip, 0),
 	}
 
-	for _, candidate := range candidates {
-		capabilities := modelselection.Capabilities{
-			Text:        candidate.endpoint.capabilities.Text,
-			ToolCalling: candidate.endpoint.capabilities.ToolCalling,
+	for _, ref := range modelRefs {
+		ref = strings.TrimSpace(ref)
+		if ref == "" {
+			continue
 		}
-		if reason := capabilities.MissingReason(requirements); reason != "" {
+		m, ok := r.registry.LookupByRef(ref)
+		if !ok {
 			plan.Skipped = append(plan.Skipped, modelselection.Skip{
-				Ref:    candidate.ref,
+				Ref:    ref,
+				Reason: "not in current roster (provider down or model deprecated)",
+			})
+			continue
+		}
+		caps := modelselection.Capabilities{
+			Text:        m.Capabilities.Text,
+			ToolCalling: m.Capabilities.ToolCalling,
+		}
+		if reason := caps.MissingReason(requirements); reason != "" {
+			plan.Skipped = append(plan.Skipped, modelselection.Skip{
+				Ref:    ref,
 				Reason: reason,
 			})
 			continue
 		}
-		plan.EligibleRefs = append(plan.EligibleRefs, candidate.ref)
+		plan.EligibleRefs = append(plan.EligibleRefs, ref)
 	}
 
-	return plan
+	return plan, nil
 }

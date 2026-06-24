@@ -1,3 +1,12 @@
+# Model discovery configuration.
+#
+# Providers manage their own models. The agent queries each provider's roster
+# endpoint at startup (and refreshes periodically) to discover available models.
+# There is no hand-typed models: list — the provider roster IS the model config.
+#
+# agent.model names the current model (the tag-stripped provider model id).
+# The agent tries this model first, then falls through to other roster models.
+
 providers:
   - name: ollama-cloud
     type: ollama
