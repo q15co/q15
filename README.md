@@ -1,6 +1,6 @@
 # q15
 
-`q15` is a Telegram-based coding agent platform split across three long-lived runtime services:
+`q15` is a self-hosted, Telegram-based AI agent runtime split across three long-lived runtime services:
 
 - `q15-agent`: the agent runtime
 - `q15-exec`: command execution and session lifecycle
