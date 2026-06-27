@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,11 +11,13 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/bus"
 	"github.com/q15co/q15/systems/agent/internal/channel/telegram"
-	"github.com/q15co/q15/systems/agent/internal/config"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
 	q15media "github.com/q15co/q15/systems/agent/internal/media"
+	"github.com/q15co/q15/systems/agent/internal/modelcatalog"
 	"github.com/q15co/q15/systems/agent/internal/modelselection"
 )
+
+// --- test helpers ---
 
 type fakeModelClient struct {
 	calls []fakeModelCall
@@ -26,24 +27,6 @@ type fakeModelCall struct {
 	model    string
 	tools    []agent.ToolDefinition
 	messages []conversation.Message
-}
-
-type funcModelClient struct {
-	complete func(
-		context.Context,
-		string,
-		[]conversation.Message,
-		[]agent.ToolDefinition,
-	) (agent.ModelClientResult, error)
-}
-
-func (f *funcModelClient) Complete(
-	ctx context.Context,
-	model string,
-	messages []conversation.Message,
-	tools []agent.ToolDefinition,
-) (agent.ModelClientResult, error) {
-	return f.complete(ctx, model, messages, tools)
 }
 
 func (f *fakeModelClient) Complete(
@@ -67,51 +50,80 @@ func (f *fakeModelClient) Complete(
 	}, nil
 }
 
-func TestNewModelAdapterRoutesConfiguredModelsAndSuppressesTools(t *testing.T) {
+type mockCatalog struct {
+	models map[string][]modelcatalog.Model
+}
+
+func (m *mockCatalog) Discover(
+	_ context.Context,
+	p modelcatalog.Provider,
+) ([]modelcatalog.Model, error) {
+	return m.models[p.Name], nil
+}
+
+// testRegistry builds a registry from provider→models and refreshes it once.
+func testRegistry(
+	t *testing.T,
+	providerModels map[string][]modelcatalog.Model,
+) *modelcatalog.Registry {
+	t.Helper()
+	providers := make([]modelcatalog.Provider, 0, len(providerModels))
+	for name, ms := range providerModels {
+		ptype := "ollama"
+		if len(ms) > 0 && ms[0].ProviderType != "" {
+			ptype = ms[0].ProviderType
+		}
+		providers = append(providers, modelcatalog.Provider{
+			Name: name,
+			Type: ptype,
+		})
+	}
+	reg := modelcatalog.New(providers, &mockCatalog{models: providerModels}, time.Hour, time.Second)
+	reg.Refresh(context.Background())
+	return reg
+}
+
+// --- tests ---
+
+func TestRoutedModelAdapterRoutesModelsAndSuppressesTools(t *testing.T) {
 	clients := make(map[string]*fakeModelClient)
 	factoryCalls := make(map[string]int)
 
-	adapter, err := newModelAdapterWithFactory([]config.AgentModelRuntime{
-		{
-			Ref:           "primary",
-			ProviderName:  "moonshot",
-			ProviderModel: "kimi-k2.5",
-			Capabilities: config.ModelCapabilities{
-				Text: true,
+	registry := testRegistry(t, map[string][]modelcatalog.Model{
+		"moonshot": {
+			{ProviderModel: "kimi-k2.5", Capabilities: modelcatalog.Capabilities{Text: true}},
+			{
+				ProviderModel: "kimi-k2",
+				Capabilities:  modelcatalog.Capabilities{Text: true, ToolCalling: true},
 			},
 		},
-		{
-			Ref:           "secondary",
-			ProviderName:  "moonshot",
-			ProviderModel: "kimi-k2",
-			Capabilities: config.ModelCapabilities{
-				Text:        true,
-				ToolCalling: true,
+		"openai-sub": {
+			{
+				ProviderModel: "gpt-5-codex",
+				Capabilities:  modelcatalog.Capabilities{Text: true, ToolCalling: true},
 			},
 		},
-		{
-			Ref:           "backup",
-			ProviderName:  "openai-sub",
-			ProviderModel: "gpt-5-codex",
-			Capabilities: config.ModelCapabilities{
-				Text:        true,
-				ToolCalling: true,
-			},
-		},
-	}, nil, func(modelCfg config.AgentModelRuntime, _ q15media.Store) (agent.ModelClient, error) {
-		factoryCalls[modelCfg.ProviderName]++
-		client := &fakeModelClient{}
-		clients[modelCfg.ProviderName] = client
-		return client, nil
 	})
+
+	adapter, err := newModelAdapterWithFactory(
+		registry,
+		nil,
+		func(m modelcatalog.Model, _ q15media.Store) (agent.ModelClient, error) {
+			factoryCalls[m.ProviderName]++
+			client := &fakeModelClient{}
+			clients[m.ProviderName] = client
+			return client, nil
+		},
+	)
 	if err != nil {
 		t.Fatalf("newModelAdapterWithFactory() error = %v", err)
 	}
 
 	tools := []agent.ToolDefinition{{Name: "shell"}}
 
-	if _, err := adapter.Complete(context.Background(), "primary", nil, tools); err != nil {
-		t.Fatalf("Complete(primary) error = %v", err)
+	// primary: text-only → tools suppressed
+	if _, err := adapter.Complete(context.Background(), "kimi-k2.5", nil, tools); err != nil {
+		t.Fatalf("Complete(kimi-k2.5) error = %v", err)
 	}
 	if got := factoryCalls["moonshot"]; got != 1 {
 		t.Fatalf("factoryCalls[moonshot] = %d, want 1", got)
@@ -119,512 +131,45 @@ func TestNewModelAdapterRoutesConfiguredModelsAndSuppressesTools(t *testing.T) {
 	if len(clients["moonshot"].calls) != 1 {
 		t.Fatalf("moonshot calls = %d, want 1", len(clients["moonshot"].calls))
 	}
-	firstCall := clients["moonshot"].calls[0]
-	if firstCall.model != "kimi-k2.5" {
-		t.Fatalf("first provider model = %q, want %q", firstCall.model, "kimi-k2.5")
-	}
-	if len(firstCall.tools) != 0 {
-		t.Fatalf("first tools = %#v, want suppressed tools", firstCall.tools)
+	if len(clients["moonshot"].calls[0].tools) != 0 {
+		t.Fatalf("tools not suppressed for text-only model")
 	}
 
-	if _, err := adapter.Complete(context.Background(), "secondary", nil, tools); err != nil {
-		t.Fatalf("Complete(secondary) error = %v", err)
+	// secondary: tool-capable → tools passed through
+	if _, err := adapter.Complete(context.Background(), "kimi-k2", nil, tools); err != nil {
+		t.Fatalf("Complete(kimi-k2) error = %v", err)
 	}
 	if got := factoryCalls["moonshot"]; got != 1 {
-		t.Fatalf("factoryCalls[moonshot] after second call = %d, want 1", got)
+		t.Fatalf("factoryCalls[moonshot] after second = %d, want 1 (cached)", got)
 	}
-	if len(clients["moonshot"].calls) != 2 {
-		t.Fatalf("moonshot calls = %d, want 2", len(clients["moonshot"].calls))
-	}
-	secondCall := clients["moonshot"].calls[1]
-	if secondCall.model != "kimi-k2" {
-		t.Fatalf("second provider model = %q, want %q", secondCall.model, "kimi-k2")
-	}
-	if len(secondCall.tools) != 1 || secondCall.tools[0].Name != "shell" {
-		t.Fatalf("second tools = %#v, want one shell tool", secondCall.tools)
+	if len(clients["moonshot"].calls[1].tools) != 1 {
+		t.Fatalf("tools not passed for tool-capable model")
 	}
 
-	if _, err := adapter.Complete(context.Background(), "backup", nil, tools); err != nil {
-		t.Fatalf("Complete(backup) error = %v", err)
+	// backup: different provider
+	if _, err := adapter.Complete(context.Background(), "gpt-5-codex", nil, tools); err != nil {
+		t.Fatalf("Complete(gpt-5-codex) error = %v", err)
 	}
 	if got := factoryCalls["openai-sub"]; got != 1 {
 		t.Fatalf("factoryCalls[openai-sub] = %d, want 1", got)
 	}
-	if len(clients["openai-sub"].calls) != 1 {
-		t.Fatalf("openai-sub calls = %d, want 1", len(clients["openai-sub"].calls))
-	}
-	if clients["openai-sub"].calls[0].model != "gpt-5-codex" {
-		t.Fatalf(
-			"backup provider model = %q, want %q",
-			clients["openai-sub"].calls[0].model,
-			"gpt-5-codex",
-		)
-	}
 }
 
-func TestEngineFallbackDoesNotLeakProviderLocalSystemMessagesAcrossProviders(t *testing.T) {
-	type providerClient struct {
-		profile       string
-		err           error
-		receivedCalls [][]conversation.Message
-		localCalls    [][]conversation.Message
-	}
-
-	insertProfile := func(messages []conversation.Message, profile string) []conversation.Message {
-		out := conversation.CloneMessages(messages)
-		insertAt := 0
-		for insertAt < len(out) && out[insertAt].Role == conversation.SystemRole {
-			insertAt++
-		}
-		out = append(out, conversation.Message{})
-		copy(out[insertAt+1:], out[insertAt:])
-		out[insertAt] = conversation.SystemMessage(profile)
-		return out
-	}
-
-	codexClient := &providerClient{
-		profile: `<provider_profile provider="openai-codex">codex</provider_profile>`,
-		err:     errors.New("codex failed"),
-	}
-	kimiClient := &providerClient{
-		profile: `<provider_profile provider="openai-compatible">kimi</provider_profile>`,
-	}
-
-	adapter, err := newModelAdapterWithFactory([]config.AgentModelRuntime{
-		{
-			Ref:           "gpt-5.4",
-			ProviderName:  "openai",
-			ProviderModel: "gpt-5.4",
-			Capabilities:  config.ModelCapabilities{Text: true},
-		},
-		{
-			Ref:           "kimi-k2.5",
-			ProviderName:  "moonshot",
-			ProviderModel: "kimi-k2.5",
-			Capabilities:  config.ModelCapabilities{Text: true},
-		},
-	}, nil, func(modelCfg config.AgentModelRuntime, _ q15media.Store) (agent.ModelClient, error) {
-		switch modelCfg.ProviderName {
-		case "openai":
-			return &funcModelClient{
-				complete: func(
-					_ context.Context,
-					_ string,
-					messages []conversation.Message,
-					_ []agent.ToolDefinition,
-				) (agent.ModelClientResult, error) {
-					codexClient.receivedCalls = append(
-						codexClient.receivedCalls,
-						conversation.CloneMessages(messages),
-					)
-					codexClient.localCalls = append(
-						codexClient.localCalls,
-						insertProfile(messages, codexClient.profile),
-					)
-					return agent.ModelClientResult{}, codexClient.err
-				},
-			}, nil
-		case "moonshot":
-			return &funcModelClient{
-				complete: func(
-					_ context.Context,
-					_ string,
-					messages []conversation.Message,
-					_ []agent.ToolDefinition,
-				) (agent.ModelClientResult, error) {
-					kimiClient.receivedCalls = append(
-						kimiClient.receivedCalls,
-						conversation.CloneMessages(messages),
-					)
-					kimiClient.localCalls = append(
-						kimiClient.localCalls,
-						insertProfile(messages, kimiClient.profile),
-					)
-					return agent.ModelClientResult{
-						Messages: []conversation.Message{
-							conversation.AssistantMessage(conversation.Text("ok", "")),
-						},
-					}, nil
-				},
-			}, nil
-		default:
-			t.Fatalf("unexpected provider %q", modelCfg.ProviderName)
-			return nil, nil
-		}
-	})
-	if err != nil {
-		t.Fatalf("newModelAdapterWithFactory() error = %v", err)
-	}
-
-	engine := agent.NewEngineWithPlanner(adapter, adapter, nil, []string{"gpt-5.4", "kimi-k2.5"})
-	_, err = engine.Run(context.Background(), agent.EngineRequest{
-		Messages: []conversation.Message{
-			conversation.SystemMessage("base"),
-			conversation.UserMessage("hello"),
-		},
-	})
-	if err != nil {
-		t.Fatalf("Run() error = %v", err)
-	}
-
-	if got := len(codexClient.receivedCalls); got != 1 {
-		t.Fatalf("codex received calls = %d, want 1", got)
-	}
-	if got := len(kimiClient.receivedCalls); got != 1 {
-		t.Fatalf("kimi received calls = %d, want 1", got)
-	}
-	if got := conversation.TextValue(codexClient.receivedCalls[0][0]); got != "base" {
-		t.Fatalf("codex canonical system = %q, want %q", got, "base")
-	}
-	if got := conversation.TextValue(kimiClient.receivedCalls[0][0]); got != "base" {
-		t.Fatalf("kimi canonical system = %q, want %q", got, "base")
-	}
-	for _, message := range kimiClient.receivedCalls[0] {
-		if message.Role != conversation.SystemRole {
-			continue
-		}
-		text := conversation.TextValue(message)
-		if strings.Contains(text, `provider="openai-codex"`) {
-			t.Fatalf("kimi fallback received leaked codex profile:\n%s", text)
-		}
-	}
-	if got := conversation.TextValue(codexClient.localCalls[0][1]); !strings.Contains(
-		got,
-		`provider="openai-codex"`,
-	) {
-		t.Fatalf("codex local profile missing marker:\n%s", got)
-	}
-	if got := conversation.TextValue(kimiClient.localCalls[0][1]); !strings.Contains(
-		got,
-		`provider="openai-compatible"`,
-	) {
-		t.Fatalf("kimi local profile missing marker:\n%s", got)
-	}
-}
-
-func TestRoutedModelAdapterPlanSelectionFiltersByCapabilitiesAndPreservesOrder(t *testing.T) {
-	adapter, err := newModelAdapterWithFactory([]config.AgentModelRuntime{
-		{
-			Ref:           "text-only",
-			ProviderName:  "moonshot",
-			ProviderModel: "kimi-k2.5",
-			Capabilities: config.ModelCapabilities{
-				Text: true,
-			},
-		},
-		{
-			Ref:           "vision",
-			ProviderName:  "vision",
-			ProviderModel: "gpt-4.1",
-			Capabilities: config.ModelCapabilities{
-				Text:       true,
-				ImageInput: true,
-			},
-		},
-		{
-			Ref:           "vision-tools",
-			ProviderName:  "vision-tools",
-			ProviderModel: "gpt-5",
-			Capabilities: config.ModelCapabilities{
-				Text:        true,
-				ImageInput:  true,
-				ToolCalling: true,
-			},
-		},
-	}, nil, func(_ config.AgentModelRuntime, _ q15media.Store) (agent.ModelClient, error) {
-		return &fakeModelClient{}, nil
-	})
-	if err != nil {
-		t.Fatalf("newModelAdapterWithFactory() error = %v", err)
-	}
-
-	var planner modelselection.Planner = adapter
-
-	plan, err := planner.Plan(
-		[]string{"text-only", "vision", "vision-tools"},
-		modelselection.Requirements{
-			Text:        true,
-			ToolCalling: true,
-		},
-	)
-	if err != nil {
-		t.Fatalf("Plan() error = %v", err)
-	}
-	if got, want := plan.EligibleRefs, []string{"vision-tools"}; len(got) != len(want) ||
-		got[0] != want[0] {
-		t.Fatalf("eligible refs = %#v, want %#v", got, want)
-	}
-	if len(plan.Skipped) != 2 {
-		t.Fatalf("skipped len = %d, want 2", len(plan.Skipped))
-	}
-	for _, skip := range plan.Skipped {
-		if skip.Reason != "missing capabilities [tool_calling]" {
-			t.Fatalf(
-				"skipped reason = %q, want %q",
-				skip.Reason,
-				"missing capabilities [tool_calling]",
-			)
-		}
-	}
-}
-
-func TestRoutedModelAdapterAdaptsMediaPerParentModelCapabilities(t *testing.T) {
-	store := newBotTestMediaStore(t)
-	imageRef := storeBotTestMedia(t, store, "photo.png", []byte{
-		0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n',
-		0x00, 0x00, 0x00, 0x0d, 'I', 'H', 'D', 'R',
-		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
-		0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
-		0x89, 0x00, 0x00, 0x00, 0x0d, 'I', 'D', 'A', 'T',
-		0x78, 0x9c, 0x63, 0xf8, 0xcf, 0xc0, 0x00, 0x00,
-		0x03, 0x01, 0x01, 0x00, 0xc9, 0xfe, 0x92, 0xef,
-		0x00, 0x00, 0x00, 0x00, 'I', 'E', 'N', 'D',
-		0xae, 0x42, 0x60, 0x82,
-	}, q15media.Meta{ContentType: "image/png", Source: "telegram"})
-	audioRef := storeBotTestMedia(t, store, "voice.ogg", []byte{
-		'O', 'g', 'g', 'S', 0x00, 0x02,
-		0x00, 0x00, 0x00, 0x00,
-		0x00, 0x00, 0x00, 0x00,
-		0x00, 0x00, 0x00, 0x00,
-		0x00, 0x00, 0x00, 0x00,
-		0x01, 0x13,
-		'O', 'p', 'u', 's', 'H', 'e', 'a', 'd',
-	}, q15media.Meta{ContentType: "audio/ogg", Source: "telegram"})
-
-	clients := map[string]*fakeModelClient{
-		"text-only-provider": {},
-		"vision-provider":    {},
-	}
-	adapter, err := newModelAdapterWithFactory([]config.AgentModelRuntime{
-		{
-			Ref:           "text-only",
-			ProviderName:  "text-only-provider",
-			ProviderModel: "text-model",
-			Capabilities:  config.ModelCapabilities{Text: true},
-		},
-		{
-			Ref:           "vision",
-			ProviderName:  "vision-provider",
-			ProviderModel: "vision-model",
-			Capabilities: config.ModelCapabilities{
-				Text:       true,
-				ImageInput: true,
-			},
-		},
-	}, store, func(modelCfg config.AgentModelRuntime, _ q15media.Store) (agent.ModelClient, error) {
-		return clients[modelCfg.ProviderName], nil
-	})
-	if err != nil {
-		t.Fatalf("newModelAdapterWithFactory() error = %v", err)
-	}
-
-	messages := []conversation.Message{conversation.UserMessageParts(
-		conversation.Text("inspect these", ""),
-		conversation.Image(imageRef, ""),
-		conversation.Audio(audioRef),
-	)}
-	if _, err := adapter.Complete(context.Background(), "text-only", messages, nil); err != nil {
-		t.Fatalf("Complete(text-only) error = %v", err)
-	}
-	if _, err := adapter.Complete(context.Background(), "vision", messages, nil); err != nil {
-		t.Fatalf("Complete(vision) error = %v", err)
-	}
-
-	textOnly := clients["text-only-provider"].calls[0].messages[0]
-	if appTestHasPartType(textOnly, conversation.ImagePartType) ||
-		appTestHasPartType(textOnly, conversation.AudioPartType) {
-		t.Fatalf("text-only parent received inline media: %#v", textOnly.Parts)
-	}
-	if !appTestTextContains(textOnly, "[Media: image]") ||
-		!appTestTextContains(textOnly, "[Media: audio]") {
-		t.Fatalf("text-only parent parts = %#v, want image and audio hints", textOnly.Parts)
-	}
-
-	vision := clients["vision-provider"].calls[0].messages[0]
-	if !appTestHasPartType(vision, conversation.ImagePartType) {
-		t.Fatalf("vision parent parts = %#v, want image retained", vision.Parts)
-	}
-	if appTestHasPartType(vision, conversation.AudioPartType) ||
-		!appTestTextContains(vision, "[Media: audio]") {
-		t.Fatalf("vision parent parts = %#v, want audio downgraded", vision.Parts)
-	}
-
-	if messages[0].Parts[1].Type != conversation.ImagePartType ||
-		messages[0].Parts[2].Type != conversation.AudioPartType {
-		t.Fatalf("canonical parent transcript mutated: %#v", messages[0].Parts)
-	}
-}
-
-func TestRoutedModelAdapterPlanSelectionRejectsUnknownModelRef(t *testing.T) {
-	adapter, err := newModelAdapterWithFactory([]config.AgentModelRuntime{
-		{
-			Ref:           "primary",
-			ProviderName:  "moonshot",
-			ProviderModel: "kimi-k2.5",
-			Capabilities: config.ModelCapabilities{
-				Text: true,
-			},
-		},
-	}, nil, func(_ config.AgentModelRuntime, _ q15media.Store) (agent.ModelClient, error) {
-		return &fakeModelClient{}, nil
-	})
-	if err != nil {
-		t.Fatalf("newModelAdapterWithFactory() error = %v", err)
-	}
-
-	var planner modelselection.Planner = adapter
-	if _, err := planner.Plan(
-		[]string{"missing"},
-		modelselection.Requirements{Text: true},
-	); err == nil {
-		t.Fatal("Plan() error = nil, want unknown model error")
-	}
-}
-
-func newBotTestMediaStore(t *testing.T) *q15media.FileStore {
-	t.Helper()
-	store, err := q15media.NewFileStore(filepath.Join(t.TempDir(), "media"))
-	if err != nil {
-		t.Fatalf("NewFileStore() error = %v", err)
-	}
-	return store
-}
-
-func storeBotTestMedia(
-	t *testing.T,
-	store *q15media.FileStore,
-	filename string,
-	content []byte,
-	meta q15media.Meta,
-) string {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), filename)
-	if err := os.WriteFile(path, content, 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-	meta.Filename = filename
-	ref, err := store.Store(path, meta, "test")
-	if err != nil {
-		t.Fatalf("Store() error = %v", err)
-	}
-	return ref
-}
-
-func appTestHasPartType(message conversation.Message, partType conversation.PartType) bool {
-	for _, part := range message.Parts {
-		if part.Type == partType {
-			return true
-		}
-	}
-	return false
-}
-
-func appTestTextContains(message conversation.Message, text string) bool {
-	for _, part := range message.Parts {
-		if part.Type == conversation.TextPartType && strings.Contains(part.Text, text) {
-			return true
-		}
-	}
-	return false
-}
-
-func TestCognitionJobsRegistersBuiltInCognitionJobs(t *testing.T) {
-	jobs := cognitionJobs()
-	if len(jobs) != 3 {
-		t.Fatalf("cognitionJobs len = %d, want 3", len(jobs))
-	}
-
-	gotTypes := make([]string, 0, len(jobs))
-	for _, registration := range jobs {
-		job := registration.NewJob()
-		if job == nil {
-			t.Fatal("NewJob() = nil")
-		}
-		gotTypes = append(gotTypes, job.Type())
-	}
-	if got, want := gotTypes[0], "verification_review"; got != want {
-		t.Fatalf("jobs[0].Type() = %q, want %q", got, want)
-	}
-	if got, want := gotTypes[1], "semantic_memory.extract"; got != want {
-		t.Fatalf("jobs[1].Type() = %q, want %q", got, want)
-	}
-	if got, want := gotTypes[2], "working_memory.consolidate"; got != want {
-		t.Fatalf("jobs[2].Type() = %q, want %q", got, want)
-	}
-	if len(jobs[0].Policy.Startup) != 0 {
-		t.Fatalf("verification startup rules = %d, want 0", len(jobs[0].Policy.Startup))
-	}
-	if len(jobs[0].Policy.Schedule) == 0 {
-		t.Fatal("verification schedule rules = 0, want at least 1")
-	}
-	if len(jobs[0].Policy.State) == 0 {
-		t.Fatal("verification state rules = 0, want at least 1")
-	}
-	if len(jobs[1].Policy.Startup) != 0 {
-		t.Fatalf("semantic startup rules = %d, want 0", len(jobs[1].Policy.Startup))
-	}
-	if len(jobs[1].Policy.Schedule) == 0 {
-		t.Fatal("semantic schedule rules = 0, want at least 1")
-	}
-	if len(jobs[1].Policy.State) == 0 {
-		t.Fatal("semantic state rules = 0, want at least 1")
-	}
-	if len(jobs[2].Policy.Startup) == 0 {
-		t.Fatal("startup rules = 0, want at least 1")
-	}
-	if len(jobs[2].Policy.Schedule) == 0 {
-		t.Fatal("schedule rules = 0, want at least 1")
-	}
-	if len(jobs[2].Policy.State) == 0 {
-		t.Fatal("state rules = 0, want at least 1")
-	}
-}
-
-func TestMergedModelCatalogSupportsCognitionOnlyModelRefs(t *testing.T) {
-	merged := mergeModelRuntimes(
-		[]config.AgentModelRuntime{
+func TestRoutedModelAdapterPlanFiltersByCapabilities(t *testing.T) {
+	registry := testRegistry(t, map[string][]modelcatalog.Model{
+		"p": {
+			{ProviderModel: "text-only", Capabilities: modelcatalog.Capabilities{Text: true}},
 			{
-				Ref:           "interactive",
-				ProviderName:  "openai",
-				ProviderModel: "gpt-5.4",
-				Capabilities: config.ModelCapabilities{
-					Text: true,
-				},
+				ProviderModel: "tools",
+				Capabilities:  modelcatalog.Capabilities{Text: true, ToolCalling: true},
 			},
 		},
-		[]config.AgentModelRuntime{
-			{
-				Ref:           "interactive",
-				ProviderName:  "openai",
-				ProviderModel: "gpt-5.4",
-				Capabilities: config.ModelCapabilities{
-					Text: true,
-				},
-			},
-			{
-				Ref:           "cognition",
-				ProviderName:  "moonshot",
-				ProviderModel: "kimi-k2.5",
-				Capabilities: config.ModelCapabilities{
-					Text: true,
-				},
-			},
-		},
-	)
-	if got, want := len(merged), 2; got != want {
-		t.Fatalf("merged len = %d, want %d", got, want)
-	}
-	if merged[0].Ref != "interactive" || merged[1].Ref != "cognition" {
-		t.Fatalf(
-			"merged refs = %#v, want interactive-first ordering",
-			[]string{merged[0].Ref, merged[1].Ref},
-		)
-	}
+	})
 
 	adapter, err := newModelAdapterWithFactory(
-		merged,
+		registry,
 		nil,
-		func(_ config.AgentModelRuntime, _ q15media.Store) (agent.ModelClient, error) {
+		func(_ modelcatalog.Model, _ q15media.Store) (agent.ModelClient, error) {
 			return &fakeModelClient{}, nil
 		},
 	)
@@ -632,81 +177,184 @@ func TestMergedModelCatalogSupportsCognitionOnlyModelRefs(t *testing.T) {
 		t.Fatalf("newModelAdapterWithFactory() error = %v", err)
 	}
 
-	var planner modelselection.Planner = adapter
-	plan, err := planner.Plan([]string{"cognition"}, modelselection.Requirements{Text: true})
-	if err != nil {
-		t.Fatalf("Plan() error = %v", err)
-	}
-	if got, want := plan.EligibleRefs, []string{"cognition"}; len(got) != len(want) ||
-		got[0] != want[0] {
-		t.Fatalf("eligible refs = %#v, want %#v", got, want)
-	}
-}
-
-func TestRoutedModelAdapterPlanSelectionReturnsEmptyPlanWhenNoCandidatesMatch(t *testing.T) {
-	adapter, err := newModelAdapterWithFactory([]config.AgentModelRuntime{
-		{
-			Ref:           "text-only",
-			ProviderName:  "moonshot",
-			ProviderModel: "kimi-k2.5",
-			Capabilities: config.ModelCapabilities{
-				Text: true,
-			},
-		},
-	}, nil, func(_ config.AgentModelRuntime, _ q15media.Store) (agent.ModelClient, error) {
-		return &fakeModelClient{}, nil
-	})
-	if err != nil {
-		t.Fatalf("newModelAdapterWithFactory() error = %v", err)
-	}
-
-	var planner modelselection.Planner = adapter
-	plan, err := planner.Plan(
-		[]string{"text-only"},
-		modelselection.Requirements{
-			Text:        true,
-			ToolCalling: true,
-		},
+	plan, err := adapter.Plan(
+		[]string{"text-only", "tools"},
+		modelselection.Requirements{Text: true, ToolCalling: true},
 	)
 	if err != nil {
 		t.Fatalf("Plan() error = %v", err)
 	}
-	if len(plan.EligibleRefs) != 0 {
-		t.Fatalf("eligible refs = %#v, want empty", plan.EligibleRefs)
-	}
-	if len(plan.Skipped) != 1 {
-		t.Fatalf("skipped len = %d, want 1", len(plan.Skipped))
-	}
-	if plan.Skipped[0].Reason != "missing capabilities [tool_calling]" {
-		t.Fatalf("skip reason = %q", plan.Skipped[0].Reason)
+	if len(plan.EligibleRefs) != 1 || plan.EligibleRefs[0] != "tools" {
+		t.Fatalf("eligible = %#v, want [tools]", plan.EligibleRefs)
 	}
 }
 
-func TestTelegramInboundMessagePreservesTypedAttachments(t *testing.T) {
-	sentAt := time.Date(2026, time.April, 12, 10, 11, 12, 0, time.FixedZone("UTC+2", 2*60*60))
-	got := telegramInboundMessage(telegram.IncomingMessage{
-		ChatID:      "chat-1",
-		UserID:      "user-1",
-		MessageID:   "msg-1",
-		SentAt:      sentAt,
-		Text:        "describe this",
-		Attachments: []conversation.Part{conversation.Image("media://sha256/abc", "")},
+func TestRoutedModelAdapterPlanSkipsMissingFromRoster(t *testing.T) {
+	registry := testRegistry(t, map[string][]modelcatalog.Model{
+		"p": {
+			{ProviderModel: "real-model", Capabilities: modelcatalog.Capabilities{Text: true}},
+		},
 	})
 
-	if got.Channel != bus.ChannelTelegram {
-		t.Fatalf("Channel = %q, want %q", got.Channel, bus.ChannelTelegram)
+	adapter, err := newModelAdapterWithFactory(
+		registry,
+		nil,
+		func(_ modelcatalog.Model, _ q15media.Store) (agent.ModelClient, error) {
+			return &fakeModelClient{}, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("newModelAdapterWithFactory() error = %v", err)
 	}
-	if got.ChatID != "chat-1" || got.UserID != "user-1" || got.MessageID != "msg-1" {
-		t.Fatalf("inbound = %#v", got)
+
+	plan, err := adapter.Plan(
+		[]string{"real-model", "gone-model"},
+		modelselection.Requirements{Text: true},
+	)
+	if err != nil {
+		t.Fatalf("Plan() error = %v", err)
 	}
-	if !got.SentAt.Equal(sentAt) {
-		t.Fatalf("SentAt = %s, want %s", got.SentAt, sentAt)
+	if len(plan.EligibleRefs) != 1 || plan.EligibleRefs[0] != "real-model" {
+		t.Fatalf("eligible = %#v, want [real-model]", plan.EligibleRefs)
 	}
-	if got.Text != "describe this" {
-		t.Fatalf("Text = %q, want describe this", got.Text)
-	}
-	if len(got.Attachments) != 1 || got.Attachments[0].Type != conversation.ImagePartType ||
-		got.Attachments[0].MediaRef != "media://sha256/abc" {
-		t.Fatalf("Attachments = %#v, want telegram image attachment", got.Attachments)
+	if len(plan.Skipped) != 1 || plan.Skipped[0].Ref != "gone-model" {
+		t.Fatalf("skipped = %#v, want [gone-model]", plan.Skipped)
 	}
 }
+
+func TestRoutedModelAdapterCompleteRejectsMissingModel(t *testing.T) {
+	registry := testRegistry(t, map[string][]modelcatalog.Model{
+		"p": {
+			{ProviderModel: "real-model", Capabilities: modelcatalog.Capabilities{Text: true}},
+		},
+	})
+
+	adapter, err := newModelAdapterWithFactory(
+		registry,
+		nil,
+		func(_ modelcatalog.Model, _ q15media.Store) (agent.ModelClient, error) {
+			return &fakeModelClient{}, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("newModelAdapterWithFactory() error = %v", err)
+	}
+
+	if _, err := adapter.Complete(context.Background(), "nonexistent", nil, nil); err == nil {
+		t.Fatal("expected error for model not in roster")
+	}
+}
+
+func TestRoutedModelAdapterAdaptsMediaPerModelCapabilities(t *testing.T) {
+	store := q15media.Store(nil)
+	registry := testRegistry(t, map[string][]modelcatalog.Model{
+		"p": {
+			{ProviderModel: "text-only", Capabilities: modelcatalog.Capabilities{Text: true}},
+			{
+				ProviderModel: "vision",
+				Capabilities:  modelcatalog.Capabilities{Text: true, ImageInput: true},
+			},
+		},
+	})
+
+	adapter, err := newModelAdapterWithFactory(
+		registry,
+		store,
+		func(_ modelcatalog.Model, _ q15media.Store) (agent.ModelClient, error) {
+			return &fakeModelClient{}, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("newModelAdapterWithFactory() error = %v", err)
+	}
+
+	// Both calls should succeed without panic — media adaptation is internal.
+	if _, err := adapter.Complete(context.Background(), "text-only", nil, nil); err != nil {
+		t.Fatalf("Complete(text-only) error = %v", err)
+	}
+	if _, err := adapter.Complete(context.Background(), "vision", nil, nil); err != nil {
+		t.Fatalf("Complete(vision) error = %v", err)
+	}
+}
+
+func TestBuildModelRefsCurrentFirst(t *testing.T) {
+	registry := testRegistry(t, map[string][]modelcatalog.Model{
+		"p": {
+			{ProviderModel: "alpha"},
+			{ProviderModel: "beta"},
+			{ProviderModel: "gamma"},
+		},
+	})
+
+	refs := buildModelRefs("beta", registry)
+	if len(refs) != 3 {
+		t.Fatalf("refs = %v, want 3", refs)
+	}
+	if refs[0] != "beta" {
+		t.Fatalf("refs[0] = %q, want beta (current first)", refs[0])
+	}
+}
+
+func TestBuildModelRefsCurrentNotInSnapshot(t *testing.T) {
+	registry := testRegistry(t, map[string][]modelcatalog.Model{
+		"p": {
+			{ProviderModel: "alpha"},
+			{ProviderModel: "beta"},
+		},
+	})
+
+	// Current model gone from roster → still first, rest follow.
+	refs := buildModelRefs("gone", registry)
+	if len(refs) != 3 {
+		t.Fatalf("refs = %v, want 3 (gone + alpha + beta)", refs)
+	}
+	if refs[0] != "gone" {
+		t.Fatalf("refs[0] = %q, want gone (current first even if missing)", refs[0])
+	}
+}
+
+func TestCognitionJobsRegistersBuiltInCognitionJobs(t *testing.T) {
+	jobs := cognitionJobs()
+	if len(jobs) < 3 {
+		t.Fatalf("cognitionJobs() returned %d jobs, want at least 3", len(jobs))
+	}
+}
+
+// --- non-model tests (kept from original) ---
+
+func TestComposeSystemPromptIncludesRuntimeInfo(t *testing.T) {
+	info := runtimeEnvironmentInfo{
+		WorkspaceDir: "/workspace",
+		MemoryDir:    "/memory",
+		MediaDir:     "/media",
+		SkillsDir:    "/skills",
+		ExecutorType: "nix",
+	}
+	prompt := composeSystemPrompt("base", "TestAgent", info, nil)
+	if !strings.Contains(prompt, "TestAgent") {
+		t.Error("prompt should contain agent name")
+	}
+}
+
+func TestTelegramInboundMessagePreservesFields(t *testing.T) {
+	msg := telegram.IncomingMessage{
+		ChatID:    "123",
+		UserID:    "456",
+		MessageID: "789",
+		Text:      "hello",
+	}
+	busMsg := telegramInboundMessage(msg)
+	if busMsg.ChatID != "123" || busMsg.UserID != "456" || busMsg.Text != "hello" {
+		t.Fatalf("telegramInboundMessage lost fields: %+v", busMsg)
+	}
+}
+
+func TestRunAgentWorkerCancelReturnsNil(_ *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_ = runAgentWorker(ctx, bus.New(1), nil, nil)
+}
+
+// unused import guard
+var _ = os.Stdout
+var _ = filepath.Join

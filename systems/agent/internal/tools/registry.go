@@ -7,11 +7,11 @@ package tools
 
 import (
 	"github.com/q15co/q15/systems/agent/internal/agent"
-	"github.com/q15co/q15/systems/agent/internal/config"
 	"github.com/q15co/q15/systems/agent/internal/embed"
 	"github.com/q15co/q15/systems/agent/internal/execution"
 	"github.com/q15co/q15/systems/agent/internal/fileops"
 	q15media "github.com/q15co/q15/systems/agent/internal/media"
+	"github.com/q15co/q15/systems/agent/internal/modelcatalog"
 
 	embedtools "github.com/q15co/q15/systems/agent/internal/tools/embed"
 	"github.com/q15co/q15/systems/agent/internal/tools/exec"
@@ -122,10 +122,10 @@ func NewEmbedStatus(service *embed.Service) *embedtools.Status {
 
 // NewSubAgentManager constructs a delegated sub-agent session manager.
 func NewSubAgentManager(
-	models []config.AgentModelRuntime,
+	registry *modelcatalog.Registry,
 	factory subagent.ModelFactory,
 	baseTools agent.ToolRegistry,
 	mediaStore q15media.Store,
 ) *subagent.Manager {
-	return subagent.NewManager(models, factory, baseTools, mediaStore)
+	return subagent.NewManager(registry, factory, baseTools, mediaStore)
 }

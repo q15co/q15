@@ -215,7 +215,8 @@ locations) in long-running deployments.
 
 ### Agent Config
 
-Keep the agent file focused on identity, models, providers, optional tools, and Telegram policy.
+Keep the agent file focused on identity, providers, the current model refs, optional tools, and
+Telegram policy. Provider discovery is mandatory: there is no hand-written `models:` list.
 
 Example:
 
@@ -228,49 +229,25 @@ providers:
     type: openai-compatible
     base_url: https://api.moonshot.ai/v1
     key_env: MOONSHOT_API_KEY
+    discovery:
+      models_dev: true
 
   - name: ollama-local
     type: ollama
+    discovery:
+      models_dev: true
 
   - name: ollama-cloud
     type: ollama
     base_url: https://ollama.com
     key_env: OLLAMA_API_KEY
-
-models:
-  - name: gpt-5.4
-    provider: openai
-    capabilities:
-      - text
-      - tool_calling
-      - reasoning
-
-  - name: kimi-k2.5
-    provider: moonshot
-    capabilities:
-      - text
-      - tool_calling
-      - reasoning
-
-  - name: gpt-oss-120b
-    provider: ollama-cloud
-    provider_model: gpt-oss:120b
-    capabilities:
-      - text
-      - tool_calling
-      - reasoning
-      - image_input
+    discovery:
+      models_dev: true
 
 agent:
   name: Q15
-  models:
-    - gpt-5.4
-    - kimi-k2.5
-    - gpt-oss-120b
-  cognition:
-    models:
-      - kimi-k2.5
-      - gpt-5.4
+  model: kimi-k2.7-code
+  cognition_model: nemotron-3-ultra
   memory_recent_turns: 6
   tools:
     web_search:
@@ -309,12 +286,12 @@ Notes:
   `/workspace/library/<author>/<work>/chunks`
 - `chunked_markdown_tree` treats each Markdown file as one embedding unit and loads sibling
   `meta.yml`; EPUB/PDF ingestion is not part of this path
-- `models[].capabilities` drive capability-aware selection; q15 skips models that cannot satisfy the
-  currently inferred request requirements before calling a provider
-- `agent.models` order is the deterministic per-turn fallback preference order after capability
-  filtering
-- `agent.cognition.models` is optional and sets the deterministic fallback order for background
-  cognition jobs; when omitted, cognition inherits `agent.models`
+- provider discovery is mandatory; provider rosters are the source of truth for available models and
+  capabilities
+- `agent.model` is the current interactive model ref; q15 tries it first each turn, then falls
+  through to other eligible models from the live provider roster
+- `agent.cognition_model` is an optional stop-gap current model ref for background cognition jobs
+  until agent-driven model switching lands; when omitted, cognition inherits `agent.model`
 - current inference is intentionally text-first; image-input and tool-calling requirement inference
   land when canonical request signals for those modes are available
 - agent memory lives under `/memory`

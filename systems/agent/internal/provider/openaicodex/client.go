@@ -1,4 +1,5 @@
-// Package openaicodex implements the OpenAI Codex-backed model client.
+// Package openaicodex implements OpenAI Codex-backed completion and static
+// model-roster adapters.
 package openaicodex
 
 import (

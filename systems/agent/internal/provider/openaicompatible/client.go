@@ -1,5 +1,5 @@
-// Package openaicompatible implements an OpenAI Chat Completions-compatible
-// model client.
+// Package openaicompatible implements OpenAI-compatible completion and
+// model-roster adapters.
 package openaicompatible
 
 import (

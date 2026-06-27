@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
-	"github.com/q15co/q15/systems/agent/internal/config"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
 	q15media "github.com/q15co/q15/systems/agent/internal/media"
+	"github.com/q15co/q15/systems/agent/internal/modelcatalog"
 )
 
 type recordingModel struct {
@@ -425,15 +425,36 @@ func TestWorkspaceOnlyPolicyMemoryRootBoundaries(t *testing.T) {
 	}
 }
 
+type fakeCatalog struct {
+	models map[string][]modelcatalog.Model
+}
+
+func (m *fakeCatalog) Discover(
+	_ context.Context,
+	p modelcatalog.Provider,
+) ([]modelcatalog.Model, error) {
+	return m.models[p.Name], nil
+}
+
 func newTestManager(t *testing.T, model agent.ModelClient) *Manager {
 	t.Helper()
 	registry, err := agent.NewToolRegistry(noopTool{name: "read_file"})
 	if err != nil {
 		t.Fatalf("NewToolRegistry() error = %v", err)
 	}
+	cat := &fakeCatalog{models: map[string][]modelcatalog.Model{
+		"p": {{ProviderModel: "child", Capabilities: modelcatalog.Capabilities{Text: true}}},
+	}}
+	reg := modelcatalog.New(
+		[]modelcatalog.Provider{{Name: "p", Type: "ollama"}},
+		cat,
+		time.Hour,
+		time.Second,
+	)
+	reg.Refresh(context.Background())
 	return NewManager(
-		[]config.AgentModelRuntime{{Ref: "child"}},
-		func(config.AgentModelRuntime, q15media.Store) (agent.ModelClient, error) {
+		reg,
+		func(modelcatalog.Model, q15media.Store) (agent.ModelClient, error) {
 			return model, nil
 		},
 		registry,

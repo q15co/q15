@@ -33,13 +33,14 @@ The runtime contract is fixed in the binaries. Overlays only need to provide:
   - Example: `GITHUB_TOKEN`
 - PVCs named `q15-workspace`, `q15-memory`, `q15-skills`, `q15-exec-nix`, and `q15-proxy-state`
 
-If multiple models are listed in `agent.models`, q15 treats that list as the deterministic per-turn
-fallback preference order. It filters out models that do not satisfy the currently inferred request
-requirements before any provider call, then falls back across the remaining eligible entries.
-Current inference is text-first; image-input and tool-calling requirement inference are staged for
-the corresponding canonical request signals. `agent.cognition.models` is optional and sets the
-deterministic fallback order for background cognition jobs. When omitted, cognition jobs inherit
-`agent.models`.
+Provider discovery is mandatory: provider rosters are the source of truth for available models and
+capabilities. `agent.model` is the current interactive model ref; q15 tries it first each turn,
+filters out models that do not satisfy the currently inferred request requirements, then falls
+through to other eligible models from the live provider roster. `agent.cognition_model` is an
+optional stop-gap current model ref for background cognition jobs until agent-driven model switching
+lands; when omitted, cognition jobs inherit `agent.model`. Current inference is text-first;
+image-input and tool-calling requirement inference are staged for the corresponding canonical
+request signals.
 
 `q15-workspace` is the stack's long-term project and working-state PVC. A fresh
 `PersistentVolumeClaim/q15-workspace` may be empty on first deployment; pre-seeding it is optional

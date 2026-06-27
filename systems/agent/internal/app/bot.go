@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/q15co/q15/libs/exec-contract/execpb"
@@ -21,9 +22,11 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/fileops"
 	q15media "github.com/q15co/q15/systems/agent/internal/media"
 	"github.com/q15co/q15/systems/agent/internal/memory"
+	"github.com/q15co/q15/systems/agent/internal/modelcatalog"
 	"github.com/q15co/q15/systems/agent/internal/provider/ollama"
 	"github.com/q15co/q15/systems/agent/internal/provider/openaicodex"
 	"github.com/q15co/q15/systems/agent/internal/provider/openaicompatible"
+	"github.com/q15co/q15/systems/agent/internal/providertypes"
 	q15skills "github.com/q15co/q15/systems/agent/internal/skills"
 	"github.com/q15co/q15/systems/agent/internal/tools"
 	"github.com/q15co/q15/systems/agent/internal/tools/subagent"
@@ -39,19 +42,19 @@ type runtimeEnvironmentInfo struct {
 	ProxyPolicyRevision string
 }
 
-func runBot(ctx context.Context, rt config.AgentRuntime) error {
+func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.Registry) error {
 	token := strings.TrimSpace(rt.TelegramToken)
 	if token == "" {
 		return errors.New("telegram token is required")
 	}
 
-	interactiveModelRefs := normalizeModelList(rt.InteractiveModels)
+	interactiveModelRefs := buildModelRefs(rt.CurrentModelRef, registry)
 	if len(interactiveModelRefs) == 0 {
 		return errors.New("at least one model is required")
 	}
-	cognitionModelRefs := normalizeModelList(rt.CognitionModels)
+	cognitionModelRefs := buildModelRefs(rt.CurrentCognitionModelRef, registry)
 	if len(cognitionModelRefs) == 0 {
-		cognitionModelRefs = append([]string(nil), interactiveModelRefs...)
+		return errors.New("at least one cognition model is required")
 	}
 
 	executionClient, executionInfo, err := connectExecutionService(ctx, &rt.Execution)
@@ -68,10 +71,7 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 	if err != nil {
 		return fmt.Errorf("initialize media store for agent %q: %w", rt.Name, err)
 	}
-	modelAdapter, err := newModelAdapter(
-		mergeModelRuntimes(rt.InteractiveModels, rt.CognitionModels),
-		mediaStore,
-	)
+	modelAdapter, err := newModelAdapter(registry, mediaStore)
 	if err != nil {
 		return err
 	}
@@ -115,7 +115,7 @@ func runBot(ctx context.Context, rt config.AgentRuntime) error {
 		return fmt.Errorf("build base tool registry for agent %q: %w", rt.Name, err)
 	}
 	subAgentManager := subagent.NewManager(
-		mergeModelRuntimes(rt.InteractiveModels, rt.CognitionModels),
+		registry,
 		defaultModelClientFactory,
 		baseToolRegistry,
 		mediaStore,
@@ -609,17 +609,13 @@ func resolveRuntimeEnvironment(
 }
 
 type routedModelAdapter struct {
-	endpoints  map[string]routedModelEndpoint
+	registry   *modelcatalog.Registry
 	mediaStore q15media.Store
+	factory    modelClientFactory
+	clients    sync.Map // providerName → agent.ModelClient
 }
 
-type routedModelEndpoint struct {
-	client        agent.ModelClient
-	providerModel string
-	capabilities  config.ModelCapabilities
-}
-
-type modelClientFactory func(config.AgentModelRuntime, q15media.Store) (agent.ModelClient, error)
+type modelClientFactory func(modelcatalog.Model, q15media.Store) (agent.ModelClient, error)
 
 var _ agent.ModelClient = (*routedModelAdapter)(nil)
 
@@ -630,24 +626,46 @@ func (r *routedModelAdapter) Complete(
 	tools []agent.ToolDefinition,
 ) (agent.ModelClientResult, error) {
 	model = strings.TrimSpace(model)
-	endpoint, ok := r.endpoints[model]
+	m, ok := r.registry.LookupByRef(model)
 	if !ok {
-		return agent.ModelClientResult{}, fmt.Errorf("unknown configured fallback model %q", model)
+		return agent.ModelClientResult{}, fmt.Errorf(
+			"model %q is not in the current roster (provider down or model deprecated)",
+			model,
+		)
 	}
 
-	if !endpoint.capabilities.ToolCalling {
+	client, err := r.getOrCreateClient(m)
+	if err != nil {
+		return agent.ModelClientResult{}, err
+	}
+
+	if !m.Capabilities.ToolCalling {
 		tools = nil
 	}
 
 	adapted := q15media.AdaptMediaToCapabilities(
 		messages,
-		mediaSupportFromCaps(endpoint.capabilities),
+		mediaSupportFromCaps(m.Capabilities),
 		r.mediaStore,
 	)
-	return endpoint.client.Complete(ctx, endpoint.providerModel, adapted, tools)
+	return client.Complete(ctx, m.ProviderModel, adapted, tools)
 }
 
-func mediaSupportFromCaps(caps config.ModelCapabilities) q15media.Support {
+func (r *routedModelAdapter) getOrCreateClient(
+	m modelcatalog.Model,
+) (agent.ModelClient, error) {
+	if cached, ok := r.clients.Load(m.ProviderName); ok {
+		return cached.(agent.ModelClient), nil
+	}
+	client, err := r.factory(m, r.mediaStore)
+	if err != nil {
+		return nil, fmt.Errorf("configure provider %q: %w", m.ProviderName, err)
+	}
+	r.clients.Store(m.ProviderName, client)
+	return client, nil
+}
+
+func mediaSupportFromCaps(caps modelcatalog.Capabilities) q15media.Support {
 	return q15media.Support{
 		Image: caps.ImageInput,
 		Audio: caps.AudioInput,
@@ -655,131 +673,67 @@ func mediaSupportFromCaps(caps config.ModelCapabilities) q15media.Support {
 }
 
 func newModelAdapter(
-	models []config.AgentModelRuntime,
+	registry *modelcatalog.Registry,
 	mediaStore q15media.Store,
 ) (*routedModelAdapter, error) {
-	return newModelAdapterWithFactory(models, mediaStore, defaultModelClientFactory)
+	return newModelAdapterWithFactory(registry, mediaStore, defaultModelClientFactory)
 }
 
 func newModelAdapterWithFactory(
-	models []config.AgentModelRuntime,
+	registry *modelcatalog.Registry,
 	mediaStore q15media.Store,
 	clientFactory modelClientFactory,
 ) (*routedModelAdapter, error) {
-	if len(models) == 0 {
-		return nil, errors.New("at least one model is required")
+	if registry == nil {
+		return nil, errors.New("model registry is required")
 	}
 	if clientFactory == nil {
 		return nil, errors.New("model client factory is required")
 	}
-
-	endpoints := make(map[string]routedModelEndpoint, len(models))
-	modelClients := make(map[string]agent.ModelClient)
-
-	for i, modelCfg := range models {
-		ref := strings.TrimSpace(modelCfg.Ref)
-		if ref == "" {
-			return nil, fmt.Errorf("models[%d].ref is required", i)
-		}
-		providerModel := strings.TrimSpace(modelCfg.ProviderModel)
-		if providerModel == "" {
-			return nil, fmt.Errorf("models[%d] (%q): provider model is required", i, ref)
-		}
-
-		providerName := strings.TrimSpace(modelCfg.ProviderName)
-		if providerName == "" {
-			providerName = ref
-		}
-
-		client, ok := modelClients[providerName]
-		if !ok {
-			var err error
-			client, err = clientFactory(modelCfg, mediaStore)
-			if err != nil {
-				return nil, fmt.Errorf("configure provider for model %q: %w", ref, err)
-			}
-			modelClients[providerName] = client
-		}
-
-		endpoints[ref] = routedModelEndpoint{
-			client:        client,
-			providerModel: providerModel,
-			capabilities:  modelCfg.Capabilities,
-		}
-	}
-
-	return &routedModelAdapter{endpoints: endpoints, mediaStore: mediaStore}, nil
+	return &routedModelAdapter{
+		registry:   registry,
+		mediaStore: mediaStore,
+		factory:    clientFactory,
+	}, nil
 }
 
 func defaultModelClientFactory(
-	modelCfg config.AgentModelRuntime,
+	m modelcatalog.Model,
 	mediaStore q15media.Store,
 ) (agent.ModelClient, error) {
-	switch strings.ToLower(strings.TrimSpace(modelCfg.ProviderType)) {
-	case "ollama":
-		return ollama.NewClient(
-			modelCfg.ProviderBaseURL,
-			modelCfg.ProviderAPIKey,
-			mediaStore,
-		)
-	case "openai-compatible":
-		return openaicompatible.NewClient(
-			modelCfg.ProviderBaseURL,
-			modelCfg.ProviderAPIKey,
-			mediaStore,
-		)
-	case "openai-codex":
+	switch providertypes.MustNormalize(m.ProviderType) {
+	case providertypes.Ollama:
+		return ollama.NewClient(m.ProviderBaseURL, m.ProviderAPIKey, mediaStore)
+	case providertypes.OpenAICompatible:
+		return openaicompatible.NewClient(m.ProviderBaseURL, m.ProviderAPIKey, mediaStore)
+	case providertypes.OpenAICodex:
 		return openaicodex.NewClient(mediaStore)
 	default:
-		return nil, fmt.Errorf("unsupported provider type %q", modelCfg.ProviderType)
+		return nil, fmt.Errorf("unsupported provider type %q", m.ProviderType)
 	}
 }
 
-func normalizeModelList(models []config.AgentModelRuntime) []string {
-	if len(models) == 0 {
-		return nil
-	}
+// buildModelRefs returns the engine's eligible model-ref list: the current
+// model first, then the remaining roster snapshot refs (deduped). This is the
+// honest, live fallback — if the current model is gone, the engine falls
+// through to other roster models.
+func buildModelRefs(currentRef string, registry *modelcatalog.Registry) []string {
+	currentRef = strings.TrimSpace(currentRef)
+	snapshot := registry.Snapshot()
 
-	out := make([]string, 0, len(models))
-	seen := make(map[string]struct{}, len(models))
-	for _, model := range models {
-		ref := strings.TrimSpace(model.Ref)
-		if ref == "" {
+	refs := make([]string, 0, len(snapshot)+1)
+	seen := make(map[string]struct{}, len(snapshot)+1)
+
+	if currentRef != "" {
+		refs = append(refs, currentRef)
+		seen[currentRef] = struct{}{}
+	}
+	for _, m := range snapshot {
+		if _, ok := seen[m.Ref]; ok {
 			continue
 		}
-		if _, ok := seen[ref]; ok {
-			continue
-		}
-		seen[ref] = struct{}{}
-		out = append(out, ref)
+		refs = append(refs, m.Ref)
+		seen[m.Ref] = struct{}{}
 	}
-	return out
-}
-
-func mergeModelRuntimes(
-	interactiveModels []config.AgentModelRuntime,
-	cognitionModels []config.AgentModelRuntime,
-) []config.AgentModelRuntime {
-	if len(interactiveModels) == 0 && len(cognitionModels) == 0 {
-		return nil
-	}
-
-	out := make([]config.AgentModelRuntime, 0, len(interactiveModels)+len(cognitionModels))
-	seen := make(map[string]struct{}, len(interactiveModels)+len(cognitionModels))
-
-	for _, modelSet := range [][]config.AgentModelRuntime{interactiveModels, cognitionModels} {
-		for _, model := range modelSet {
-			ref := strings.TrimSpace(model.Ref)
-			if ref == "" {
-				continue
-			}
-			if _, ok := seen[ref]; ok {
-				continue
-			}
-			seen[ref] = struct{}{}
-			out = append(out, model)
-		}
-	}
-
-	return out
+	return refs
 }
