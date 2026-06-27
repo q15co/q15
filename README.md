@@ -246,8 +246,6 @@ providers:
 
 agent:
   name: Q15
-  model: kimi-k2.7-code
-  cognition_model: nemotron-3-ultra
   memory_recent_turns: 6
   tools:
     web_search:
@@ -288,10 +286,13 @@ Notes:
   `meta.yml`; EPUB/PDF ingestion is not part of this path
 - provider discovery is mandatory; provider rosters are the source of truth for available models and
   capabilities
-- `agent.model` is the current interactive model ref; q15 tries it first each turn, then falls
-  through to other eligible models from the live provider roster
-- `agent.cognition_model` is an optional stop-gap current model ref for background cognition jobs
-  until agent-driven model switching lands; when omitted, cognition inherits `agent.model`
+- the interactive and cognition models are NOT in config; they are runtime state. On first run q15
+  auto-selects a first-eligible roster model (preferring a tool-calling model), persists it under
+  `/workspace/.q15/agent/selection.json`, and the agent/user changes it at runtime with
+  `list_providers`, `list_models`, `switch_model`, and `switch_cognition_model`. Switches survive
+  restart.
+- background cognition jobs inherit the interactive model unless `switch_cognition_model` sets a
+  per-job override
 - current inference is intentionally text-first; image-input and tool-calling requirement inference
   land when canonical request signals for those modes are available
 - agent memory lives under `/memory`

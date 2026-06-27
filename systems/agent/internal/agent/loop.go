@@ -21,14 +21,19 @@ const (
 	maxEmptyAssistantRetries         = 3
 )
 
+// SystemTextSource returns dynamic text to append to the base system prompt on
+// each user turn.
+type SystemTextSource func() string
+
 // Loop coordinates model calls, tool execution, and turn persistence.
 type Loop struct {
-	mu          sync.Mutex
-	engine      *Engine
-	store       ConversationStore
-	systemText  string
-	maxTurns    int
-	recentTurns int
+	mu                sync.Mutex
+	engine            *Engine
+	store             ConversationStore
+	systemText        string
+	systemTextSources []SystemTextSource
+	maxTurns          int
+	recentTurns       int
 }
 
 var _ Agent = (*Loop)(nil)
@@ -65,6 +70,29 @@ func NewLoopWithPlanner(
 	store ConversationStore,
 	recentTurns int,
 ) *Loop {
+	return NewLoopWithPlannerAndModelRefSource(
+		modelClient,
+		planner,
+		tools,
+		StaticModelRefSource(modelRefs),
+		systemText,
+		store,
+		recentTurns,
+	)
+}
+
+// NewLoopWithPlannerAndModelRefSource constructs a loop with a dynamic model
+// ref source and optional dynamic system prompt snippets.
+func NewLoopWithPlannerAndModelRefSource(
+	modelClient ModelClient,
+	planner modelselection.Planner,
+	tools ToolRegistry,
+	modelRefSource ModelRefSource,
+	systemText string,
+	store ConversationStore,
+	recentTurns int,
+	systemTextSources ...SystemTextSource,
+) *Loop {
 	systemText = strings.TrimSpace(systemText)
 	if systemText == "" {
 		systemText = DefaultSystemPrompt
@@ -75,14 +103,33 @@ func NewLoopWithPlanner(
 	if planner == nil {
 		planner = modelselection.Passthrough{}
 	}
-	engine := NewEngineWithPlanner(modelClient, planner, tools, modelRefs)
+	engine := NewEngineWithPlannerAndModelRefSource(modelClient, planner, tools, modelRefSource)
 	return &Loop{
-		engine:      engine,
-		store:       store,
-		systemText:  systemText,
-		maxTurns:    engine.maxTurns,
-		recentTurns: recentTurns,
+		engine:            engine,
+		store:             store,
+		systemText:        systemText,
+		systemTextSources: append([]SystemTextSource(nil), systemTextSources...),
+		maxTurns:          engine.maxTurns,
+		recentTurns:       recentTurns,
 	}
+}
+
+func (l *Loop) renderSystemText() string {
+	if l == nil {
+		return DefaultSystemPrompt
+	}
+	parts := []string{l.systemText}
+	for _, source := range l.systemTextSources {
+		if source == nil {
+			continue
+		}
+		text := strings.TrimSpace(source())
+		if text == "" {
+			continue
+		}
+		parts = append(parts, text)
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 func normalizeModelRefs(modelRefs []string) []string {
@@ -145,7 +192,8 @@ func (l *Loop) Reply(
 
 	// Keep the canonical system prefix ordered from most stable to least stable
 	// so providers can reuse cached prefixes across working-memory changes.
-	systemMessages := []conversation.Message{systemMessage(l.systemText)}
+	systemText := l.renderSystemText()
+	systemMessages := []conversation.Message{systemMessage(systemText)}
 	if l.store != nil {
 		if coreStore, ok := l.store.(CoreMemoryStore); ok {
 			coreMemory, err := coreStore.LoadCoreMemory(ctx)
@@ -207,9 +255,10 @@ func (l *Loop) Reply(
 
 	messages = append(messages, copyMessages([]conversation.Message{userMessage})...)
 	result, err := l.engine.Run(ctx, EngineRequest{
-		Messages: messages,
-		UseTools: true,
-		Observer: observer,
+		Messages:         messages,
+		UseTools:         true,
+		SystemTextSource: l.renderSystemText,
+		Observer:         observer,
 	})
 	if err != nil {
 		var stopErr *StopError

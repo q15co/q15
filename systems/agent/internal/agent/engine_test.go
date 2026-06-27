@@ -362,6 +362,52 @@ func TestEngineRun_EmptyAllowedToolsPreservesAllTools(t *testing.T) {
 	}
 }
 
+func TestEngineRunReadsModelRefSourceEachModelTurn(t *testing.T) {
+	refs := []string{"before"}
+	systemText := "before prompt"
+	model := &fakeModelClient{
+		results: []ModelClientResult{
+			toolCallResult("call-1", "switch", `{}`),
+			assistantResult("done"),
+		},
+	}
+	registry, err := NewToolRegistry(&testTool{
+		def: ToolDefinition{Name: "switch"},
+		run: func(context.Context, string) (string, error) {
+			refs = []string{"after"}
+			systemText = "after prompt"
+			return "switched", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewToolRegistry() error = %v", err)
+	}
+
+	engine := NewEngineWithPlannerAndModelRefSource(
+		model,
+		nil,
+		registry,
+		func() []string { return append([]string(nil), refs...) },
+	)
+	if _, err := engine.Run(context.Background(), EngineRequest{
+		Messages:         []conversation.Message{conversation.SystemMessage("prompt")},
+		UseTools:         true,
+		SystemTextSource: func() string { return systemText },
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if got, want := strings.Join(model.callModels, ","), "before,after"; got != want {
+		t.Fatalf("model calls = %v, want %s", model.callModels, want)
+	}
+	if got := messageText(model.callMsgs[0][0]); got != "before prompt" {
+		t.Fatalf("first system prompt = %q, want before prompt", got)
+	}
+	if got := messageText(model.callMsgs[1][0]); got != "after prompt" {
+		t.Fatalf("second system prompt = %q, want after prompt", got)
+	}
+}
+
 func TestEngineRun_AllowedToolsFilterExposedDefinitions(t *testing.T) {
 	var gotTools []ToolDefinition
 	model := &fakeModelClient{

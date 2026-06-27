@@ -36,10 +36,11 @@ Notes:
   `auth.json` bind mount can keep pointing at an old inode after `q15-auth login` atomically
   replaces the host file.
 - In `agent-config.yaml`, provider discovery is mandatory: provider rosters are the source of truth
-  for available models and capabilities. `agent.model` is the current interactive model ref; q15
-  tries it first each turn, then falls through to other eligible models from the live provider
-  roster. `agent.cognition_model` is an optional stop-gap current model ref for background cognition
-  jobs until agent-driven model switching lands; when omitted, cognition inherits `agent.model`.
+  for available models and capabilities. `agent.provider` + `agent.model` seed the current
+  interactive provider/model pair; q15 can list and switch live models at runtime, and otherwise
+  tries the current model first each turn before falling through to other eligible roster models.
+  `agent.cognition_model` is an optional current model ref for background cognition jobs; when
+  omitted, cognition inherits `agent.model`.
 - The checked-in Compose agent config enables Brave Search with
   `agent.tools.web_search.brave_api_key_env: BRAVE_API_KEY`, and the Compose file mounts that
   optional secret as `BRAVE_API_KEY_FILE=/run/q15-secrets/brave_api_key`.
@@ -61,10 +62,12 @@ Provider discovery is **mandatory**: the provider roster IS the model config. Th
 `/api/show`, OpenAI-compatible `/v1/models`), enriches models from [models.dev](https://models.dev),
 and refreshes periodically so roster changes are picked up without restart.
 
-`agent.model` names the current interactive model — the tag-stripped provider model id (e.g.
-`kimi-k2.7-code`). `agent.cognition_model` optionally names the current background-cognition model;
-it defaults to `agent.model` when omitted. Each path tries its configured model first, then falls
-through to other eligible roster models if it's unavailable.
+`agent.name` and `agent.memory_recent_turns` are the only agent fields. The current model is runtime
+state, not config: on first run q15 auto-selects a first-eligible roster model (preferring a
+tool-calling model) and persists it; the agent/user then changes it with `list_providers`,
+`list_models`, `switch_model`, and `switch_cognition_model`. Background cognition jobs inherit the
+interactive model unless `switch_cognition_model` sets a per-job override. Each path tries its model
+first, then falls through to other eligible roster models if it's unavailable.
 
 ```yaml
 providers:
@@ -77,8 +80,7 @@ providers:
       exclude: ["*-embed"]
 agent:
   name: Q15
-  model: kimi-k2.7-code
-  cognition_model: nemotron-3-ultra
+  memory_recent_turns: 6
   ...
 ```
 

@@ -106,6 +106,21 @@ func (r *Registry) Run(ctx context.Context) error {
 	}
 }
 
+// Providers returns the immutable configured provider descriptors. Safe for
+// concurrent use. Provider API keys are intentionally redacted from the copy so
+// callers can safely use this for model-facing summaries.
+func (r *Registry) Providers() []Provider {
+	if r == nil || len(r.providers) == 0 {
+		return nil
+	}
+	out := make([]Provider, len(r.providers))
+	copy(out, r.providers)
+	for i := range out {
+		out[i].APIKey = ""
+	}
+	return out
+}
+
 // Snapshot returns the current flat roster. Safe for concurrent use.
 func (r *Registry) Snapshot() []Model {
 	r.mu.RLock()
@@ -121,8 +136,45 @@ func (r *Registry) Snapshot() []Model {
 func (r *Registry) LookupByRef(ref string) (Model, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	m, ok := r.byRef[ref]
+	m, ok := r.byRef[strings.TrimSpace(ref)]
 	return m, ok
+}
+
+// Lookup finds one model by provider name and agent-side ref. It disambiguates
+// duplicate refs that are hosted by more than one provider.
+func (r *Registry) Lookup(providerName, ref string) (Model, bool) {
+	providerName = strings.TrimSpace(providerName)
+	ref = strings.TrimSpace(ref)
+	if providerName == "" || ref == "" {
+		return Model{}, false
+	}
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, m := range r.snap {
+		if m.ProviderName == providerName && m.Ref == ref {
+			return m, true
+		}
+	}
+	return Model{}, false
+}
+
+// ProviderHasModels reports whether providerName contributed at least one model
+// to the current live roster.
+func (r *Registry) ProviderHasModels(providerName string) bool {
+	providerName = strings.TrimSpace(providerName)
+	if providerName == "" {
+		return false
+	}
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, m := range r.snap {
+		if m.ProviderName == providerName {
+			return true
+		}
+	}
+	return false
 }
 
 // IsEmpty reports whether the current roster has zero models.

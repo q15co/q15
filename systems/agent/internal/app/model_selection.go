@@ -26,7 +26,7 @@ func (r *routedModelAdapter) Plan(
 		if ref == "" {
 			continue
 		}
-		m, ok := r.registry.LookupByRef(ref)
+		m, ok := r.lookupModel(ref)
 		if !ok {
 			plan.Skipped = append(plan.Skipped, modelselection.Skip{
 				Ref:    ref,

@@ -9,49 +9,53 @@ import (
 )
 
 type runtimeEntryPoints struct {
-	modelClient          agent.ModelClient
-	planner              modelselection.Planner
-	tools                agent.ToolRegistry
-	interactiveModelRefs []string
-	cognitionModelRefs   []string
-	interactivePrompt    string
-	interactiveStore     agent.ConversationStore
-	controllerStore      cognition.ControllerStore
-	loader               cognition.ContextLoader
-	recentTurns          int
+	modelClient                agent.ModelClient
+	planner                    modelselection.Planner
+	tools                      agent.ToolRegistry
+	interactiveModelRefSource  agent.ModelRefSource
+	cognitionRefResolver       cognition.ModelRefResolver
+	interactivePrompt          string
+	interactiveSystemTextHints []agent.SystemTextSource
+	interactiveStore           agent.ConversationStore
+	controllerStore            cognition.ControllerStore
+	loader                     cognition.ContextLoader
+	recentTurns                int
 }
 
 type runtimeEntryPointsConfig struct {
-	modelClient          agent.ModelClient
-	planner              modelselection.Planner
-	tools                agent.ToolRegistry
-	interactiveModelRefs []string
-	cognitionModelRefs   []string
-	interactivePrompt    string
-	interactiveStore     agent.ConversationStore
-	controllerStore      cognition.ControllerStore
-	loader               cognition.ContextLoader
-	recentTurns          int
+	modelClient                agent.ModelClient
+	planner                    modelselection.Planner
+	tools                      agent.ToolRegistry
+	interactiveModelRefSource  agent.ModelRefSource
+	cognitionRefResolver       cognition.ModelRefResolver
+	interactivePrompt          string
+	interactiveSystemTextHints []agent.SystemTextSource
+	interactiveStore           agent.ConversationStore
+	controllerStore            cognition.ControllerStore
+	loader                     cognition.ContextLoader
+	recentTurns                int
 }
 
 func newRuntimeEntryPoints(cfg runtimeEntryPointsConfig) *runtimeEntryPoints {
 	if cfg.planner == nil {
 		cfg.planner = modelselection.Passthrough{}
 	}
-	if len(cfg.cognitionModelRefs) == 0 {
-		cfg.cognitionModelRefs = cfg.interactiveModelRefs
-	}
+	interactiveSystemTextHints := append(
+		[]agent.SystemTextSource(nil),
+		cfg.interactiveSystemTextHints...,
+	)
 	return &runtimeEntryPoints{
-		modelClient:          cfg.modelClient,
-		planner:              cfg.planner,
-		tools:                cfg.tools,
-		interactiveModelRefs: append([]string(nil), cfg.interactiveModelRefs...),
-		cognitionModelRefs:   append([]string(nil), cfg.cognitionModelRefs...),
-		interactivePrompt:    strings.TrimSpace(cfg.interactivePrompt),
-		interactiveStore:     cfg.interactiveStore,
-		controllerStore:      cfg.controllerStore,
-		loader:               cfg.loader,
-		recentTurns:          cfg.recentTurns,
+		modelClient:                cfg.modelClient,
+		planner:                    cfg.planner,
+		tools:                      cfg.tools,
+		interactiveModelRefSource:  cfg.interactiveModelRefSource,
+		cognitionRefResolver:       cfg.cognitionRefResolver,
+		interactivePrompt:          strings.TrimSpace(cfg.interactivePrompt),
+		interactiveSystemTextHints: interactiveSystemTextHints,
+		interactiveStore:           cfg.interactiveStore,
+		controllerStore:            cfg.controllerStore,
+		loader:                     cfg.loader,
+		recentTurns:                cfg.recentTurns,
 	}
 }
 
@@ -59,14 +63,15 @@ func (r *runtimeEntryPoints) NewInteractiveAgent() agent.Agent {
 	if r == nil {
 		return nil
 	}
-	return agent.NewLoopWithPlanner(
+	return agent.NewLoopWithPlannerAndModelRefSource(
 		r.modelClient,
 		r.planner,
 		r.tools,
-		r.interactiveModelRefs,
+		r.interactiveModelRefSource,
 		r.interactivePrompt,
 		r.interactiveStore,
 		r.recentTurns,
+		r.interactiveSystemTextHints...,
 	)
 }
 
@@ -74,11 +79,11 @@ func (r *runtimeEntryPoints) NewCognitionRunner() *cognition.Runner {
 	if r == nil {
 		return nil
 	}
-	return cognition.NewRunnerWithPlanner(
+	return cognition.NewRunnerWithResolver(
 		r.modelClient,
 		r.planner,
 		r.tools,
-		r.cognitionModelRefs,
+		r.cognitionRefResolver,
 		r.loader,
 	)
 }

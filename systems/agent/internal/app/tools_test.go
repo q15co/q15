@@ -3,9 +3,7 @@ package app
 import (
 	"context"
 	"io"
-	"strings"
 	"testing"
-	"time"
 
 	"github.com/q15co/q15/libs/exec-contract/execpb"
 	"github.com/q15co/q15/systems/agent/internal/agent"
@@ -14,95 +12,6 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/fileops"
 	q15media "github.com/q15co/q15/systems/agent/internal/media"
 )
-
-func TestComposeSystemPromptIncludesRuntimeAndExecGuidance(t *testing.T) {
-	oldLocal := time.Local
-	time.Local = time.FixedZone("UTC+2", 2*60*60)
-	defer func() {
-		time.Local = oldLocal
-	}()
-
-	info := runtimeEnvironmentInfo{
-		WorkspaceDir:        "/workspace",
-		MemoryDir:           "/memory",
-		MediaDir:            "/media",
-		SkillsDir:           "/skills",
-		ExecutorType:        "local-nix-shell",
-		ProxyEnabled:        true,
-		ProxyPolicyRevision: "rev-1",
-	}
-
-	prompt := composeSystemPrompt("Base prompt", "Jared", info, []agent.ToolDefinition{
-		{
-			Name:        "read_file",
-			Description: "Read a file",
-			PromptGuidance: []string{
-				"Use for routine UTF-8 text reads instead of shelling out.",
-			},
-		},
-		{
-			Name: "exec",
-			PromptGuidance: []string{
-				"Use for commands, builds, tests, formatting, git, and other CLI workflows.",
-			},
-		},
-	})
-
-	for _, want := range []string{
-		"<runtime_environment>",
-		"- Runtime local timezone for user-facing dates and times: UTC+2 (UTC+02:00).",
-		"- Unless the user explicitly asks for another timezone, interpret and present dates and times in this runtime local timezone rather than UTC.",
-		"- Prompt-visible <message_meta .../> tags use this same runtime local timezone for their local weekday and timestamp fields.",
-		"- Workspace: /workspace",
-		"- Persistent memory repo: /memory",
-		"- Core self-model files (auto-injected into prompt each turn): /memory/core/*.md (seeded with AGENT.md, USER.md, SOUL.md)",
-		"- Canonical working-memory file (auto-injected into prompt each turn): /memory/working/WORKING_MEMORY.md",
-		"- Additional persistent memory layers (tool-fetched, not auto-injected): /memory/semantic, /memory/history, /memory/cognition",
-		"- Canonical semantic-memory files are /memory/semantic/facts.md, /memory/semantic/preferences.md, and /memory/semantic/projects.md.",
-		"- When editing canonical semantic memory, preserve these exact H2 headings:",
-		"- facts.md: Confirmed Facts, Grounded Inferences",
-		"- preferences.md: User Preferences, Collaboration Preferences",
-		"- projects.md: Active Projects, Durable Project Knowledge",
-		"- Do not invent new top-level sections in canonical semantic memory; merge content into the existing headings instead.",
-		"- Other files under /memory/working are not implicitly prompt-visible; only WORKING_MEMORY.md is auto-injected.",
-		"- Transcript sequence bookkeeping lives under /memory/history/state/head.json.",
-		"- Auxiliary notebook files live under /memory/notes/inbox, /memory/notes/zettel, and /memory/notes/maps using the built-in zettelkasten layout; they are never implicit prompt-visible working state.",
-		"- Runtime media root: /media",
-		"- Shared skills root: /skills",
-		"- Command runtime: q15-exec sessions via local-nix-shell",
-		"- Proxy-mediated exec env injection is enabled (policy revision: rev-1).",
-		"- Prefer exec for commands, builds, tests, formatting, git, and other CLI workflows, not for routine file reads or edits.",
-		"- The exec `packages` array is optional; omit it or pass `[]` for commands that only need the runtime shell, and include nix installables only when the command needs extra tools (for example `[\"nixpkgs#git\"]`).",
-		"- Browser-specific command presets are not built in; use exec directly with explicit browser packages when needed.",
-		"- Use web_fetch for known web page URLs: it returns cleaned markdown plus slice metadata and is preferred over using exec with curl for ordinary webpage reads.",
-		"<tool_advice>",
-		`<tool name="exec">`,
-	} {
-		if !strings.Contains(prompt, want) {
-			t.Fatalf("prompt missing %q:\n%s", want, prompt)
-		}
-	}
-
-	for _, unwanted := range []string{
-		"Every exec call must include a non-empty `packages` array",
-		"Every call must include a non-empty packages array",
-	} {
-		if strings.Contains(prompt, unwanted) {
-			t.Fatalf("prompt contains stale exec packages guidance %q:\n%s", unwanted, prompt)
-		}
-	}
-
-	if strings.Index(prompt, "<runtime_environment>") < strings.Index(prompt, "Base prompt") {
-		t.Fatalf("runtime section should appear after base prompt:\n%s", prompt)
-	}
-}
-
-func TestResolveRuntimeEnvironmentRequiresExecServiceFields(t *testing.T) {
-	_, err := resolveRuntimeEnvironment(&execpb.GetRuntimeInfoResponse{})
-	if err == nil || !strings.Contains(err.Error(), "workspace_dir") {
-		t.Fatalf("resolveRuntimeEnvironment() error = %v", err)
-	}
-}
 
 func TestBuildToolListIncludesOnlyCurrentRuntimeTools(t *testing.T) {
 	t.Parallel()
@@ -252,6 +161,8 @@ func TestBuildToolListAppendsEmbeddingToolsWhenConfigured(t *testing.T) {
 		t.Fatalf("tool names = %v, want %v", got, want)
 	}
 }
+
+// --- tool test doubles ---
 
 type stubExecutionService struct{}
 

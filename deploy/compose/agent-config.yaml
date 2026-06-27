@@ -8,8 +8,6 @@ providers:
 
 agent:
   name: Q15
-  model: kimi-k2.7-code
-  cognition_model: kimi-k2.7-code
   memory_recent_turns: 6
   tools:
     web_search:

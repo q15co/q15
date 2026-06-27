@@ -71,10 +71,6 @@ func (c Config) validate() error {
 		return errors.New("agent.name is required")
 	}
 
-	if strings.TrimSpace(c.Agent.Model) == "" {
-		return errors.New("agent.model is required (the current model ref)")
-	}
-
 	if strings.TrimSpace(c.Agent.Telegram.Token) == "" &&
 		strings.TrimSpace(c.Agent.Telegram.TokenEnv) == "" {
 		return errors.New("agent.telegram requires token or token_env")
