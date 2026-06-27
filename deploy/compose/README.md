@@ -35,13 +35,11 @@ Notes:
 - `/etc/q15/auth` must be a writable directory mount containing `auth.json`. A single-file
   `auth.json` bind mount can keep pointing at an old inode after `q15-auth login` atomically
   replaces the host file.
-- In `agent-config.yaml`, `agent.models` order defines the deterministic per-turn fallback
-  preference order. q15 filters out models that do not satisfy the currently inferred request
-  requirements before any provider call. Current inference is text-first; image-input and
-  tool-calling requirement inference are staged for the corresponding canonical request signals. The
-  checked-in Compose example uses OpenAI `gpt-5.4` first and Moonshot/Kimi second.
-- `agent.cognition.models` is optional and defines the background-cognition fallback order. If it is
-  omitted, cognition jobs inherit `agent.models`.
+- In `agent-config.yaml`, provider discovery is mandatory: provider rosters are the source of truth
+  for available models and capabilities. `agent.model` is the current interactive model ref; q15
+  tries it first each turn, then falls through to other eligible models from the live provider
+  roster. `agent.cognition_model` is an optional stop-gap current model ref for background cognition
+  jobs until agent-driven model switching lands; when omitted, cognition inherits `agent.model`.
 - The checked-in Compose agent config enables Brave Search with
   `agent.tools.web_search.brave_api_key_env: BRAVE_API_KEY`, and the Compose file mounts that
   optional secret as `BRAVE_API_KEY_FILE=/run/q15-secrets/brave_api_key`.
@@ -63,9 +61,10 @@ Provider discovery is **mandatory**: the provider roster IS the model config. Th
 `/api/show`, OpenAI-compatible `/v1/models`), enriches models from [models.dev](https://models.dev),
 and refreshes periodically so roster changes are picked up without restart.
 
-`agent.model` names the current model — the tag-stripped provider model id (e.g. `kimi-k2.7-code`).
-The agent tries this model first each turn, then falls through to other eligible roster models if
-it's unavailable.
+`agent.model` names the current interactive model — the tag-stripped provider model id (e.g.
+`kimi-k2.7-code`). `agent.cognition_model` optionally names the current background-cognition model;
+it defaults to `agent.model` when omitted. Each path tries its configured model first, then falls
+through to other eligible roster models if it's unavailable.
 
 ```yaml
 providers:
@@ -79,6 +78,7 @@ providers:
 agent:
   name: Q15
   model: kimi-k2.7-code
+  cognition_model: nemotron-3-ultra
   ...
 ```
 

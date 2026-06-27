@@ -48,9 +48,13 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 		return errors.New("telegram token is required")
 	}
 
-	modelRefs := buildModelRefs(rt.CurrentModelRef, registry)
-	if len(modelRefs) == 0 {
+	interactiveModelRefs := buildModelRefs(rt.CurrentModelRef, registry)
+	if len(interactiveModelRefs) == 0 {
 		return errors.New("at least one model is required")
+	}
+	cognitionModelRefs := buildModelRefs(rt.CurrentCognitionModelRef, registry)
+	if len(cognitionModelRefs) == 0 {
+		return errors.New("at least one cognition model is required")
 	}
 
 	executionClient, executionInfo, err := connectExecutionService(ctx, &rt.Execution)
@@ -150,8 +154,8 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 		modelClient:          modelAdapter,
 		planner:              modelAdapter,
 		tools:                toolRegistry,
-		interactiveModelRefs: modelRefs,
-		cognitionModelRefs:   modelRefs,
+		interactiveModelRefs: interactiveModelRefs,
+		cognitionModelRefs:   cognitionModelRefs,
 		interactivePrompt:    systemPrompt,
 		interactiveStore:     store,
 		controllerStore:      store,

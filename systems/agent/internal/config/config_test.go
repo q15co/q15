@@ -57,11 +57,54 @@ agent:
 	if runtime.CurrentModelRef != "kimi-k2.7-code" {
 		t.Fatalf("CurrentModelRef = %q, want kimi-k2.7-code", runtime.CurrentModelRef)
 	}
+	if runtime.CurrentCognitionModelRef != "kimi-k2.7-code" {
+		t.Fatalf(
+			"CurrentCognitionModelRef = %q, want kimi-k2.7-code",
+			runtime.CurrentCognitionModelRef,
+		)
+	}
 	if runtime.Name != "Q15" {
 		t.Fatalf("Name = %q, want Q15", runtime.Name)
 	}
 	if runtime.TelegramToken != "tg-123" {
 		t.Fatalf("TelegramToken = %q, want tg-123", runtime.TelegramToken)
+	}
+}
+
+func TestLoadAgentRuntimeYAMLResolvesCognitionModel(t *testing.T) {
+	t.Setenv("MOONSHOT_API_KEY", "api-123")
+	t.Setenv("Q15_TELEGRAM_TOKEN", "tg-123")
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+providers:
+  - name: moonshot
+    type: openai-compatible
+    base_url: https://api.moonshot.ai/v1
+    key_env: MOONSHOT_API_KEY
+agent:
+  name: Q15
+  model: kimi-k2.7-code
+  cognition_model: nemotron-3-ultra
+  telegram:
+    token_env: Q15_TELEGRAM_TOKEN
+    allowed_user_ids: [123456789]
+`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	runtime, err := LoadAgentRuntime(path)
+	if err != nil {
+		t.Fatalf("LoadAgentRuntime() error = %v", err)
+	}
+	if runtime.CurrentModelRef != "kimi-k2.7-code" {
+		t.Fatalf("CurrentModelRef = %q, want kimi-k2.7-code", runtime.CurrentModelRef)
+	}
+	if runtime.CurrentCognitionModelRef != "nemotron-3-ultra" {
+		t.Fatalf(
+			"CurrentCognitionModelRef = %q, want nemotron-3-ultra",
+			runtime.CurrentCognitionModelRef,
+		)
 	}
 }
 

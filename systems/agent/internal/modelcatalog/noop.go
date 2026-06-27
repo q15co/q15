@@ -2,9 +2,8 @@ package modelcatalog
 
 import "context"
 
-// NoopCatalog returns no models. It is used by callers that want to disable
-// discovery entirely (for example config.ResolveAgentRuntime when no provider
-// enables discovery).
+// NoopCatalog returns no models. It is used by tests or callers that need a
+// minimal Catalog implementation.
 type NoopCatalog struct{}
 
 // Discover implements Catalog by returning no models and no error.

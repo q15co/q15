@@ -42,6 +42,7 @@ type ProviderDiscovery struct {
 type Agent struct {
 	Name              string   `yaml:"name"`
 	Model             string   `yaml:"model"`
+	CognitionModel    string   `yaml:"cognition_model"`
 	MemoryRecentTurns int      `yaml:"memory_recent_turns"`
 	Tools             Tools    `yaml:"tools"`
 	Telegram          Telegram `yaml:"telegram"`
@@ -100,18 +101,20 @@ type EmbeddingsToolRuntime struct {
 }
 
 // AgentRuntime is the resolved runtime config for the configured agent. It
-// carries the non-model runtime bits; model resolution is live via the
-// modelcatalog.Registry at turn time.
+// carries runtime bits plus the static current-model seed refs; model metadata
+// and availability are resolved live via the modelcatalog.Registry at turn
+// time.
 type AgentRuntime struct {
-	Name                   string
-	CurrentModelRef        string
-	WorkspaceLocalDir      string
-	MemoryLocalDir         string
-	MediaLocalDir          string
-	SkillsLocalDir         string
-	MemoryRecentTurns      int
-	Execution              ExecutionRuntime
-	Tools                  ToolsRuntime
-	TelegramToken          string
-	TelegramAllowedUserIDs []int64
+	Name                     string
+	CurrentModelRef          string
+	CurrentCognitionModelRef string
+	WorkspaceLocalDir        string
+	MemoryLocalDir           string
+	MediaLocalDir            string
+	SkillsLocalDir           string
+	MemoryRecentTurns        int
+	Execution                ExecutionRuntime
+	Tools                    ToolsRuntime
+	TelegramToken            string
+	TelegramAllowedUserIDs   []int64
 }

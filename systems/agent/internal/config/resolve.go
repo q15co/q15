@@ -46,15 +46,22 @@ func (c Config) ResolveAgentRuntime() (*AgentRuntime, error) {
 		memoryRecentTurns = defaultMemoryRecentTurns
 	}
 
+	currentModelRef := strings.TrimSpace(agentCfg.Model)
+	currentCognitionModelRef := strings.TrimSpace(agentCfg.CognitionModel)
+	if currentCognitionModelRef == "" {
+		currentCognitionModelRef = currentModelRef
+	}
+
 	return &AgentRuntime{
-		Name:              strings.TrimSpace(agentCfg.Name),
-		CurrentModelRef:   strings.TrimSpace(agentCfg.Model),
-		WorkspaceLocalDir: runtimeWorkspaceLocalDir,
-		MemoryLocalDir:    "/memory",
-		MediaLocalDir:     runtimeMediaLocalDir,
-		SkillsLocalDir:    runtimeSkillsLocalDir,
-		MemoryRecentTurns: memoryRecentTurns,
-		Execution:         ExecutionRuntime{ServiceAddress: runtimeExecutionServiceAddr},
+		Name:                     strings.TrimSpace(agentCfg.Name),
+		CurrentModelRef:          currentModelRef,
+		CurrentCognitionModelRef: currentCognitionModelRef,
+		WorkspaceLocalDir:        runtimeWorkspaceLocalDir,
+		MemoryLocalDir:           "/memory",
+		MediaLocalDir:            runtimeMediaLocalDir,
+		SkillsLocalDir:           runtimeSkillsLocalDir,
+		MemoryRecentTurns:        memoryRecentTurns,
+		Execution:                ExecutionRuntime{ServiceAddress: runtimeExecutionServiceAddr},
 		Tools: ToolsRuntime{
 			WebSearch: WebSearchToolRuntime{
 				BraveAPIKey: braveAPIKey,
