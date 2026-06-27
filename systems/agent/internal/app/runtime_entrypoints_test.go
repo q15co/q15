@@ -161,15 +161,15 @@ func TestRuntimeEntryPointsBuildInteractiveAndCognitionPaths(t *testing.T) {
 	store := &spyRuntimeStore{}
 	model := &fakeModelClient{}
 	entryPoints := newRuntimeEntryPoints(runtimeEntryPointsConfig{
-		modelClient:          model,
-		planner:              modelselection.Passthrough{},
-		interactiveModelRefs: []string{"interactive"},
-		cognitionModelRefs:   []string{"cognition"},
-		interactivePrompt:    "Interactive prompt",
-		interactiveStore:     store,
-		controllerStore:      store,
-		loader:               store,
-		recentTurns:          3,
+		modelClient:               model,
+		planner:                   modelselection.Passthrough{},
+		interactiveModelRefSource: agent.StaticModelRefSource([]string{"interactive"}),
+		cognitionRefResolver:      cognition.ConstantModelRefResolver([]string{"cognition"}),
+		interactivePrompt:         "Interactive prompt",
+		interactiveStore:          store,
+		controllerStore:           store,
+		loader:                    store,
+		recentTurns:               3,
 	})
 
 	interactive := entryPoints.NewInteractiveAgent()
@@ -246,15 +246,15 @@ func TestRuntimeEntryPointsInteractiveReplayUsesCheckpointAwareHistory(t *testin
 	store := &runtimeStore{memory: mem}
 	model := &fakeModelClient{}
 	entryPoints := newRuntimeEntryPoints(runtimeEntryPointsConfig{
-		modelClient:          model,
-		planner:              modelselection.Passthrough{},
-		interactiveModelRefs: []string{"interactive"},
-		cognitionModelRefs:   []string{"cognition"},
-		interactivePrompt:    "Interactive prompt",
-		interactiveStore:     store,
-		controllerStore:      store,
-		loader:               store,
-		recentTurns:          6,
+		modelClient:               model,
+		planner:                   modelselection.Passthrough{},
+		interactiveModelRefSource: agent.StaticModelRefSource([]string{"interactive"}),
+		cognitionRefResolver:      cognition.ConstantModelRefResolver([]string{"cognition"}),
+		interactivePrompt:         "Interactive prompt",
+		interactiveStore:          store,
+		controllerStore:           store,
+		loader:                    store,
+		recentTurns:               6,
 	})
 
 	interactive := entryPoints.NewInteractiveAgent()

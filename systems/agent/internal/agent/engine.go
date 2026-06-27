@@ -11,14 +11,26 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/turnreply"
 )
 
+// ModelRefSource returns the ordered model refs to consider for one model
+// turn.
+type ModelRefSource func() []string
+
+// StaticModelRefSource returns a source that always yields the provided refs.
+func StaticModelRefSource(modelRefs []string) ModelRefSource {
+	refs := normalizeModelRefs(modelRefs)
+	return func() []string {
+		return append([]string(nil), refs...)
+	}
+}
+
 // Engine runs model/tool turns without assuming a user-facing chat turn or
 // transcript persistence strategy.
 type Engine struct {
-	modelClient ModelClient
-	planner     modelselection.Planner
-	tools       ToolRegistry
-	modelRefs   []string
-	maxTurns    int
+	modelClient    ModelClient
+	planner        modelselection.Planner
+	tools          ToolRegistry
+	modelRefSource ModelRefSource
+	maxTurns       int
 }
 
 // EngineRequest describes one engine execution.
@@ -28,6 +40,7 @@ type EngineRequest struct {
 	AllowedTools       []string
 	ToolCallPolicy     ToolCallPolicy
 	RequireToolCalling bool
+	SystemTextSource   SystemTextSource
 	Observer           RunObserver
 }
 
@@ -59,15 +72,35 @@ func NewEngineWithPlanner(
 	tools ToolRegistry,
 	modelRefs []string,
 ) *Engine {
+	return NewEngineWithPlannerAndModelRefSource(
+		modelClient,
+		planner,
+		tools,
+		StaticModelRefSource(modelRefs),
+	)
+}
+
+// NewEngineWithPlannerAndModelRefSource constructs an Engine whose model refs
+// are read from source for each model turn. This lets runtime state changes,
+// such as switch_model, take effect without rebuilding the engine.
+func NewEngineWithPlannerAndModelRefSource(
+	modelClient ModelClient,
+	planner modelselection.Planner,
+	tools ToolRegistry,
+	source ModelRefSource,
+) *Engine {
 	if planner == nil {
 		planner = modelselection.Passthrough{}
 	}
+	if source == nil {
+		source = StaticModelRefSource(nil)
+	}
 	return &Engine{
-		modelClient: modelClient,
-		planner:     planner,
-		tools:       tools,
-		modelRefs:   normalizeModelRefs(modelRefs),
-		maxTurns:    defaultMaxTurns,
+		modelClient:    modelClient,
+		planner:        planner,
+		tools:          tools,
+		modelRefSource: source,
+		maxTurns:       defaultMaxTurns,
 	}
 }
 
@@ -98,6 +131,7 @@ func (e *Engine) Run(ctx context.Context, req EngineRequest) (EngineResult, erro
 
 	for turn := 0; turn < e.maxTurns; turn++ {
 		requestMessages := copyMessages(messages)
+		requestMessages = applySystemTextSource(requestMessages, req.SystemTextSource)
 		if emptyAssistantRetries > 0 {
 			requestMessages = append(
 				requestMessages,
@@ -227,6 +261,31 @@ func (e *Engine) Run(ctx context.Context, req EngineRequest) (EngineResult, erro
 	}, stopErr
 }
 
+func applySystemTextSource(
+	messages []conversation.Message,
+	source SystemTextSource,
+) []conversation.Message {
+	if source == nil {
+		return messages
+	}
+	text := strings.TrimSpace(source())
+	if text == "" {
+		return messages
+	}
+
+	updated := systemMessage(text)
+	for i := range messages {
+		if messages[i].Role == conversation.SystemRole {
+			messages[i] = updated
+			return messages
+		}
+	}
+	out := make([]conversation.Message, 0, len(messages)+1)
+	out = append(out, updated)
+	out = append(out, messages...)
+	return out
+}
+
 func (e *Engine) runTool(
 	ctx context.Context,
 	tools ToolRegistry,
@@ -255,7 +314,8 @@ func (e *Engine) completeWithObserver(
 	turn int,
 	observer RunObserver,
 ) (string, ModelClientResult, error) {
-	if len(e.modelRefs) == 0 {
+	modelRefs := normalizeModelRefs(e.modelRefSource())
+	if len(modelRefs) == 0 {
 		return "", ModelClientResult{}, fmt.Errorf("no models configured")
 	}
 
@@ -267,7 +327,7 @@ func (e *Engine) completeWithObserver(
 		requirements.ToolCalling = true
 	}
 
-	plan, err := e.planner.Plan(e.modelRefs, requirements)
+	plan, err := e.planner.Plan(modelRefs, requirements)
 	if err != nil {
 		return "", ModelClientResult{}, err
 	}

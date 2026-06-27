@@ -39,10 +39,12 @@ type ProviderDiscovery struct {
 }
 
 // Agent defines one configured q15 agent instance.
+//
+// The interactive and cognition models are NOT configured here: they are
+// runtime state, auto-selected from the live roster on first run and then
+// persisted (see internal/selectionstore) so switches survive restart.
 type Agent struct {
 	Name              string   `yaml:"name"`
-	Model             string   `yaml:"model"`
-	CognitionModel    string   `yaml:"cognition_model"`
 	MemoryRecentTurns int      `yaml:"memory_recent_turns"`
 	Tools             Tools    `yaml:"tools"`
 	Telegram          Telegram `yaml:"telegram"`
@@ -101,20 +103,17 @@ type EmbeddingsToolRuntime struct {
 }
 
 // AgentRuntime is the resolved runtime config for the configured agent. It
-// carries runtime bits plus the static current-model seed refs; model metadata
-// and availability are resolved live via the modelcatalog.Registry at turn
-// time.
+// carries runtime bits only; the current model selection is resolved live via
+// the modelcatalog.Registry and persisted via internal/selectionstore.
 type AgentRuntime struct {
-	Name                     string
-	CurrentModelRef          string
-	CurrentCognitionModelRef string
-	WorkspaceLocalDir        string
-	MemoryLocalDir           string
-	MediaLocalDir            string
-	SkillsLocalDir           string
-	MemoryRecentTurns        int
-	Execution                ExecutionRuntime
-	Tools                    ToolsRuntime
-	TelegramToken            string
-	TelegramAllowedUserIDs   []int64
+	Name                   string
+	WorkspaceLocalDir      string
+	MemoryLocalDir         string
+	MediaLocalDir          string
+	SkillsLocalDir         string
+	MemoryRecentTurns      int
+	Execution              ExecutionRuntime
+	Tools                  ToolsRuntime
+	TelegramToken          string
+	TelegramAllowedUserIDs []int64
 }

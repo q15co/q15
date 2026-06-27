@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"sync"
-	"time"
 
 	"github.com/q15co/q15/libs/exec-contract/execpb"
 	"github.com/q15co/q15/systems/agent/internal/agent"
@@ -17,21 +15,16 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/cognition"
 	"github.com/q15co/q15/systems/agent/internal/config"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
-	"github.com/q15co/q15/systems/agent/internal/embed"
-	"github.com/q15co/q15/systems/agent/internal/execution"
 	"github.com/q15co/q15/systems/agent/internal/fileops"
 	q15media "github.com/q15co/q15/systems/agent/internal/media"
 	"github.com/q15co/q15/systems/agent/internal/memory"
 	"github.com/q15co/q15/systems/agent/internal/modelcatalog"
-	"github.com/q15co/q15/systems/agent/internal/provider/ollama"
-	"github.com/q15co/q15/systems/agent/internal/provider/openaicodex"
-	"github.com/q15co/q15/systems/agent/internal/provider/openaicompatible"
-	"github.com/q15co/q15/systems/agent/internal/providertypes"
+	"github.com/q15co/q15/systems/agent/internal/selectionstore"
 	q15skills "github.com/q15co/q15/systems/agent/internal/skills"
-	"github.com/q15co/q15/systems/agent/internal/tools"
-	"github.com/q15co/q15/systems/agent/internal/tools/subagent"
 )
 
+// runtimeEnvironmentInfo is the resolved view of the q15-exec runtime that the
+// prompt and wiring consume.
 type runtimeEnvironmentInfo struct {
 	WorkspaceDir        string
 	MemoryDir           string
@@ -42,20 +35,30 @@ type runtimeEnvironmentInfo struct {
 	ProxyPolicyRevision string
 }
 
+// runBot is the composition root: it builds the selection store, model adapter,
+// tools, system prompt, memory store, cognition controller, and the Telegram
+// channel, then runs the interactive agent and cognition loop until the context
+// is canceled or a worker fails.
 func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.Registry) error {
 	token := strings.TrimSpace(rt.TelegramToken)
 	if token == "" {
 		return errors.New("telegram token is required")
 	}
 
-	interactiveModelRefs := buildModelRefs(rt.CurrentModelRef, registry)
-	if len(interactiveModelRefs) == 0 {
-		return errors.New("at least one model is required")
+	jobs := cognitionJobs()
+	selectionStore, err := selectionstore.Open(selectionstore.DefaultPath(rt.WorkspaceLocalDir))
+	if err != nil {
+		return fmt.Errorf("open model selection store: %w", err)
 	}
-	cognitionModelRefs := buildModelRefs(rt.CurrentCognitionModelRef, registry)
-	if len(cognitionModelRefs) == 0 {
-		return errors.New("at least one cognition model is required")
+	selection, err := loadInteractiveSelection(registry, selectionStore)
+	if err != nil {
+		return err
 	}
+	interactiveModelRefSource := func() []string {
+		return buildModelRefs(selection.CurrentModel(), registry)
+	}
+	cognitionRefResolver := newCognitionRefResolver(registry, selection, selectionStore)
+	cognitionJobTypes := cognitionJobTypeNames(jobs)
 
 	executionClient, executionInfo, err := connectExecutionService(ctx, &rt.Execution)
 	if err != nil {
@@ -71,25 +74,12 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 	if err != nil {
 		return fmt.Errorf("initialize media store for agent %q: %w", rt.Name, err)
 	}
-	modelAdapter, err := newModelAdapter(registry, mediaStore)
+	modelAdapter, err := newModelAdapter(registry, selection, mediaStore)
 	if err != nil {
 		return err
 	}
 
-	skillManager := q15skills.NewManager(q15skills.Settings{
-		WorkspaceLocalDir:   rt.WorkspaceLocalDir,
-		WorkspaceRuntimeDir: runtimeInfo.WorkspaceDir,
-		SkillsLocalDir:      rt.SkillsLocalDir,
-		SkillsRuntimeDir:    runtimeInfo.SkillsDir,
-	})
-	fileSettings := fileops.Settings{
-		WorkspaceLocalDir:   rt.WorkspaceLocalDir,
-		WorkspaceRuntimeDir: runtimeInfo.WorkspaceDir,
-		MemoryLocalDir:      rt.MemoryLocalDir,
-		MemoryRuntimeDir:    runtimeInfo.MemoryDir,
-		SkillsLocalDir:      rt.SkillsLocalDir,
-		SkillsRuntimeDir:    runtimeInfo.SkillsDir,
-	}
+	skillManager, fileSettings := buildSkillManager(rt, runtimeInfo)
 	fileExec := q15skills.NewFileExecutor(fileops.NewExecutor(fileSettings), skillManager)
 	embeddingService, err := newEmbeddingService(ctx, rt, fileSettings)
 	if err != nil {
@@ -98,7 +88,7 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 	if embeddingService != nil {
 		defer embeddingService.Close()
 	}
-	toolList, err := buildToolList(
+	baseToolList, err := buildToolList(
 		executionClient,
 		fileExec,
 		skillManager,
@@ -110,33 +100,25 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 	if err != nil {
 		return fmt.Errorf("configure tools for agent %q: %w", rt.Name, err)
 	}
-	baseToolRegistry, err := agent.NewToolRegistry(toolList...)
+	baseToolRegistry, err := agent.NewToolRegistry(baseToolList...)
 	if err != nil {
 		return fmt.Errorf("build base tool registry for agent %q: %w", rt.Name, err)
 	}
-	subAgentManager := subagent.NewManager(
+	toolRegistry, err := agent.NewToolRegistry(buildRuntimeTools(
+		baseToolList,
 		registry,
-		defaultModelClientFactory,
+		selection,
+		selectionStore,
+		cognitionJobTypes,
 		baseToolRegistry,
 		mediaStore,
-	)
-	toolList = append(
-		toolList,
-		subagent.NewSpawn(subAgentManager),
-		subagent.NewRead(subAgentManager),
-		subagent.NewWrite(subAgentManager),
-		subagent.NewList(subAgentManager),
-		subagent.NewKill(subAgentManager),
-	)
-
-	toolRegistry, err := agent.NewToolRegistry(toolList...)
+	)...)
 	if err != nil {
 		return fmt.Errorf("build tool registry for agent %q: %w", rt.Name, err)
 	}
 
-	systemPrompt := agent.DefaultSystemPromptForName(rt.Name)
-	systemPrompt = composeSystemPrompt(
-		systemPrompt,
+	systemPrompt := composeSystemPrompt(
+		agent.DefaultSystemPromptForName(rt.Name),
 		rt.Name,
 		runtimeInfo,
 		toolRegistry.Definitions(),
@@ -151,27 +133,66 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 		skills: skillManager,
 	}
 	entryPoints := newRuntimeEntryPoints(runtimeEntryPointsConfig{
-		modelClient:          modelAdapter,
-		planner:              modelAdapter,
-		tools:                toolRegistry,
-		interactiveModelRefs: interactiveModelRefs,
-		cognitionModelRefs:   cognitionModelRefs,
-		interactivePrompt:    systemPrompt,
-		interactiveStore:     store,
-		controllerStore:      store,
-		loader:               store,
-		recentTurns:          rt.MemoryRecentTurns,
+		modelClient:               modelAdapter,
+		planner:                   modelAdapter,
+		tools:                     toolRegistry,
+		interactiveModelRefSource: interactiveModelRefSource,
+		cognitionRefResolver:      cognitionRefResolver,
+		interactivePrompt:         systemPrompt,
+		interactiveSystemTextHints: []agent.SystemTextSource{
+			func() string { return renderCurrentModelPrompt(registry, selection, selectionStore) },
+		},
+		interactiveStore: store,
+		controllerStore:  store,
+		loader:           store,
+		recentTurns:      rt.MemoryRecentTurns,
 	})
 	botAgent := entryPoints.NewInteractiveAgent()
-	cognitionController, err := entryPoints.NewCognitionController(cognitionJobs()...)
+	cognitionController, err := entryPoints.NewCognitionController(jobs...)
 	if err != nil {
 		return fmt.Errorf("configure cognition controller for agent %q: %w", rt.Name, err)
 	}
 	if cognitionController != nil {
 		store.AddAppendObserver(cognitionController.NotifyStateChange)
 	}
-	messageBus := bus.New(bus.DefaultBufferSize)
+	return runTelegramLoop(ctx, token, mediaStore, rt, botAgent, cognitionController)
+}
 
+// buildSkillManager constructs the skill manager and the shared file-operation
+// settings used by both the file executor and the embedding service.
+func buildSkillManager(
+	rt config.AgentRuntime,
+	info runtimeEnvironmentInfo,
+) (*q15skills.Manager, fileops.Settings) {
+	skillManager := q15skills.NewManager(q15skills.Settings{
+		WorkspaceLocalDir:   rt.WorkspaceLocalDir,
+		WorkspaceRuntimeDir: info.WorkspaceDir,
+		SkillsLocalDir:      rt.SkillsLocalDir,
+		SkillsRuntimeDir:    info.SkillsDir,
+	})
+	settings := fileops.Settings{
+		WorkspaceLocalDir:   rt.WorkspaceLocalDir,
+		WorkspaceRuntimeDir: info.WorkspaceDir,
+		MemoryLocalDir:      rt.MemoryLocalDir,
+		MemoryRuntimeDir:    info.MemoryDir,
+		SkillsLocalDir:      rt.SkillsLocalDir,
+		SkillsRuntimeDir:    info.SkillsDir,
+	}
+	return skillManager, settings
+}
+
+// runTelegramLoop starts the channel and runs the interactive agent and
+// cognition controller workers, returning when the context is canceled or a
+// worker fails.
+func runTelegramLoop(
+	ctx context.Context,
+	token string,
+	mediaStore q15media.Store,
+	rt config.AgentRuntime,
+	botAgent agent.Agent,
+	cognitionController *cognition.Controller,
+) error {
+	messageBus := bus.New(bus.DefaultBufferSize)
 	channel, err := telegram.NewChannel(token, func(msg telegram.IncomingMessage) {
 		err := messageBus.PublishInbound(ctx, telegramInboundMessage(msg))
 		if err != nil && !errors.Is(err, context.Canceled) {
@@ -210,6 +231,7 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 	}
 }
 
+// cognitionJobs registers the built-in background cognition jobs.
 func cognitionJobs() []cognition.JobRegistration {
 	return []cognition.JobRegistration{
 		cognition.NewVerificationReviewRegistration(),
@@ -218,6 +240,7 @@ func cognitionJobs() []cognition.JobRegistration {
 	}
 }
 
+// telegramInboundMessage adapts a Telegram channel message to the bus shape.
 func telegramInboundMessage(msg telegram.IncomingMessage) bus.InboundMessage {
 	return bus.InboundMessage{
 		Channel:     bus.ChannelTelegram,
@@ -230,337 +253,9 @@ func telegramInboundMessage(msg telegram.IncomingMessage) bus.InboundMessage {
 	}
 }
 
-func buildToolList(
-	execClient execution.Service,
-	fileExec tools.FileToolExecutor,
-	skillManager *q15skills.Manager,
-	fileSettings fileops.Settings,
-	mediaStore q15media.Store,
-	embeddingService *embed.Service,
-	braveAPIKey string,
-) ([]agent.Tool, error) {
-	toolList := []agent.Tool{
-		tools.NewReadFile(fileExec),
-		tools.NewWriteFile(fileExec),
-		tools.NewEditFile(fileExec),
-		tools.NewApplyPatch(fileExec),
-		tools.NewValidateSkill(skillManager),
-		tools.NewExec(execClient),
-		tools.NewExecList(execClient),
-		tools.NewExecRead(execClient),
-		tools.NewExecWrite(execClient),
-		tools.NewExecKill(execClient),
-		tools.NewLoadImage(fileSettings, mediaStore),
-		tools.NewAttachAudio(fileSettings, mediaStore),
-		tools.NewAttachImage(fileSettings, mediaStore),
-		tools.NewWebFetch(),
-	}
-
-	if embeddingService != nil {
-		toolList = append(
-			toolList,
-			tools.NewEmbedSources(embeddingService),
-			tools.NewEmbedSync(embeddingService),
-			tools.NewEmbedSearch(embeddingService),
-			tools.NewEmbedStatus(embeddingService),
-		)
-	}
-
-	braveAPIKey = strings.TrimSpace(braveAPIKey)
-	if braveAPIKey == "" {
-		return toolList, nil
-	}
-
-	webSearchTool, err := tools.NewBraveWebSearch(braveAPIKey)
-	if err != nil {
-		return nil, err
-	}
-	return append(toolList, webSearchTool), nil
-}
-
-func newEmbeddingService(
-	ctx context.Context,
-	rt config.AgentRuntime,
-	fileSettings fileops.Settings,
-) (*embed.Service, error) {
-	tool := rt.Tools.Embeddings
-	if !tool.Enabled {
-		return nil, nil
-	}
-	settings := embed.Settings{
-		WorkspaceLocalDir: fileSettings.WorkspaceLocalDir,
-		MemoryLocalDir:    fileSettings.MemoryLocalDir,
-		SkillsLocalDir:    fileSettings.SkillsLocalDir,
-		QdrantURL:         tool.QdrantURL,
-		GeminiAPIKey:      tool.GeminiAPIKey,
-		Model:             tool.Model,
-		Dimensions:        tool.Dimensions,
-	}
-	state, err := embed.OpenState(ctx, settings)
-	if err != nil {
-		return nil, err
-	}
-	vectors, err := embed.NewQdrantStore(tool.QdrantURL, tool.Dimensions)
-	if err != nil {
-		_ = state.Close()
-		return nil, err
-	}
-	embedder, err := embed.NewGeminiEmbedder(ctx, tool.GeminiAPIKey, tool.Model, tool.Dimensions)
-	if err != nil {
-		_ = state.Close()
-		_ = vectors.Close()
-		return nil, err
-	}
-	return embed.NewService(settings, state, vectors, embedder), nil
-}
-
-func composeSystemPrompt(
-	base string,
-	agentName string,
-	info runtimeEnvironmentInfo,
-	toolDefs []agent.ToolDefinition,
-) string {
-	base = strings.TrimSpace(base)
-	if base == "" {
-		base = agent.DefaultSystemPromptForName(agentName)
-	}
-
-	parts := []string{base}
-	if runtimeSection := renderRuntimeEnvironmentPrompt(agentName, info); runtimeSection != "" {
-		parts = append(parts, runtimeSection)
-	}
-	if toolAdviceSection := renderToolAdvicePrompt(toolDefs); toolAdviceSection != "" {
-		parts = append(parts, toolAdviceSection)
-	}
-	return strings.Join(parts, "\n\n")
-}
-
-func renderRuntimeEnvironmentPrompt(
-	agentName string,
-	info runtimeEnvironmentInfo,
-) string {
-	var lines []string
-	nowLocal := time.Now().In(time.Local)
-	agentName = strings.TrimSpace(agentName)
-	if agentName != "" {
-		lines = append(
-			lines,
-			fmt.Sprintf("- Agent name (authoritative from config): %s", agentName),
-			"- If memory files mention a different agent name, treat that as stale and update those files.",
-		)
-	}
-	lines = append(
-		lines,
-		fmt.Sprintf(
-			"- Runtime local timezone for user-facing dates and times: %s.",
-			describeRuntimeLocalTimezone(nowLocal),
-		),
-		"- Unless the user explicitly asks for another timezone, interpret and present dates and times in this runtime local timezone rather than UTC.",
-		"- Prompt-visible <message_meta .../> tags use this same runtime local timezone for their local weekday and timestamp fields.",
-	)
-	if info.WorkspaceDir != "" {
-		lines = append(
-			lines,
-			fmt.Sprintf(
-				"- Workspace: %s",
-				info.WorkspaceDir,
-			),
-		)
-	}
-	if info.SkillsDir != "" {
-		lines = append(
-			lines,
-			fmt.Sprintf(
-				"- Shared skills root: %s",
-				info.SkillsDir,
-			),
-		)
-	}
-	if info.MemoryDir != "" {
-		lines = append(
-			lines,
-			fmt.Sprintf(
-				"- Persistent memory repo: %s",
-				info.MemoryDir,
-			),
-			fmt.Sprintf(
-				"- Core self-model files (auto-injected into prompt each turn): %s/core/*.md (seeded with AGENT.md, USER.md, SOUL.md)",
-				info.MemoryDir,
-			),
-			fmt.Sprintf(
-				"- Canonical working-memory file (auto-injected into prompt each turn): %s/working/WORKING_MEMORY.md",
-				info.MemoryDir,
-			),
-			fmt.Sprintf(
-				"- Additional persistent memory layers (tool-fetched, not auto-injected): %s/semantic, %s/history, %s/cognition",
-				info.MemoryDir,
-				info.MemoryDir,
-				info.MemoryDir,
-			),
-			fmt.Sprintf(
-				"- Canonical semantic-memory files are %s/semantic/facts.md, %s/semantic/preferences.md, and %s/semantic/projects.md.",
-				info.MemoryDir,
-				info.MemoryDir,
-				info.MemoryDir,
-			),
-			"- When editing canonical semantic memory, preserve these exact H2 headings:",
-			"- facts.md: Confirmed Facts, Grounded Inferences",
-			"- preferences.md: User Preferences, Collaboration Preferences",
-			"- projects.md: Active Projects, Durable Project Knowledge",
-			"- Do not invent new top-level sections in canonical semantic memory; merge content into the existing headings instead.",
-			fmt.Sprintf(
-				"- Other files under %s/working are not implicitly prompt-visible; only WORKING_MEMORY.md is auto-injected.",
-				info.MemoryDir,
-			),
-			fmt.Sprintf(
-				"- Transcript sequence bookkeeping lives under %s/history/state/head.json.",
-				info.MemoryDir,
-			),
-			fmt.Sprintf(
-				"- Auxiliary notebook files live under %s/notes/inbox, %s/notes/zettel, and %s/notes/maps using the built-in zettelkasten layout; they are never implicit prompt-visible working state.",
-				info.MemoryDir,
-				info.MemoryDir,
-				info.MemoryDir,
-			),
-		)
-	}
-	if info.MediaDir != "" {
-		lines = append(
-			lines,
-			fmt.Sprintf("- Runtime media root: %s", info.MediaDir),
-			"- Image inputs are stored in the runtime media root and passed to providers via media refs; do not treat it as a normal text-edit root.",
-		)
-	}
-	if info.ExecutorType != "" {
-		lines = append(
-			lines,
-			fmt.Sprintf("- Command runtime: q15-exec sessions via %s", info.ExecutorType),
-		)
-	}
-	if info.ProxyEnabled {
-		revision := strings.TrimSpace(info.ProxyPolicyRevision)
-		if revision == "" {
-			revision = "present"
-		}
-		lines = append(
-			lines,
-			fmt.Sprintf(
-				"- Proxy-mediated exec env injection is enabled (policy revision: %s).",
-				revision,
-			),
-		)
-	}
-	lines = append(
-		lines,
-		"- Built-in skills are available read-only under `/skills/@builtin/...` via read_file even when no shared skills mount is configured.",
-		"- Shared skills, when configured, are available under `/skills/<name>/...` and may be edited with the normal file tools.",
-		"- Use read_file for routine UTF-8 text reads from the workspace, memory, or skills roots; paths may be relative to the workspace or absolute under `/workspace/...`, `/memory/...`, `/skills/...`, or `/skills/@builtin/...`.",
-		"- Use write_file to create or fully replace UTF-8 text files in the workspace, memory, or shared skills roots.",
-		"- Use edit_file for a single exact text replacement in an existing UTF-8 text file in the workspace, memory, or shared skills roots when you know the current text.",
-		"- Use apply_patch for multi-file or diff-style edits in the workspace, memory, or shared skills roots using the high-level patch envelope.",
-		"- Use validate_skill after creating or updating a skill directory.",
-		"- apply_patch does not accept unified diff, git diff, or context diff syntax. Never send `diff --git`, `--- a/...`, `+++ b/...`, `*** a/...`, `*** b/...`, or bare path lines.",
-		"- apply_patch patches must start with `*** Begin Patch` and end with `*** End Patch`.",
-		"- Inside apply_patch, use exactly one of `*** Add File: PATH`, `*** Delete File: PATH`, or `*** Update File: PATH`. For renames, put `*** Move to: NEW_PATH` immediately after `*** Update File: PATH`.",
-		"- In `*** Add File`, every file-content line must start with `+`.",
-		"- In `*** Update File`, each hunk must start with `@@`, then use a leading space for context lines, `-` for removed lines, and `+` for added lines.",
-		"- Minimal apply_patch example:",
-		"```text\n*** Begin Patch\n*** Update File: /memory/notes/inbox/todo.md\n@@\n unchanged line\n-old value\n+new value\n unchanged tail\n*** End Patch\n```",
-		"- Prefer exec for commands, builds, tests, formatting, git, and other CLI workflows, not for routine file reads or edits.",
-		"- The exec `packages` array is optional; omit it or pass `[]` for commands that only need the runtime shell, and include nix installables only when the command needs extra tools (for example `[\"nixpkgs#git\"]`).",
-		"- Use exec by providing the user command in `command` and optional nix installables in `packages`; the execution service starts a session, streams stdout/stderr internally, and returns when the command exits.",
-		"- Use exec for proxy-authenticated CLI flows such as `gh`, `git`, or `curl` when q15 is deployed with a separate q15-proxy instance.",
-		"- First run may bootstrap nix and fetch package indexes, so network access is required.",
-		"- Browser-specific command presets are not built in; use exec directly with explicit browser packages when needed.",
-	)
-	lines = append(
-		lines,
-		"- Use web_fetch for known web page URLs: it returns cleaned markdown plus slice metadata and is preferred over using exec with curl for ordinary webpage reads.",
-		"- Use web_search for discovering current sources, then use web_fetch on a chosen result URL when you need page contents.",
-	)
-	if len(lines) == 0 {
-		return ""
-	}
-
-	return agent.RenderPromptElement("runtime_environment", nil, strings.Join(lines, "\n"))
-}
-
-func describeRuntimeLocalTimezone(now time.Time) string {
-	locationName := strings.TrimSpace(now.Location().String())
-	zoneName, offsetSeconds := now.Zone()
-	offsetText := formatUTCOffset(offsetSeconds)
-	switch {
-	case locationName != "" &&
-		!strings.EqualFold(locationName, "Local") &&
-		zoneName != "" &&
-		zoneName != locationName:
-		return fmt.Sprintf("%s (%s, %s)", locationName, zoneName, offsetText)
-	case locationName != "" && !strings.EqualFold(locationName, "Local"):
-		return fmt.Sprintf("%s (%s)", locationName, offsetText)
-	case zoneName != "":
-		return fmt.Sprintf("%s (%s)", zoneName, offsetText)
-	default:
-		return offsetText
-	}
-}
-
-func formatUTCOffset(offsetSeconds int) string {
-	sign := "+"
-	if offsetSeconds < 0 {
-		sign = "-"
-		offsetSeconds = -offsetSeconds
-	}
-	hours := offsetSeconds / 3600
-	minutes := (offsetSeconds % 3600) / 60
-	return fmt.Sprintf("UTC%s%02d:%02d", sign, hours, minutes)
-}
-
-func renderToolAdvicePrompt(toolDefs []agent.ToolDefinition) string {
-	if len(toolDefs) == 0 {
-		return ""
-	}
-
-	renderedTools := make([]string, 0, len(toolDefs))
-	for _, tool := range toolDefs {
-		name := strings.TrimSpace(tool.Name)
-		if name == "" || len(tool.PromptGuidance) == 0 {
-			continue
-		}
-
-		lines := make([]string, 0, len(tool.PromptGuidance))
-		seen := make(map[string]struct{}, len(tool.PromptGuidance))
-		for _, line := range tool.PromptGuidance {
-			line = strings.TrimSpace(line)
-			if line == "" {
-				continue
-			}
-			if _, ok := seen[line]; ok {
-				continue
-			}
-			seen[line] = struct{}{}
-			lines = append(lines, "- "+line)
-		}
-		if len(lines) == 0 {
-			continue
-		}
-
-		attrs := map[string]string{"name": name}
-		if desc := strings.TrimSpace(tool.Description); desc != "" {
-			attrs["summary"] = desc
-		}
-		rendered := agent.RenderPromptElement("tool", attrs, strings.Join(lines, "\n"))
-		if rendered == "" {
-			continue
-		}
-		renderedTools = append(renderedTools, rendered)
-	}
-	if len(renderedTools) == 0 {
-		return ""
-	}
-
-	return agent.RenderPromptElement("tool_advice", nil, strings.Join(renderedTools, "\n\n"))
-}
-
+// resolveRuntimeEnvironment converts the q15-exec runtime info response into the
+// runtimeEnvironmentInfo the prompt and wiring consume, validating that all
+// required roots are present.
 func resolveRuntimeEnvironment(
 	info *execpb.GetRuntimeInfoResponse,
 ) (runtimeEnvironmentInfo, error) {
@@ -606,134 +301,4 @@ func resolveRuntimeEnvironment(
 		ProxyEnabled:        info.GetProxyEnabled(),
 		ProxyPolicyRevision: strings.TrimSpace(info.GetProxyPolicyRevision()),
 	}, nil
-}
-
-type routedModelAdapter struct {
-	registry   *modelcatalog.Registry
-	mediaStore q15media.Store
-	factory    modelClientFactory
-	clients    sync.Map // providerName → agent.ModelClient
-}
-
-type modelClientFactory func(modelcatalog.Model, q15media.Store) (agent.ModelClient, error)
-
-var _ agent.ModelClient = (*routedModelAdapter)(nil)
-
-func (r *routedModelAdapter) Complete(
-	ctx context.Context,
-	model string,
-	messages []conversation.Message,
-	tools []agent.ToolDefinition,
-) (agent.ModelClientResult, error) {
-	model = strings.TrimSpace(model)
-	m, ok := r.registry.LookupByRef(model)
-	if !ok {
-		return agent.ModelClientResult{}, fmt.Errorf(
-			"model %q is not in the current roster (provider down or model deprecated)",
-			model,
-		)
-	}
-
-	client, err := r.getOrCreateClient(m)
-	if err != nil {
-		return agent.ModelClientResult{}, err
-	}
-
-	if !m.Capabilities.ToolCalling {
-		tools = nil
-	}
-
-	adapted := q15media.AdaptMediaToCapabilities(
-		messages,
-		mediaSupportFromCaps(m.Capabilities),
-		r.mediaStore,
-	)
-	return client.Complete(ctx, m.ProviderModel, adapted, tools)
-}
-
-func (r *routedModelAdapter) getOrCreateClient(
-	m modelcatalog.Model,
-) (agent.ModelClient, error) {
-	if cached, ok := r.clients.Load(m.ProviderName); ok {
-		return cached.(agent.ModelClient), nil
-	}
-	client, err := r.factory(m, r.mediaStore)
-	if err != nil {
-		return nil, fmt.Errorf("configure provider %q: %w", m.ProviderName, err)
-	}
-	r.clients.Store(m.ProviderName, client)
-	return client, nil
-}
-
-func mediaSupportFromCaps(caps modelcatalog.Capabilities) q15media.Support {
-	return q15media.Support{
-		Image: caps.ImageInput,
-		Audio: caps.AudioInput,
-	}
-}
-
-func newModelAdapter(
-	registry *modelcatalog.Registry,
-	mediaStore q15media.Store,
-) (*routedModelAdapter, error) {
-	return newModelAdapterWithFactory(registry, mediaStore, defaultModelClientFactory)
-}
-
-func newModelAdapterWithFactory(
-	registry *modelcatalog.Registry,
-	mediaStore q15media.Store,
-	clientFactory modelClientFactory,
-) (*routedModelAdapter, error) {
-	if registry == nil {
-		return nil, errors.New("model registry is required")
-	}
-	if clientFactory == nil {
-		return nil, errors.New("model client factory is required")
-	}
-	return &routedModelAdapter{
-		registry:   registry,
-		mediaStore: mediaStore,
-		factory:    clientFactory,
-	}, nil
-}
-
-func defaultModelClientFactory(
-	m modelcatalog.Model,
-	mediaStore q15media.Store,
-) (agent.ModelClient, error) {
-	switch providertypes.MustNormalize(m.ProviderType) {
-	case providertypes.Ollama:
-		return ollama.NewClient(m.ProviderBaseURL, m.ProviderAPIKey, mediaStore)
-	case providertypes.OpenAICompatible:
-		return openaicompatible.NewClient(m.ProviderBaseURL, m.ProviderAPIKey, mediaStore)
-	case providertypes.OpenAICodex:
-		return openaicodex.NewClient(mediaStore)
-	default:
-		return nil, fmt.Errorf("unsupported provider type %q", m.ProviderType)
-	}
-}
-
-// buildModelRefs returns the engine's eligible model-ref list: the current
-// model first, then the remaining roster snapshot refs (deduped). This is the
-// honest, live fallback — if the current model is gone, the engine falls
-// through to other roster models.
-func buildModelRefs(currentRef string, registry *modelcatalog.Registry) []string {
-	currentRef = strings.TrimSpace(currentRef)
-	snapshot := registry.Snapshot()
-
-	refs := make([]string, 0, len(snapshot)+1)
-	seen := make(map[string]struct{}, len(snapshot)+1)
-
-	if currentRef != "" {
-		refs = append(refs, currentRef)
-		seen[currentRef] = struct{}{}
-	}
-	for _, m := range snapshot {
-		if _, ok := seen[m.Ref]; ok {
-			continue
-		}
-		refs = append(refs, m.Ref)
-		seen[m.Ref] = struct{}{}
-	}
-	return refs
 }

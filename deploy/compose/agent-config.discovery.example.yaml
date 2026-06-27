@@ -4,11 +4,13 @@
 # endpoint at startup (and refreshes periodically) to discover available models.
 # There is no hand-typed models: list — the provider roster IS the model config.
 #
-# agent.model names the current interactive model (the tag-stripped provider
-# model id). agent.cognition_model is an optional stop-gap for background
-# cognition jobs until agent-driven model switching lands; it defaults to
-# agent.model when omitted. Each path tries its configured model first, then
-# falls through to other roster models.
+# agent.provider + agent.model seed the current interactive provider/model
+# pair. agent.model is the tag-stripped provider model id. The agent can list
+# and switch live models at runtime with list_providers/list_models/switch_model;
+# switches are persisted and survive restart. Background cognition jobs inherit
+# the interactive model unless switch_cognition_model targets a specific job.
+# Each path tries its configured model first, then falls through to other
+# roster models.
 
 providers:
   - name: ollama-cloud
@@ -20,8 +22,6 @@ providers:
 
 agent:
   name: Q15
-  model: kimi-k2.7-code
-  cognition_model: kimi-k2.7-code
   memory_recent_turns: 6
   tools:
     web_search:

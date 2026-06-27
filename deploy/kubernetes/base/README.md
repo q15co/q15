@@ -34,13 +34,13 @@ The runtime contract is fixed in the binaries. Overlays only need to provide:
 - PVCs named `q15-workspace`, `q15-memory`, `q15-skills`, `q15-exec-nix`, and `q15-proxy-state`
 
 Provider discovery is mandatory: provider rosters are the source of truth for available models and
-capabilities. `agent.model` is the current interactive model ref; q15 tries it first each turn,
-filters out models that do not satisfy the currently inferred request requirements, then falls
-through to other eligible models from the live provider roster. `agent.cognition_model` is an
-optional stop-gap current model ref for background cognition jobs until agent-driven model switching
-lands; when omitted, cognition jobs inherit `agent.model`. Current inference is text-first;
-image-input and tool-calling requirement inference are staged for the corresponding canonical
-request signals.
+capabilities. The interactive and cognition models are runtime state, persisted under
+`/workspace/.q15/agent/selection.json` on the durable `q15-workspace` volume. On first run q15
+auto-selects a first-eligible roster model (preferring a tool-calling model); the agent/user then
+changes it at runtime with `list_providers`, `list_models`, `switch_model`, and
+`switch_cognition_model` (per background cognition job). Switches survive restart. Current inference
+is text-first; image-input and tool-calling requirement inference are staged for the corresponding
+canonical request signals.
 
 `q15-workspace` is the stack's long-term project and working-state PVC. A fresh
 `PersistentVolumeClaim/q15-workspace` may be empty on first deployment; pre-seeding it is optional

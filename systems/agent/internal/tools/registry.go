@@ -13,10 +13,12 @@ import (
 	q15media "github.com/q15co/q15/systems/agent/internal/media"
 	"github.com/q15co/q15/systems/agent/internal/modelcatalog"
 
+	"github.com/q15co/q15/systems/agent/internal/selectionstore"
 	embedtools "github.com/q15co/q15/systems/agent/internal/tools/embed"
 	"github.com/q15co/q15/systems/agent/internal/tools/exec"
 	"github.com/q15co/q15/systems/agent/internal/tools/files"
 	mediatools "github.com/q15co/q15/systems/agent/internal/tools/media"
+	modeltools "github.com/q15co/q15/systems/agent/internal/tools/models"
 	"github.com/q15co/q15/systems/agent/internal/tools/skills"
 	"github.com/q15co/q15/systems/agent/internal/tools/subagent"
 	"github.com/q15co/q15/systems/agent/internal/tools/web"
@@ -88,6 +90,40 @@ func NewAttachImage(paths fileops.Settings, mediaStore q15media.Store) *mediatoo
 // NewValidateSkill delegates to skills.NewValidateSkill.
 func NewValidateSkill(validator skills.SkillValidator) *skills.ValidateSkill {
 	return skills.NewValidateSkill(validator)
+}
+
+// NewListProviders delegates to models.NewListProviders.
+func NewListProviders(
+	registry *modelcatalog.Registry,
+	selection *modelcatalog.Selection,
+) *modeltools.ListProviders {
+	return modeltools.NewListProviders(registry, selection)
+}
+
+// NewListModels delegates to models.NewListModels.
+func NewListModels(
+	registry *modelcatalog.Registry,
+	selection *modelcatalog.Selection,
+) *modeltools.ListModels {
+	return modeltools.NewListModels(registry, selection)
+}
+
+// NewSwitchModel delegates to models.NewSwitchModel.
+func NewSwitchModel(
+	registry *modelcatalog.Registry,
+	selection *modelcatalog.Selection,
+	store *selectionstore.Store,
+) *modeltools.SwitchModel {
+	return modeltools.NewSwitchModel(registry, selection, store)
+}
+
+// NewSwitchCognitionModel delegates to models.NewSwitchCognitionModel.
+func NewSwitchCognitionModel(
+	registry *modelcatalog.Registry,
+	store *selectionstore.Store,
+	jobTypes []string,
+) *modeltools.SwitchCognitionModel {
+	return modeltools.NewSwitchCognitionModel(registry, store, jobTypes)
 }
 
 // NewWebFetch delegates to web.NewFetch.
