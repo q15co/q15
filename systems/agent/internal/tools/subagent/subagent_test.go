@@ -2,6 +2,7 @@ package subagent
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -82,14 +83,10 @@ func TestManagerStartDefaultsToNoTools(t *testing.T) {
 	model := &recordingModel{}
 	manager := newTestManager(t, model)
 
-	session, err := manager.Start(
-		context.Background(),
-		"child",
-		"summarize this",
-		"",
-		nil,
-		0,
-	)
+	session, err := manager.Start(context.Background(), StartRequest{
+		ModelRef: "child",
+		Task:     "summarize this",
+	})
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -229,14 +226,10 @@ func TestManagerStartSendsTaggedProviderModelToClient(t *testing.T) {
 	})
 
 	// deriveRef("gemma3:4b") == "gemma3", so the agent-facing ref is "gemma3".
-	session, err := manager.Start(
-		context.Background(),
-		"gemma3", // agent-facing ref
-		"summarize this",
-		"",
-		nil,
-		0,
-	)
+	session, err := manager.Start(context.Background(), StartRequest{
+		ModelRef: "gemma3", // agent-facing ref
+		Task:     "summarize this",
+	})
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -284,14 +277,10 @@ func TestSessionWriteQueuesFollowUpForRunningSubAgent(t *testing.T) {
 	}
 	manager := newTestManager(t, model)
 
-	session, err := manager.Start(
-		context.Background(),
-		"child",
-		"initial task",
-		"",
-		nil,
-		0,
-	)
+	session, err := manager.Start(context.Background(), StartRequest{
+		ModelRef: "child",
+		Task:     "initial task",
+	})
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -347,7 +336,10 @@ func TestWriteToolRunAppendsMessageToRunningSession(t *testing.T) {
 	}
 	manager := newTestManager(t, model)
 
-	session, err := manager.Start(context.Background(), "child", "initial task", "", nil, 0)
+	session, err := manager.Start(context.Background(), StartRequest{
+		ModelRef: "child",
+		Task:     "initial task",
+	})
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -417,7 +409,10 @@ func TestWriteToolRunRejectsEmptyMessage(t *testing.T) {
 	}
 	manager := newTestManager(t, model)
 
-	session, err := manager.Start(context.Background(), "child", "initial task", "", nil, 0)
+	session, err := manager.Start(context.Background(), StartRequest{
+		ModelRef: "child",
+		Task:     "initial task",
+	})
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -571,6 +566,7 @@ func newTestManagerWithModels(
 		},
 		registry,
 		nil,
+		nil,
 	)
 }
 
@@ -649,4 +645,312 @@ func messagesContainText(messages []conversation.Message, want string) bool {
 		}
 	}
 	return false
+}
+
+// messageText extracts the concatenated text of all text parts in a message.
+func messageText(msg conversation.Message) string {
+	var b strings.Builder
+	for _, part := range msg.Parts {
+		if part.Type == conversation.TextPartType {
+			b.WriteString(part.Text)
+		}
+	}
+	return b.String()
+}
+
+// fakeSkillResolver implements SkillResolver for tests.
+type fakeSkillResolver struct {
+	skills map[string]Skill
+	err    error
+}
+
+func (r *fakeSkillResolver) ResolveSkill(ref string) (Skill, error) {
+	if r.err != nil {
+		return Skill{}, r.err
+	}
+	if skill, ok := r.skills[ref]; ok {
+		return skill, nil
+	}
+	return Skill{}, fmt.Errorf("unknown skill %q", ref)
+}
+
+// newTestManagerWithResolver builds a manager with the given tools and
+// skill resolver.
+func newTestManagerWithResolver(
+	t *testing.T,
+	model agent.ModelClient,
+	tools []agent.Tool,
+	resolver SkillResolver,
+) *Manager {
+	t.Helper()
+	registry, err := agent.NewToolRegistry(tools...)
+	if err != nil {
+		t.Fatalf("NewToolRegistry() error = %v", err)
+	}
+	cat := &fakeCatalog{models: map[string][]modelcatalog.Model{
+		"p": {{ProviderModel: "child", Capabilities: modelcatalog.Capabilities{Text: true}}},
+	}}
+	reg := modelcatalog.New(
+		[]modelcatalog.Provider{{Name: "p", Type: "ollama"}},
+		cat,
+		time.Hour,
+		time.Second,
+	)
+	reg.Refresh(context.Background())
+	return NewManager(
+		reg,
+		func(modelcatalog.Model, q15media.Store) (agent.ModelClient, error) {
+			return model, nil
+		},
+		registry,
+		nil,
+		resolver,
+	)
+}
+
+func TestSpawnRunInjectsSkillBodyAndUnionsTools(t *testing.T) {
+	t.Parallel()
+
+	model := &recordingModel{}
+	resolver := &fakeSkillResolver{skills: map[string]Skill{
+		"demo-skill": {
+			Name:          "demo-skill",
+			Description:   "Demo skill.",
+			Source:        "shared",
+			SkillFilePath: "/skills/demo-skill/SKILL.md",
+			Tools:         []string{"exec", "read_file"},
+			Body:          "# Demo\nFollow this workflow.",
+		},
+	}}
+	manager := newTestManagerWithResolver(
+		t,
+		model,
+		[]agent.Tool{noopTool{name: "read_file"}, noopTool{name: "exec"}},
+		resolver,
+	)
+
+	args := `{"model":"child","task":"do the thing","tools":["read_file"],"skills":["demo-skill"],"wait_seconds":1}`
+	out, err := NewSpawn(manager).Run(context.Background(), args)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	_ = out // session may still be running or done; we care about the model call
+
+	calls := model.snapshotCalls()
+	if len(calls) != 1 {
+		t.Fatalf("model calls = %d, want 1", len(calls))
+	}
+	msg := calls[0]
+	// Base system message + delegated skills system message + user task = 3.
+	if got, want := len(msg), 3; got != want {
+		t.Fatalf("messages = %d, want %d", got, want)
+	}
+	// The delegated skills message must contain the skill body and metadata.
+	delegated := messageText(msg[1])
+	for _, want := range []string{
+		"<delegated_skills>",
+		"<skill",
+		`name="demo-skill"`,
+		`path="/skills/demo-skill/SKILL.md"`,
+		`tools="exec,read_file"`,
+		"# Demo",
+		"Follow this workflow.",
+		"</delegated_skills>",
+	} {
+		if !strings.Contains(delegated, want) {
+			t.Fatalf("delegated skills message missing %q:\n%s", want, delegated)
+		}
+	}
+	// User task message is last.
+	if msg[2].Role != conversation.UserRole {
+		t.Fatalf("last message role = %q, want %q", msg[2].Role, conversation.UserRole)
+	}
+
+	// Tools exposed: explicit tools first (read_file), then skill-only (exec).
+	toolSets := model.snapshotTools()
+	if len(toolSets) != 1 {
+		t.Fatalf("tool sets = %d, want 1", len(toolSets))
+	}
+	exposed := toolSets[0]
+	if len(exposed) != 2 {
+		t.Fatalf("exposed tools = %#v, want 2", exposed)
+	}
+	if exposed[0].Name != "read_file" || exposed[1].Name != "exec" {
+		t.Fatalf("exposed tool order = [%s, %s], want [read_file, exec]",
+			exposed[0].Name, exposed[1].Name)
+	}
+}
+
+func TestSpawnRunNoSkillsPreservesNoToolDefault(t *testing.T) {
+	t.Parallel()
+
+	model := &recordingModel{}
+	manager := newTestManager(t, model)
+
+	args := `{"model":"child","task":"do the thing","wait_seconds":1}`
+	out, err := NewSpawn(manager).Run(context.Background(), args)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	_ = out
+
+	calls := model.snapshotCalls()
+	if len(calls) != 1 {
+		t.Fatalf("model calls = %d, want 1", len(calls))
+	}
+	msg := calls[0]
+	// No skills: exactly base system message + user task (no delegated_skills).
+	if got, want := len(msg), 2; got != want {
+		t.Fatalf("messages = %d, want %d (no skill injection expected)", got, want)
+	}
+	base := messageText(msg[0])
+	if want := "You are a delegated sub-agent. Work only on the provided task. Do not assume access to the parent conversation or private memory."; base != want {
+		t.Fatalf("base system message = %q, want %q", base, want)
+	}
+
+	toolSets := model.snapshotTools()
+	if len(toolSets) != 1 || len(toolSets[0]) != 0 {
+		t.Fatalf("tools exposed = %#v, want none (no-tools default)", toolSets)
+	}
+}
+
+func TestSpawnRunRejectsUnknownSkill(t *testing.T) {
+	t.Parallel()
+
+	model := &recordingModel{}
+	resolver := &fakeSkillResolver{err: fmt.Errorf("skill not found")}
+	manager := newTestManagerWithResolver(
+		t,
+		model,
+		[]agent.Tool{noopTool{name: "read_file"}},
+		resolver,
+	)
+
+	args := `{"model":"child","task":"do the thing","skills":["nope"],"wait_seconds":1}`
+	_, err := NewSpawn(manager).Run(context.Background(), args)
+	if err == nil {
+		t.Fatal("Run() error = nil, want error for unknown skill")
+	}
+	if !strings.Contains(err.Error(), "resolve delegated skill") {
+		t.Fatalf("Run() error = %v, want error containing 'resolve delegated skill'", err)
+	}
+	if len(model.snapshotCalls()) != 0 {
+		t.Fatalf("model should not be called when skill resolution fails")
+	}
+}
+
+func TestSpawnRunRejectsUnavailableDeclaredSkillTool(t *testing.T) {
+	t.Parallel()
+
+	model := &recordingModel{}
+	resolver := &fakeSkillResolver{skills: map[string]Skill{
+		"demo": {
+			Name:  "demo",
+			Tools: []string{"read_file", "web_search"},
+			Body:  "# Demo",
+		},
+	}}
+	// Registry only has read_file, not web_search.
+	manager := newTestManagerWithResolver(
+		t,
+		model,
+		[]agent.Tool{noopTool{name: "read_file"}},
+		resolver,
+	)
+
+	args := `{"model":"child","task":"do the thing","skills":["demo"],"wait_seconds":1}`
+	_, err := NewSpawn(manager).Run(context.Background(), args)
+	if err == nil {
+		t.Fatal("Run() error = nil, want error for unavailable declared tool")
+	}
+	if !strings.Contains(err.Error(), "declares unavailable tool") {
+		t.Fatalf("Run() error = %v, want error about unavailable tool", err)
+	}
+	if !strings.Contains(err.Error(), "web_search") {
+		t.Fatalf("Run() error = %v, want error naming web_search", err)
+	}
+	if len(model.snapshotCalls()) != 0 {
+		t.Fatalf("model should not be called when tool validation fails")
+	}
+}
+
+func TestSpawnRunRejectsSkillsWithoutResolver(t *testing.T) {
+	t.Parallel()
+
+	model := &recordingModel{}
+	manager := newTestManager(t, model)
+
+	args := `{"model":"child","task":"do the thing","skills":["some-skill"],"wait_seconds":1}`
+	_, err := NewSpawn(manager).Run(context.Background(), args)
+	if err == nil {
+		t.Fatal("Run() error = nil, want error when no resolver is configured")
+	}
+	if !strings.Contains(err.Error(), "skill resolver") {
+		t.Fatalf("Run() error = %v, want error about missing skill resolver", err)
+	}
+}
+
+func TestUnionAllowedToolsOrderStableAndDeduped(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		explicit []string
+		skills   []Skill
+		want     []string
+	}{
+		{
+			name:     "both empty returns nil",
+			explicit: nil,
+			skills:   nil,
+			want:     nil,
+		},
+		{
+			name:     "explicit only",
+			explicit: []string{"exec", "read_file"},
+			skills:   nil,
+			want:     []string{"exec", "read_file"},
+		},
+		{
+			name:     "skill only",
+			explicit: nil,
+			skills:   []Skill{{Tools: []string{"read_file", "exec"}}},
+			want:     []string{"read_file", "exec"},
+		},
+		{
+			name:     "explicit first then skill",
+			explicit: []string{"web_fetch"},
+			skills:   []Skill{{Tools: []string{"exec", "read_file"}}},
+			want:     []string{"web_fetch", "exec", "read_file"},
+		},
+		{
+			name:     "dedup across explicit and skill",
+			explicit: []string{"exec"},
+			skills:   []Skill{{Tools: []string{"exec", "read_file"}}},
+			want:     []string{"exec", "read_file"},
+		},
+		{
+			name:     "dedup across multiple skills",
+			explicit: nil,
+			skills: []Skill{
+				{Tools: []string{"exec"}},
+				{Tools: []string{"exec", "read_file"}},
+			},
+			want: []string{"exec", "read_file"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := unionAllowedTools(tt.explicit, tt.skills)
+			if len(got) != len(tt.want) {
+				t.Fatalf("unionAllowedTools() = %#v, want %#v", got, tt.want)
+			}
+			for i, w := range tt.want {
+				if got[i] != w {
+					t.Fatalf("unionAllowedTools()[%d] = %q, want %q", i, got[i], w)
+				}
+			}
+		})
+	}
 }

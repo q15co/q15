@@ -79,6 +79,7 @@ type SkillCatalogEntry struct {
 	Source        string
 	SkillPath     string
 	SkillFilePath string
+	Tools         []string
 }
 
 // SkillCatalogStore can provide a fresh skills catalog for each reply.

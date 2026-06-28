@@ -97,6 +97,7 @@ func (s *runtimeStore) LoadSkillCatalog(ctx context.Context) (agent.SkillCatalog
 			Source:        string(entry.Source),
 			SkillPath:     entry.SkillPath,
 			SkillFilePath: entry.SkillFilePath,
+			Tools:         append([]string(nil), entry.Tools...),
 		})
 	}
 	return agent.SkillCatalog{

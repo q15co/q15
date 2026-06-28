@@ -162,6 +162,7 @@ func NewSubAgentManager(
 	factory subagent.ModelFactory,
 	baseTools agent.ToolRegistry,
 	mediaStore q15media.Store,
+	skillResolver subagent.SkillResolver,
 ) *subagent.Manager {
-	return subagent.NewManager(registry, factory, baseTools, mediaStore)
+	return subagent.NewManager(registry, factory, baseTools, mediaStore, skillResolver)
 }

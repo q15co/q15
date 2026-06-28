@@ -87,6 +87,9 @@ func (v *ValidateSkill) Run(_ context.Context, arguments string) (string, error)
 	if result.SkillFilePath != "" {
 		lines = append(lines, "Skill-File: "+result.SkillFilePath)
 	}
+	if len(result.Tools) > 0 {
+		lines = append(lines, "Tools: "+strings.Join(result.Tools, ", "))
+	}
 	if len(result.Warnings) > 0 {
 		lines = append(lines, "Warnings:")
 		for _, warning := range result.Warnings {

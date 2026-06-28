@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
@@ -28,12 +29,14 @@ func buildRuntimeTools(
 	cognitionJobTypes []string,
 	baseToolRegistry agent.ToolRegistry,
 	mediaStore q15media.Store,
+	skillManager *q15skills.Manager,
 ) []agent.Tool {
 	subAgentManager := subagent.NewManager(
 		registry,
 		defaultModelClientFactory,
 		baseToolRegistry,
 		mediaStore,
+		subagentSkillResolver{manager: skillManager},
 	)
 	return append(
 		baseToolList,
@@ -136,4 +139,32 @@ func newEmbeddingService(
 		return nil, err
 	}
 	return embed.NewService(settings, state, vectors, embedder), nil
+}
+
+// subagentSkillResolver adapts the skills.Manager to the subagent package's
+// SkillResolver interface. It lives in app, where both packages are visible,
+// to avoid an import cycle between internal/skills and internal/tools/subagent.
+type subagentSkillResolver struct {
+	manager *q15skills.Manager
+}
+
+// ResolveSkill implements subagent.SkillResolver by delegating to the skills
+// manager and mapping the result into the subagent package's neutral Skill type.
+func (r subagentSkillResolver) ResolveSkill(ref string) (subagent.Skill, error) {
+	if r.manager == nil {
+		return subagent.Skill{}, fmt.Errorf("skills manager is not configured")
+	}
+	resolved, err := r.manager.ResolveSkill(ref)
+	if err != nil {
+		return subagent.Skill{}, err
+	}
+	return subagent.Skill{
+		Name:          resolved.Name,
+		Description:   resolved.Description,
+		Source:        string(resolved.Source),
+		SkillPath:     resolved.SkillPath,
+		SkillFilePath: resolved.SkillFilePath,
+		Body:          resolved.Body,
+		Tools:         append([]string(nil), resolved.Tools...),
+	}, nil
 }

@@ -1117,6 +1117,7 @@ func TestLoopReply_IncludesSkillCatalogInSeparateSystemMessage(t *testing.T) {
 					Description:   "Create or update skills.",
 					Source:        "builtin",
 					SkillFilePath: "/skills/@builtin/skill-creator/SKILL.md",
+					Tools:         []string{"read_file", "exec"},
 				},
 			},
 			Warnings: []string{"skipping invalid shared skill \"broken\": missing SKILL.md"},
@@ -1137,7 +1138,7 @@ func TestLoopReply_IncludesSkillCatalogInSeparateSystemMessage(t *testing.T) {
 	system := messageText(model.callMsgs[0][1])
 	for _, want := range []string{
 		"<skill_catalog>",
-		`<skill name="skill-creator" path="/skills/@builtin/skill-creator/SKILL.md" source="builtin">`,
+		`<skill name="skill-creator" path="/skills/@builtin/skill-creator/SKILL.md" source="builtin" tools="read_file,exec">`,
 		"Create or update skills.",
 		"<warning>",
 		`skipping invalid shared skill "broken": missing SKILL.md`,
