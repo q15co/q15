@@ -19,6 +19,7 @@ type recordingModel struct {
 	mu       sync.Mutex
 	calls    [][]conversation.Message
 	tools    [][]agent.ToolDefinition
+	models   []string
 	complete func(
 		context.Context,
 		string,
@@ -34,10 +35,10 @@ func (m *recordingModel) Complete(
 	messages []conversation.Message,
 	tools []agent.ToolDefinition,
 ) (agent.ModelClientResult, error) {
-	_ = model
 	m.mu.Lock()
 	m.calls = append(m.calls, conversation.CloneMessages(messages))
 	m.tools = append(m.tools, append([]agent.ToolDefinition(nil), tools...))
+	m.models = append(m.models, model)
 	call := len(m.calls)
 	m.mu.Unlock()
 
@@ -57,6 +58,12 @@ func (m *recordingModel) snapshotTools() [][]agent.ToolDefinition {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return append([][]agent.ToolDefinition(nil), m.tools...)
+}
+
+func (m *recordingModel) snapshotModels() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]string(nil), m.models...)
 }
 
 type noopTool struct {
@@ -120,8 +127,9 @@ func TestMediaAdaptiveClientDocumentsSubagentMediaBehavior(t *testing.T) {
 
 	textOnlyModel := &recordingModel{}
 	textOnlyClient := &mediaAdaptiveClient{
-		inner: textOnlyModel,
-		store: store,
+		inner:         textOnlyModel,
+		store:         store,
+		providerModel: "child",
 	}
 	if _, err := textOnlyClient.Complete(context.Background(), "child", messages, nil); err != nil {
 		t.Fatalf("Complete(text-only) error = %v", err)
@@ -138,9 +146,10 @@ func TestMediaAdaptiveClientDocumentsSubagentMediaBehavior(t *testing.T) {
 
 	visionModel := &recordingModel{}
 	visionClient := &mediaAdaptiveClient{
-		inner:   visionModel,
-		support: q15media.Support{Image: true},
-		store:   store,
+		inner:         visionModel,
+		support:       q15media.Support{Image: true},
+		store:         store,
+		providerModel: "child",
 	}
 	if _, err := visionClient.Complete(context.Background(), "child", messages, nil); err != nil {
 		t.Fatalf("Complete(vision) error = %v", err)
@@ -157,6 +166,96 @@ func TestMediaAdaptiveClientDocumentsSubagentMediaBehavior(t *testing.T) {
 	if messages[0].Parts[1].Type != conversation.ImagePartType ||
 		messages[0].Parts[2].Type != conversation.AudioPartType {
 		t.Fatalf("canonical subagent transcript mutated: %#v", messages[0].Parts)
+	}
+}
+
+// TestMediaAdaptiveClientPassesBoundProviderModel proves the wrapper sends the
+// bound provider-facing model id (full tag) to the inner provider client
+// rather than the engine's agent-facing ref. This is the direct unit-level
+// regression for #127: a tagged Ollama model like "gemma3:4b" must reach the
+// provider API intact.
+func TestMediaAdaptiveClientPassesBoundProviderModel(t *testing.T) {
+	model := &recordingModel{}
+	client := &mediaAdaptiveClient{
+		inner:         model,
+		providerModel: "gemma3:4b",
+	}
+	if _, err := client.Complete(
+		context.Background(),
+		"gemma3", // engine's agent-facing ref — must NOT reach the provider
+		[]conversation.Message{conversation.UserMessage("hello")},
+		nil,
+	); err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
+	models := model.snapshotModels()
+	if len(models) != 1 {
+		t.Fatalf("model calls = %d, want 1", len(models))
+	}
+	if got := models[0]; got != "gemma3:4b" {
+		t.Fatalf("inner client model = %q, want %q (full tagged provider model)", got, "gemma3:4b")
+	}
+}
+
+// TestMediaAdaptiveClientFallsBackToEngineModelWhenUnbound guards the
+// defensive fallback: when providerModel is not set (direct wrapper
+// construction without binding), the incoming engine model is forwarded.
+func TestMediaAdaptiveClientFallsBackToEngineModelWhenUnbound(t *testing.T) {
+	model := &recordingModel{}
+	client := &mediaAdaptiveClient{inner: model}
+	if _, err := client.Complete(
+		context.Background(),
+		"plain-model",
+		[]conversation.Message{conversation.UserMessage("hello")},
+		nil,
+	); err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
+	models := model.snapshotModels()
+	if len(models) != 1 || models[0] != "plain-model" {
+		t.Fatalf("inner client models = %#v, want [plain-model]", models)
+	}
+}
+
+// TestManagerStartSendsTaggedProviderModelToClient is the end-to-end
+// regression for #127. A sub-agent spawned with the agent-facing ref
+// "gemma3" (whose ProviderModel is the tagged "gemma3:4b") must send
+// "gemma3:4b" to the provider client on every completion call. The session
+// model stays the agent-facing ref.
+func TestManagerStartSendsTaggedProviderModelToClient(t *testing.T) {
+	model := &recordingModel{}
+	manager := newTestManagerWithModels(t, model, []modelcatalog.Model{
+		{ProviderModel: "gemma3:4b", Capabilities: modelcatalog.Capabilities{Text: true}},
+	})
+
+	// deriveRef("gemma3:4b") == "gemma3", so the agent-facing ref is "gemma3".
+	session, err := manager.Start(
+		context.Background(),
+		"gemma3", // agent-facing ref
+		"summarize this",
+		"",
+		nil,
+		0,
+	)
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	waitDone(t, session)
+
+	models := model.snapshotModels()
+	if len(models) != 1 {
+		t.Fatalf("model calls = %d, want 1", len(models))
+	}
+	if got := models[0]; got != "gemma3:4b" {
+		t.Fatalf(
+			"provider client received model %q, want %q (full tagged provider model, not the stripped ref)",
+			got,
+			"gemma3:4b",
+		)
+	}
+	// The session model remains the agent-facing ref, not the provider tag.
+	if session.Model != "gemma3" {
+		t.Fatalf("session model = %q, want agent-facing ref %q", session.Model, "gemma3")
 	}
 }
 
@@ -438,13 +537,26 @@ func (m *fakeCatalog) Discover(
 
 func newTestManager(t *testing.T, model agent.ModelClient) *Manager {
 	t.Helper()
+	return newTestManagerWithModels(t, model, []modelcatalog.Model{
+		{ProviderModel: "child", Capabilities: modelcatalog.Capabilities{Text: true}},
+	})
+}
+
+// newTestManagerWithModels builds a sub-agent manager backed by a registry
+// seeded with the given provider models. It allows tests to register tagged
+// models (e.g. ProviderModel: "gemma3:4b") whose agent-facing ref is derived
+// by modelcatalog.deriveRef at refresh time.
+func newTestManagerWithModels(
+	t *testing.T,
+	model agent.ModelClient,
+	providerModels []modelcatalog.Model,
+) *Manager {
+	t.Helper()
 	registry, err := agent.NewToolRegistry(noopTool{name: "read_file"})
 	if err != nil {
 		t.Fatalf("NewToolRegistry() error = %v", err)
 	}
-	cat := &fakeCatalog{models: map[string][]modelcatalog.Model{
-		"p": {{ProviderModel: "child", Capabilities: modelcatalog.Capabilities{Text: true}}},
-	}}
+	cat := &fakeCatalog{models: map[string][]modelcatalog.Model{"p": providerModels}}
 	reg := modelcatalog.New(
 		[]modelcatalog.Provider{{Name: "p", Type: "ollama"}},
 		cat,
