@@ -33,10 +33,16 @@ type ModelFactory func(modelcatalog.Model, q15media.Store) (agent.ModelClient, e
 // the delegated model's capabilities before each completion call. Subagents
 // build a fresh client per Start (unlike the parent's provider-cached client),
 // so the capability is bound here at construction time.
+//
+// providerModel is the provider-facing model identifier (e.g. "gemma3:4b")
+// bound at Start from modelcatalog.Model.ProviderModel. It is passed to the
+// inner provider client on every Complete call instead of the engine's
+// agent-facing ref, so tagged Ollama variants resolve correctly at the API.
 type mediaAdaptiveClient struct {
-	inner   agent.ModelClient
-	support q15media.Support
-	store   q15media.Store
+	inner         agent.ModelClient
+	support       q15media.Support
+	store         q15media.Store
+	providerModel string
 }
 
 func (c *mediaAdaptiveClient) Complete(
@@ -46,7 +52,15 @@ func (c *mediaAdaptiveClient) Complete(
 	tools []agent.ToolDefinition,
 ) (agent.ModelClientResult, error) {
 	adapted := q15media.AdaptMediaToCapabilities(messages, c.support, c.store)
-	return c.inner.Complete(ctx, model, adapted, tools)
+	// Send the bound provider-facing model id (e.g. "gemma3:4b") to the inner
+	// provider client rather than the engine's agent-facing ref (e.g.
+	// "gemma3"). Falling back to the incoming model only when no provider model
+	// was bound keeps direct wrapper construction in tests working.
+	providerModel := c.providerModel
+	if strings.TrimSpace(providerModel) == "" {
+		providerModel = model
+	}
+	return c.inner.Complete(ctx, providerModel, adapted, tools)
 }
 
 // Manager tracks delegated sub-agent sessions.
@@ -130,6 +144,10 @@ func (m *Manager) Start(
 			Audio: modelCfg.Capabilities.AudioInput,
 		},
 		store: m.media,
+		// Provider-facing model id (full tag) so tagged Ollama variants such
+		// as "gemma3:4b" reach the provider API intact. The engine and
+		// session continue to use the agent-facing ref (modelCfg.Ref).
+		providerModel: modelCfg.ProviderModel,
 	}
 	registry := agent.FilterToolRegistry(m.tools, allowedTools)
 	engine := agent.NewEngine(client, registry, []string{modelCfg.Ref})
