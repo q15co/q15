@@ -78,6 +78,9 @@ func injectSkillCatalog(catalog SkillCatalog) (conversation.Message, bool) {
 		if skillFilePath := strings.TrimSpace(entry.SkillFilePath); skillFilePath != "" {
 			attrs["path"] = skillFilePath
 		}
+		if len(entry.Tools) > 0 {
+			attrs["tools"] = strings.Join(entry.Tools, ",")
+		}
 		body := strings.TrimSpace(entry.Description)
 		if body == "" {
 			body = "Available on demand."

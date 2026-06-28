@@ -23,17 +23,24 @@ import (
 
 // DefaultContainerDir and BuiltinNamespace define the container-visible skill roots.
 const (
-	DefaultContainerDir   = "/skills"
-	BuiltinNamespace      = "@builtin"
-	skillFileName         = "SKILL.md"
-	defaultReadLimitLines = 400
-	maxReadLimitLines     = 400
-	maxReadBytes          = 16 * 1024
-	maxDescriptionChars   = 1024
-	maxSkillNameChars     = 63
+	DefaultContainerDir    = "/skills"
+	BuiltinNamespace       = "@builtin"
+	skillFileName          = "SKILL.md"
+	defaultReadLimitLines  = 400
+	maxReadLimitLines      = 400
+	maxReadBytes           = 16 * 1024
+	maxDescriptionChars    = 1024
+	maxSkillNameChars      = 63
+	maxDeclaredToolNameLen = 64
+	maxDeclaredTools       = 32
 )
 
-var skillNameRE = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+var (
+	skillNameRE = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+	// toolNameRE matches declared tool dependency names such as read_file,
+	// web_fetch, attach_audio, exec_start, and subagent_read.
+	toolNameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
+)
 
 //go:embed builtins
 var builtinSkillFS embed.FS
@@ -67,12 +74,27 @@ type Entry struct {
 	Source        Source
 	SkillPath     string
 	SkillFilePath string
+	Tools         []string
 }
 
 // Catalog contains visible skills plus any non-fatal discovery warnings.
 type Catalog struct {
 	Entries  []Entry
 	Warnings []string
+}
+
+// ResolvedSkill is a fully resolved skill, including its stripped SKILL.md
+// body, for delegation to sub-agents. Unlike Entry, it carries the body text
+// so a sub-agent receives the complete workflow without the parent copying
+// the SKILL.md content into the task prompt.
+type ResolvedSkill struct {
+	Name          string
+	Description   string
+	Source        Source
+	SkillPath     string
+	SkillFilePath string
+	Tools         []string
+	Body          string
 }
 
 // ValidationResult contains structured validation output for one skill.
@@ -83,6 +105,7 @@ type ValidationResult struct {
 	Source        Source
 	SkillPath     string
 	SkillFilePath string
+	Tools         []string
 	Warnings      []string
 	Errors        []string
 }
@@ -91,6 +114,7 @@ type metadata struct {
 	Name        string
 	Description string
 	Body        string
+	Tools       []string
 }
 
 // Manager owns skills discovery, validation, and builtin reads.
@@ -186,6 +210,140 @@ func (m *Manager) ValidateSkill(rawPath string) (ValidationResult, error) {
 	}
 }
 
+// ResolveSkill resolves a skill by bare name or container/workspace path and
+// returns its full metadata plus stripped SKILL.md body for delegation. A
+// bare name (no path separator) resolves through the live catalog (builtins
+// and shared skills). Paths resolve through ValidateSkill/resolveFilesystemPath.
+// Invalid or unknown skills return a hard error so a delegation never
+// silently runs without promised instructions.
+func (m *Manager) ResolveSkill(ref string) (ResolvedSkill, error) {
+	if m == nil {
+		return ResolvedSkill{}, fmt.Errorf("skills manager is not configured")
+	}
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return ResolvedSkill{}, fmt.Errorf("skill ref is required")
+	}
+
+	// Bare name: resolve through the catalog (builtins + shared).
+	if !strings.Contains(ref, "/") {
+		for _, entry := range m.LoadCatalog().Entries {
+			if entry.Name != ref {
+				continue
+			}
+			return m.resolveFromEntry(entry)
+		}
+		return ResolvedSkill{}, fmt.Errorf("unknown skill %q", ref)
+	}
+
+	// Path-based ref: use the validation pipeline to resolve and confirm the
+	// skill is well-formed, then read its body from the resolved source.
+	result, err := m.ValidateSkill(ref)
+	if err != nil {
+		return ResolvedSkill{}, err
+	}
+	if !result.Valid {
+		return ResolvedSkill{}, fmt.Errorf("invalid skill %q: %s", ref, joinErrors(result.Errors))
+	}
+	return m.resolveFromResult(result)
+}
+
+// resolveFromEntry reads the body for a catalog entry and builds a ResolvedSkill.
+func (m *Manager) resolveFromEntry(entry Entry) (ResolvedSkill, error) {
+	resolved := ResolvedSkill{
+		Name:          entry.Name,
+		Description:   entry.Description,
+		Source:        entry.Source,
+		SkillPath:     entry.SkillPath,
+		SkillFilePath: entry.SkillFilePath,
+		Tools:         append([]string(nil), entry.Tools...),
+	}
+	body, err := m.readSkillBody(entry.Source, entry.SkillFilePath)
+	if err != nil {
+		return ResolvedSkill{}, err
+	}
+	resolved.Body = body
+	return resolved, nil
+}
+
+// resolveFromResult reads the body for a validated result and builds a
+// ResolvedSkill.
+func (m *Manager) resolveFromResult(result ValidationResult) (ResolvedSkill, error) {
+	resolved := ResolvedSkill{
+		Name:          result.Name,
+		Description:   result.Description,
+		Source:        result.Source,
+		SkillPath:     result.SkillPath,
+		SkillFilePath: result.SkillFilePath,
+		Tools:         append([]string(nil), result.Tools...),
+	}
+	body, err := m.readSkillBody(result.Source, result.SkillFilePath)
+	if err != nil {
+		return ResolvedSkill{}, err
+	}
+	resolved.Body = body
+	return resolved, nil
+}
+
+// readSkillBody reads and strips the SKILL.md body from the appropriate source
+// (embedded builtin FS or host filesystem).
+func (m *Manager) readSkillBody(source Source, skillFilePath string) (string, error) {
+	if source == SourceBuiltin {
+		rel, err := m.resolveBuiltinRelative(skillFilePath)
+		if err != nil {
+			return "", err
+		}
+		meta, errs, _ := readMetadataFromFS(builtinSkillFS, rel)
+		if len(errs) > 0 {
+			return "", fmt.Errorf("read builtin skill body: %s", joinErrors(errs))
+		}
+		return meta.Body, nil
+	}
+
+	// Shared and workspace draft skills live on the host filesystem under the
+	// resolved skill directory.
+	hostDir, err := m.skillFilePathToHostDir(skillFilePath, source)
+	if err != nil {
+		return "", err
+	}
+	meta, errs, _ := readMetadataFromFile(filepath.Join(hostDir, skillFileName))
+	if len(errs) > 0 {
+		return "", fmt.Errorf("read skill body: %s", joinErrors(errs))
+	}
+	return meta.Body, nil
+}
+
+// skillFilePathToHostDir converts a container-visible SkillFilePath back to the
+// host directory that holds the SKILL.md file for filesystem-backed skills.
+func (m *Manager) skillFilePathToHostDir(skillFilePath string, source Source) (string, error) {
+	switch source {
+	case SourceShared:
+		if strings.TrimSpace(m.settings.SkillsLocalDir) == "" {
+			return "", fmt.Errorf("shared skills root is not configured")
+		}
+		rel := strings.TrimPrefix(path.Clean(skillFilePath), m.SkillsDir()+"/")
+		rel = strings.TrimSuffix(rel, "/"+skillFileName)
+		first, _, _ := strings.Cut(rel, "/")
+		if err := validateRelativePath(first); err != nil {
+			return "", err
+		}
+		return filepath.Join(m.settings.SkillsLocalDir, filepath.FromSlash(first)), nil
+	case SourceDraft:
+		if strings.TrimSpace(m.settings.WorkspaceLocalDir) == "" ||
+			strings.TrimSpace(m.settings.WorkspaceRuntimeDir) == "" {
+			return "", fmt.Errorf("workspace root is not configured")
+		}
+		rel := strings.TrimPrefix(path.Clean(skillFilePath), m.settings.WorkspaceRuntimeDir+"/")
+		rel = strings.TrimSuffix(rel, "/"+skillFileName)
+		if err := validateRelativePath(rel); err != nil {
+			return "", err
+		}
+		return filepath.Join(m.settings.WorkspaceLocalDir, filepath.FromSlash(rel)), nil
+	default:
+		return "", fmt.Errorf("unsupported skill source %q", source)
+	}
+}
+
 // ReadBuiltinFile serves one builtin skill file via the read_file pagination
 // contract. The handled return indicates whether the path belongs to the
 // builtin namespace.
@@ -257,6 +415,7 @@ func (m *Manager) loadSharedEntries() ([]Entry, []string) {
 			Source:        SourceShared,
 			SkillPath:     result.SkillPath,
 			SkillFilePath: result.SkillFilePath,
+			Tools:         append([]string(nil), result.Tools...),
 		})
 		for _, warning := range result.Warnings {
 			warnings = append(warnings, fmt.Sprintf("%s: %s", entry.Name(), warning))
@@ -267,8 +426,9 @@ func (m *Manager) loadSharedEntries() ([]Entry, []string) {
 
 func (m *Manager) validateSharedDir(dirName string) ValidationResult {
 	result := ValidationResult{
-		Source:    SourceShared,
-		SkillPath: path.Join(m.SkillsDir(), dirName),
+		Source:        SourceShared,
+		SkillPath:     path.Join(m.SkillsDir(), dirName),
+		SkillFilePath: path.Join(m.SkillsDir(), dirName, skillFileName),
 	}
 	hostDir := filepath.Join(m.settings.SkillsLocalDir, dirName)
 	return m.validateDir(hostDir, result)
@@ -299,6 +459,7 @@ func (m *Manager) validateBuiltin(rawPath string) ValidationResult {
 	result.Warnings = append(result.Warnings, warnings...)
 	result.Name = meta.Name
 	result.Description = meta.Description
+	result.Tools = append([]string(nil), meta.Tools...)
 	if len(result.Errors) == 0 && meta.Name != name {
 		result.Errors = append(
 			result.Errors,
@@ -344,6 +505,7 @@ func (m *Manager) validateDir(hostDir string, result ValidationResult) Validatio
 	result.Warnings = append(result.Warnings, warnings...)
 	result.Name = meta.Name
 	result.Description = meta.Description
+	result.Tools = append([]string(nil), meta.Tools...)
 
 	dirName := filepath.Base(hostDir)
 	if meta.Name != "" && dirName != meta.Name {
@@ -468,6 +630,7 @@ func builtinEntries(skillsDir string) []Entry {
 			Source:        SourceBuiltin,
 			SkillPath:     path.Join(skillsDir, BuiltinNamespace, dirName),
 			SkillFilePath: path.Join(skillsDir, BuiltinNamespace, dirName, skillFileName),
+			Tools:         append([]string(nil), meta.Tools...),
 		})
 	}
 	return out
@@ -579,10 +742,92 @@ func readMetadata(raw []byte) (metadata, []string, []string) {
 	}
 
 	warnings := make([]string, 0)
+	md.Tools, errorsList, warnings = parseToolsField(values, errorsList, warnings)
 	if lineCount(textValue) > 500 {
 		warnings = append(warnings, "SKILL.md exceeds 500 lines; prefer progressive disclosure")
 	}
 	return md, errorsList, warnings
+}
+
+// parseToolsField reads the optional `tools` frontmatter field and returns a
+// stable-deduplicated, first-seen-order slice of validated tool dependency
+// names. The errors and warnings slices are extended in place. An absent field
+// yields nil tools with no warnings or errors.
+func parseToolsField(
+	values map[string]interface{},
+	errorsList []string,
+	warnings []string,
+) ([]string, []string, []string) {
+	raw, present := values["tools"]
+	if !present {
+		return nil, errorsList, warnings
+	}
+	list, ok := raw.([]interface{})
+	if !ok {
+		return nil,
+			append(errorsList, "frontmatter field \"tools\" must be a list of strings"),
+			warnings
+	}
+	if len(list) > maxDeclaredTools {
+		return nil,
+			append(
+				errorsList,
+				fmt.Sprintf("tools must declare <= %d entries", maxDeclaredTools),
+			),
+			warnings
+	}
+	seen := make(map[string]struct{}, len(list))
+	out := make([]string, 0, len(list))
+	for i, item := range list {
+		str, ok := item.(string)
+		if !ok {
+			return nil,
+				append(
+					errorsList,
+					fmt.Sprintf("tools[%d] must be a string", i),
+				),
+				warnings
+		}
+		name := strings.TrimSpace(str)
+		if name == "" {
+			return nil,
+				append(
+					errorsList,
+					fmt.Sprintf("tools[%d] is empty", i),
+				),
+				warnings
+		}
+		if len(name) > maxDeclaredToolNameLen {
+			return nil,
+				append(
+					errorsList,
+					fmt.Sprintf(
+						"tools[%d] must be <= %d characters",
+						i,
+						maxDeclaredToolNameLen,
+					),
+				),
+				warnings
+		}
+		if !toolNameRE.MatchString(name) {
+			return nil,
+				append(
+					errorsList,
+					fmt.Sprintf(
+						"tools[%d] must use lowercase letters, digits, underscores, and hyphens only",
+						i,
+					),
+				),
+				warnings
+		}
+		if _, dup := seen[name]; dup {
+			warnings = append(warnings, fmt.Sprintf("duplicate declared tool %q", name))
+			continue
+		}
+		seen[name] = struct{}{}
+		out = append(out, name)
+	}
+	return out, errorsList, warnings
 }
 
 func normalizeText(raw string) string {

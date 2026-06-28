@@ -21,6 +21,7 @@ func (s *stubSkillValidator) ValidateSkill(path string) (q15skills.ValidationRes
 		Source:        q15skills.SourceDraft,
 		SkillPath:     "/workspace/demo-skill",
 		SkillFilePath: "/workspace/demo-skill/SKILL.md",
+		Tools:         []string{"read_file", "exec"},
 		Warnings:      []string{"SKILL.md exceeds 500 lines; prefer progressive disclosure"},
 		Errors:        []string{"frontmatter field \"description\" is required"},
 	}, nil
@@ -48,6 +49,7 @@ func TestValidateSkillDefinitionAndRun(t *testing.T) {
 		"Source: draft",
 		"Name: demo-skill",
 		"Description: Demo description",
+		"Tools: read_file, exec",
 		"Warnings:",
 		"Errors:",
 	} {

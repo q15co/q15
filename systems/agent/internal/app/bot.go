@@ -112,6 +112,7 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 		cognitionJobTypes,
 		baseToolRegistry,
 		mediaStore,
+		skillManager,
 	)...)
 	if err != nil {
 		return fmt.Errorf("build tool registry for agent %q: %w", rt.Name, err)

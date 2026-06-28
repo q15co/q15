@@ -29,6 +29,39 @@ const (
 // ModelFactory constructs model clients for delegated agents.
 type ModelFactory func(modelcatalog.Model, q15media.Store) (agent.ModelClient, error)
 
+// Skill is a delegated skill whose body and declared tools are injected into a
+// sub-agent at spawn time. The subagent package owns this neutral value type
+// to avoid importing internal/skills; the app layer maps from
+// skills.ResolvedSkill into this type.
+type Skill struct {
+	Name          string
+	Description   string
+	Source        string
+	SkillPath     string
+	SkillFilePath string
+	Body          string
+	Tools         []string
+}
+
+// SkillResolver resolves a skill name or path into a delegated Skill. It is
+// implemented by the app layer and passed into the subagent Manager to avoid
+// an import cycle between internal/skills and internal/tools/subagent.
+type SkillResolver interface {
+	ResolveSkill(ref string) (Skill, error)
+}
+
+// StartRequest holds the parameters for starting a delegated sub-agent
+// session. Using a struct avoids a long, fragile positional parameter list as
+// skill support grows.
+type StartRequest struct {
+	ModelRef     string
+	Task         string
+	ExtraContext string
+	AllowedTools []string
+	Skills       []Skill
+	MaxTurns     int
+}
+
 // mediaAdaptiveClient wraps a ModelClient so that media parts are adapted to
 // the delegated model's capabilities before each completion call. Subagents
 // build a fresh client per Start (unlike the parent's provider-cached client),
@@ -65,13 +98,14 @@ func (c *mediaAdaptiveClient) Complete(
 
 // Manager tracks delegated sub-agent sessions.
 type Manager struct {
-	mu       sync.Mutex
-	sessions map[string]*Session
-	registry *modelcatalog.Registry
-	factory  ModelFactory
-	tools    agent.ToolRegistry
-	media    q15media.Store
-	next     int64
+	mu            sync.Mutex
+	sessions      map[string]*Session
+	registry      *modelcatalog.Registry
+	factory       ModelFactory
+	tools         agent.ToolRegistry
+	media         q15media.Store
+	skillResolver SkillResolver
+	next          int64
 }
 
 // Session stores one delegated sub-agent lifecycle.
@@ -101,37 +135,41 @@ type Event struct {
 }
 
 // NewManager constructs a sub-agent manager backed by the live model registry.
+// A nil skillResolver is valid and preserves the pre-skill behavior (no skill
+// injection possible, but existing spawns work unchanged).
 func NewManager(
 	registry *modelcatalog.Registry,
 	factory ModelFactory,
 	tools agent.ToolRegistry,
 	media q15media.Store,
+	skillResolver SkillResolver,
 ) *Manager {
 	return &Manager{
-		sessions: map[string]*Session{},
-		registry: registry,
-		factory:  factory,
-		tools:    tools,
-		media:    media,
+		sessions:      map[string]*Session{},
+		registry:      registry,
+		factory:       factory,
+		tools:         tools,
+		media:         media,
+		skillResolver: skillResolver,
 	}
 }
 
 // Start creates and runs a delegated sub-agent session.
-func (m *Manager) Start(
-	ctx context.Context,
-	modelRef, task, extraContext string,
-	allowedTools []string,
-	maxTurns int,
-) (*Session, error) {
+func (m *Manager) Start(ctx context.Context, req StartRequest) (*Session, error) {
 	if m == nil {
 		return nil, fmt.Errorf("subagent manager is not configured")
 	}
-	modelCfg, ok := m.registry.LookupByRef(strings.TrimSpace(modelRef))
+	modelRef := strings.TrimSpace(req.ModelRef)
+	modelCfg, ok := m.registry.LookupByRef(modelRef)
 	if !ok {
 		return nil, fmt.Errorf("unknown subagent model %q", modelRef)
 	}
-	if strings.TrimSpace(task) == "" {
+	if strings.TrimSpace(req.Task) == "" {
 		return nil, fmt.Errorf("task is required")
+	}
+	skills := req.Skills
+	if err := m.validateSkillToolsAvailable(skills); err != nil {
+		return nil, err
 	}
 	client, err := m.factory(modelCfg, m.media)
 	if err != nil {
@@ -149,19 +187,27 @@ func (m *Manager) Start(
 		// session continue to use the agent-facing ref (modelCfg.Ref).
 		providerModel: modelCfg.ProviderModel,
 	}
+	// allowedTools governs WHICH tools the sub-agent may use (membership and
+	// intended precedence: explicit first, then skill-declared). The emitted
+	// definition ORDER sent to the model follows base-registry order, since
+	// FilterToolRegistry iterates the base registry.
+	allowedTools := unionAllowedTools(req.AllowedTools, skills)
 	registry := agent.FilterToolRegistry(m.tools, allowedTools)
 	engine := agent.NewEngine(client, registry, []string{modelCfg.Ref})
-	engine.SetMaxTurns(maxTurns)
-	msg := strings.TrimSpace(task)
-	if strings.TrimSpace(extraContext) != "" {
-		msg += "\n\nContext:\n" + strings.TrimSpace(extraContext)
+	engine.SetMaxTurns(req.MaxTurns)
+	msg := strings.TrimSpace(req.Task)
+	if strings.TrimSpace(req.ExtraContext) != "" {
+		msg += "\n\nContext:\n" + strings.TrimSpace(req.ExtraContext)
 	}
 	messages := []conversation.Message{
 		conversation.SystemMessage(
 			"You are a delegated sub-agent. Work only on the provided task. Do not assume access to the parent conversation or private memory.",
 		),
-		conversation.UserMessage(msg),
 	}
+	if injected, ok := renderDelegatedSkills(skills); ok {
+		messages = append(messages, conversation.SystemMessage(injected))
+	}
+	messages = append(messages, conversation.UserMessage(msg))
 	childCtx, cancel := context.WithCancel(ctx)
 	m.mu.Lock()
 	m.next++
@@ -169,7 +215,7 @@ func (m *Manager) Start(
 	s := &Session{
 		ID:        id,
 		Model:     modelCfg.Ref,
-		Task:      task,
+		Task:      req.Task,
 		Status:    "running",
 		CreatedAt: time.Now(),
 		messages:  messages,
@@ -357,6 +403,7 @@ func (t *Spawn) Definition() agent.ToolDefinition {
 			"Use a vision-capable model when delegating analysis of media refs such as media://sha256/... attachments.",
 			"Default tools allowlist is empty; explicitly grant only needed tools.",
 			"Give the sub-agent full /workspace/... paths for files in packages whose names collide with runtime roots (memory, skills); /memory and /skills are persistent runtime roots, not Go package paths.",
+			"When delegating a skill by name or path, pass it via `skills`; its instructions are injected automatically and its declared tools are granted without listing them in `tools`.",
 		},
 		Parameters: map[string]any{
 			"type": "object",
@@ -367,6 +414,11 @@ func (t *Spawn) Definition() agent.ToolDefinition {
 				"tools": map[string]any{
 					"type":  "array",
 					"items": map[string]string{"type": "string"},
+				},
+				"skills": map[string]any{
+					"type":        "array",
+					"description": "Skill names or skill paths to inject into the delegated sub-agent",
+					"items":       map[string]string{"type": "string"},
 				},
 				"wait_seconds": map[string]any{
 					"type":    "integer",
@@ -387,13 +439,25 @@ func (t *Spawn) Run(ctx context.Context, args string) (string, error) {
 	var a struct {
 		Model, Task, Context string
 		Tools                []string `json:"tools"`
+		Skills               []string `json:"skills"`
 		Wait                 *int     `json:"wait_seconds"`
 		MaxTurns             int      `json:"max_turns"`
 	}
 	if err := json.Unmarshal([]byte(args), &a); err != nil {
 		return "", fmt.Errorf("invalid arguments JSON: %w", err)
 	}
-	s, err := t.manager.Start(ctx, a.Model, a.Task, a.Context, a.Tools, a.MaxTurns)
+	skills, err := t.manager.resolveSkillRefs(a.Skills)
+	if err != nil {
+		return "", err
+	}
+	s, err := t.manager.Start(ctx, StartRequest{
+		ModelRef:     a.Model,
+		Task:         a.Task,
+		ExtraContext: a.Context,
+		AllowedTools: a.Tools,
+		Skills:       skills,
+		MaxTurns:     a.MaxTurns,
+	})
 	if err != nil {
 		return "", err
 	}
@@ -611,6 +675,163 @@ func (t *Kill) Run(_ context.Context, args string) (string, error) {
 	}
 	s.Kill()
 	return fmt.Sprintf("Session-ID: %s\nStatus: %s", s.ID, s.Status), nil
+}
+
+// resolveSkillRefs resolves skill name/path refs from the spawn tool into
+// delegated Skill values using the configured SkillResolver.
+func (m *Manager) resolveSkillRefs(refs []string) ([]Skill, error) {
+	if len(refs) == 0 {
+		return nil, nil
+	}
+	if m.skillResolver == nil {
+		return nil, fmt.Errorf(
+			"skill delegation is not configured: no skill resolver available",
+		)
+	}
+	resolved := make([]Skill, 0, len(refs))
+	for _, ref := range refs {
+		ref = strings.TrimSpace(ref)
+		if ref == "" {
+			return nil, fmt.Errorf("skill ref is empty")
+		}
+		skill, err := m.skillResolver.ResolveSkill(ref)
+		if err != nil {
+			return nil, fmt.Errorf("resolve delegated skill %q: %w", ref, err)
+		}
+		resolved = append(resolved, skill)
+	}
+	return resolved, nil
+}
+
+// unionAllowedTools merges explicit tools (parent intent, first) with
+// skill-declared tools (in skills-list order, then each skill's Tools order).
+// The result is deduplicated in first-seen order. If both inputs are empty the
+// return value is nil so agent.FilterToolRegistry still exposes zero tools
+// (preserving the no-tools default).
+func unionAllowedTools(explicit []string, skills []Skill) []string {
+	var count int
+	for _, name := range explicit {
+		if strings.TrimSpace(name) != "" {
+			count++
+		}
+	}
+	for _, skill := range skills {
+		count += len(skill.Tools)
+	}
+	if count == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, count)
+	out := make([]string, 0, count)
+	add := func(name string) {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return
+		}
+		if _, dup := seen[name]; dup {
+			return
+		}
+		seen[name] = struct{}{}
+		out = append(out, name)
+	}
+	for _, name := range explicit {
+		add(name)
+	}
+	for _, skill := range skills {
+		for _, name := range skill.Tools {
+			add(name)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// validateSkillToolsAvailable checks that every tool declared by a delegated
+// skill is registered in the live tool registry. This catches declared
+// dependencies that cannot be satisfied by the current deployment at spawn
+// time, when the registry is known. Explicit tools are not validated here
+// (existing behavior allows unknown explicit names to pass through).
+func (m *Manager) validateSkillToolsAvailable(skills []Skill) error {
+	if len(skills) == 0 {
+		return nil
+	}
+	if m.tools == nil {
+		for _, skill := range skills {
+			if len(skill.Tools) > 0 {
+				return fmt.Errorf(
+					"tool registry not configured; cannot validate declared tools for delegated skill %q",
+					skill.Name,
+				)
+			}
+		}
+		return nil
+	}
+	available := make(map[string]struct{})
+	for _, def := range m.tools.Definitions() {
+		name := strings.TrimSpace(def.Name)
+		if name != "" {
+			available[name] = struct{}{}
+		}
+	}
+	for _, skill := range skills {
+		for _, declared := range skill.Tools {
+			declared = strings.TrimSpace(declared)
+			if declared == "" {
+				continue
+			}
+			if _, ok := available[declared]; !ok {
+				return fmt.Errorf(
+					"delegated skill %q declares unavailable tool %q",
+					skill.Name,
+					declared,
+				)
+			}
+		}
+	}
+	return nil
+}
+
+// renderDelegatedSkills renders one or more delegated skill bodies into a
+// single <delegated_skills> system prompt block. Returns ok=false when there
+// are no skills to inject (preserving the pre-skill message layout).
+func renderDelegatedSkills(skills []Skill) (string, bool) {
+	if len(skills) == 0 {
+		return "", false
+	}
+	parts := make([]string, 0, len(skills))
+	for _, skill := range skills {
+		attrs := map[string]string{
+			"name": skill.Name,
+		}
+		if strings.TrimSpace(skill.Source) != "" {
+			attrs["source"] = skill.Source
+		}
+		if path := strings.TrimSpace(skill.SkillFilePath); path != "" {
+			attrs["path"] = path
+		}
+		if len(skill.Tools) > 0 {
+			attrs["tools"] = strings.Join(skill.Tools, ",")
+		}
+		body := strings.TrimSpace(skill.Body)
+		if body == "" {
+			body = strings.TrimSpace(skill.Description)
+		}
+		rendered := agent.RenderPromptElement("skill", attrs, body)
+		if rendered == "" {
+			continue
+		}
+		parts = append(parts, rendered)
+	}
+	if len(parts) == 0 {
+		return "", false
+	}
+	return agent.RenderPromptElement(
+		"delegated_skills",
+		nil,
+		strings.Join(parts, "\n\n"),
+	), true
 }
 
 type workspaceOnlyPolicy struct{}
