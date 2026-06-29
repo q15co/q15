@@ -705,7 +705,8 @@ func TestStoreAppendAndLoadRecentMessagesWithImageParts(t *testing.T) {
 	if len(got) != len(want) {
 		t.Fatalf("LoadRecentMessages len = %d, want %d", len(got), len(want))
 	}
-	if got[0].Parts[1].Type != conversation.ImagePartType ||
+	if got[0].Parts[1].Type != conversation.MediaPartType ||
+		got[0].Parts[1].MediaKind != conversation.MediaKindImage ||
 		got[0].Parts[1].MediaRef != "media://sha256/abc" {
 		t.Fatalf("replayed image part = %#v", got[0].Parts[1])
 	}
@@ -749,7 +750,8 @@ func TestStoreAppendTurnPreservesAssistantOwnedAttachments(t *testing.T) {
 		t.Fatalf("replayed tool parts = %#v, want tool_result only", toolParts)
 	}
 	if final := got[3]; len(final.Parts) != 2 ||
-		final.Parts[1].Type != conversation.ImagePartType ||
+		final.Parts[1].Type != conversation.MediaPartType ||
+		final.Parts[1].MediaKind != conversation.MediaKindImage ||
 		final.Parts[1].MediaRef != "media://sha256/cat" {
 		t.Fatalf("replayed final assistant = %#v, want text plus image", final)
 	}
@@ -805,11 +807,13 @@ func TestStoreAppendTurnDoesNotReDeriveDeliveryFromToolMessages(t *testing.T) {
 	// Both tool messages keep their images (no promotion); the assistant reply
 	// stays text-only.
 	if previewParts := got[2].Parts; len(previewParts) != 2 ||
-		previewParts[1].Type != conversation.ImagePartType {
+		previewParts[1].Type != conversation.MediaPartType ||
+		previewParts[1].MediaKind != conversation.MediaKindImage {
 		t.Fatalf("preview tool parts = %#v, want tool_result plus image retained", previewParts)
 	}
 	if finalToolParts := got[4].Parts; len(finalToolParts) != 2 ||
-		finalToolParts[1].Type != conversation.ImagePartType {
+		finalToolParts[1].Type != conversation.MediaPartType ||
+		finalToolParts[1].MediaKind != conversation.MediaKindImage {
 		t.Fatalf("final tool parts = %#v, want tool_result plus image retained", finalToolParts)
 	}
 	if final := got[5]; len(final.Parts) != 1 ||
@@ -911,11 +915,11 @@ func TestStoreInitMigratesLegacyTurnsToCurrentSchemaAndSynchronizesHead(t *testi
 	if err := store.Init(context.Background()); err != nil {
 		t.Fatalf("Init() error = %v", err)
 	}
-	if committer.lastMessage != "memory: upgrade transcript history to v3" {
+	if committer.lastMessage != "memory: upgrade transcript history to v4" {
 		t.Fatalf(
 			"commit message = %q, want %q",
 			committer.lastMessage,
-			"memory: upgrade transcript history to v3",
+			"memory: upgrade transcript history to v4",
 		)
 	}
 
@@ -1084,11 +1088,11 @@ func TestStoreInitQuarantinesUnreadableLegacyTurns(t *testing.T) {
 	if err := store.Init(context.Background()); err != nil {
 		t.Fatalf("Init() error = %v", err)
 	}
-	if committer.lastMessage != "memory: upgrade transcript history to v3" {
+	if committer.lastMessage != "memory: upgrade transcript history to v4" {
 		t.Fatalf(
 			"commit message = %q, want %q",
 			committer.lastMessage,
-			"memory: upgrade transcript history to v3",
+			"memory: upgrade transcript history to v4",
 		)
 	}
 	if _, err := os.Stat(legacyPath); !os.IsNotExist(err) {
@@ -1153,11 +1157,11 @@ func TestStoreInitSanitizesExistingV2TurnsIntoCurrentSchema(t *testing.T) {
 	if err := store.Init(context.Background()); err != nil {
 		t.Fatalf("Init() error = %v", err)
 	}
-	if committer.lastMessage != "memory: upgrade transcript history to v3" {
+	if committer.lastMessage != "memory: upgrade transcript history to v4" {
 		t.Fatalf(
 			"commit message = %q, want %q",
 			committer.lastMessage,
-			"memory: upgrade transcript history to v3",
+			"memory: upgrade transcript history to v4",
 		)
 	}
 
@@ -1232,7 +1236,8 @@ func TestStoreInitKeepsVisionImageOnToolMessageOnLoad(t *testing.T) {
 	}
 	// The vision image stays on the tool message for model inspection.
 	if toolParts := turn.Messages[2].Parts; len(toolParts) != 2 ||
-		toolParts[1].Type != conversation.ImagePartType ||
+		toolParts[1].Type != conversation.MediaPartType ||
+		toolParts[1].MediaKind != conversation.MediaKindImage ||
 		toolParts[1].MediaRef != "media://sha256/cat" {
 		t.Fatalf("tool parts = %#v, want tool_result plus retained vision image", toolParts)
 	}
@@ -1240,6 +1245,67 @@ func TestStoreInitKeepsVisionImageOnToolMessageOnLoad(t *testing.T) {
 	if final := turn.Messages[3]; len(final.Parts) != 1 ||
 		final.Parts[0].Type != conversation.TextPartType {
 		t.Fatalf("final assistant = %#v, want text-only (no promotion)", final)
+	}
+}
+
+func TestStoreInitMigratesLegacyV3MediaPartsToFlatModel(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "memory")
+	turnPath := filepath.Join(
+		root,
+		"history",
+		"turns",
+		"2026",
+		"06",
+		"28",
+		"00000000000000000006.json",
+	)
+	if err := os.MkdirAll(filepath.Dir(turnPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	// A v3 turn persisted with legacy first-class image/audio part types.
+	// Migration must rewrite them to MediaPartType + MediaKind before
+	// sanitization drops them as unknown types.
+	legacy := `{
+		"schema_version": 3,
+		"id": "turn-00000000000000000006",
+		"seq": 6,
+		"created_at": "2026-06-28T12:00:00Z",
+		"messages": [
+			{"role": "user", "parts": [
+				{"type": "text", "text": "see and hear"},
+				{"type": "image", "media_ref": "media://sha256/img"},
+				{"type": "audio", "media_ref": "media://sha256/aud"}
+			]}
+		]
+	}`
+	if err := os.WriteFile(turnPath, []byte(legacy), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	store := NewStore(root, "Jared", &fakeCommitter{})
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	turn, err := store.readTurn(turnPath)
+	if err != nil {
+		t.Fatalf("readTurn() error = %v", err)
+	}
+	if turn.SchemaVersion != conversation.SchemaVersion {
+		t.Fatalf("SchemaVersion = %d, want %d", turn.SchemaVersion, conversation.SchemaVersion)
+	}
+	parts := turn.Messages[0].Parts
+	if len(parts) != 3 {
+		t.Fatalf("parts len = %d, want 3", len(parts))
+	}
+	if !parts[1].IsMedia(conversation.MediaKindImage) ||
+		parts[1].MediaRef != "media://sha256/img" {
+		t.Fatalf("image part = %#v, want media/image migrated", parts[1])
+	}
+	if !parts[2].IsMedia(conversation.MediaKindAudio) ||
+		parts[2].MediaRef != "media://sha256/aud" {
+		t.Fatalf("audio part = %#v, want media/audio migrated", parts[2])
 	}
 }
 
@@ -1286,11 +1352,11 @@ func TestStoreInitBackfillsReplayOnlyReasoningForExistingToolReplay(t *testing.T
 	if err := store.Init(context.Background()); err != nil {
 		t.Fatalf("Init() error = %v", err)
 	}
-	if committer.lastMessage != "memory: upgrade transcript history to v3" {
+	if committer.lastMessage != "memory: upgrade transcript history to v4" {
 		t.Fatalf(
 			"commit message = %q, want %q",
 			committer.lastMessage,
-			"memory: upgrade transcript history to v3",
+			"memory: upgrade transcript history to v4",
 		)
 	}
 

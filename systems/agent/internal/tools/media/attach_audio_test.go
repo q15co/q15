@@ -48,7 +48,8 @@ func TestAttachAudioRegistersAudioAndReturnsAttachment(t *testing.T) {
 	if !strings.Contains(result.Output, "Attached audio: /workspace/out.ogg") {
 		t.Fatalf("Output = %q", result.Output)
 	}
-	if len(result.Attachments) != 1 || result.Attachments[0].Type != conversation.AudioPartType ||
+	if len(result.Attachments) != 1 ||
+		!result.Attachments[0].IsMedia(conversation.MediaKindAudio) ||
 		!strings.HasPrefix(result.Attachments[0].MediaRef, "media://sha256/") {
 		t.Fatalf("Attachments = %#v, want one audio attachment", result.Attachments)
 	}

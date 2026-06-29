@@ -19,8 +19,8 @@ const DefaultMaxImageBytes = 20 << 20
 // ResolveImagePartDataURL resolves one canonical image part into a data URL.
 func ResolveImagePartDataURL(part conversation.Part, store Store, maxBytes int) (string, error) {
 	part = conversation.NormalizePart(part)
-	if part.Type != conversation.ImagePartType {
-		return "", fmt.Errorf("part type %q is not an image", part.Type)
+	if !part.IsMedia(conversation.MediaKindImage) {
+		return "", fmt.Errorf("part media_kind %q is not an image", part.MediaKind)
 	}
 
 	if maxBytes <= 0 {

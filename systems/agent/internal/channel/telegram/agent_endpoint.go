@@ -48,6 +48,11 @@ type agentRunChannel interface {
 	SendTextMessage(context.Context, string, string) (string, error)
 	SendPhoto(context.Context, string, string, string) error
 	SendAudio(context.Context, string, string, string) error
+	SendVideo(context.Context, string, string, string) error
+	SendDocument(context.Context, string, string, string) error
+	SendAnimation(context.Context, string, string, string) error
+	SendVideoNote(context.Context, string, string) error
+	SendSticker(context.Context, string, string) error
 	EditText(context.Context, string, string, string) error
 	DeleteMessage(context.Context, string, string) error
 	StartTyping(context.Context, string) (func(), error)
@@ -58,13 +63,44 @@ type agentRunChannel interface {
 type telegramAttachmentKind string
 
 const (
-	telegramAttachmentPhoto telegramAttachmentKind = "photo"
-	telegramAttachmentAudio telegramAttachmentKind = "audio"
+	telegramAttachmentPhoto     telegramAttachmentKind = "photo"
+	telegramAttachmentAudio     telegramAttachmentKind = "audio"
+	telegramAttachmentVoice     telegramAttachmentKind = "voice"
+	telegramAttachmentVideo     telegramAttachmentKind = "video"
+	telegramAttachmentDocument  telegramAttachmentKind = "document"
+	telegramAttachmentSticker   telegramAttachmentKind = "sticker"
+	telegramAttachmentAnimation telegramAttachmentKind = "animation"
+	telegramAttachmentVideoNote telegramAttachmentKind = "video_note"
 )
 
 type telegramAttachment struct {
 	kind telegramAttachmentKind
 	ref  string
+}
+
+// telegramAttachmentSupportsCaption reports whether the Telegram send endpoint
+// for the given kind accepts a caption. Photos, videos, documents, and
+// animations accept captions; voice, audio (as file), stickers, and video
+// notes do not.
+func telegramAttachmentSupportsCaption(kind telegramAttachmentKind) bool {
+	switch kind {
+	case telegramAttachmentPhoto, telegramAttachmentVideo, telegramAttachmentDocument,
+		telegramAttachmentAnimation:
+		return true
+	default:
+		return false
+	}
+}
+
+// telegramAttachmentLogName returns the human-readable name for one
+// attachment kind, used in notices and log messages.
+func telegramAttachmentLogName(kind telegramAttachmentKind) string {
+	switch kind {
+	case telegramAttachmentVideoNote:
+		return "video note"
+	default:
+		return string(kind)
+	}
 }
 
 // AgentEndpoint adapts the Telegram transport to the generic app worker.
@@ -299,9 +335,9 @@ func (s *agentRunSession) Finish(ctx context.Context, result agent.ReplyResult) 
 		}
 		s.sendFinalText(ctx, statusMessageID, finalText)
 	} else {
-		if statusMessageID == "" && canAttachCaptionToOnlyPhoto(attachments, finalText) {
-			if err := s.channel.SendPhoto(ctx, s.chatID, attachments[0].ref, finalText); err != nil {
-				s.logError("telegram photo send error: %v", err)
+		if statusMessageID == "" && canAttachCaptionToSingleAttachment(attachments, finalText) {
+			if err := sendCaptionedAttachment(ctx, s.channel, s.chatID, attachments[0], finalText); err != nil {
+				s.logError("telegram %s send error: %v", attachments[0].kind, err)
 				if finalText != "" {
 					s.sendFinalText(ctx, "", finalText)
 				} else if err := s.channel.SendText(ctx, s.chatID, attachmentSendFailureText); err != nil {
@@ -346,6 +382,31 @@ func (s *agentRunSession) sendAttachment(ctx context.Context, attachment telegra
 	case telegramAttachmentAudio:
 		if err := s.channel.SendAudio(ctx, s.chatID, attachment.ref, ""); err != nil {
 			s.logError("telegram audio send error: %v", err)
+			return false
+		}
+	case telegramAttachmentVideo:
+		if err := s.channel.SendVideo(ctx, s.chatID, attachment.ref, ""); err != nil {
+			s.logError("telegram video send error: %v", err)
+			return false
+		}
+	case telegramAttachmentDocument:
+		if err := s.channel.SendDocument(ctx, s.chatID, attachment.ref, ""); err != nil {
+			s.logError("telegram document send error: %v", err)
+			return false
+		}
+	case telegramAttachmentAnimation:
+		if err := s.channel.SendAnimation(ctx, s.chatID, attachment.ref, ""); err != nil {
+			s.logError("telegram animation send error: %v", err)
+			return false
+		}
+	case telegramAttachmentVideoNote:
+		if err := s.channel.SendVideoNote(ctx, s.chatID, attachment.ref); err != nil {
+			s.logError("telegram video note send error: %v", err)
+			return false
+		}
+	case telegramAttachmentSticker:
+		if err := s.channel.SendSticker(ctx, s.chatID, attachment.ref); err != nil {
+			s.logError("telegram sticker send error: %v", err)
 			return false
 		}
 	default:
@@ -774,7 +835,7 @@ func typedTelegramAttachments(parts []conversation.Part) []telegramAttachment {
 	seen := make(map[string]struct{})
 	out := make([]telegramAttachment, 0, len(parts))
 	for _, part := range conversation.NormalizeParts(parts) {
-		kind, ok := telegramAttachmentKindForPart(part.Type)
+		kind, ok := telegramAttachmentKindForPart(part)
 		if !ok {
 			continue
 		}
@@ -782,10 +843,11 @@ func typedTelegramAttachments(parts []conversation.Part) []telegramAttachment {
 		if ref == "" {
 			continue
 		}
-		if _, ok := seen[ref]; ok {
+		key := string(kind) + "\x00" + ref
+		if _, ok := seen[key]; ok {
 			continue
 		}
-		seen[ref] = struct{}{}
+		seen[key] = struct{}{}
 		out = append(out, telegramAttachment{kind: kind, ref: ref})
 	}
 	if len(out) == 0 {
@@ -794,12 +856,22 @@ func typedTelegramAttachments(parts []conversation.Part) []telegramAttachment {
 	return out
 }
 
-func telegramAttachmentKindForPart(partType conversation.PartType) (telegramAttachmentKind, bool) {
-	switch partType {
-	case conversation.ImagePartType:
+func telegramAttachmentKindForPart(part conversation.Part) (telegramAttachmentKind, bool) {
+	switch part.MediaKind {
+	case conversation.MediaKindImage:
 		return telegramAttachmentPhoto, true
-	case conversation.AudioPartType:
+	case conversation.MediaKindAudio:
 		return telegramAttachmentAudio, true
+	case conversation.MediaKindVideo:
+		return telegramAttachmentVideo, true
+	case conversation.MediaKindDocument:
+		return telegramAttachmentDocument, true
+	case conversation.MediaKindSticker:
+		return telegramAttachmentSticker, true
+	case conversation.MediaKindAnimation:
+		return telegramAttachmentAnimation, true
+	case conversation.MediaKindVideoNote:
+		return telegramAttachmentVideoNote, true
 	default:
 		return "", false
 	}
@@ -825,10 +897,33 @@ func imageRefTelegramAttachments(refs []string) []telegramAttachment {
 	return out
 }
 
-func canAttachCaptionToOnlyPhoto(attachments []telegramAttachment, text string) bool {
+func canAttachCaptionToSingleAttachment(attachments []telegramAttachment, text string) bool {
 	return len(attachments) == 1 &&
-		attachments[0].kind == telegramAttachmentPhoto &&
+		telegramAttachmentSupportsCaption(attachments[0].kind) &&
 		canUseTelegramPhotoCaption(text)
+}
+
+// sendCaptionedAttachment dispatches one caption-capable attachment with a
+// caption. Only photo/video/document/animation reach this path.
+func sendCaptionedAttachment(
+	ctx context.Context,
+	channel agentRunChannel,
+	chatID string,
+	attachment telegramAttachment,
+	caption string,
+) error {
+	switch attachment.kind {
+	case telegramAttachmentPhoto:
+		return channel.SendPhoto(ctx, chatID, attachment.ref, caption)
+	case telegramAttachmentVideo:
+		return channel.SendVideo(ctx, chatID, attachment.ref, caption)
+	case telegramAttachmentDocument:
+		return channel.SendDocument(ctx, chatID, attachment.ref, caption)
+	case telegramAttachmentAnimation:
+		return channel.SendAnimation(ctx, chatID, attachment.ref, caption)
+	default:
+		return nil
+	}
 }
 
 func canUseTelegramPhotoCaption(text string) bool {

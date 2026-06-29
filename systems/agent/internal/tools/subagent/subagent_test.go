@@ -132,8 +132,8 @@ func TestMediaAdaptiveClientDocumentsSubagentMediaBehavior(t *testing.T) {
 		t.Fatalf("Complete(text-only) error = %v", err)
 	}
 	textOnly := textOnlyModel.snapshotCalls()[0][0]
-	if subagentTestHasPartType(textOnly, conversation.ImagePartType) ||
-		subagentTestHasPartType(textOnly, conversation.AudioPartType) {
+	if subagentTestHasMediaKind(textOnly, conversation.MediaKindImage) ||
+		subagentTestHasMediaKind(textOnly, conversation.MediaKindAudio) {
 		t.Fatalf("text-only subagent received inline media: %#v", textOnly.Parts)
 	}
 	if !subagentTestTextContains(textOnly, "[Media: image]") ||
@@ -144,7 +144,7 @@ func TestMediaAdaptiveClientDocumentsSubagentMediaBehavior(t *testing.T) {
 	visionModel := &recordingModel{}
 	visionClient := &mediaAdaptiveClient{
 		inner:         visionModel,
-		support:       q15media.Support{Image: true},
+		support:       q15media.Support{conversation.MediaKindImage: true},
 		store:         store,
 		providerModel: "child",
 	}
@@ -152,16 +152,18 @@ func TestMediaAdaptiveClientDocumentsSubagentMediaBehavior(t *testing.T) {
 		t.Fatalf("Complete(vision) error = %v", err)
 	}
 	vision := visionModel.snapshotCalls()[0][0]
-	if !subagentTestHasPartType(vision, conversation.ImagePartType) {
+	if !subagentTestHasMediaKind(vision, conversation.MediaKindImage) {
 		t.Fatalf("vision subagent parts = %#v, want image retained", vision.Parts)
 	}
-	if subagentTestHasPartType(vision, conversation.AudioPartType) ||
+	if subagentTestHasMediaKind(vision, conversation.MediaKindAudio) ||
 		!subagentTestTextContains(vision, "[Media: audio]") {
 		t.Fatalf("vision subagent parts = %#v, want audio downgraded", vision.Parts)
 	}
 
-	if messages[0].Parts[1].Type != conversation.ImagePartType ||
-		messages[0].Parts[2].Type != conversation.AudioPartType {
+	if messages[0].Parts[1].Type != conversation.MediaPartType ||
+		messages[0].Parts[1].MediaKind != conversation.MediaKindImage ||
+		messages[0].Parts[2].Type != conversation.MediaPartType ||
+		messages[0].Parts[2].MediaKind != conversation.MediaKindAudio {
 		t.Fatalf("canonical subagent transcript mutated: %#v", messages[0].Parts)
 	}
 }
@@ -599,9 +601,9 @@ func storeSubagentTestMedia(
 	return ref
 }
 
-func subagentTestHasPartType(message conversation.Message, partType conversation.PartType) bool {
+func subagentTestHasMediaKind(message conversation.Message, kind conversation.MediaKind) bool {
 	for _, part := range message.Parts {
-		if part.Type == partType {
+		if part.IsMedia(kind) {
 			return true
 		}
 	}

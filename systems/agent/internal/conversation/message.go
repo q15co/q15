@@ -11,7 +11,7 @@ import (
 // SchemaVersion is the current persisted transcript schema version. New writes
 // always use this version; older versions are accepted only during startup
 // migration.
-const SchemaVersion = 3
+const SchemaVersion = 4
 
 // PortableReasoningUnavailableText is an explicit placeholder used when a
 // provider only exposed opaque replay state and no portable reasoning text.
@@ -32,13 +32,33 @@ const (
 type PartType string
 
 // Canonical message part types.
+//
+// All media (image, audio, video, document, sticker, animation, video note)
+// shares one flat MediaPartType, discriminated by MediaKind. This keeps the
+// taxonomy uniform: a new kind never needs its own PartType, and provider
+// inline capability is expressed data-driven via media.Support rather than
+// duplicated in the type hierarchy.
 const (
 	TextPartType       PartType = "text"
-	ImagePartType      PartType = "image"
-	AudioPartType      PartType = "audio"
+	MediaPartType      PartType = "media"
 	ReasoningPartType  PartType = "reasoning"
 	ToolCallPartType   PartType = "tool_call"
 	ToolResultPartType PartType = "tool_result"
+)
+
+// MediaKind discriminates the concrete file kind carried by a MediaPartType
+// part.
+type MediaKind string
+
+// Canonical media kinds for MediaPartType parts.
+const (
+	MediaKindImage     MediaKind = "image"
+	MediaKindAudio     MediaKind = "audio"
+	MediaKindVideo     MediaKind = "video"
+	MediaKindDocument  MediaKind = "document"
+	MediaKindSticker   MediaKind = "sticker"
+	MediaKindAnimation MediaKind = "animation"
+	MediaKindVideoNote MediaKind = "video_note"
 )
 
 // TextDisposition classifies assistant text when the source provider exposes a
@@ -126,9 +146,10 @@ type Part struct {
 	// Text and Reasoning parts.
 	Text        string          `json:"text,omitempty"`
 	Disposition TextDisposition `json:"disposition,omitempty"`
-	// Image and audio parts.
-	MediaRef string `json:"media_ref,omitempty"`
-	DataURL  string `json:"data_url,omitempty"`
+	// Media parts (all kinds share MediaPartType, discriminated by MediaKind).
+	MediaKind MediaKind `json:"media_kind,omitempty"`
+	MediaRef  string    `json:"media_ref,omitempty"`
+	DataURL   string    `json:"data_url,omitempty"`
 	// Replay stores provider-specific reconstruction metadata for a reasoning
 	// part. It is supplemental only: portable transcript fields remain the
 	// canonical source of truth, and replay consumers should prefer Text when it
@@ -155,21 +176,45 @@ func Text(text string, disposition TextDisposition) Part {
 	}
 }
 
-// Image creates one image part backed by either a media ref or a data URL.
+// Image creates one image media part backed by either a media ref or a data
+// URL. The call-site API is preserved from the legacy first-class image type;
+// the part serializes as {"type":"media","media_kind":"image"}.
 func Image(mediaRef, dataURL string) Part {
 	return Part{
-		Type:     ImagePartType,
-		MediaRef: strings.TrimSpace(mediaRef),
-		DataURL:  strings.TrimSpace(dataURL),
+		Type:      MediaPartType,
+		MediaKind: MediaKindImage,
+		MediaRef:  strings.TrimSpace(mediaRef),
+		DataURL:   strings.TrimSpace(dataURL),
 	}
 }
 
-// Audio creates one audio part backed by a media ref.
+// Audio creates one audio media part backed by a media ref. The call-site API
+// is preserved from the legacy first-class audio type; the part serializes as
+// {"type":"media","media_kind":"audio"}.
 func Audio(mediaRef string) Part {
 	return Part{
-		Type:     AudioPartType,
-		MediaRef: strings.TrimSpace(mediaRef),
+		Type:      MediaPartType,
+		MediaKind: MediaKindAudio,
+		MediaRef:  strings.TrimSpace(mediaRef),
 	}
+}
+
+// Media creates one generic media part backed by a media ref and discriminated
+// by kind. An empty or unknown kind yields an empty part, which normalization
+// then drops.
+func Media(kind MediaKind, mediaRef string) Part {
+	return Part{
+		Type:      MediaPartType,
+		MediaKind: normalizeMediaKind(kind),
+		MediaRef:  strings.TrimSpace(mediaRef),
+	}
+}
+
+// IsMedia reports whether the part is a media part of the given kind. It
+// normalizes the receiver first, so callers do not need to pre-normalize.
+func (p Part) IsMedia(kind MediaKind) bool {
+	p = NormalizePart(p)
+	return p.Type == MediaPartType && p.MediaKind == kind
 }
 
 // Reasoning creates one reasoning part.
@@ -260,4 +305,14 @@ func normalizeArguments(arguments string) string {
 		return "{}"
 	}
 	return trimmed
+}
+
+func normalizeMediaKind(kind MediaKind) MediaKind {
+	switch MediaKind(strings.TrimSpace(string(kind))) {
+	case MediaKindImage, MediaKindAudio, MediaKindVideo, MediaKindDocument,
+		MediaKindSticker, MediaKindAnimation, MediaKindVideoNote:
+		return MediaKind(strings.TrimSpace(string(kind)))
+	default:
+		return ""
+	}
 }

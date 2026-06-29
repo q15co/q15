@@ -5,14 +5,46 @@ import (
 	"strings"
 
 	"github.com/q15co/q15/systems/agent/internal/conversation"
+	"github.com/q15co/q15/systems/agent/internal/modelcatalog"
 )
 
-// Support describes which media types the selected model can render
-// inline. Unsupported types are downgraded to text hints before the provider
-// sees them.
-type Support struct {
-	Image bool
-	Audio bool
+// Support describes which media kinds the selected model can render inline.
+// Unsupported kinds are downgraded to text hints before the provider sees them.
+// A nil or empty map renders every media kind as a text hint.
+type Support map[conversation.MediaKind]bool
+
+// providerInlineKinds is the set of media kinds for which at least one provider
+// client has a real inline serialization path today. A model catalog capability
+// is necessary but not sufficient for inline rendering: the kind must also
+// appear here, otherwise it is downgraded to a text hint regardless of what the
+// model declares.
+//
+// Only image is serialized by provider clients today. Audio is declared by some
+// models (Capabilities.AudioInput) but no provider serializes it yet, so it is
+// deliberately absent here and always downgraded to a hint. When a provider
+// gains a real serializer for a kind, add it to this set — nothing else in the
+// adaptation layer needs to change.
+var providerInlineKinds = map[conversation.MediaKind]bool{
+	conversation.MediaKindImage: true,
+}
+
+// SupportFromCapabilities builds the per-turn media Support set from a model's
+// catalog capabilities, gating each declared capability on whether a provider
+// client can actually serialize that media kind inline (see providerInlineKinds).
+//
+// This is the single sanctioned mapping from modelcatalog.Capabilities to the
+// Support map consumed by AdaptMediaToCapabilities; every production Support
+// builder must go through it so the "is there a provider serializer?" truth
+// lives in exactly one place.
+func SupportFromCapabilities(caps modelcatalog.Capabilities) Support {
+	support := Support{}
+	if caps.ImageInput && providerInlineKinds[conversation.MediaKindImage] {
+		support[conversation.MediaKindImage] = true
+	}
+	if caps.AudioInput && providerInlineKinds[conversation.MediaKindAudio] {
+		support[conversation.MediaKindAudio] = true
+	}
+	return support
 }
 
 // AdaptMediaToCapabilities returns a copy of messages where media parts the
@@ -46,14 +78,8 @@ func adaptParts(
 	adapted := make([]conversation.Part, 0, len(parts))
 	for _, part := range conversation.NormalizeParts(parts) {
 		switch part.Type {
-		case conversation.ImagePartType:
-			if support.Image {
-				adapted = append(adapted, part)
-			} else {
-				adapted = append(adapted, conversation.Text(mediaHintText(part, store), ""))
-			}
-		case conversation.AudioPartType:
-			if support.Audio {
+		case conversation.MediaPartType:
+			if support[part.MediaKind] {
 				adapted = append(adapted, part)
 			} else {
 				adapted = append(adapted, conversation.Text(mediaHintText(part, store), ""))
@@ -73,7 +99,7 @@ func adaptParts(
 // never returns an error.
 func mediaHintText(part conversation.Part, store Store) string {
 	part = conversation.NormalizePart(part)
-	kind := mediaKind(part.Type)
+	kind := string(part.MediaKind)
 	ref := strings.TrimSpace(part.MediaRef)
 
 	lines := []string{
@@ -89,23 +115,18 @@ func mediaHintText(part conversation.Part, store Store) string {
 	return strings.Join(lines, "\n")
 }
 
-func mediaKind(partType conversation.PartType) string {
-	switch partType {
-	case conversation.ImagePartType:
-		return "image"
-	case conversation.AudioPartType:
-		return "audio"
-	default:
-		return string(partType)
-	}
-}
-
 func mediaHintGuidance(kind string) string {
 	switch kind {
 	case "image":
 		return "The current model cannot display this media inline. Use load_image with the media_ref to inspect it with vision on the next turn, or delegate to a model that supports image input."
 	case "audio":
 		return "The current model cannot process this media inline. Use exec tools to process the file at the path above (e.g. transcribe or transcode)."
+	case "video", "video_note", "animation":
+		return "The current model cannot process this media inline. Use exec tools to process the file at the path above (e.g. extract frames or audio with ffmpeg)."
+	case "document":
+		return "The current model cannot read this file inline. Use exec tools to access the file at the path above."
+	case "sticker":
+		return "The current model cannot render this sticker inline. It is available as a file at the path above."
 	default:
 		return "The current model cannot process this media inline. Use exec tools to process the file at the path above."
 	}

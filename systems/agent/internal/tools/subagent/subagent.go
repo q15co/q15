@@ -176,12 +176,9 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) (*Session, error)
 		return nil, fmt.Errorf("configure subagent model %q: %w", modelRef, err)
 	}
 	client = &mediaAdaptiveClient{
-		inner: client,
-		support: q15media.Support{
-			Image: modelCfg.Capabilities.ImageInput,
-			Audio: modelCfg.Capabilities.AudioInput,
-		},
-		store: m.media,
+		inner:   client,
+		support: q15media.SupportFromCapabilities(modelCfg.Capabilities),
+		store:   m.media,
 		// Provider-facing model id (full tag) so tagged Ollama variants such
 		// as "gemma3:4b" reach the provider API intact. The engine and
 		// session continue to use the agent-facing ref (modelCfg.Ref).
