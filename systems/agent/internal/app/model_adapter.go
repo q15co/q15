@@ -65,7 +65,7 @@ func (r *routedModelAdapter) Complete(
 
 	adapted := q15media.AdaptMediaToCapabilities(
 		messages,
-		mediaSupportFromCaps(m.Capabilities),
+		q15media.SupportFromCapabilities(m.Capabilities),
 		r.mediaStore,
 	)
 	return client.Complete(ctx, m.ProviderModel, adapted, tools)
@@ -102,15 +102,6 @@ func (r *routedModelAdapter) getOrCreateClient(
 	}
 	r.clients.Store(m.ProviderName, client)
 	return client, nil
-}
-
-// mediaSupportFromCaps maps model capabilities to the media adaptation support
-// flags.
-func mediaSupportFromCaps(caps modelcatalog.Capabilities) q15media.Support {
-	return q15media.Support{
-		Image: caps.ImageInput,
-		Audio: caps.AudioInput,
-	}
 }
 
 // newModelAdapter builds a routed adapter bound to the given selection using the

@@ -240,7 +240,8 @@ func TestUserMessageFromInboundBuildsOrderedTextAndImageParts(t *testing.T) {
 	if got.Parts[0].Type != conversation.TextPartType || got.Parts[0].Text != "hello" {
 		t.Fatalf("parts[0] = %#v", got.Parts[0])
 	}
-	if got.Parts[1].Type != conversation.ImagePartType ||
+	if got.Parts[1].Type != conversation.MediaPartType ||
+		got.Parts[1].MediaKind != conversation.MediaKindImage ||
 		got.Parts[1].MediaRef != "media://sha256/abc" {
 		t.Fatalf("parts[1] = %#v", got.Parts[1])
 	}
@@ -260,7 +261,8 @@ func TestUserMessageFromInboundPreservesTypedAttachments(t *testing.T) {
 	if got.Parts[0].Type != conversation.TextPartType || got.Parts[0].Text != "listen" {
 		t.Fatalf("parts[0] = %#v", got.Parts[0])
 	}
-	if got.Parts[1].Type != conversation.AudioPartType ||
+	if got.Parts[1].Type != conversation.MediaPartType ||
+		got.Parts[1].MediaKind != conversation.MediaKindAudio ||
 		got.Parts[1].MediaRef != "media://sha256/audio" {
 		t.Fatalf("parts[1] = %#v", got.Parts[1])
 	}
@@ -291,7 +293,8 @@ func TestRunAgentWorker_AcceptsAttachmentOnlyInboundMessage(t *testing.T) {
 			if len(msg.Parts) != 1 {
 				t.Fatalf("reply message parts len = %d, want 1", len(msg.Parts))
 			}
-			if msg.Parts[0].Type != conversation.ImagePartType ||
+			if msg.Parts[0].Type != conversation.MediaPartType ||
+				msg.Parts[0].MediaKind != conversation.MediaKindImage ||
 				msg.Parts[0].MediaRef != "media://sha256/abc" {
 				t.Fatalf("reply image part = %#v", msg.Parts[0])
 			}

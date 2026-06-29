@@ -32,7 +32,7 @@ func TestIssue108InboundMediaStorageTypedPartsAndAdaptiveDowngrade(t *testing.T)
 		wantCaption     string
 		wantFilename    string
 		wantContentType string
-		wantPartType    conversation.PartType
+		wantMediaKind   conversation.MediaKind
 		wantHintKind    string
 	}{
 		{
@@ -47,7 +47,7 @@ func TestIssue108InboundMediaStorageTypedPartsAndAdaptiveDowngrade(t *testing.T)
 			wantCaption:     "describe png",
 			wantFilename:    "issue-108.png",
 			wantContentType: "image/png",
-			wantPartType:    conversation.ImagePartType,
+			wantMediaKind:   conversation.MediaKindImage,
 			wantHintKind:    "[Media: image]",
 		},
 		{
@@ -62,7 +62,7 @@ func TestIssue108InboundMediaStorageTypedPartsAndAdaptiveDowngrade(t *testing.T)
 			wantCaption:     "describe jpeg",
 			wantFilename:    "issue-108.jpg",
 			wantContentType: "image/jpeg",
-			wantPartType:    conversation.ImagePartType,
+			wantMediaKind:   conversation.MediaKindImage,
 			wantHintKind:    "[Media: image]",
 		},
 		{
@@ -77,7 +77,7 @@ func TestIssue108InboundMediaStorageTypedPartsAndAdaptiveDowngrade(t *testing.T)
 			wantCaption:     "transcribe ogg",
 			wantFilename:    "issue-108.ogg",
 			wantContentType: "application/ogg",
-			wantPartType:    conversation.AudioPartType,
+			wantMediaKind:   conversation.MediaKindAudio,
 			wantHintKind:    "[Media: audio]",
 		},
 		{
@@ -92,7 +92,7 @@ func TestIssue108InboundMediaStorageTypedPartsAndAdaptiveDowngrade(t *testing.T)
 			wantCaption:     "transcribe mp3",
 			wantFilename:    "issue-108.mp3",
 			wantContentType: "audio/mpeg",
-			wantPartType:    conversation.AudioPartType,
+			wantMediaKind:   conversation.MediaKindAudio,
 			wantHintKind:    "[Media: audio]",
 		},
 	}
@@ -136,8 +136,12 @@ func TestIssue108InboundMediaStorageTypedPartsAndAdaptiveDowngrade(t *testing.T)
 			if !strings.Contains(got.Text, tt.wantCaption) {
 				t.Fatalf("Text = %q, want caption %q", got.Text, tt.wantCaption)
 			}
-			if len(got.Attachments) != 1 || got.Attachments[0].Type != tt.wantPartType {
-				t.Fatalf("Attachments = %#v, want one %s part", got.Attachments, tt.wantPartType)
+			if len(got.Attachments) != 1 || got.Attachments[0].MediaKind != tt.wantMediaKind {
+				t.Fatalf(
+					"Attachments = %#v, want one %s media part",
+					got.Attachments,
+					tt.wantMediaKind,
+				)
 			}
 
 			mediaRef := extractMediaRef(t, got.Text)
@@ -174,8 +178,7 @@ func TestIssue108InboundMediaStorageTypedPartsAndAdaptiveDowngrade(t *testing.T)
 				q15media.Support{},
 				store,
 			)
-			if messageHasPartType(adapted[0], conversation.ImagePartType) ||
-				messageHasPartType(adapted[0], conversation.AudioPartType) {
+			if messageHasMediaPart(adapted[0]) {
 				t.Fatalf("adapted message retained inline media: %#v", adapted[0].Parts)
 			}
 			hint := messageTextContaining(adapted[0], tt.wantHintKind)
@@ -195,9 +198,9 @@ func TestIssue108InboundMediaStorageTypedPartsAndAdaptiveDowngrade(t *testing.T)
 	}
 }
 
-func messageHasPartType(message conversation.Message, partType conversation.PartType) bool {
+func messageHasMediaPart(message conversation.Message) bool {
 	for _, part := range message.Parts {
-		if part.Type == partType {
+		if part.Type == conversation.MediaPartType {
 			return true
 		}
 	}

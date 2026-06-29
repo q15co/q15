@@ -213,25 +213,27 @@ func (c *Channel) handleMessage(ctx context.Context, message *telego.Message) er
 		msg.UserID = strconv.FormatInt(message.From.ID, 10)
 	}
 
-	if kind, fileID, ok := detectInboundAttachment(message); ok {
+	if attachment, ok := detectInboundAttachment(message); ok {
 		ref, localPath, err := c.storeAttachment(
 			ctx,
-			fileID,
-			kind,
+			attachment,
 			mediaScope(msg.ChatID, msg.MessageID),
 		)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "telegram %s ingest error: %v\n", kind, err)
-			msg.Text = attachmentFailureText(kind, text)
+			fmt.Fprintf(os.Stderr, "telegram %s ingest error: %v\n", attachment.kind, err)
+			msg.Text = attachmentFailureText(telegramAttachmentLogName(attachment.kind), text)
 			c.onMessage(msg)
 			return nil
 		}
-		msg.Text = joinCaptionAndNotice(text, buildInboundAttachmentNotice(kind, ref, localPath))
-		msg.Attachments = inboundAttachmentParts(kind, ref)
-	} else if kind := unsupportedTelegramAttachmentKind(message); kind != "" {
-		msg.Text = unsupportedAttachmentText(kind, text)
-		c.onMessage(msg)
-		return nil
+		msg.Text = joinCaptionAndNotice(
+			text,
+			buildInboundAttachmentNotice(
+				telegramAttachmentLogName(attachment.kind),
+				ref,
+				localPath,
+			),
+		)
+		msg.Attachments = inboundAttachmentParts(attachment.kind, ref)
 	}
 
 	if msg.Text == "" && len(msg.Attachments) == 0 {
@@ -489,6 +491,309 @@ func (c *Channel) sendVoiceFile(
 	return nil
 }
 
+// SendVideo sends one Telegram video resolved from a media-store ref.
+func (c *Channel) SendVideo(ctx context.Context, chatID, mediaRef, caption string) error {
+	return c.sendCaptionedMedia(
+		ctx,
+		chatID,
+		mediaRef,
+		caption,
+		telegramVideoKind,
+		func(ctx context.Context, chatID int64, file *os.File, filename, caption, parseMode string) error {
+			params := &telego.SendVideoParams{
+				ChatID: telego.ChatID{ID: chatID},
+				Video:  tu.FileFromReader(file, filename),
+			}
+			if caption != "" {
+				params.Caption = caption
+				params.ParseMode = parseMode
+			}
+			_, err := c.bot.SendVideo(ctx, params)
+			return err
+		},
+	)
+}
+
+// SendDocument sends one Telegram document resolved from a media-store ref.
+func (c *Channel) SendDocument(ctx context.Context, chatID, mediaRef, caption string) error {
+	return c.sendCaptionedMedia(
+		ctx,
+		chatID,
+		mediaRef,
+		caption,
+		telegramDocumentKind,
+		func(ctx context.Context, chatID int64, file *os.File, filename, caption, parseMode string) error {
+			params := &telego.SendDocumentParams{
+				ChatID:   telego.ChatID{ID: chatID},
+				Document: tu.FileFromReader(file, filename),
+			}
+			if caption != "" {
+				params.Caption = caption
+				params.ParseMode = parseMode
+			}
+			_, err := c.bot.SendDocument(ctx, params)
+			return err
+		},
+	)
+}
+
+// SendAnimation sends one Telegram animation resolved from a media-store ref.
+func (c *Channel) SendAnimation(ctx context.Context, chatID, mediaRef, caption string) error {
+	return c.sendCaptionedMedia(
+		ctx,
+		chatID,
+		mediaRef,
+		caption,
+		telegramAnimationKind,
+		func(ctx context.Context, chatID int64, file *os.File, filename, caption, parseMode string) error {
+			params := &telego.SendAnimationParams{
+				ChatID:    telego.ChatID{ID: chatID},
+				Animation: tu.FileFromReader(file, filename),
+			}
+			if caption != "" {
+				params.Caption = caption
+				params.ParseMode = parseMode
+			}
+			_, err := c.bot.SendAnimation(ctx, params)
+			return err
+		},
+	)
+}
+
+// SendVideoNote sends one Telegram video note resolved from a media-store ref.
+// Video notes do not accept captions.
+func (c *Channel) SendVideoNote(ctx context.Context, chatID, mediaRef string) error {
+	return c.sendUncaptionedMedia(ctx, chatID, mediaRef, telegramVideoNoteKind,
+		func(ctx context.Context, chatID int64, file *os.File, filename string) error {
+			_, err := c.bot.SendVideoNote(ctx, &telego.SendVideoNoteParams{
+				ChatID:    telego.ChatID{ID: chatID},
+				VideoNote: tu.FileFromReader(file, filename),
+			})
+			return err
+		})
+}
+
+// SendSticker sends one Telegram sticker resolved from a media-store ref.
+// Stickers do not accept captions.
+func (c *Channel) SendSticker(ctx context.Context, chatID, mediaRef string) error {
+	return c.sendUncaptionedMedia(ctx, chatID, mediaRef, telegramStickerKind,
+		func(ctx context.Context, chatID int64, file *os.File, filename string) error {
+			_, err := c.bot.SendSticker(ctx, &telego.SendStickerParams{
+				ChatID:  telego.ChatID{ID: chatID},
+				Sticker: tu.FileFromReader(file, filename),
+			})
+			return err
+		})
+}
+
+// telegramMediaKind describes one outbound media kind's validation rules for
+// the factored send helpers.
+type telegramMediaKind struct {
+	logName         string
+	ensureFile      func(localPath string, meta q15media.Meta) error
+	defaultFilename string
+}
+
+var (
+	telegramVideoKind = telegramMediaKind{
+		logName:         "video",
+		ensureFile:      ensureTelegramVideoFile,
+		defaultFilename: "video.mp4",
+	}
+	telegramDocumentKind = telegramMediaKind{
+		logName:         "document",
+		ensureFile:      ensureTelegramRegularFile,
+		defaultFilename: "document",
+	}
+	telegramAnimationKind = telegramMediaKind{
+		logName:         "animation",
+		ensureFile:      ensureTelegramAnimationFile,
+		defaultFilename: "animation.mp4",
+	}
+	telegramVideoNoteKind = telegramMediaKind{
+		logName:         "video note",
+		ensureFile:      ensureTelegramVideoFile,
+		defaultFilename: "video_note.mp4",
+	}
+	telegramStickerKind = telegramMediaKind{
+		logName:         "sticker",
+		ensureFile:      ensureTelegramRegularFile,
+		defaultFilename: "sticker.webp",
+	}
+)
+
+// sendCaptionedMedia resolves, validates, and sends one caption-capable media
+// attachment (video/document/animation) with HTML-then-plain caption retry.
+// The send closure receives caption and parseMode so it can set them on the
+// provider-specific params struct.
+func (c *Channel) sendCaptionedMedia(
+	ctx context.Context,
+	chatID string,
+	mediaRef string,
+	caption string,
+	kind telegramMediaKind,
+	send func(ctx context.Context, chatID int64, file *os.File, filename, caption, parseMode string) error,
+) error {
+	chatID = strings.TrimSpace(chatID)
+	mediaRef = strings.TrimSpace(mediaRef)
+	caption = strings.TrimSpace(caption)
+	kindLogName := kind.logName
+
+	if chatID == "" {
+		return errors.New("chat id is required")
+	}
+	if mediaRef == "" {
+		return errors.New("media ref is required")
+	}
+	if c.mediaStore == nil {
+		return errors.New("telegram media store is not configured")
+	}
+	if caption != "" && utf8.RuneCountInString(caption) > telegramCaptionRunes {
+		return fmt.Errorf("telegram %s caption exceeds %d runes", kindLogName, telegramCaptionRunes)
+	}
+
+	chatValue, err := parseChatID(chatID)
+	if err != nil {
+		return fmt.Errorf("invalid chat id %q: %w", chatID, err)
+	}
+
+	localPath, meta, err := c.mediaStore.Resolve(mediaRef)
+	if err != nil {
+		return fmt.Errorf("resolve telegram %s %q: %w", kindLogName, mediaRef, err)
+	}
+	if err := kind.ensureFile(localPath, meta); err != nil {
+		return err
+	}
+	filename := telegramMediaFilenameForSend(meta, localPath, kind.defaultFilename)
+
+	file, err := os.Open(localPath)
+	if err != nil {
+		return fmt.Errorf("open telegram %s %q: %w", kindLogName, localPath, err)
+	}
+	defer file.Close()
+
+	if caption == "" {
+		if err := send(ctx, chatValue, file, filename, "", ""); err != nil {
+			return fmt.Errorf("send telegram %s: %w", kindLogName, err)
+		}
+		return nil
+	}
+
+	formatted := markdownToTelegramHTML(caption)
+	if formatted != "" && utf8.RuneCountInString(formatted) <= telegramCaptionRunes {
+		if err := send(ctx, chatValue, file, filename, formatted, telego.ModeHTML); err == nil {
+			return nil
+		}
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			return fmt.Errorf("rewind telegram %s %q: %w", kindLogName, localPath, err)
+		}
+	}
+
+	if err := send(ctx, chatValue, file, filename, caption, ""); err != nil {
+		return fmt.Errorf("send telegram %s: %w", kindLogName, err)
+	}
+	return nil
+}
+
+// sendUncaptionedMedia resolves, validates, and sends one non-caption media
+// attachment (video note/sticker). No caption or parse_mode fields are ever
+// set on the request body.
+func (c *Channel) sendUncaptionedMedia(
+	ctx context.Context,
+	chatID string,
+	mediaRef string,
+	kind telegramMediaKind,
+	send func(ctx context.Context, chatID int64, file *os.File, filename string) error,
+) error {
+	chatID = strings.TrimSpace(chatID)
+	mediaRef = strings.TrimSpace(mediaRef)
+	kindLogName := kind.logName
+
+	if chatID == "" {
+		return errors.New("chat id is required")
+	}
+	if mediaRef == "" {
+		return errors.New("media ref is required")
+	}
+	if c.mediaStore == nil {
+		return errors.New("telegram media store is not configured")
+	}
+
+	chatValue, err := parseChatID(chatID)
+	if err != nil {
+		return fmt.Errorf("invalid chat id %q: %w", chatID, err)
+	}
+
+	localPath, meta, err := c.mediaStore.Resolve(mediaRef)
+	if err != nil {
+		return fmt.Errorf("resolve telegram %s %q: %w", kindLogName, mediaRef, err)
+	}
+	if err := kind.ensureFile(localPath, meta); err != nil {
+		return err
+	}
+	filename := telegramMediaFilenameForSend(meta, localPath, kind.defaultFilename)
+
+	file, err := os.Open(localPath)
+	if err != nil {
+		return fmt.Errorf("open telegram %s %q: %w", kindLogName, localPath, err)
+	}
+	defer file.Close()
+
+	if err := send(ctx, chatValue, file, filename); err != nil {
+		return fmt.Errorf("send telegram %s: %w", kindLogName, err)
+	}
+	return nil
+}
+
+func ensureTelegramRegularFile(localPath string, _ q15media.Meta) error {
+	info, err := os.Stat(localPath)
+	if err != nil {
+		return fmt.Errorf("stat telegram media %q: %w", localPath, err)
+	}
+	if info.IsDir() {
+		return fmt.Errorf("telegram media %q must be a file", localPath)
+	}
+	return nil
+}
+
+func ensureTelegramVideoFile(localPath string, meta q15media.Meta) error {
+	if err := ensureTelegramRegularFile(localPath, meta); err != nil {
+		return err
+	}
+	contentType := strings.ToLower(strings.TrimSpace(meta.ContentType))
+	if contentType != "" && !strings.HasPrefix(contentType, "video/") {
+		return fmt.Errorf(
+			"telegram video %q is not a video (content type %q)",
+			localPath,
+			contentType,
+		)
+	}
+	return nil
+}
+
+func ensureTelegramAnimationFile(localPath string, meta q15media.Meta) error {
+	if err := ensureTelegramRegularFile(localPath, meta); err != nil {
+		return err
+	}
+	contentType := strings.ToLower(strings.TrimSpace(meta.ContentType))
+	if contentType != "" && !strings.HasPrefix(contentType, "video/") &&
+		contentType != "image/gif" {
+		return fmt.Errorf(
+			"telegram animation %q is not a video or GIF (content type %q)",
+			localPath,
+			contentType,
+		)
+	}
+	return nil
+}
+
+func telegramMediaFilenameForSend(meta q15media.Meta, localPath string, fallback string) string {
+	if name := strings.TrimSpace(meta.Filename); name != "" {
+		return filepath.Base(name)
+	}
+	return normalizeFilename(localPath, fallback)
+}
+
 // DeleteMessage removes one Telegram message.
 func (c *Channel) DeleteMessage(ctx context.Context, chatID, messageID string) error {
 	chatID = strings.TrimSpace(chatID)
@@ -677,26 +982,6 @@ func mediaScope(chatID, messageID string) string {
 	return "telegram:" + strings.TrimSpace(chatID) + ":" + strings.TrimSpace(messageID)
 }
 
-func unsupportedTelegramAttachmentKind(message *telego.Message) string {
-	if message == nil {
-		return ""
-	}
-
-	switch {
-	case message.Sticker != nil:
-		return "sticker"
-	default:
-		return ""
-	}
-}
-
-func unsupportedAttachmentText(kind, originalText string) string {
-	return attachmentNotice(
-		fmt.Sprintf("The user sent a Telegram %s attachment.", strings.TrimSpace(kind)),
-		originalText,
-	)
-}
-
 func attachmentFailureText(kind, originalText string) string {
 	return attachmentNotice(
 		fmt.Sprintf(
@@ -710,7 +995,6 @@ func attachmentFailureText(kind, originalText string) string {
 func attachmentNotice(summary, originalText string) string {
 	lines := []string{
 		"System note: " + strings.TrimSpace(summary),
-		"Telegram currently forwards only supported media types to q15.",
 		"The agent must not pretend it saw the attachment.",
 	}
 	originalText = strings.TrimSpace(originalText)
@@ -786,15 +1070,14 @@ func ensureTelegramAudio(localPath string, meta q15media.Meta) error {
 
 func (c *Channel) storeAttachment(
 	ctx context.Context,
-	fileID string,
-	kind string,
+	attachment telegramInboundAttachment,
 	scope string,
 ) (ref string, objectPath string, err error) {
 	if c.mediaStore == nil {
 		return "", "", fmt.Errorf("telegram media store is not configured")
 	}
 
-	fileID = strings.TrimSpace(fileID)
+	fileID := strings.TrimSpace(attachment.fileID)
 	if fileID == "" {
 		return "", "", fmt.Errorf("telegram file id is required")
 	}
@@ -804,12 +1087,13 @@ func (c *Channel) storeAttachment(
 		return "", "", fmt.Errorf("get telegram file %q: %w", fileID, err)
 	}
 
+	filename := resolveInboundFilename(attachment, file)
 	localPath, contentType, filename, err := c.downloadTelegramFile(
 		ctx,
 		file,
-		kind,
-		"",
-		normalizeFilename(file.FilePath, defaultFilenameForKind(kind)),
+		string(attachment.kind),
+		attachment.contentType,
+		filename,
 	)
 	if err != nil {
 		return "", "", err
@@ -826,12 +1110,12 @@ func (c *Channel) storeAttachment(
 		Source:      "telegram",
 	}, scope)
 	if err != nil {
-		return "", "", fmt.Errorf("store telegram %s %q: %w", kind, filename, err)
+		return "", "", fmt.Errorf("store telegram %s %q: %w", attachment.kind, filename, err)
 	}
 
 	resolvedPath, _, resolveErr := c.mediaStore.Resolve(ref)
 	if resolveErr != nil {
-		return "", "", fmt.Errorf("resolve stored telegram %s ref: %w", kind, resolveErr)
+		return "", "", fmt.Errorf("resolve stored telegram %s ref: %w", attachment.kind, resolveErr)
 	}
 	return ref, resolvedPath, nil
 }
@@ -934,44 +1218,134 @@ func normalizeFilename(filePath, fallback string) string {
 	return name
 }
 
-func detectInboundAttachment(message *telego.Message) (kind string, fileID string, ok bool) {
+// telegramInboundAttachment carries the resolved attachment metadata from
+// one inbound Telegram message: the kind, file id, and best-known filename and
+// content type. The filename/content type are inferred from the Telegram
+// object when available (Audio/Video/Document/Animation carry MimeType and
+// FileName); sticker defaults are inferred from IsVideo/IsAnimated because
+// sticker objects carry no MIME and http.DetectContentType mis-detects
+// webp/tgs/webm.
+type telegramInboundAttachment struct {
+	kind        telegramAttachmentKind
+	fileID      string
+	filename    string
+	contentType string
+}
+
+func detectInboundAttachment(message *telego.Message) (telegramInboundAttachment, bool) {
 	if message == nil {
-		return "", "", false
+		return telegramInboundAttachment{}, false
 	}
 	switch {
 	case len(message.Photo) > 0:
-		return "photo", message.Photo[len(message.Photo)-1].FileID, true
+		return telegramInboundAttachment{
+			kind:   telegramAttachmentPhoto,
+			fileID: message.Photo[len(message.Photo)-1].FileID,
+		}, true
 	case message.Voice != nil:
-		return "voice", message.Voice.FileID, true
+		return telegramInboundAttachment{
+			kind:   telegramAttachmentVoice,
+			fileID: message.Voice.FileID,
+		}, true
 	case message.Audio != nil:
-		return "audio", message.Audio.FileID, true
+		return telegramInboundAttachment{
+			kind:        telegramAttachmentAudio,
+			fileID:      message.Audio.FileID,
+			filename:    strings.TrimSpace(message.Audio.FileName),
+			contentType: strings.TrimSpace(message.Audio.MimeType),
+		}, true
 	case message.Video != nil:
-		return "video", message.Video.FileID, true
+		return telegramInboundAttachment{
+			kind:        telegramAttachmentVideo,
+			fileID:      message.Video.FileID,
+			filename:    strings.TrimSpace(message.Video.FileName),
+			contentType: strings.TrimSpace(message.Video.MimeType),
+		}, true
 	case message.Document != nil:
-		return "document", message.Document.FileID, true
+		return telegramInboundAttachment{
+			kind:        telegramAttachmentDocument,
+			fileID:      message.Document.FileID,
+			filename:    strings.TrimSpace(message.Document.FileName),
+			contentType: strings.TrimSpace(message.Document.MimeType),
+		}, true
+	case message.Sticker != nil:
+		name, contentType := stickerIngestDefaults(message.Sticker)
+		return telegramInboundAttachment{
+			kind:        telegramAttachmentSticker,
+			fileID:      message.Sticker.FileID,
+			filename:    name,
+			contentType: contentType,
+		}, true
 	case message.Animation != nil:
-		return "animation", message.Animation.FileID, true
+		return telegramInboundAttachment{
+			kind:        telegramAttachmentAnimation,
+			fileID:      message.Animation.FileID,
+			filename:    strings.TrimSpace(message.Animation.FileName),
+			contentType: strings.TrimSpace(message.Animation.MimeType),
+		}, true
 	case message.VideoNote != nil:
-		return "video note", message.VideoNote.FileID, true
+		return telegramInboundAttachment{
+			kind:   telegramAttachmentVideoNote,
+			fileID: message.VideoNote.FileID,
+		}, true
 	default:
-		return "", "", false
+		return telegramInboundAttachment{}, false
 	}
 }
 
-func defaultFilenameForKind(kind string) string {
+// stickerIngestDefaults infers a fallback filename and content type for a
+// sticker based on its IsVideo/IsAnimated flags. Telegram sticker objects carry
+// no MIME field, and http.DetectContentType mis-detects webp/tgs/webm.
+func stickerIngestDefaults(sticker *telego.Sticker) (filename string, contentType string) {
+	switch {
+	case sticker.IsVideo:
+		return "sticker.webm", "video/webm"
+	case sticker.IsAnimated:
+		return "sticker.tgs", "application/x-tgsticker"
+	default:
+		return "sticker.webp", "image/webp"
+	}
+}
+
+// resolveInboundFilename applies per-kind precedence for the stored filename.
+// For photo/voice/video-note the GetFile path is authoritative (the Telegram
+// object carries no filename). For audio/video/document/animation the object's
+// FileName is preferred and falls back to the GetFile path. For stickers the
+// inferred default applies unless the GetFile path overrides it.
+func resolveInboundFilename(attachment telegramInboundAttachment, file *telego.File) string {
+	fallback := normalizeFilename(file.FilePath, defaultFilenameForKind(attachment.kind))
+	switch attachment.kind {
+	case telegramAttachmentPhoto, telegramAttachmentVoice, telegramAttachmentVideoNote:
+		return fallback
+	case telegramAttachmentSticker:
+		if name := normalizeFilename(file.FilePath, ""); name != "" {
+			return name
+		}
+		return attachment.filename
+	default:
+		if name := strings.TrimSpace(attachment.filename); name != "" {
+			return filepath.Base(name)
+		}
+		return fallback
+	}
+}
+
+func defaultFilenameForKind(kind telegramAttachmentKind) string {
 	switch kind {
-	case "photo":
+	case telegramAttachmentPhoto:
 		return "photo.jpg"
-	case "voice":
+	case telegramAttachmentVoice:
 		return "voice.ogg"
-	case "audio":
+	case telegramAttachmentAudio:
 		return "audio.mp3"
-	case "video":
+	case telegramAttachmentVideo:
 		return "video.mp4"
-	case "animation":
+	case telegramAttachmentAnimation:
 		return "animation.mp4"
-	case "video note":
+	case telegramAttachmentVideoNote:
 		return "video_note.mp4"
+	case telegramAttachmentSticker:
+		return "sticker.webp"
 	default:
 		return "file"
 	}
@@ -993,8 +1367,12 @@ func attachmentHintForKind(kind string) string {
 		return "Call load_image with this media_ref to inspect it with vision on the next turn."
 	case "voice", "audio":
 		return "The file is usable from exec at the path above (e.g. transcribe with whisper, transcode with ffmpeg)."
-	case "video":
+	case "video", "animation", "video_note":
 		return "The file is usable from exec at the path above (e.g. extract frames or audio with ffmpeg)."
+	case "document":
+		return "The file is usable from exec at the path above."
+	case "sticker":
+		return "The sticker is usable from exec at the path above."
 	default:
 		return "The file is usable from exec at the path above."
 	}
@@ -1014,15 +1392,23 @@ func joinCaptionAndNotice(caption, notice string) string {
 
 // inboundAttachmentParts returns the typed conversation parts for an inbound
 // attachment so capability-adaptive rendering can inline it for capable models.
-func inboundAttachmentParts(kind, ref string) []conversation.Part {
+func inboundAttachmentParts(kind telegramAttachmentKind, ref string) []conversation.Part {
 	switch kind {
-	case "photo":
+	case telegramAttachmentPhoto:
 		return []conversation.Part{conversation.Image(ref, "")}
-	case "voice", "audio":
+	case telegramAttachmentVoice, telegramAttachmentAudio:
 		return []conversation.Part{conversation.Audio(ref)}
+	case telegramAttachmentVideo:
+		return []conversation.Part{conversation.Media(conversation.MediaKindVideo, ref)}
+	case telegramAttachmentDocument:
+		return []conversation.Part{conversation.Media(conversation.MediaKindDocument, ref)}
+	case telegramAttachmentSticker:
+		return []conversation.Part{conversation.Media(conversation.MediaKindSticker, ref)}
+	case telegramAttachmentAnimation:
+		return []conversation.Part{conversation.Media(conversation.MediaKindAnimation, ref)}
+	case telegramAttachmentVideoNote:
+		return []conversation.Part{conversation.Media(conversation.MediaKindVideoNote, ref)}
 	default:
-		// video, document, animation, video note — no typed part yet;
-		// the text notice is the sole representation.
 		return nil
 	}
 }

@@ -114,13 +114,18 @@ func renderTranscriptPart(part conversation.Part) (string, map[string]string) {
 			body = conversation.PortableReasoningUnavailableText
 		}
 		return body, nil
-	case conversation.ImagePartType:
-		lines := []string{"Image attachment omitted from transcript artifact."}
+	case conversation.MediaPartType:
+		lines := []string{"Media attachment omitted from transcript artifact."}
+		if kind := strings.TrimSpace(string(part.MediaKind)); kind != "" {
+			lines = append(lines, "Media-Kind: "+kind)
+		}
 		if mediaRef := strings.TrimSpace(part.MediaRef); mediaRef != "" {
 			lines = append(lines, "Media-Ref: "+mediaRef)
 		}
-		if dataURL := strings.TrimSpace(part.DataURL); dataURL != "" {
-			lines = append(lines, "Data-URL: present")
+		if part.MediaKind == conversation.MediaKindImage {
+			if dataURL := strings.TrimSpace(part.DataURL); dataURL != "" {
+				lines = append(lines, "Data-URL: present")
+			}
 		}
 		return strings.Join(lines, "\n"), nil
 	case conversation.ToolCallPartType:

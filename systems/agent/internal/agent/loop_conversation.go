@@ -25,7 +25,7 @@ func normalizeUserMessage(msg conversation.Message) (conversation.Message, error
 	hasInput := false
 	for _, part := range msg.Parts {
 		switch part.Type {
-		case conversation.TextPartType, conversation.ImagePartType, conversation.AudioPartType:
+		case conversation.TextPartType, conversation.MediaPartType:
 			hasInput = true
 		default:
 			return conversation.Message{}, fmt.Errorf(
@@ -126,18 +126,18 @@ func mediaRefsFromAttachments(parts []conversation.Part) []string {
 	seen := make(map[string]struct{})
 	out := make([]string, 0, len(parts))
 	for _, part := range conversation.NormalizeParts(parts) {
-		switch part.Type {
-		case conversation.ImagePartType:
-			ref := strings.TrimSpace(part.MediaRef)
-			if ref == "" {
-				continue
-			}
-			if _, ok := seen[ref]; ok {
-				continue
-			}
-			seen[ref] = struct{}{}
-			out = append(out, ref)
+		if !part.IsMedia(conversation.MediaKindImage) {
+			continue
 		}
+		ref := strings.TrimSpace(part.MediaRef)
+		if ref == "" {
+			continue
+		}
+		if _, ok := seen[ref]; ok {
+			continue
+		}
+		seen[ref] = struct{}{}
+		out = append(out, ref)
 	}
 	if len(out) == 0 {
 		return nil
