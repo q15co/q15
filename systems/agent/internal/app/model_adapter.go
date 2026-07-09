@@ -108,21 +108,6 @@ func (r *routedModelAdapter) getOrCreateClient(
 	return client, nil
 }
 
-// newModelAdapter builds a routed adapter bound to the given selection using the
-// default provider client factory.
-func newModelAdapter(
-	registry *modelcatalog.Registry,
-	selection *modelcatalog.Selection,
-	mediaStore q15media.Store,
-) (*routedModelAdapter, error) {
-	return newModelAdapterWithSelectionAndFactory(
-		registry,
-		selection,
-		mediaStore,
-		defaultModelClientFactory,
-	)
-}
-
 // newModelAdapterWithFactory builds a routed adapter without a selection (so
 // duplicate refs resolve to the first provider). It is primarily a test helper.
 func newModelAdapterWithFactory(
@@ -198,7 +183,11 @@ func openDumpWriter() (io.Writer, func()) {
 		log.Printf("q15: Q15_DUMP_PAYLOADS open %q failed: %v (dump disabled)", path, err)
 		return nil, nil
 	}
-	return f, func() { f.Close() }
+	return f, func() {
+		if err := f.Close(); err != nil {
+			log.Printf("q15: Q15_DUMP_PAYLOADS close %q failed: %v", path, err)
+		}
+	}
 }
 
 // buildModelRefs returns the engine's eligible model-ref list: the current
