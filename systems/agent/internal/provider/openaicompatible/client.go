@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"strings"
 
 	"github.com/openai/openai-go/v3"
@@ -37,7 +38,13 @@ const assistantImageFollowupText = "Use the attached image output from the assis
 const systemOnlyFollowupText = "Use the system instructions above as the full task definition and complete them directly."
 
 // NewClient constructs a Chat Completions-compatible model client.
-func NewClient(baseURL string, apiKey string, mediaStore q15media.Store) (*Client, error) {
+// rt overrides the HTTP transport; nil uses the SDK default.
+func NewClient(
+	baseURL string,
+	apiKey string,
+	mediaStore q15media.Store,
+	rt http.RoundTripper,
+) (*Client, error) {
 	baseURL = strings.TrimSpace(baseURL)
 	if baseURL == "" {
 		return nil, fmt.Errorf("provider base url is required")
@@ -47,10 +54,14 @@ func NewClient(baseURL string, apiKey string, mediaStore q15media.Store) (*Clien
 		return nil, fmt.Errorf("provider api key is required")
 	}
 
-	client := openai.NewClient(
+	opts := []option.RequestOption{
 		option.WithBaseURL(baseURL),
 		option.WithAPIKey(apiKey),
-	)
+	}
+	if rt != nil {
+		opts = append(opts, option.WithHTTPClient(&http.Client{Transport: rt}))
+	}
+	client := openai.NewClient(opts...)
 
 	return &Client{
 		client:     client,

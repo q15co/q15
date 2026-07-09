@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"strings"
 
 	"github.com/openai/openai-go/v3"
@@ -43,12 +44,17 @@ type Client struct {
 var _ agent.ModelClient = (*Client)(nil)
 
 // NewClient constructs a Codex-backed model client with q15 defaults.
-func NewClient(mediaStore q15media.Store) (*Client, error) {
-	client := openai.NewClient(
+// rt overrides the HTTP transport; nil uses the SDK default.
+func NewClient(mediaStore q15media.Store, rt http.RoundTripper) (*Client, error) {
+	opts := []option.RequestOption{
 		option.WithBaseURL(codexBaseURL),
 		option.WithHeader("originator", codexOriginator),
 		option.WithHeader("OpenAI-Beta", codexBetaHeader),
-	)
+	}
+	if rt != nil {
+		opts = append(opts, option.WithHTTPClient(&http.Client{Transport: rt}))
+	}
+	client := openai.NewClient(opts...)
 	return &Client{
 		client:      client,
 		mediaStore:  mediaStore,

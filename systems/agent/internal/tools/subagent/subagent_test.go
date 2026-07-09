@@ -569,6 +569,7 @@ func newTestManagerWithModels(
 		registry,
 		nil,
 		nil,
+		nil,
 	)
 }
 
@@ -707,6 +708,7 @@ func newTestManagerWithResolver(
 		registry,
 		nil,
 		resolver,
+		nil,
 	)
 }
 

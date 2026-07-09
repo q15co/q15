@@ -6,6 +6,8 @@
 package tools
 
 import (
+	"io"
+
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/embed"
 	"github.com/q15co/q15/systems/agent/internal/execution"
@@ -163,6 +165,7 @@ func NewSubAgentManager(
 	baseTools agent.ToolRegistry,
 	mediaStore q15media.Store,
 	skillResolver subagent.SkillResolver,
+	dumpWriter io.Writer,
 ) *subagent.Manager {
-	return subagent.NewManager(registry, factory, baseTools, mediaStore, skillResolver)
+	return subagent.NewManager(registry, factory, baseTools, mediaStore, skillResolver, dumpWriter)
 }
