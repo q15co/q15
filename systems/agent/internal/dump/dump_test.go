@@ -388,3 +388,58 @@ func TestWireDump_CapturesTransportError(t *testing.T) {
 		t.Error("expected a wire_error entry")
 	}
 }
+
+func TestWireDump_CapturesStreamingNDJSONResponse(t *testing.T) {
+	var buf bytes.Buffer
+	// Ollama /api/chat streams newline-delimited JSON objects. This body is
+	// NOT a single JSON value, so a naive json.RawMessage field would fail to
+	// marshal and the wire_response entry would be silently dropped.
+	ndjson := `{"model":"x","message":{"role":"assistant","content":"hel"},"done":false}` + "\n" +
+		`{"model":"x","message":{"role":"assistant","content":"lo"},"done":true}` + "\n"
+	inner := &fakeRoundTripper{
+		resp: makeResponse(200, ndjson),
+	}
+	dt := NewTransportDump(inner, &buf)
+
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost,
+		"https://ollama.com/api/chat", strings.NewReader(`{"model":"x","stream":true}`))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := dt.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("RoundTrip error: %v", err)
+	}
+	// Caller still sees the full NDJSON body, byte-for-byte.
+	respBody, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if string(respBody) != ndjson {
+		t.Errorf("response body not preserved: %q", respBody)
+	}
+
+	entries := parseJSONL(t, &buf)
+	var respEntry map[string]any
+	for _, e := range entries {
+		if e["type"] == "wire_response" {
+			respEntry = e
+		}
+	}
+	if respEntry == nil {
+		t.Fatalf("wire_response entry missing; got %d entries", len(entries))
+	}
+	// NDJSON body decodes as a JSON array of chunks (jq-native, no fromjson).
+	chunks, ok := respEntry["body"].([]any)
+	if !ok {
+		t.Fatalf("wire_response body is %T, want []any (decoded NDJSON)", respEntry["body"])
+	}
+	if len(chunks) != 2 {
+		t.Fatalf("expected 2 NDJSON chunks, got %d", len(chunks))
+	}
+	first := chunks[0].(map[string]any)
+	if first["done"] != false {
+		t.Errorf("chunk 0 done = %v, want false", first["done"])
+	}
+	second := chunks[1].(map[string]any)
+	if second["done"] != true {
+		t.Errorf("chunk 1 done = %v, want true", second["done"])
+	}
+}
