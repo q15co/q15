@@ -409,6 +409,7 @@ func TestOllamaLocalIntegration(t *testing.T) {
 		os.Getenv("Q15_OLLAMA_INTEGRATION_BASE_URL"),
 		os.Getenv("OLLAMA_API_KEY"),
 		nil,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("NewClient() error = %v", err)

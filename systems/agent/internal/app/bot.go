@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/cognition"
 	"github.com/q15co/q15/systems/agent/internal/config"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
+	"github.com/q15co/q15/systems/agent/internal/dump"
 	"github.com/q15co/q15/systems/agent/internal/fileops"
 	q15media "github.com/q15co/q15/systems/agent/internal/media"
 	"github.com/q15co/q15/systems/agent/internal/memory"
@@ -74,9 +76,32 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 	if err != nil {
 		return fmt.Errorf("initialize media store for agent %q: %w", rt.Name, err)
 	}
-	modelAdapter, err := newModelAdapter(registry, selection, mediaStore)
+	// Payload dump: set Q15_DUMP_PAYLOADS to a file path (or "stderr") to
+	// capture canonical and raw wire request/response JSONL for debugging or
+	// live demos.
+	dumpWriter, dumpCloser := openDumpWriter()
+	if dumpCloser != nil {
+		defer dumpCloser()
+	}
+
+	var dumpRT http.RoundTripper
+	if dumpWriter != nil {
+		dumpRT = dump.NewTransportDump(http.DefaultTransport, dumpWriter)
+	}
+
+	factory := makeDumpAwareFactory(dumpRT)
+	modelAdapter, err := newModelAdapterWithSelectionAndFactory(
+		registry,
+		selection,
+		mediaStore,
+		factory,
+	)
 	if err != nil {
 		return err
+	}
+	var modelClient agent.ModelClient = modelAdapter
+	if dumpWriter != nil {
+		modelClient = dump.NewModelClientDump(modelAdapter, dumpWriter)
 	}
 
 	skillManager, fileSettings := buildSkillManager(rt, runtimeInfo)
@@ -113,6 +138,7 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 		baseToolRegistry,
 		mediaStore,
 		skillManager,
+		dumpWriter,
 	)...)
 	if err != nil {
 		return fmt.Errorf("build tool registry for agent %q: %w", rt.Name, err)
@@ -134,7 +160,7 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 		skills: skillManager,
 	}
 	entryPoints := newRuntimeEntryPoints(runtimeEntryPointsConfig{
-		modelClient:               modelAdapter,
+		modelClient:               modelClient,
 		planner:                   modelAdapter,
 		tools:                     toolRegistry,
 		interactiveModelRefSource: interactiveModelRefSource,

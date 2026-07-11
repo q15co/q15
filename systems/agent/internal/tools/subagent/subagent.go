@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"regexp"
 	"sort"
 	"strings"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
+	"github.com/q15co/q15/systems/agent/internal/dump"
 	q15media "github.com/q15co/q15/systems/agent/internal/media"
 	"github.com/q15co/q15/systems/agent/internal/modelcatalog"
 )
@@ -105,6 +107,7 @@ type Manager struct {
 	tools         agent.ToolRegistry
 	media         q15media.Store
 	skillResolver SkillResolver
+	dumpWriter    io.Writer
 	next          int64
 }
 
@@ -143,6 +146,7 @@ func NewManager(
 	tools agent.ToolRegistry,
 	media q15media.Store,
 	skillResolver SkillResolver,
+	dumpWriter io.Writer,
 ) *Manager {
 	return &Manager{
 		sessions:      map[string]*Session{},
@@ -151,6 +155,7 @@ func NewManager(
 		tools:         tools,
 		media:         media,
 		skillResolver: skillResolver,
+		dumpWriter:    dumpWriter,
 	}
 }
 
@@ -183,6 +188,9 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) (*Session, error)
 		// as "gemma3:4b" reach the provider API intact. The engine and
 		// session continue to use the agent-facing ref (modelCfg.Ref).
 		providerModel: modelCfg.ProviderModel,
+	}
+	if m.dumpWriter != nil {
+		client = dump.NewModelClientDump(client, m.dumpWriter)
 	}
 	// allowedTools governs WHICH tools the sub-agent may use (membership and
 	// intended precedence: explicit first, then skill-declared). The emitted

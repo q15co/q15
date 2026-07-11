@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
@@ -30,6 +31,7 @@ func buildRuntimeTools(
 	baseToolRegistry agent.ToolRegistry,
 	mediaStore q15media.Store,
 	skillManager *q15skills.Manager,
+	dumpWriter io.Writer,
 ) []agent.Tool {
 	subAgentManager := subagent.NewManager(
 		registry,
@@ -37,6 +39,7 @@ func buildRuntimeTools(
 		baseToolRegistry,
 		mediaStore,
 		subagentSkillResolver{manager: skillManager},
+		dumpWriter,
 	)
 	return append(
 		baseToolList,

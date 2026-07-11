@@ -57,21 +57,32 @@ func (c nativeChatClient) Chat(
 
 // NewClient constructs an Ollama model client. Empty baseURL defaults to the
 // local Ollama daemon. apiKey is optional and enables direct Ollama Cloud API
-// access through Bearer authentication.
-func NewClient(baseURL string, apiKey string, mediaStore q15media.Store) (*Client, error) {
+// access through Bearer authentication. rt overrides the HTTP transport; nil
+// uses http.DefaultTransport.
+func NewClient(
+	baseURL string,
+	apiKey string,
+	mediaStore q15media.Store,
+	rt http.RoundTripper,
+) (*Client, error) {
 	base, err := normalizeBaseURL(baseURL)
 	if err != nil {
 		return nil, err
+	}
+
+	httpClient := http.DefaultClient
+	if rt != nil {
+		httpClient = &http.Client{Transport: rt}
 	}
 
 	var chat chatAPI
 	apiKey = strings.TrimSpace(apiKey)
 	if apiKey == "" {
 		chat = nativeChatClient{
-			client: ollamaapi.NewClient(base, http.DefaultClient),
+			client: ollamaapi.NewClient(base, httpClient),
 		}
 	} else {
-		chat = newBearerChatClient(base, apiKey, http.DefaultClient)
+		chat = newBearerChatClient(base, apiKey, httpClient)
 	}
 
 	return &Client{

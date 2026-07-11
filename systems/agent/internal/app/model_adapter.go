@@ -4,6 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"os"
 	"strings"
 	"sync"
 
@@ -104,21 +108,6 @@ func (r *routedModelAdapter) getOrCreateClient(
 	return client, nil
 }
 
-// newModelAdapter builds a routed adapter bound to the given selection using the
-// default provider client factory.
-func newModelAdapter(
-	registry *modelcatalog.Registry,
-	selection *modelcatalog.Selection,
-	mediaStore q15media.Store,
-) (*routedModelAdapter, error) {
-	return newModelAdapterWithSelectionAndFactory(
-		registry,
-		selection,
-		mediaStore,
-		defaultModelClientFactory,
-	)
-}
-
 // newModelAdapterWithFactory builds a routed adapter without a selection (so
 // duplicate refs resolve to the first provider). It is primarily a test helper.
 func newModelAdapterWithFactory(
@@ -156,15 +145,48 @@ func defaultModelClientFactory(
 	m modelcatalog.Model,
 	mediaStore q15media.Store,
 ) (agent.ModelClient, error) {
-	switch providertypes.MustNormalize(m.ProviderType) {
-	case providertypes.Ollama:
-		return ollama.NewClient(m.ProviderBaseURL, m.ProviderAPIKey, mediaStore)
-	case providertypes.OpenAICompatible:
-		return openaicompatible.NewClient(m.ProviderBaseURL, m.ProviderAPIKey, mediaStore)
-	case providertypes.OpenAICodex:
-		return openaicodex.NewClient(mediaStore)
-	default:
-		return nil, fmt.Errorf("unsupported provider type %q", m.ProviderType)
+	return makeDumpAwareFactory(nil)(m, mediaStore)
+}
+
+// makeDumpAwareFactory returns a modelClientFactory that threads an optional
+// dump transport through to each provider's NewClient. When rt is nil the
+// factory uses default HTTP transports.
+func makeDumpAwareFactory(rt http.RoundTripper) modelClientFactory {
+	return func(m modelcatalog.Model, mediaStore q15media.Store) (agent.ModelClient, error) {
+		switch providertypes.MustNormalize(m.ProviderType) {
+		case providertypes.Ollama:
+			return ollama.NewClient(m.ProviderBaseURL, m.ProviderAPIKey, mediaStore, rt)
+		case providertypes.OpenAICompatible:
+			return openaicompatible.NewClient(m.ProviderBaseURL, m.ProviderAPIKey, mediaStore, rt)
+		case providertypes.OpenAICodex:
+			return openaicodex.NewClient(mediaStore, rt)
+		default:
+			return nil, fmt.Errorf("unsupported provider type %q", m.ProviderType)
+		}
+	}
+}
+
+// openDumpWriter reads Q15_DUMP_PAYLOADS and returns a writer for JSONL payload
+// capture. An empty or unset env var returns (nil, nil). The special value
+// "stderr" writes to os.Stderr. Any other value is treated as a file path
+// (opened append-only). The closer is non-nil only for file-backed writers.
+func openDumpWriter() (io.Writer, func()) {
+	path := strings.TrimSpace(os.Getenv("Q15_DUMP_PAYLOADS"))
+	if path == "" {
+		return nil, nil
+	}
+	if path == "stderr" {
+		return os.Stderr, nil
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		log.Printf("q15: Q15_DUMP_PAYLOADS open %q failed: %v (dump disabled)", path, err)
+		return nil, nil
+	}
+	return f, func() {
+		if err := f.Close(); err != nil {
+			log.Printf("q15: Q15_DUMP_PAYLOADS close %q failed: %v", path, err)
+		}
 	}
 }
 
