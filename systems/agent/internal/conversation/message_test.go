@@ -13,7 +13,12 @@ func TestNormalizeMessagesDropsEmptyAndNormalizesFields(t *testing.T) {
 			Role: AssistantRole,
 			Parts: []Part{
 				{Type: TextPartType, Text: "hello", Disposition: "final"},
-				{Type: ImagePartType, MediaRef: " media://abc ", DataURL: " "},
+				{
+					Type:      MediaPartType,
+					MediaKind: MediaKindImage,
+					MediaRef:  " media://abc ",
+					DataURL:   " ",
+				},
 				{Type: ToolCallPartType, ID: " call-1 ", Name: " echo ", Arguments: ""},
 				{
 					Type: ReasoningPartType,
@@ -42,7 +47,8 @@ func TestNormalizeMessagesDropsEmptyAndNormalizesFields(t *testing.T) {
 			TextDispositionFinal,
 		)
 	}
-	if got[0].Parts[1].MediaRef != "media://abc" || got[0].Parts[1].DataURL != "" {
+	if got[0].Parts[1].MediaKind != MediaKindImage ||
+		got[0].Parts[1].MediaRef != "media://abc" || got[0].Parts[1].DataURL != "" {
 		t.Fatalf("image normalization = %#v", got[0].Parts[1])
 	}
 	if got[0].Parts[2].ID != "call-1" || got[0].Parts[2].Name != "echo" ||
@@ -172,7 +178,8 @@ func TestMessageJSONRoundTripPreservesImagePart(t *testing.T) {
 	if len(got.Parts) != 2 {
 		t.Fatalf("parts len = %d, want 2", len(got.Parts))
 	}
-	if got.Parts[1].Type != ImagePartType || got.Parts[1].MediaRef != "media://sha256/abc" {
+	if got.Parts[1].Type != MediaPartType || got.Parts[1].MediaKind != MediaKindImage ||
+		got.Parts[1].MediaRef != "media://sha256/abc" {
 		t.Fatalf("image part = %#v", got.Parts[1])
 	}
 }
@@ -323,5 +330,68 @@ func TestHasImageParts(t *testing.T) {
 		),
 	}) {
 		t.Fatal("HasImageParts() = false, want true")
+	}
+}
+
+func TestMediaConstructorProducesFlatMediaPart(t *testing.T) {
+	part := Media(MediaKindVideo, " media://abc ")
+	if part.Type != MediaPartType || part.MediaKind != MediaKindVideo ||
+		part.MediaRef != "media://abc" {
+		t.Fatalf("Media() = %#v", part)
+	}
+}
+
+func TestImageAudioSerializeAsFlatMedia(t *testing.T) {
+	img := Image("media://sha256/img", "data:image/png;base64,abc")
+	if img.Type != MediaPartType || img.MediaKind != MediaKindImage ||
+		img.MediaRef != "media://sha256/img" || img.DataURL != "data:image/png;base64,abc" {
+		t.Fatalf("Image() = %#v", img)
+	}
+
+	aud := Audio(" media://sha256/aud ")
+	if aud.Type != MediaPartType || aud.MediaKind != MediaKindAudio ||
+		aud.MediaRef != "media://sha256/aud" || aud.DataURL != "" {
+		t.Fatalf("Audio() = %#v", aud)
+	}
+}
+
+func TestIsMediaDiscriminator(t *testing.T) {
+	if !Image("ref", "").IsMedia(MediaKindImage) {
+		t.Fatal("Image().IsMedia(MediaKindImage) = false, want true")
+	}
+	if Image("ref", "").IsMedia(MediaKindAudio) {
+		t.Fatal("Image().IsMedia(MediaKindAudio) = true, want false")
+	}
+	if !Audio("ref").IsMedia(MediaKindAudio) {
+		t.Fatal("Audio().IsMedia(MediaKindAudio) = false, want true")
+	}
+	if !Media(MediaKindDocument, "ref").IsMedia(MediaKindDocument) {
+		t.Fatal("Media(Document).IsMedia(MediaKindDocument) = false, want true")
+	}
+}
+
+func TestNormalizeDropsUnknownMediaKind(t *testing.T) {
+	part := NormalizePart(Part{Type: MediaPartType, MediaKind: "unknown", MediaRef: "ref"})
+	if shouldKeepPart(part) {
+		t.Fatalf("unknown media kind should be dropped, got %#v", part)
+	}
+}
+
+func TestNormalizeClearsDataURLForNonImageMedia(t *testing.T) {
+	part := NormalizePart(Part{Type: MediaPartType, MediaKind: MediaKindAudio,
+		MediaRef: "ref", DataURL: "data:image/png;base64,abc"})
+	if part.DataURL != "" {
+		t.Fatalf("DataURL should be cleared for non-image media, got %q", part.DataURL)
+	}
+}
+
+func TestNormalizeKeepsImageDataURLOnlyPart(t *testing.T) {
+	part := NormalizePart(Part{Type: MediaPartType, MediaKind: MediaKindImage,
+		MediaRef: "", DataURL: " data:image/png;base64,abc "})
+	if !shouldKeepPart(part) {
+		t.Fatal("image with only DataURL should survive normalization")
+	}
+	if part.DataURL != "data:image/png;base64,abc" {
+		t.Fatalf("DataURL = %q, want trimmed URL", part.DataURL)
 	}
 }

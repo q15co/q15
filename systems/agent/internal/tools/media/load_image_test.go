@@ -39,7 +39,8 @@ func TestLoadImageRegistersImageAndReturnsMediaRef(t *testing.T) {
 	if !strings.Contains(result.Output, "Loaded image: /workspace/artifact.png") {
 		t.Fatalf("Output = %q", result.Output)
 	}
-	if len(result.Attachments) != 1 || result.Attachments[0].Type != conversation.ImagePartType ||
+	if len(result.Attachments) != 1 ||
+		!result.Attachments[0].IsMedia(conversation.MediaKindImage) ||
 		!strings.HasPrefix(result.Attachments[0].MediaRef, "media://sha256/") {
 		t.Fatalf("Attachments = %#v, want one image attachment", result.Attachments)
 	}
@@ -117,7 +118,8 @@ func TestLoadImageMediaRefInjectsVisionAttachment(t *testing.T) {
 	if !strings.Contains(result.Output, seededRef) {
 		t.Fatalf("Output = %q, want seeded ref %q", result.Output, seededRef)
 	}
-	if len(result.Attachments) != 1 || result.Attachments[0].Type != conversation.ImagePartType ||
+	if len(result.Attachments) != 1 ||
+		!result.Attachments[0].IsMedia(conversation.MediaKindImage) ||
 		result.Attachments[0].MediaRef != seededRef {
 		t.Fatalf("Attachments = %#v, want image attachment with seeded ref", result.Attachments)
 	}

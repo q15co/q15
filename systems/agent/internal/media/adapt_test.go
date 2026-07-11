@@ -3,9 +3,11 @@ package media
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/q15co/q15/systems/agent/internal/conversation"
+	"github.com/q15co/q15/systems/agent/internal/modelcatalog"
 )
 
 func TestAdaptMediaToCapabilities_ImageKeptWhenSupported(t *testing.T) {
@@ -16,13 +18,13 @@ func TestAdaptMediaToCapabilities_ImageKeptWhenSupported(t *testing.T) {
 		),
 	}
 
-	got := AdaptMediaToCapabilities(messages, Support{Image: true}, nil)
+	got := AdaptMediaToCapabilities(messages, Support{conversation.MediaKindImage: true}, nil)
 
 	if len(got) != 1 || len(got[0].Parts) != 2 {
 		t.Fatalf("adapted parts = %#v, want 2 parts", got[0].Parts)
 	}
-	if got[0].Parts[1].Type != conversation.ImagePartType {
-		t.Fatalf("part[1] type = %q, want %q", got[0].Parts[1].Type, conversation.ImagePartType)
+	if !got[0].Parts[1].IsMedia(conversation.MediaKindImage) {
+		t.Fatalf("part[1] is not image media: %#v", got[0].Parts[1])
 	}
 	if got[0].Parts[1].MediaRef != "media://sha256/abc" {
 		t.Fatalf("part[1] MediaRef = %q", got[0].Parts[1].MediaRef)
@@ -37,7 +39,7 @@ func TestAdaptMediaToCapabilities_ImageDowngradedWhenNotSupported(t *testing.T) 
 		),
 	}
 
-	got := AdaptMediaToCapabilities(messages, Support{Image: false}, nil)
+	got := AdaptMediaToCapabilities(messages, nil, nil)
 
 	if len(got) != 1 || len(got[0].Parts) != 2 {
 		t.Fatalf("adapted parts = %#v, want 2 parts", got[0].Parts)
@@ -54,15 +56,14 @@ func TestAdaptMediaToCapabilities_ImageDowngradedWhenNotSupported(t *testing.T) 
 	}
 }
 
-func TestAdaptMediaToCapabilities_AudioAlwaysDowngradedInPhase1(t *testing.T) {
+func TestAdaptMediaToCapabilities_AudioDowngradedWhenNotSupported(t *testing.T) {
 	messages := []conversation.Message{
 		conversation.UserMessageParts(
 			conversation.Audio("media://sha256/voice"),
 		),
 	}
 
-	// Phase 1: AudioInput not declared on any model, so support.Audio is false.
-	got := AdaptMediaToCapabilities(messages, Support{Image: true, Audio: false}, nil)
+	got := AdaptMediaToCapabilities(messages, Support{conversation.MediaKindImage: true}, nil)
 
 	if len(got) != 1 || len(got[0].Parts) != 1 {
 		t.Fatalf("adapted parts = %#v, want 1 part", got[0].Parts)
@@ -75,20 +76,35 @@ func TestAdaptMediaToCapabilities_AudioAlwaysDowngradedInPhase1(t *testing.T) {
 	}
 }
 
-func TestAdaptMediaToCapabilities_AudioKeptWhenSupported(t *testing.T) {
-	messages := []conversation.Message{
-		conversation.UserMessageParts(
-			conversation.Audio("media://sha256/voice"),
-		),
+func TestAdaptMediaToCapabilities_GenericMediaAlwaysDowngraded(t *testing.T) {
+	kinds := []conversation.MediaKind{
+		conversation.MediaKindVideo,
+		conversation.MediaKindDocument,
+		conversation.MediaKindSticker,
+		conversation.MediaKindAnimation,
+		conversation.MediaKindVideoNote,
 	}
+	for _, kind := range kinds {
+		messages := []conversation.Message{
+			conversation.UserMessageParts(
+				conversation.Media(kind, "media://sha256/"+string(kind)),
+			),
+		}
 
-	got := AdaptMediaToCapabilities(messages, Support{Audio: true}, nil)
+		got := AdaptMediaToCapabilities(messages, Support{
+			conversation.MediaKindImage: true,
+			conversation.MediaKindAudio: true,
+		}, nil)
 
-	if len(got) != 1 || len(got[0].Parts) != 1 {
-		t.Fatalf("adapted parts = %#v, want 1 part", got[0].Parts)
-	}
-	if got[0].Parts[0].Type != conversation.AudioPartType {
-		t.Fatalf("part[0] type = %q, want %q", got[0].Parts[0].Type, conversation.AudioPartType)
+		if len(got) != 1 || len(got[0].Parts) != 1 {
+			t.Fatalf("[%s] adapted parts = %#v, want 1 part", kind, got[0].Parts)
+		}
+		if got[0].Parts[0].Type != conversation.TextPartType {
+			t.Fatalf("[%s] part type = %q, want text hint", kind, got[0].Parts[0].Type)
+		}
+		if !contains(got[0].Parts[0].Text, "[Media: "+string(kind)+"]") {
+			t.Fatalf("[%s] hint missing kind: %q", kind, got[0].Parts[0].Text)
+		}
 	}
 }
 
@@ -97,7 +113,10 @@ func TestAdaptMediaToCapabilities_TextPartsUntouched(t *testing.T) {
 		conversation.UserMessage("hello"),
 	}
 
-	got := AdaptMediaToCapabilities(messages, Support{Image: true, Audio: true}, nil)
+	got := AdaptMediaToCapabilities(messages, Support{
+		conversation.MediaKindImage: true,
+		conversation.MediaKindAudio: true,
+	}, nil)
 
 	if got[0].Parts[0].Type != conversation.TextPartType ||
 		got[0].Parts[0].Text != "hello" {
@@ -130,7 +149,7 @@ func TestAdaptMediaToCapabilities_ToolPartsUntouched(t *testing.T) {
 		},
 	}
 
-	got := AdaptMediaToCapabilities(messages, Support{Image: false, Audio: false}, nil)
+	got := AdaptMediaToCapabilities(messages, nil, nil)
 
 	if got[0].Parts[0].Type != conversation.ToolCallPartType ||
 		got[0].Parts[0].Name != "exec" {
@@ -150,14 +169,13 @@ func TestAdaptMediaToCapabilities_CanonicalTranscriptUnmutated(t *testing.T) {
 		),
 	}
 
-	_ = AdaptMediaToCapabilities(original, Support{Image: false, Audio: false}, nil)
+	_ = AdaptMediaToCapabilities(original, nil, nil)
 
-	// The original slice must still contain typed parts — not text hints.
-	if original[0].Parts[0].Type != conversation.ImagePartType {
-		t.Fatalf("canonical image part mutated: %q", original[0].Parts[0].Type)
+	if !original[0].Parts[0].IsMedia(conversation.MediaKindImage) {
+		t.Fatalf("canonical image part mutated: %#v", original[0].Parts[0])
 	}
-	if original[0].Parts[1].Type != conversation.AudioPartType {
-		t.Fatalf("canonical audio part mutated: %q", original[0].Parts[1].Type)
+	if !original[0].Parts[1].IsMedia(conversation.MediaKindAudio) {
+		t.Fatalf("canonical audio part mutated: %#v", original[0].Parts[1])
 	}
 }
 
@@ -168,7 +186,7 @@ func TestAdaptMediaToCapabilities_HintWithNilStore(t *testing.T) {
 		),
 	}
 
-	got := AdaptMediaToCapabilities(messages, Support{Image: false}, nil)
+	got := AdaptMediaToCapabilities(messages, nil, nil)
 
 	hint := got[0].Parts[0].Text
 	if !contains(hint, "[Media: image]") {
@@ -182,7 +200,6 @@ func TestAdaptMediaToCapabilities_HintWithNilStore(t *testing.T) {
 func TestAdaptMediaToCapabilities_HintWithResolvingStore(t *testing.T) {
 	store := newTestStore(t)
 
-	// Store a dummy file so Resolve succeeds.
 	src := filepath.Join(store.rootDir, "source")
 	if err := os.WriteFile(src, []byte("dummy"), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
@@ -202,7 +219,7 @@ func TestAdaptMediaToCapabilities_HintWithResolvingStore(t *testing.T) {
 		),
 	}
 
-	got := AdaptMediaToCapabilities(messages, Support{Image: false}, store)
+	got := AdaptMediaToCapabilities(messages, nil, store)
 
 	hint := got[0].Parts[0].Text
 	if !contains(hint, "File:") {
@@ -213,8 +230,45 @@ func TestAdaptMediaToCapabilities_HintWithResolvingStore(t *testing.T) {
 	}
 }
 
+func TestSupportFromCapabilities(t *testing.T) {
+	tests := []struct {
+		name string
+		caps modelcatalog.Capabilities
+		want Support
+	}{
+		{
+			name: "image declared and serialized",
+			caps: modelcatalog.Capabilities{ImageInput: true},
+			want: Support{conversation.MediaKindImage: true},
+		},
+		{
+			name: "audio declared but no provider serializer yet",
+			caps: modelcatalog.Capabilities{AudioInput: true},
+			want: Support{},
+		},
+		{
+			name: "image and audio declared; only image is inline-serializable",
+			caps: modelcatalog.Capabilities{ImageInput: true, AudioInput: true},
+			want: Support{conversation.MediaKindImage: true},
+		},
+		{
+			name: "no media capabilities declared",
+			caps: modelcatalog.Capabilities{},
+			want: Support{},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := SupportFromCapabilities(tt.caps)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("SupportFromCapabilities(%+v) = %#v, want %#v", tt.caps, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestAdaptMediaToCapabilities_EmptyMessages(t *testing.T) {
-	got := AdaptMediaToCapabilities(nil, Support{Image: true}, nil)
+	got := AdaptMediaToCapabilities(nil, Support{conversation.MediaKindImage: true}, nil)
 	if len(got) != 0 {
 		t.Fatalf("adapted nil messages = %#v, want empty", got)
 	}

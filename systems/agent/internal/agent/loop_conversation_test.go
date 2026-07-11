@@ -17,7 +17,8 @@ func TestNormalizeUserMessageAcceptsAudioInput(t *testing.T) {
 	if len(got.Parts) != 2 {
 		t.Fatalf("parts len = %d, want 2", len(got.Parts))
 	}
-	if got.Parts[1].Type != conversation.AudioPartType ||
+	if got.Parts[1].Type != conversation.MediaPartType ||
+		got.Parts[1].MediaKind != conversation.MediaKindAudio ||
 		got.Parts[1].MediaRef != "media://sha256/abc" {
 		t.Fatalf("audio part = %#v", got.Parts[1])
 	}

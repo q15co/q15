@@ -185,8 +185,10 @@ func mapMessages(
 						out,
 						openai.ToolMessage(part.Content, part.ToolCallID),
 					)
-				case conversation.ImagePartType:
-					imageParts = append(imageParts, part)
+				case conversation.MediaPartType:
+					if part.MediaKind == conversation.MediaKindImage {
+						imageParts = append(imageParts, part)
+					}
 				}
 			}
 			if toolParts == 0 && len(imageParts) == 0 {
@@ -231,7 +233,10 @@ func buildUserMessage(
 		case conversation.TextPartType:
 			textBuilder.WriteString(part.Text)
 			contentParts = append(contentParts, openai.TextContentPart(part.Text))
-		case conversation.ImagePartType:
+		case conversation.MediaPartType:
+			if part.MediaKind != conversation.MediaKindImage {
+				continue
+			}
 			textOnly = false
 			dataURL, err := q15media.ResolveImagePartDataURL(
 				part,
@@ -293,7 +298,7 @@ func collectAssistantImageParts(messages []conversation.Message) []conversation.
 	out := make([]conversation.Part, 0)
 	for _, msg := range messages {
 		for _, part := range conversation.NormalizeParts(msg.Parts) {
-			if part.Type != conversation.ImagePartType {
+			if !part.IsMedia(conversation.MediaKindImage) {
 				continue
 			}
 			out = append(out, part)

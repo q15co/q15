@@ -74,7 +74,7 @@ func TestExtractPromotesDeliverToolAttachmentFollowedByUnrelatedTool(t *testing.
 		t.Fatalf("Extract().Text = %q, want done", got.Text)
 	}
 	if len(got.Attachments) != 1 ||
-		got.Attachments[0].Type != conversation.AudioPartType ||
+		!got.Attachments[0].IsMedia(conversation.MediaKindAudio) ||
 		got.Attachments[0].MediaRef != "media://sha256/au" {
 		t.Fatalf("Extract().Attachments = %#v, want audio attachment preserved", got.Attachments)
 	}
@@ -135,7 +135,7 @@ func TestExtractPromotesAttachImage(t *testing.T) {
 	})
 
 	if len(got.Attachments) != 1 ||
-		got.Attachments[0].Type != conversation.ImagePartType ||
+		!got.Attachments[0].IsMedia(conversation.MediaKindImage) ||
 		got.Attachments[0].MediaRef != "media://sha256/chart" {
 		t.Fatalf("Extract().Attachments = %#v, want the attached image", got.Attachments)
 	}
@@ -269,11 +269,11 @@ func TestCanonicalizePromotesAllDeliverAttachmentsAcrossTurn(t *testing.T) {
 	if final.Parts[0].Type != conversation.TextPartType {
 		t.Fatalf("final assistant part[0] = %#v, want text", final.Parts[0])
 	}
-	if final.Parts[1].Type != conversation.AudioPartType ||
+	if !final.Parts[1].IsMedia(conversation.MediaKindAudio) ||
 		final.Parts[1].MediaRef != "media://sha256/voice" {
 		t.Fatalf("final attachment[0] = %#v, want voice audio", final.Parts[1])
 	}
-	if final.Parts[2].Type != conversation.ImagePartType ||
+	if !final.Parts[2].IsMedia(conversation.MediaKindImage) ||
 		final.Parts[2].MediaRef != "media://sha256/final" {
 		t.Fatalf("final attachment[1] = %#v, want final image", final.Parts[2])
 	}
@@ -307,7 +307,7 @@ func TestCanonicalizeKeepsVisionImageOnToolMessage(t *testing.T) {
 	var toolImages, assistantImages int
 	for _, msg := range got {
 		for _, part := range msg.Parts {
-			if part.Type != conversation.ImagePartType {
+			if !part.IsMedia(conversation.MediaKindImage) {
 				continue
 			}
 			switch msg.Role {
@@ -382,7 +382,7 @@ func TestCanonicalizeSynthesizesImageOnlyAssistant(t *testing.T) {
 	if last.Role != conversation.AssistantRole {
 		t.Fatalf("last role = %q, want assistant", last.Role)
 	}
-	if len(last.Parts) != 1 || last.Parts[0].Type != conversation.ImagePartType {
+	if len(last.Parts) != 1 || !last.Parts[0].IsMedia(conversation.MediaKindImage) {
 		t.Fatalf("last assistant parts = %#v, want image-only assistant", last.Parts)
 	}
 }

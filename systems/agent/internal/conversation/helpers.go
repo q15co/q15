@@ -100,11 +100,15 @@ func NormalizePart(part Part) Part {
 	switch part.Type {
 	case TextPartType:
 		part.Disposition = normalizeDisposition(part.Disposition)
-	case ImagePartType:
+	case MediaPartType:
+		part.MediaKind = normalizeMediaKind(part.MediaKind)
 		part.MediaRef = strings.TrimSpace(part.MediaRef)
 		part.DataURL = strings.TrimSpace(part.DataURL)
-	case AudioPartType:
-		part.MediaRef = strings.TrimSpace(part.MediaRef)
+		// Only image media may carry an inline data URL; clear it for all other
+		// kinds so a stale field does not leak into non-image serialization.
+		if part.MediaKind != MediaKindImage {
+			part.DataURL = ""
+		}
 	case ReasoningPartType:
 	case ToolCallPartType:
 		part.ID = strings.TrimSpace(part.ID)
@@ -121,9 +125,14 @@ func shouldKeepPart(part Part) bool {
 	switch part.Type {
 	case TextPartType:
 		return strings.TrimSpace(part.Text) != ""
-	case ImagePartType:
-		return strings.TrimSpace(part.MediaRef) != "" || strings.TrimSpace(part.DataURL) != ""
-	case AudioPartType:
+	case MediaPartType:
+		if part.MediaKind == "" {
+			return false
+		}
+		if part.MediaKind == MediaKindImage {
+			return strings.TrimSpace(part.MediaRef) != "" ||
+				strings.TrimSpace(part.DataURL) != ""
+		}
 		return strings.TrimSpace(part.MediaRef) != ""
 	case ReasoningPartType:
 		return strings.TrimSpace(part.Text) != "" || len(part.Replay) > 0
@@ -194,7 +203,7 @@ func FinalAnswer(messages []Message) string {
 func HasImageParts(messages []Message) bool {
 	for _, msg := range messages {
 		for _, part := range msg.Parts {
-			if NormalizePart(part).Type == ImagePartType {
+			if NormalizePart(part).IsMedia(MediaKindImage) {
 				return true
 			}
 		}

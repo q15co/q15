@@ -233,8 +233,12 @@ func mapMessages(
 			for _, part := range msg.Parts {
 				part = conversation.NormalizePart(part)
 				switch part.Type {
-				case conversation.TextPartType, conversation.ImagePartType:
+				case conversation.TextPartType:
 					assistantParts = append(assistantParts, part)
+				case conversation.MediaPartType:
+					if part.MediaKind == conversation.MediaKindImage {
+						assistantParts = append(assistantParts, part)
+					}
 				case conversation.ReasoningPartType:
 					if err := flushAssistantParts(); err != nil {
 						return nil, fmt.Errorf("message %d: %w", i, err)
@@ -297,8 +301,10 @@ func mapMessages(
 							},
 						},
 					})
-				case conversation.ImagePartType:
-					imageParts = append(imageParts, part)
+				case conversation.MediaPartType:
+					if part.MediaKind == conversation.MediaKindImage {
+						imageParts = append(imageParts, part)
+					}
 				}
 			}
 			if toolParts == 0 && len(imageParts) == 0 {
@@ -403,7 +409,10 @@ func buildUserInputItem(
 				contentParts,
 				responses.ResponseInputContentParamOfInputText(part.Text),
 			)
-		case conversation.ImagePartType:
+		case conversation.MediaPartType:
+			if part.MediaKind != conversation.MediaKindImage {
+				continue
+			}
 			textOnly = false
 			dataURL, err := q15media.ResolveImagePartDataURL(
 				part,
@@ -559,8 +568,10 @@ func buildAssistantReplayItems(
 		switch part.Type {
 		case conversation.TextPartType:
 			textParts = append(textParts, part)
-		case conversation.ImagePartType:
-			imageParts = append(imageParts, part)
+		case conversation.MediaPartType:
+			if part.MediaKind == conversation.MediaKindImage {
+				imageParts = append(imageParts, part)
+			}
 		}
 	}
 

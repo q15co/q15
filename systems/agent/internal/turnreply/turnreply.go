@@ -264,29 +264,29 @@ func collectReplyAttachments(
 
 func normalizeReplyAttachment(part conversation.Part) (replyAttachment, bool) {
 	part = conversation.NormalizePart(part)
-	switch part.Type {
-	case conversation.ImagePartType:
+	if part.Type != conversation.MediaPartType || part.MediaKind == "" {
+		return replyAttachment{}, false
+	}
+	switch part.MediaKind {
+	case conversation.MediaKindImage:
 		if strings.TrimSpace(part.MediaRef) == "" && strings.TrimSpace(part.DataURL) == "" {
 			return replyAttachment{}, false
 		}
 		normalized := conversation.Image(part.MediaRef, part.DataURL)
 		return replyAttachment{
-			key: string(
-				normalized.Type,
-			) + "\x00" + normalized.MediaRef + "\x00" + normalized.DataURL,
-			part: normalized,
-		}, true
-	case conversation.AudioPartType:
-		if strings.TrimSpace(part.MediaRef) == "" {
-			return replyAttachment{}, false
-		}
-		normalized := conversation.Audio(part.MediaRef)
-		return replyAttachment{
-			key:  string(normalized.Type) + "\x00" + normalized.MediaRef,
+			key: string(normalized.MediaKind) + "\x00" + normalized.MediaRef +
+				"\x00" + normalized.DataURL,
 			part: normalized,
 		}, true
 	default:
-		return replyAttachment{}, false
+		if strings.TrimSpace(part.MediaRef) == "" {
+			return replyAttachment{}, false
+		}
+		normalized := conversation.Media(part.MediaKind, part.MediaRef)
+		return replyAttachment{
+			key:  string(normalized.MediaKind) + "\x00" + normalized.MediaRef,
+			part: normalized,
+		}, true
 	}
 }
 

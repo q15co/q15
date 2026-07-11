@@ -236,8 +236,10 @@ func mapMessages(
 						ToolName:   toolNamesByID[toolCallID],
 						ToolCallID: toolCallID,
 					})
-				case conversation.ImagePartType:
-					imageParts = append(imageParts, part)
+				case conversation.MediaPartType:
+					if part.MediaKind == conversation.MediaKindImage {
+						imageParts = append(imageParts, part)
+					}
 				}
 			}
 			if toolParts == 0 && len(imageParts) == 0 {
@@ -283,7 +285,10 @@ func buildUserMessage(
 		switch part.Type {
 		case conversation.TextPartType:
 			content.WriteString(part.Text)
-		case conversation.ImagePartType:
+		case conversation.MediaPartType:
+			if part.MediaKind != conversation.MediaKindImage {
+				continue
+			}
 			image, err := resolveImagePart(part, mediaStore)
 			if err != nil {
 				return ollamaapi.Message{}, fmt.Errorf("resolve image input: %w", err)
@@ -360,7 +365,7 @@ func collectAssistantImageParts(messages []conversation.Message) []conversation.
 	out := make([]conversation.Part, 0)
 	for _, msg := range messages {
 		for _, part := range conversation.NormalizeParts(msg.Parts) {
-			if part.Type != conversation.ImagePartType {
+			if !part.IsMedia(conversation.MediaKindImage) {
 				continue
 			}
 			out = append(out, part)

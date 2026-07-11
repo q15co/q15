@@ -34,6 +34,9 @@ type fakeAgentRunChannel struct {
 	sendMessageErr   error
 	sendPhotoErr     error
 	sendAudioErr     error
+
+	sendCaptionedMedia   []fakeSentCaptionedMedia
+	sendUncaptionedMedia []fakeSentUncaptionedMedia
 }
 
 type fakeSentPhoto struct {
@@ -46,6 +49,19 @@ type fakeSentAudio struct {
 	chatID   string
 	mediaRef string
 	caption  string
+}
+
+type fakeSentCaptionedMedia struct {
+	kind     string
+	chatID   string
+	mediaRef string
+	caption  string
+}
+
+type fakeSentUncaptionedMedia struct {
+	kind     string
+	chatID   string
+	mediaRef string
 }
 
 func (f *fakeAgentRunChannel) SendText(
@@ -110,6 +126,83 @@ func (f *fakeAgentRunChannel) SendAudio(
 		caption:  caption,
 	})
 	return f.sendAudioErr
+}
+
+func (f *fakeAgentRunChannel) SendVideo(
+	ctx context.Context,
+	chatID string,
+	mediaRef string,
+	caption string,
+) error {
+	return f.sendCaptioned(ctx, "video", chatID, mediaRef, caption)
+}
+
+func (f *fakeAgentRunChannel) SendDocument(
+	ctx context.Context,
+	chatID string,
+	mediaRef string,
+	caption string,
+) error {
+	return f.sendCaptioned(ctx, "document", chatID, mediaRef, caption)
+}
+
+func (f *fakeAgentRunChannel) SendAnimation(
+	ctx context.Context,
+	chatID string,
+	mediaRef string,
+	caption string,
+) error {
+	return f.sendCaptioned(ctx, "animation", chatID, mediaRef, caption)
+}
+
+func (f *fakeAgentRunChannel) SendVideoNote(
+	ctx context.Context,
+	chatID string,
+	mediaRef string,
+) error {
+	return f.sendUncaptioned(ctx, "video_note", chatID, mediaRef)
+}
+
+func (f *fakeAgentRunChannel) SendSticker(
+	ctx context.Context,
+	chatID string,
+	mediaRef string,
+) error {
+	return f.sendUncaptioned(ctx, "sticker", chatID, mediaRef)
+}
+
+func (f *fakeAgentRunChannel) sendCaptioned(
+	_ context.Context,
+	kind string,
+	chatID string,
+	mediaRef string,
+	caption string,
+) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sendCaptionedMedia = append(f.sendCaptionedMedia, fakeSentCaptionedMedia{
+		kind:     kind,
+		chatID:   chatID,
+		mediaRef: mediaRef,
+		caption:  caption,
+	})
+	return f.sendErr
+}
+
+func (f *fakeAgentRunChannel) sendUncaptioned(
+	_ context.Context,
+	kind string,
+	chatID string,
+	mediaRef string,
+) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sendUncaptionedMedia = append(f.sendUncaptionedMedia, fakeSentUncaptionedMedia{
+		kind:     kind,
+		chatID:   chatID,
+		mediaRef: mediaRef,
+	})
+	return f.sendErr
 }
 
 func (f *fakeAgentRunChannel) EditText(
@@ -580,6 +673,198 @@ func TestAgentRunSession_AudioReplySendsTextAndAudioSeparately(t *testing.T) {
 	}
 	if len(channel.sendPhotos) != 0 {
 		t.Fatalf("sendPhotos = %#v, want none", channel.sendPhotos)
+	}
+}
+
+func TestAgentRunSession_NewMediaKindsRouteToCorrectSendMethod(t *testing.T) {
+	tests := []struct {
+		name      string
+		part      conversation.Part
+		wantKind  string
+		captioned bool
+	}{
+		{
+			name:      "video",
+			part:      conversation.Media(conversation.MediaKindVideo, "media://sha256/video"),
+			wantKind:  "video",
+			captioned: true,
+		},
+		{
+			name:      "document",
+			part:      conversation.Media(conversation.MediaKindDocument, "media://sha256/doc"),
+			wantKind:  "document",
+			captioned: true,
+		},
+		{
+			name:      "animation",
+			part:      conversation.Media(conversation.MediaKindAnimation, "media://sha256/anim"),
+			wantKind:  "animation",
+			captioned: true,
+		},
+		{
+			name:      "sticker",
+			part:      conversation.Media(conversation.MediaKindSticker, "media://sha256/sticker"),
+			wantKind:  "sticker",
+			captioned: false,
+		},
+		{
+			name:      "video_note",
+			part:      conversation.Media(conversation.MediaKindVideoNote, "media://sha256/vnote"),
+			wantKind:  "video_note",
+			captioned: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			channel := &fakeAgentRunChannel{}
+			session := newAgentRunSession(channel, "123", "", progressModeProgress)
+
+			session.Finish(context.Background(), agent.ReplyResult{
+				Attachments: []conversation.Part{tt.part},
+			})
+
+			channel.mu.Lock()
+			defer channel.mu.Unlock()
+			if tt.captioned {
+				if len(channel.sendCaptionedMedia) != 1 {
+					t.Fatalf("sendCaptionedMedia len = %d, want 1", len(channel.sendCaptionedMedia))
+				}
+				got := channel.sendCaptionedMedia[0]
+				if got.kind != tt.wantKind {
+					t.Fatalf("sendCaptionedMedia[0].kind = %q, want %q", got.kind, tt.wantKind)
+				}
+				if len(channel.sendUncaptionedMedia) != 0 {
+					t.Fatalf("sendUncaptionedMedia = %#v, want none", channel.sendUncaptionedMedia)
+				}
+			} else {
+				if len(channel.sendUncaptionedMedia) != 1 {
+					t.Fatalf("sendUncaptionedMedia len = %d, want 1", len(channel.sendUncaptionedMedia))
+				}
+				got := channel.sendUncaptionedMedia[0]
+				if got.kind != tt.wantKind {
+					t.Fatalf("sendUncaptionedMedia[0].kind = %q, want %q", got.kind, tt.wantKind)
+				}
+				if len(channel.sendCaptionedMedia) != 0 {
+					t.Fatalf("sendCaptionedMedia = %#v, want none", channel.sendCaptionedMedia)
+				}
+			}
+		})
+	}
+}
+
+func TestAgentRunSession_SingleCaptionableAttachmentUsesCaption(t *testing.T) {
+	tests := []struct {
+		name string
+		part conversation.Part
+	}{
+		{
+			name: "video",
+			part: conversation.Media(conversation.MediaKindVideo, "media://sha256/video"),
+		},
+		{
+			name: "document",
+			part: conversation.Media(conversation.MediaKindDocument, "media://sha256/doc"),
+		},
+		{
+			name: "animation",
+			part: conversation.Media(conversation.MediaKindAnimation, "media://sha256/anim"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			channel := &fakeAgentRunChannel{}
+			session := newAgentRunSession(channel, "123", "", progressModeProgress)
+
+			session.Finish(context.Background(), agent.ReplyResult{
+				Text:        "done",
+				Attachments: []conversation.Part{tt.part},
+			})
+
+			channel.mu.Lock()
+			defer channel.mu.Unlock()
+			if len(channel.sendCaptionedMedia) != 1 {
+				t.Fatalf("sendCaptionedMedia len = %d, want 1", len(channel.sendCaptionedMedia))
+			}
+			if got := channel.sendCaptionedMedia[0]; got.caption != "done" {
+				t.Fatalf("sendCaptionedMedia[0].caption = %q, want %q", got.caption, "done")
+			}
+			if len(channel.sendTexts) != 0 {
+				t.Fatalf("sendTexts = %#v, want none", channel.sendTexts)
+			}
+		})
+	}
+}
+
+func TestAgentRunSession_StickerAndVideoNoteNeverReceiveCaption(t *testing.T) {
+	tests := []struct {
+		name string
+		part conversation.Part
+	}{
+		{
+			name: "sticker",
+			part: conversation.Media(conversation.MediaKindSticker, "media://sha256/sticker"),
+		},
+		{
+			name: "video_note",
+			part: conversation.Media(conversation.MediaKindVideoNote, "media://sha256/vnote"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			channel := &fakeAgentRunChannel{}
+			session := newAgentRunSession(channel, "123", "", progressModeProgress)
+
+			session.Finish(context.Background(), agent.ReplyResult{
+				Text:        "done",
+				Attachments: []conversation.Part{tt.part},
+			})
+
+			channel.mu.Lock()
+			defer channel.mu.Unlock()
+			if len(channel.sendUncaptionedMedia) != 1 {
+				t.Fatalf("sendUncaptionedMedia len = %d, want 1", len(channel.sendUncaptionedMedia))
+			}
+			if got := channel.sendUncaptionedMedia[0].kind; got != tt.name {
+				t.Fatalf("sendUncaptionedMedia[0].kind = %q, want %q", got, tt.name)
+			}
+			if len(channel.sendTexts) != 1 || channel.sendTexts[0] != "done" {
+				t.Fatalf("sendTexts = %#v, want [done]", channel.sendTexts)
+			}
+			if len(channel.sendCaptionedMedia) != 0 {
+				t.Fatalf("sendCaptionedMedia = %#v, want none", channel.sendCaptionedMedia)
+			}
+		})
+	}
+}
+
+func TestAgentRunSession_DedupByKeyAndRef(t *testing.T) {
+	channel := &fakeAgentRunChannel{}
+	session := newAgentRunSession(channel, "123", "", progressModeProgress)
+
+	session.Finish(context.Background(), agent.ReplyResult{
+		Attachments: []conversation.Part{
+			conversation.Media(conversation.MediaKindVideo, "media://sha256/same"),
+			conversation.Media(conversation.MediaKindDocument, "media://sha256/same"),
+		},
+	})
+
+	channel.mu.Lock()
+	defer channel.mu.Unlock()
+	if len(channel.sendCaptionedMedia) != 2 {
+		t.Fatalf(
+			"sendCaptionedMedia len = %d, want 2 (same ref, different kinds are not deduped)",
+			len(channel.sendCaptionedMedia),
+		)
+	}
+	kinds := map[string]bool{}
+	for _, sent := range channel.sendCaptionedMedia {
+		kinds[sent.kind] = true
+	}
+	if !kinds["video"] || !kinds["document"] {
+		t.Fatalf("sendCaptionedMedia kinds = %v, want both video and document", kinds)
 	}
 }
 
