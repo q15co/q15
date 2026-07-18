@@ -13,9 +13,6 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/conversation"
 )
 
-// DefaultMaxImageBytes caps resolved image inputs at 20 MiB.
-const DefaultMaxImageBytes = 20 << 20
-
 // ResolveImagePartDataURL resolves one canonical image part into a data URL.
 func ResolveImagePartDataURL(part conversation.Part, store Store, maxBytes int) (string, error) {
 	part = conversation.NormalizePart(part)

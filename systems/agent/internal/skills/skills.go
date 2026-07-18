@@ -38,7 +38,7 @@ const (
 var (
 	skillNameRE = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 	// toolNameRE matches declared tool dependency names such as read_file,
-	// web_fetch, attach_audio, exec_start, and subagent_read.
+	// web_fetch, attach_media, exec_start, and subagent_read.
 	toolNameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 )
 

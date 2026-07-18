@@ -726,9 +726,11 @@ func TestStoreAppendTurnPreservesAssistantOwnedAttachments(t *testing.T) {
 	// tool_result. The store must round-trip that shape unchanged.
 	if err := store.AppendTurn(context.Background(), []conversation.Message{
 		conversation.UserMessage("send the image"),
-		conversation.AssistantMessage(
-			conversation.ToolCall("call-1", "attach_image", `{"path":"cat.png"}`),
-		),
+		conversation.AssistantMessage(conversation.ToolCall(
+			"call-1",
+			"attach_media",
+			`{"kind":"image","path":"cat.png"}`,
+		)),
 		conversation.ToolResultMessage("call-1", "Attached image: /workspace/cat.png", false),
 		conversation.AssistantMessage(
 			conversation.Text("done", ""),

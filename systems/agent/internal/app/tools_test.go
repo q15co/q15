@@ -53,8 +53,7 @@ func TestBuildToolListIncludesOnlyCurrentRuntimeTools(t *testing.T) {
 		"exec_write",
 		"exec_kill",
 		"load_image",
-		"attach_audio",
-		"attach_image",
+		"attach_media",
 		"web_fetch",
 	}; !equalStrings(got, want) {
 		t.Fatalf("tool names = %v, want %v", got, want)
@@ -101,8 +100,7 @@ func TestBuildToolListAppendsWebSearchWhenConfigured(t *testing.T) {
 		"exec_write",
 		"exec_kill",
 		"load_image",
-		"attach_audio",
-		"attach_image",
+		"attach_media",
 		"web_fetch",
 		"web_search",
 	}; !equalStrings(got, want) {
@@ -150,8 +148,7 @@ func TestBuildToolListAppendsEmbeddingToolsWhenConfigured(t *testing.T) {
 		"exec_write",
 		"exec_kill",
 		"load_image",
-		"attach_audio",
-		"attach_image",
+		"attach_media",
 		"web_fetch",
 		"embed_sources",
 		"embed_sync",
