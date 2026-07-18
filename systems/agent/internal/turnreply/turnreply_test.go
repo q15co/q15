@@ -6,11 +6,10 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/conversation"
 )
 
-// deliverTools is the canonical deliver set used across these tests: the two
+// deliverTools is the canonical deliver set used across these tests: the
 // explicit "send to the user" tools. load_image is deliberately absent.
 var deliverTools = map[string]struct{}{
-	"attach_audio": {},
-	"attach_image": {},
+	"attach_media": {},
 }
 
 func extractor() *Extractor {
@@ -42,14 +41,18 @@ func TestExtractPrefersAssistantAttachmentsOverToolFallback(t *testing.T) {
 }
 
 // TestExtractPromotesDeliverToolAttachmentFollowedByUnrelatedTool locks in the
-// #110 fix: an attachment produced by a deliver tool (attach_audio) survives a
+// #110 fix: an attachment produced by a deliver tool (attach_media) survives a
 // later, unrelated tool call instead of being silently dropped because it sits
 // outside the trailing tool block.
 func TestExtractPromotesDeliverToolAttachmentFollowedByUnrelatedTool(t *testing.T) {
 	got := extractor().Extract([]conversation.Message{
 		conversation.UserMessage("send the voice note then clean up"),
 		conversation.AssistantMessage(
-			conversation.ToolCall("call-1", "attach_audio", `{"path":"out.ogg"}`),
+			conversation.ToolCall(
+				"call-1",
+				"attach_media",
+				`{"kind":"audio","path":"out.ogg"}`,
+			),
 		),
 		{
 			Role: conversation.ToolRole,
@@ -107,9 +110,9 @@ func TestExtractDoesNotPromoteVisionOnlyLoadImage(t *testing.T) {
 	}
 }
 
-// TestExtractPromotesAttachImage verifies the new deliberate image-delivery
+// TestExtractPromotesAttachMediaImage verifies the deliberate image-delivery
 // tool is promoted position-independently.
-func TestExtractPromotesAttachImage(t *testing.T) {
+func TestExtractPromotesAttachMediaImage(t *testing.T) {
 	got := extractor().Extract([]conversation.Message{
 		conversation.UserMessage("send me the rendered chart"),
 		conversation.AssistantMessage(
@@ -122,7 +125,11 @@ func TestExtractPromotesAttachImage(t *testing.T) {
 			},
 		},
 		conversation.AssistantMessage(
-			conversation.ToolCall("call-2", "attach_image", `{"path":"chart.png"}`),
+			conversation.ToolCall(
+				"call-2",
+				"attach_media",
+				`{"kind":"image","path":"chart.png"}`,
+			),
 		),
 		{
 			Role: conversation.ToolRole,
@@ -138,6 +145,37 @@ func TestExtractPromotesAttachImage(t *testing.T) {
 		!got.Attachments[0].IsMedia(conversation.MediaKindImage) ||
 		got.Attachments[0].MediaRef != "media://sha256/chart" {
 		t.Fatalf("Extract().Attachments = %#v, want the attached image", got.Attachments)
+	}
+}
+
+func TestExtractPromotesAttachMediaDocument(t *testing.T) {
+	got := extractor().Extract([]conversation.Message{
+		conversation.UserMessage("send me the report"),
+		conversation.AssistantMessage(
+			conversation.ToolCall(
+				"call-1",
+				"attach_media",
+				`{"kind":"document","path":"report.pdf"}`,
+			),
+		),
+		{
+			Role: conversation.ToolRole,
+			Parts: []conversation.Part{
+				conversation.ToolResult(
+					"call-1",
+					"Attached document: /workspace/report.pdf",
+					false,
+				),
+				conversation.Media(conversation.MediaKindDocument, "media://sha256/report"),
+			},
+		},
+		conversation.AssistantMessage(conversation.Text("here it is", "")),
+	})
+
+	if len(got.Attachments) != 1 ||
+		!got.Attachments[0].IsMedia(conversation.MediaKindDocument) ||
+		got.Attachments[0].MediaRef != "media://sha256/report" {
+		t.Fatalf("Extract().Attachments = %#v, want the attached document", got.Attachments)
 	}
 }
 
@@ -172,7 +210,11 @@ func TestExtractDedupesSameRefAcrossDeliverResults(t *testing.T) {
 	got := extractor().Extract([]conversation.Message{
 		conversation.UserMessage("send the audio twice"),
 		conversation.AssistantMessage(
-			conversation.ToolCall("call-1", "attach_audio", `{"path":"a.ogg"}`),
+			conversation.ToolCall(
+				"call-1",
+				"attach_media",
+				`{"kind":"audio","path":"a.ogg"}`,
+			),
 		),
 		{
 			Role: conversation.ToolRole,
@@ -182,7 +224,11 @@ func TestExtractDedupesSameRefAcrossDeliverResults(t *testing.T) {
 			},
 		},
 		conversation.AssistantMessage(
-			conversation.ToolCall("call-2", "attach_audio", `{"path":"b.ogg"}`),
+			conversation.ToolCall(
+				"call-2",
+				"attach_media",
+				`{"kind":"audio","path":"b.ogg"}`,
+			),
 		),
 		{
 			Role: conversation.ToolRole,
@@ -206,7 +252,11 @@ func TestEmptyDeliverSetPromotesNothing(t *testing.T) {
 	got := NewExtractor(nil).Extract([]conversation.Message{
 		conversation.UserMessage("send the audio"),
 		conversation.AssistantMessage(
-			conversation.ToolCall("call-1", "attach_audio", `{"path":"out.ogg"}`),
+			conversation.ToolCall(
+				"call-1",
+				"attach_media",
+				`{"kind":"audio","path":"out.ogg"}`,
+			),
 		),
 		{
 			Role: conversation.ToolRole,
@@ -227,7 +277,11 @@ func TestCanonicalizePromotesAllDeliverAttachmentsAcrossTurn(t *testing.T) {
 	got := extractor().Canonicalize([]conversation.Message{
 		conversation.UserMessage("send the preview voice then the final image"),
 		conversation.AssistantMessage(
-			conversation.ToolCall("call-1", "attach_audio", `{"path":"voice.ogg"}`),
+			conversation.ToolCall(
+				"call-1",
+				"attach_media",
+				`{"kind":"audio","path":"voice.ogg"}`,
+			),
 		),
 		{
 			Role: conversation.ToolRole,
@@ -238,7 +292,11 @@ func TestCanonicalizePromotesAllDeliverAttachmentsAcrossTurn(t *testing.T) {
 			},
 		},
 		conversation.AssistantMessage(
-			conversation.ToolCall("call-2", "attach_image", `{"path":"final.png"}`),
+			conversation.ToolCall(
+				"call-2",
+				"attach_media",
+				`{"kind":"image","path":"final.png"}`,
+			),
 		),
 		{
 			Role: conversation.ToolRole,
@@ -364,7 +422,11 @@ func TestCanonicalizeSynthesizesImageOnlyAssistant(t *testing.T) {
 	got := extractor().Canonicalize([]conversation.Message{
 		conversation.UserMessage("send the image only"),
 		conversation.AssistantMessage(
-			conversation.ToolCall("call-1", "attach_image", `{"path":"cat.png"}`),
+			conversation.ToolCall(
+				"call-1",
+				"attach_media",
+				`{"kind":"image","path":"cat.png"}`,
+			),
 		),
 		{
 			Role: conversation.ToolRole,

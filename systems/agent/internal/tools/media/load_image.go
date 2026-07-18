@@ -41,7 +41,7 @@ func (l *LoadImage) Definition() agent.ToolDefinition {
 			"Use after exec or another tool creates an image file you need to inspect.",
 			"Generated images must be written under a shared root like /workspace, not /tmp, so this tool can access them.",
 			"For an inbound Telegram image, pass its media_ref (from the attachment notice) instead of a path.",
-			"Images loaded here are for your own inspection and are NOT sent to the user. Use attach_image to deliver an image to the user.",
+			"Images loaded here are for your own inspection and are NOT sent to the user. Use attach_media with kind=image to deliver an image to the user.",
 		},
 		Parameters: map[string]any{
 			"type": "object",

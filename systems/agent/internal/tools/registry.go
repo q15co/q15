@@ -79,14 +79,9 @@ func NewLoadImage(paths fileops.Settings, mediaStore q15media.Store) *mediatools
 	return mediatools.NewLoadImage(paths, mediaStore)
 }
 
-// NewAttachAudio delegates to media.NewAttachAudio.
-func NewAttachAudio(paths fileops.Settings, mediaStore q15media.Store) *mediatools.AttachAudio {
-	return mediatools.NewAttachAudio(paths, mediaStore)
-}
-
-// NewAttachImage delegates to media.NewAttachImage.
-func NewAttachImage(paths fileops.Settings, mediaStore q15media.Store) *mediatools.AttachImage {
-	return mediatools.NewAttachImage(paths, mediaStore)
+// NewAttachMedia delegates to media.NewAttachMedia.
+func NewAttachMedia(paths fileops.Settings, mediaStore q15media.Store) *mediatools.AttachMedia {
+	return mediatools.NewAttachMedia(paths, mediaStore)
 }
 
 // NewValidateSkill delegates to skills.NewValidateSkill.
