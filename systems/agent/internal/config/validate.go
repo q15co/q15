@@ -92,6 +92,9 @@ func (c Config) validate() error {
 	if err := c.Agent.Tools.Embeddings.validate(); err != nil {
 		return fmt.Errorf("agent.tools.embeddings: %w", err)
 	}
+	if err := c.Agent.Tools.Schedule.validate(); err != nil {
+		return fmt.Errorf("agent.tools.schedule: %w", err)
+	}
 
 	return nil
 }
@@ -116,6 +119,20 @@ func (e EmbeddingsTool) validate() error {
 	if e.Dimensions < 0 {
 		return errors.New("dimensions must be greater than or equal to 0")
 	}
+	return nil
+}
+
+func (s ScheduleTool) validate() error {
+	if s.MaxJobs < 0 || s.MaxJobs > maxScheduleJobs {
+		return fmt.Errorf("max_jobs must be between 1 and %d when configured", maxScheduleJobs)
+	}
+	if s.MaxRunTurns < 0 || s.MaxRunTurns > maxScheduleRunTurns {
+		return fmt.Errorf(
+			"max_run_turns must be between 1 and %d when configured",
+			maxScheduleRunTurns,
+		)
+	}
+
 	return nil
 }
 

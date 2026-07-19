@@ -152,6 +152,17 @@ func (s *Store) upgradeTurn(path string) (bool, bool, error) {
 			return false, false, fmt.Errorf("rewrite upgraded turn record %q: %w", path, err)
 		}
 		return true, false, nil
+	case 4:
+		var record turnRecord
+		if err := json.Unmarshal(data, &record); err != nil {
+			return false, true, s.quarantineTurn(path, fmt.Errorf("decode v4 turn record: %w", err))
+		}
+		record.SchemaVersion = conversation.SchemaVersion
+		record.Messages = sanitizeStoredMessages(record.Messages)
+		if err := writeJSONFileAtomic(path, record); err != nil {
+			return false, false, fmt.Errorf("rewrite upgraded turn record %q: %w", path, err)
+		}
+		return true, false, nil
 	case conversation.SchemaVersion:
 		var record turnRecord
 		if err := json.Unmarshal(data, &record); err != nil {
@@ -365,16 +376,16 @@ func migrateLegacyDisposition(phase string) conversation.TextDisposition {
 }
 
 func (s *Store) quarantineTurn(path string, reason error) error {
-	base := filepath.Join(s.rootDir, "history", "turns")
+	base := filepath.Join(s.root(), "history", "turns")
 	relative, err := filepath.Rel(base, path)
 	if err != nil {
 		return fmt.Errorf("resolve turn quarantine path for %q: %w", path, err)
 	}
 
-	target := filepath.Join(s.rootDir, "history", "quarantine", relative)
+	target := filepath.Join(s.root(), "history", "quarantine", relative)
 	if _, err := os.Stat(target); err == nil {
 		target = filepath.Join(
-			s.rootDir,
+			s.root(),
 			"history",
 			"quarantine",
 			strings.TrimSuffix(

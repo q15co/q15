@@ -38,6 +38,10 @@ providers:
     key_env: MOONSHOT_API_KEY
 agent:
   name: Q15
+  tools:
+    schedule:
+      max_jobs: 12
+      max_run_turns: 24
   telegram:
     token_env: Q15_TELEGRAM_TOKEN
     allowed_user_ids: [123456789]
@@ -57,6 +61,21 @@ agent:
 	}
 	if runtime.TelegramToken != "tg-123" {
 		t.Fatalf("TelegramToken = %q, want tg-123", runtime.TelegramToken)
+	}
+	if runtime.StateLocalDir != "/var/lib/q15/agent" {
+		t.Fatalf(
+			"StateLocalDir = %q, want /var/lib/q15/agent",
+			runtime.StateLocalDir,
+		)
+	}
+	if runtime.Tools.Schedule.MaxJobs != 12 {
+		t.Fatalf("Tools.Schedule.MaxJobs = %d, want 12", runtime.Tools.Schedule.MaxJobs)
+	}
+	if runtime.Tools.Schedule.MaxRunTurns != 24 {
+		t.Fatalf(
+			"Tools.Schedule.MaxRunTurns = %d, want 24",
+			runtime.Tools.Schedule.MaxRunTurns,
+		)
 	}
 }
 
@@ -111,6 +130,28 @@ agent:
 	}
 	if _, err := Load(path); err == nil {
 		t.Fatal("expected error for removed agent.model field")
+	}
+}
+
+func TestLoadRejectsGlobalScheduleAllowedTools(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+providers:
+  - name: p
+    type: ollama
+agent:
+  name: a
+  tools:
+    schedule:
+      allowed_tools: [web_fetch]
+  telegram:
+    token_env: T
+    allowed_user_ids: [1]
+`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected error for removed agent.tools.schedule.allowed_tools field")
 	}
 }
 
@@ -242,6 +283,93 @@ func TestValidateRejectsBothTelegramAllowedUserIDSources(t *testing.T) {
 	}
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected error for both allowed_user_ids sources")
+	}
+}
+
+func TestValidateScheduleTool(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		schedule ScheduleTool
+		wantErr  bool
+	}{
+		{
+			name: "valid",
+			schedule: ScheduleTool{
+				MaxJobs:     1000,
+				MaxRunTurns: 128,
+			},
+		},
+		{
+			name:     "negative max jobs",
+			schedule: ScheduleTool{MaxJobs: -1},
+			wantErr:  true,
+		},
+		{
+			name:     "max jobs above limit",
+			schedule: ScheduleTool{MaxJobs: 1001},
+			wantErr:  true,
+		},
+		{
+			name:     "negative max run turns",
+			schedule: ScheduleTool{MaxRunTurns: -1},
+			wantErr:  true,
+		},
+		{
+			name:     "max run turns above limit",
+			schedule: ScheduleTool{MaxRunTurns: 129},
+			wantErr:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := Config{
+				Providers: []Provider{testProvider("p", "ollama", "", "")},
+				Agent:     testAgent("a"),
+			}
+			cfg.Agent.Tools.Schedule = tt.schedule
+
+			err := cfg.Validate()
+			if tt.wantErr && err == nil {
+				t.Fatal("Validate() error = nil, want non-nil")
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("Validate() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestResolveAgentRuntimeUsesScheduleDefaults(t *testing.T) {
+	t.Setenv("Q15_TELEGRAM_TOKEN", "t")
+
+	cfg := Config{
+		Providers: []Provider{testProvider("local", "ollama", "http://localhost:11434", "")},
+		Agent: &Agent{
+			Name: "a",
+			Telegram: Telegram{
+				TokenEnv:       "Q15_TELEGRAM_TOKEN",
+				AllowedUserIDs: []int64{1},
+			},
+		},
+	}
+
+	rt, err := cfg.ResolveAgentRuntime()
+	if err != nil {
+		t.Fatalf("ResolveAgentRuntime() error = %v", err)
+	}
+	if rt.Tools.Schedule.MaxJobs != 64 {
+		t.Fatalf("Tools.Schedule.MaxJobs = %d, want 64", rt.Tools.Schedule.MaxJobs)
+	}
+	if rt.StateLocalDir != "/var/lib/q15/agent" {
+		t.Fatalf("StateLocalDir = %q, want /var/lib/q15/agent", rt.StateLocalDir)
+	}
+	if rt.Tools.Schedule.MaxRunTurns != 16 {
+		t.Fatalf("Tools.Schedule.MaxRunTurns = %d, want 16", rt.Tools.Schedule.MaxRunTurns)
 	}
 }
 

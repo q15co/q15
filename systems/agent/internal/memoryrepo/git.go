@@ -1,6 +1,4 @@
-// Package memory provides persistent agent-state storage and git-backed
-// history for conversation state.
-package memory
+package memoryrepo
 
 import (
 	"context"
@@ -16,26 +14,20 @@ const (
 	defaultGitUserEmail = "q15@local"
 )
 
-// Committer ensures the memory repository exists and records committed turns.
-type Committer interface {
-	EnsureRepo(ctx context.Context, repoDir string) error
-	CommitAll(ctx context.Context, repoDir, message string) (string, error)
-}
-
-// GitCommitter records memory changes in a git repository.
+// GitCommitter records memory changes in a Git repository.
 type GitCommitter struct {
 	bin string
 }
 
-// NewGitCommitter constructs a git-backed memory committer.
+// NewGitCommitter constructs a Git-backed state committer.
 func NewGitCommitter() *GitCommitter {
 	return &GitCommitter{bin: "git"}
 }
 
-// EnsureRepo initializes and configures the memory git repository when needed.
+// EnsureRepo initializes and configures the memory repository when needed.
 func (g *GitCommitter) EnsureRepo(ctx context.Context, repoDir string) error {
 	if g == nil {
-		return fmt.Errorf("nil git committer")
+		return fmt.Errorf("nil Git committer")
 	}
 	if err := g.ensureSafeDirectory(ctx, repoDir); err != nil {
 		return err
@@ -44,18 +36,18 @@ func (g *GitCommitter) EnsureRepo(ctx context.Context, repoDir string) error {
 	_, err := g.run(ctx, repoDir, "rev-parse", "--is-inside-work-tree")
 	if err != nil {
 		if _, initErr := g.run(ctx, repoDir, "init"); initErr != nil {
-			return fmt.Errorf("initialize memory repo: %w", initErr)
+			return fmt.Errorf("initialize memory repository: %w", initErr)
 		}
 	}
 
 	if _, err := g.run(ctx, repoDir, "config", "user.name", defaultGitUserName); err != nil {
-		return fmt.Errorf("configure git user.name: %w", err)
+		return fmt.Errorf("configure Git user.name: %w", err)
 	}
 	if _, err := g.run(ctx, repoDir, "config", "user.email", defaultGitUserEmail); err != nil {
-		return fmt.Errorf("configure git user.email: %w", err)
+		return fmt.Errorf("configure Git user.email: %w", err)
 	}
 	if _, err := g.run(ctx, repoDir, "config", "commit.gpgsign", "false"); err != nil {
-		return fmt.Errorf("configure git commit.gpgsign: %w", err)
+		return fmt.Errorf("configure Git commit.gpgsign: %w", err)
 	}
 
 	return nil
@@ -64,12 +56,12 @@ func (g *GitCommitter) EnsureRepo(ctx context.Context, repoDir string) error {
 func (g *GitCommitter) ensureSafeDirectory(ctx context.Context, repoDir string) error {
 	repoDir = filepath.Clean(strings.TrimSpace(repoDir))
 	if repoDir == "" {
-		return fmt.Errorf("memory repo dir is required")
+		return fmt.Errorf("memory repository dir is required")
 	}
 
 	out, err := g.runGlobal(ctx, "config", "--global", "--get-all", "safe.directory")
 	if err != nil && !isGitConfigMissingValue(err) {
-		return fmt.Errorf("read git safe.directory: %w", err)
+		return fmt.Errorf("read Git safe.directory: %w", err)
 	}
 
 	for _, line := range strings.Split(out, "\n") {
@@ -79,38 +71,69 @@ func (g *GitCommitter) ensureSafeDirectory(ctx context.Context, repoDir string) 
 	}
 
 	if _, err := g.runGlobal(ctx, "config", "--global", "--add", "safe.directory", repoDir); err != nil {
-		return fmt.Errorf("configure git safe.directory: %w", err)
+		return fmt.Errorf("configure Git safe.directory: %w", err)
 	}
 	return nil
 }
 
-// CommitAll stages and commits all pending memory changes.
-func (g *GitCommitter) CommitAll(ctx context.Context, repoDir, message string) (string, error) {
+// CommitPaths stages and commits only paths. Unrelated staged and unstaged
+// changes are left untouched.
+func (g *GitCommitter) CommitPaths(
+	ctx context.Context,
+	repoDir string,
+	message string,
+	paths []string,
+) error {
 	if g == nil {
-		return "", fmt.Errorf("nil git committer")
+		return fmt.Errorf("nil Git committer")
 	}
 
-	if _, err := g.run(ctx, repoDir, "add", "-A"); err != nil {
-		return "", fmt.Errorf("git add memory changes: %w", err)
+	pathArgs := append([]string{"add", "-A", "--"}, paths...)
+	if _, err := g.run(ctx, repoDir, pathArgs...); err != nil {
+		return fmt.Errorf("git add memory changes: %w", err)
 	}
 
-	statusOut, err := g.run(ctx, repoDir, "status", "--porcelain")
+	statusArgs := append([]string{"status", "--porcelain", "--"}, paths...)
+	statusOut, err := g.run(ctx, repoDir, statusArgs...)
 	if err != nil {
-		return "", fmt.Errorf("git status memory changes: %w", err)
+		return fmt.Errorf("git status memory changes: %w", err)
 	}
 	if strings.TrimSpace(statusOut) == "" {
-		return "", nil
+		return nil
 	}
 
-	if _, err := g.run(ctx, repoDir, "commit", "--no-gpg-sign", "-m", message); err != nil {
-		return "", fmt.Errorf("git commit memory changes: %w", err)
+	commitArgs := []string{"commit", "--only", "--no-gpg-sign", "-m", message, "--"}
+	commitArgs = append(commitArgs, paths...)
+	if _, err := g.run(ctx, repoDir, commitArgs...); err != nil {
+		return fmt.Errorf("git commit state changes: %w", err)
+	}
+	return nil
+}
+
+// ResetPaths restores paths in the index to HEAD without changing the
+// worktree. In an unborn repository, it removes newly staged entries instead.
+func (g *GitCommitter) ResetPaths(
+	ctx context.Context,
+	repoDir string,
+	paths []string,
+) error {
+	if g == nil {
+		return fmt.Errorf("nil Git committer")
 	}
 
-	sha, err := g.run(ctx, repoDir, "rev-parse", "HEAD")
-	if err != nil {
-		return "", fmt.Errorf("resolve memory commit sha: %w", err)
+	if _, err := g.run(ctx, repoDir, "rev-parse", "--verify", "HEAD"); err == nil {
+		args := append([]string{"reset", "--quiet", "HEAD", "--"}, paths...)
+		if _, err := g.run(ctx, repoDir, args...); err != nil {
+			return fmt.Errorf("reset Git memory paths: %w", err)
+		}
+		return nil
 	}
-	return strings.TrimSpace(sha), nil
+
+	args := append([]string{"rm", "--cached", "-r", "--ignore-unmatch", "--"}, paths...)
+	if _, err := g.run(ctx, repoDir, args...); err != nil {
+		return fmt.Errorf("reset unborn Git memory paths: %w", err)
+	}
+	return nil
 }
 
 func (g *GitCommitter) run(ctx context.Context, repoDir string, args ...string) (string, error) {

@@ -59,6 +59,22 @@ func (s *runtimeStore) AppendTurn(ctx context.Context, messages []conversation.M
 	if err := s.memory.AppendTurn(ctx, messages); err != nil {
 		return err
 	}
+	s.notifyAppendObservers()
+	return nil
+}
+
+func (s *runtimeStore) RecordDeliveredAssistantEvent(
+	ctx context.Context,
+	event conversation.DeliveredAssistantEvent,
+) error {
+	if err := s.memory.RecordDeliveredAssistantEvent(ctx, event); err != nil {
+		return err
+	}
+	s.notifyAppendObservers()
+	return nil
+}
+
+func (s *runtimeStore) notifyAppendObservers() {
 	s.mu.Lock()
 	observers := append([]func(){}, s.appendObservers...)
 	s.mu.Unlock()
@@ -68,7 +84,6 @@ func (s *runtimeStore) AppendTurn(ctx context.Context, messages []conversation.M
 		}
 		observer()
 	}
-	return nil
 }
 
 func (s *runtimeStore) LoadCoreMemory(ctx context.Context) (agent.CoreMemory, error) {

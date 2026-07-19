@@ -13,15 +13,16 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/fileops"
 	q15media "github.com/q15co/q15/systems/agent/internal/media"
 	"github.com/q15co/q15/systems/agent/internal/modelcatalog"
+	"github.com/q15co/q15/systems/agent/internal/schedule"
 	"github.com/q15co/q15/systems/agent/internal/selectionstore"
 	q15skills "github.com/q15co/q15/systems/agent/internal/skills"
 	"github.com/q15co/q15/systems/agent/internal/tools"
 	"github.com/q15co/q15/systems/agent/internal/tools/subagent"
 )
 
-// buildRuntimeTools appends the runtime-only tools (model selection and
-// delegated sub-agent sessions) to the base tool list. The base registry is
-// reused as the sub-agent's tool surface.
+// buildRuntimeTools appends model selection, delegated sub-agent, and
+// owner-scoped scheduling tools to the base tool list. The base registry is
+// reused as the restricted sub-agent and scheduled-job tool surface.
 func buildRuntimeTools(
 	baseToolList []agent.Tool,
 	registry *modelcatalog.Registry,
@@ -32,6 +33,7 @@ func buildRuntimeTools(
 	mediaStore q15media.Store,
 	skillManager *q15skills.Manager,
 	dumpWriter io.Writer,
+	scheduleManager *schedule.Manager,
 ) []agent.Tool {
 	subAgentManager := subagent.NewManager(
 		registry,
@@ -52,6 +54,11 @@ func buildRuntimeTools(
 		subagent.NewWrite(subAgentManager),
 		subagent.NewList(subAgentManager),
 		subagent.NewKill(subAgentManager),
+		tools.NewScheduleCreate(scheduleManager),
+		tools.NewScheduleList(scheduleManager),
+		tools.NewScheduleRuns(scheduleManager),
+		tools.NewScheduleUpdate(scheduleManager),
+		tools.NewScheduleDelete(scheduleManager),
 	)
 }
 

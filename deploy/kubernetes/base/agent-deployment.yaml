@@ -44,6 +44,8 @@ spec:
               mountPath: /media
             - name: skills
               mountPath: /skills
+            - name: agent-state
+              mountPath: /var/lib/q15/agent
       volumes:
         - name: agent-config
           configMap:
@@ -69,3 +71,6 @@ spec:
         - name: skills
           persistentVolumeClaim:
             claimName: q15-skills
+        - name: agent-state
+          persistentVolumeClaim:
+            claimName: q15-agent-state

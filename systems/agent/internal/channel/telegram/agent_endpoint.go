@@ -128,6 +128,14 @@ func (e *AgentEndpoint) Channel() string {
 	return bus.ChannelTelegram
 }
 
+// Deliver sends an unsolicited text message through the Telegram channel.
+func (e *AgentEndpoint) Deliver(ctx context.Context, msg bus.OutboundMessage) error {
+	if e == nil || e.channel == nil {
+		return fmt.Errorf("telegram channel is not configured")
+	}
+	return e.channel.SendText(ctx, msg.ChatID, msg.Text)
+}
+
 // OpenSession handles local Telegram controls or opens a run session.
 func (e *AgentEndpoint) OpenSession(
 	ctx context.Context,

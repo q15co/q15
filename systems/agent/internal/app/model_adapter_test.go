@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -216,6 +217,155 @@ func TestRoutedModelAdapterUsesSelectionToDisambiguateCurrentRef(t *testing.T) {
 	}
 	if len(plan.EligibleRefs) != 1 || plan.EligibleRefs[0] != "shared" {
 		t.Fatalf("eligible = %#v, want [shared]", plan.EligibleRefs)
+	}
+}
+
+func TestRoutedModelAdapterBindProviderModelUsesExactProvider(t *testing.T) {
+	registry := modelcatalog.New(
+		[]modelcatalog.Provider{{Name: "p1", Type: "ollama"}, {Name: "p2", Type: "ollama"}},
+		&mockCatalog{models: map[string][]modelcatalog.Model{
+			"p1": {
+				{ProviderModel: "shared", Capabilities: modelcatalog.Capabilities{Text: true}},
+			},
+			"p2": {
+				{
+					ProviderModel: "shared:cloud",
+					Capabilities:  modelcatalog.Capabilities{Text: true, ToolCalling: true},
+				},
+			},
+		}},
+		time.Hour,
+		time.Second,
+	)
+	registry.Refresh(context.Background())
+	selection := modelcatalog.NewSelection(registry, "p1", "shared")
+	clients := make(map[string]*fakeModelClient)
+
+	adapter, err := newModelAdapterWithSelectionAndFactory(
+		registry,
+		selection,
+		nil,
+		func(m modelcatalog.Model, _ q15media.Store) (agent.ModelClient, error) {
+			client := &fakeModelClient{}
+			clients[m.ProviderName] = client
+			return client, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("newModelAdapterWithSelectionAndFactory() error = %v", err)
+	}
+
+	tools := []agent.ToolDefinition{{Name: "shell"}}
+	client, err := adapter.BindProviderModel(
+		" p2 ",
+		" shared ",
+	)
+	if err != nil {
+		t.Fatalf("BindProviderModel(p2, shared) error = %v", err)
+	}
+	if _, err := client.Complete(context.Background(), "shared", nil, tools); err != nil {
+		t.Fatalf("bound Complete(shared) error = %v", err)
+	}
+	if _, ok := clients["p1"]; ok {
+		t.Fatal("provider p1 client was created despite exact p2 target")
+	}
+	p2Client, ok := clients["p2"]
+	if !ok {
+		t.Fatal("provider p2 client was not created")
+	}
+	if len(p2Client.calls) != 1 {
+		t.Fatalf("p2 calls = %d, want 1", len(p2Client.calls))
+	}
+	if got := p2Client.calls[0].model; got != "shared:cloud" {
+		t.Fatalf("provider model = %q, want shared:cloud", got)
+	}
+	if got := len(p2Client.calls[0].tools); got != 1 {
+		t.Fatalf("tools = %d, want 1 for p2 tool-capable model", got)
+	}
+}
+
+func TestRoutedModelAdapterBindProviderModelRejectsMissingExactTarget(t *testing.T) {
+	registry := testRegistry(t, map[string][]modelcatalog.Model{
+		"p1": {
+			{ProviderModel: "shared", Capabilities: modelcatalog.Capabilities{Text: true}},
+		},
+		"p2": {
+			{ProviderModel: "other", Capabilities: modelcatalog.Capabilities{Text: true}},
+		},
+	})
+	factoryCalls := 0
+	adapter, err := newModelAdapterWithFactory(
+		registry,
+		nil,
+		func(_ modelcatalog.Model, _ q15media.Store) (agent.ModelClient, error) {
+			factoryCalls++
+			return &fakeModelClient{}, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("newModelAdapterWithFactory() error = %v", err)
+	}
+
+	_, err = adapter.BindProviderModel("p2", "shared")
+	if err == nil {
+		t.Fatal("expected error for missing exact provider/model target")
+	}
+	if !errors.Is(err, errProviderModelUnavailable) {
+		t.Fatalf("error = %v, want errProviderModelUnavailable", err)
+	}
+	if factoryCalls != 0 {
+		t.Fatalf("factory calls = %d, want 0 (must not fall back to p1)", factoryCalls)
+	}
+}
+
+func TestBoundProviderModelSurvivesRosterRefreshWithoutFallback(t *testing.T) {
+	catalog := &mockCatalog{models: map[string][]modelcatalog.Model{
+		"p1": {
+			{ProviderModel: "shared", Capabilities: modelcatalog.Capabilities{Text: true}},
+		},
+		"p2": {
+			{ProviderModel: "shared:cloud", Capabilities: modelcatalog.Capabilities{Text: true}},
+		},
+	}}
+	registry := modelcatalog.New(
+		[]modelcatalog.Provider{{Name: "p1", Type: "ollama"}, {Name: "p2", Type: "ollama"}},
+		catalog,
+		time.Hour,
+		time.Second,
+	)
+	registry.Refresh(context.Background())
+
+	var routedProvider string
+	adapter, err := newModelAdapterWithFactory(
+		registry,
+		nil,
+		func(model modelcatalog.Model, _ q15media.Store) (agent.ModelClient, error) {
+			routedProvider = model.ProviderName
+			return &fakeModelClient{}, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("newModelAdapterWithFactory() error = %v", err)
+	}
+	bound, err := adapter.BindProviderModel("p2", "shared")
+	if err != nil {
+		t.Fatalf("BindProviderModel(p2, shared) error = %v", err)
+	}
+
+	catalog.models["p2"] = nil
+	registry.Refresh(context.Background())
+
+	if _, err := bound.Complete(context.Background(), "shared", nil, nil); err != nil {
+		t.Fatalf("bound Complete() after refresh error = %v", err)
+	}
+	if routedProvider != "p2" {
+		t.Fatalf("bound completion provider = %q, want p2", routedProvider)
+	}
+	if _, err := adapter.BindProviderModel("p2", "shared"); !errors.Is(
+		err,
+		errProviderModelUnavailable,
+	) {
+		t.Fatalf("new BindProviderModel() error = %v, want unavailable", err)
 	}
 }
 

@@ -14,6 +14,12 @@ type AgentEndpoint interface {
 	OpenSession(ctx context.Context, msg bus.InboundMessage) (AgentSession, error)
 }
 
+// OutboundEndpoint delivers unsolicited transport-bound messages.
+type OutboundEndpoint interface {
+	Channel() string
+	Deliver(ctx context.Context, msg bus.OutboundMessage) error
+}
+
 // AgentSession owns transport-specific run UX for one inbound message.
 type AgentSession interface {
 	agent.RunObserver

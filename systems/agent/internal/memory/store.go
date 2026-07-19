@@ -1,3 +1,5 @@
+// Package memory persists agent conversation, cognition, and authored memory
+// state in the Git-backed memory repository.
 package memory
 
 import (
@@ -12,11 +14,12 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
+	"github.com/q15co/q15/systems/agent/internal/atomicfile"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
+	"github.com/q15co/q15/systems/agent/internal/memoryrepo"
 	"github.com/yuin/goldmark"
 	meta "github.com/yuin/goldmark-meta"
 	"github.com/yuin/goldmark/parser"
@@ -88,6 +91,16 @@ var semanticSeedPaths = []struct {
 	},
 }
 
+var memoryCommitPaths = []string{
+	readmeRelativePath,
+	coreDirPath,
+	semanticDirPath,
+	workingDirPath,
+	"history",
+	"notes",
+	cognitionDirPath,
+}
+
 var coreFrontmatterParser = goldmark.New(
 	goldmark.WithExtensions(meta.Meta),
 )
@@ -95,10 +108,8 @@ var coreFrontmatterParser = goldmark.New(
 // Store persists the agent's episodic history, core self-model files, and
 // related memory state on disk.
 type Store struct {
-	mu        sync.Mutex
-	rootDir   string
-	agentName string
-	committer Committer
+	repository *memoryrepo.Repository
+	agentName  string
 }
 
 var _ agent.ConversationStore = (*Store)(nil)
@@ -106,43 +117,43 @@ var _ agent.CoreMemoryStore = (*Store)(nil)
 var _ agent.SemanticMemoryStore = (*Store)(nil)
 var _ agent.WorkingMemoryStore = (*Store)(nil)
 
-// NewStore constructs a memory store rooted at the provided directory.
-func NewStore(rootDir string, agentName string, committer Committer) *Store {
-	if committer == nil {
-		committer = NewGitCommitter()
-	}
+// NewStore constructs a memory store over its Git-backed repository.
+func NewStore(
+	repository *memoryrepo.Repository,
+	agentName string,
+) *Store {
 	return &Store{
-		rootDir:   filepath.Clean(strings.TrimSpace(rootDir)),
-		agentName: normalizeAgentName(agentName),
-		committer: committer,
+		repository: repository,
+		agentName:  normalizeAgentName(agentName),
 	}
 }
 
 // Init creates the on-disk memory scaffold and initializes git tracking.
 func (s *Store) Init(ctx context.Context) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if strings.TrimSpace(s.rootDir) == "" {
-		return fmt.Errorf("memory root dir is required")
+	if s == nil || s.repository == nil {
+		return fmt.Errorf("memory repository is required")
 	}
-	if !filepath.IsAbs(s.rootDir) {
-		return fmt.Errorf("memory root dir must be absolute")
+	if err := s.repository.Init(ctx); err != nil {
+		return err
 	}
 
+	release := s.repository.Acquire()
+	defer release()
+
+	root := s.root()
 	dirs := []string{
-		filepath.Join(s.rootDir, coreDirPath),
-		filepath.Join(s.rootDir, semanticDirPath),
-		filepath.Join(s.rootDir, workingDirPath),
-		filepath.Join(s.rootDir, "history", "turns"),
-		filepath.Join(s.rootDir, "history", "state"),
-		filepath.Join(s.rootDir, "notes", "inbox"),
-		filepath.Join(s.rootDir, "notes", "zettel"),
-		filepath.Join(s.rootDir, "notes", "maps"),
-		filepath.Join(s.rootDir, cognitionStatePath),
-		filepath.Join(s.rootDir, cognitionIndexerPath),
-		filepath.Join(s.rootDir, cognitionRunsPath),
-		filepath.Join(s.rootDir, cognitionJobsPath),
+		filepath.Join(root, coreDirPath),
+		filepath.Join(root, semanticDirPath),
+		filepath.Join(root, workingDirPath),
+		filepath.Join(root, "history", "turns"),
+		filepath.Join(root, "history", "state"),
+		filepath.Join(root, "notes", "inbox"),
+		filepath.Join(root, "notes", "zettel"),
+		filepath.Join(root, "notes", "maps"),
+		filepath.Join(root, cognitionStatePath),
+		filepath.Join(root, cognitionIndexerPath),
+		filepath.Join(root, cognitionRunsPath),
+		filepath.Join(root, cognitionJobsPath),
 	}
 	for _, dir := range dirs {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -188,9 +199,6 @@ func (s *Store) Init(ctx context.Context) error {
 		return fmt.Errorf("synchronize memory head state: %w", err)
 	}
 
-	if err := s.committer.EnsureRepo(ctx, s.rootDir); err != nil {
-		return fmt.Errorf("ensure git memory repo: %w", err)
-	}
 	commitMessage := "memory: initialize repository"
 	if upgrade.Upgraded > 0 || upgrade.Quarantined > 0 {
 		commitMessage = fmt.Sprintf(
@@ -200,11 +208,22 @@ func (s *Store) Init(ctx context.Context) error {
 	} else if headSynced {
 		commitMessage = "memory: synchronize transcript head state"
 	}
-	if _, err := s.committer.CommitAll(ctx, s.rootDir, commitMessage); err != nil {
+	if err := s.repository.Commit(
+		ctx,
+		commitMessage,
+		memoryCommitPaths...,
+	); err != nil {
 		return fmt.Errorf("commit memory changes: %w", err)
 	}
 
 	return nil
+}
+
+func (s *Store) root() string {
+	if s == nil || s.repository == nil {
+		return ""
+	}
+	return s.repository.Root()
 }
 
 // LoadRecentMessages loads the bounded unconsolidated replay slice used for
@@ -215,8 +234,8 @@ func (s *Store) LoadRecentMessages(ctx context.Context, turns int) ([]conversati
 		return nil, nil
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	release := s.repository.Acquire()
+	defer release()
 
 	return s.loadMessagesLocked(turns, true)
 }
@@ -229,8 +248,8 @@ func (s *Store) LoadLatestMessages(ctx context.Context, turns int) ([]conversati
 		return nil, nil
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	release := s.repository.Acquire()
+	defer release()
 
 	return s.loadMessagesLocked(turns, false)
 }
@@ -243,8 +262,8 @@ func (s *Store) LoadMessagesSinceSeq(
 ) ([]conversation.Message, error) {
 	_ = ctx
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	release := s.repository.Acquire()
+	defer release()
 
 	return s.loadMessagesSinceSeqLocked(afterSeq)
 }
@@ -256,8 +275,8 @@ func (s *Store) LoadLastUserTimestamp(
 ) (time.Time, bool, error) {
 	_ = ctx
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	release := s.repository.Acquire()
+	defer release()
 
 	entries, err := s.listTurnEntries()
 	if err != nil {
@@ -281,8 +300,8 @@ func (s *Store) LoadLastUserTimestamp(
 func (s *Store) LoadCoreMemory(ctx context.Context) (agent.CoreMemory, error) {
 	_ = ctx
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	release := s.repository.Acquire()
+	defer release()
 
 	files, err := s.loadCoreFiles()
 	if err != nil {
@@ -298,8 +317,8 @@ func (s *Store) LoadCoreMemory(ctx context.Context) (agent.CoreMemory, error) {
 func (s *Store) LoadSemanticMemory(ctx context.Context) (agent.SemanticMemory, error) {
 	_ = ctx
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	release := s.repository.Acquire()
+	defer release()
 
 	out := make([]agent.SemanticMemoryFile, 0, len(semanticSeedPaths))
 	for _, file := range semanticSeedPaths {
@@ -322,8 +341,8 @@ func (s *Store) LoadSemanticMemory(ctx context.Context) (agent.SemanticMemory, e
 func (s *Store) LoadWorkingMemory(ctx context.Context) (agent.WorkingMemory, error) {
 	_ = ctx
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	release := s.repository.Acquire()
+	defer release()
 
 	path := s.workingMemoryPath()
 	raw, err := os.ReadFile(path)
@@ -334,7 +353,7 @@ func (s *Store) LoadWorkingMemory(ctx context.Context) (agent.WorkingMemory, err
 		return agent.WorkingMemory{}, fmt.Errorf("read working memory file %q: %w", path, err)
 	}
 
-	relative, err := filepath.Rel(s.rootDir, path)
+	relative, err := filepath.Rel(s.root(), path)
 	if err != nil {
 		return agent.WorkingMemory{}, fmt.Errorf(
 			"resolve relative working memory path %q: %w",
@@ -354,13 +373,53 @@ func (s *Store) AppendTurn(ctx context.Context, messages []conversation.Message)
 		return nil
 	}
 
+	release := s.repository.Acquire()
+	defer release()
+
+	return s.appendTurnLocked(ctx, withoutExternalEventMetadata(messages))
+}
+
+// RecordDeliveredAssistantEvent idempotently appends an externally delivered
+// assistant event to the canonical transcript. Callers must invoke this only
+// after the delivery transport acknowledges the exact event text.
+func (s *Store) RecordDeliveredAssistantEvent(
+	ctx context.Context,
+	event conversation.DeliveredAssistantEvent,
+) error {
+	if strings.TrimSpace(event.Text) == "" {
+		return fmt.Errorf("delivered assistant event text is required")
+	}
+
+	event.Metadata = conversation.NormalizeExternalEventMetadata(event.Metadata)
+	if !event.Metadata.Valid() {
+		return fmt.Errorf("delivered assistant event metadata is incomplete or invalid")
+	}
+
+	release := s.repository.Acquire()
+	defer release()
+
+	recordedSeq, recorded, err := s.findDeliveredAssistantEventLocked(event.Metadata)
+	if err != nil {
+		return err
+	}
+	if recorded {
+		return s.reconcileDeliveredAssistantEventLocked(ctx, recordedSeq)
+	}
+
+	return s.appendTurnLocked(
+		ctx,
+		[]conversation.Message{conversation.DeliveredAssistantEventMessage(event)},
+	)
+}
+
+func (s *Store) appendTurnLocked(
+	ctx context.Context,
+	messages []conversation.Message,
+) error {
 	messages = sanitizeStoredMessages(copyMessages(messages))
 	if len(messages) == 0 {
 		return nil
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	head, err := s.readHeadState()
 	if err != nil {
@@ -388,15 +447,70 @@ func (s *Store) AppendTurn(ctx context.Context, messages []conversation.Message)
 		return fmt.Errorf("write memory head state: %w", err)
 	}
 
-	if _, err := s.committer.CommitAll(ctx, s.rootDir, fmt.Sprintf("memory: append turn %d", seq)); err != nil {
+	if err := s.repository.Commit(
+		ctx,
+		fmt.Sprintf("memory: append turn %d", seq),
+		memoryCommitPaths...,
+	); err != nil {
 		return fmt.Errorf("commit memory turn %d: %w", seq, err)
 	}
 
 	return nil
 }
 
+func (s *Store) findDeliveredAssistantEventLocked(
+	metadata conversation.ExternalEventMetadata,
+) (int64, bool, error) {
+	entries, err := s.listTurnEntries()
+	if err != nil {
+		return 0, false, err
+	}
+
+	for i := len(entries) - 1; i >= 0; i-- {
+		turn, err := s.readTurn(entries[i].Path)
+		if err != nil {
+			return 0, false, err
+		}
+		for _, message := range turn.Messages {
+			existing := message.ExternalEvent
+			if existing == nil {
+				continue
+			}
+			normalized := conversation.NormalizeExternalEventMetadata(*existing)
+			if normalized.Source == metadata.Source &&
+				normalized.JobID == metadata.JobID &&
+				normalized.RunID == metadata.RunID {
+				return turn.Seq, true, nil
+			}
+		}
+	}
+	return 0, false, nil
+}
+
+func (s *Store) reconcileDeliveredAssistantEventLocked(
+	ctx context.Context,
+	recordedSeq int64,
+) error {
+	if _, err := s.syncHeadStateWithHistory(); err != nil {
+		return fmt.Errorf("reconcile delivered assistant event head state: %w", err)
+	}
+
+	if err := s.repository.Commit(
+		ctx,
+		fmt.Sprintf("memory: reconcile delivered assistant event turn %d", recordedSeq),
+		memoryCommitPaths...,
+	); err != nil {
+		return fmt.Errorf(
+			"commit reconciled delivered assistant event turn %d: %w",
+			recordedSeq,
+			err,
+		)
+	}
+	return nil
+}
+
 func (s *Store) ensureREADME() error {
-	path := filepath.Join(s.rootDir, readmeRelativePath)
+	path := filepath.Join(s.root(), readmeRelativePath)
 	if _, err := os.Stat(path); err == nil {
 		return nil
 	} else if !os.IsNotExist(err) {
@@ -406,7 +520,7 @@ func (s *Store) ensureREADME() error {
 	content := strings.TrimSpace(`
 # q15 Agent Memory
 
-This directory contains q15's persistent agent-state root.
+This directory contains q15's Git-backed agent memory root.
 
 	- Core self-model files (always injected into the system prompt) are stored in core/*.md (for example AGENT.md, USER.md, SOUL.md).
 	- Agent identity comes from config agent.name; use {{agent_name}} in core files instead of hardcoded names.
@@ -517,7 +631,7 @@ func (s *Store) ensureSemanticExtractionCheckpoint() error {
 }
 
 func (s *Store) loadCoreFiles() ([]agent.CoreMemoryFile, error) {
-	base := filepath.Join(s.rootDir, coreDirPath)
+	base := filepath.Join(s.root(), coreDirPath)
 
 	entries, err := os.ReadDir(base)
 	if err != nil {
@@ -545,7 +659,7 @@ func (s *Store) loadCoreFiles() ([]agent.CoreMemoryFile, error) {
 			return nil, fmt.Errorf("read core file %q: %w", path, err)
 		}
 		description, limit, body := parseMarkdownFrontmatter(string(raw))
-		relative, err := filepath.Rel(s.rootDir, path)
+		relative, err := filepath.Rel(s.root(), path)
 		if err != nil {
 			return nil, fmt.Errorf("resolve relative core path %q: %w", path, err)
 		}
@@ -638,7 +752,7 @@ func readEmbeddedSeed(path string) (string, error) {
 }
 
 func (s *Store) loadSeededMemoryFile(relativePath, seedPath string) (string, error) {
-	path := filepath.Join(s.rootDir, filepath.FromSlash(relativePath))
+	path := filepath.Join(s.root(), filepath.FromSlash(relativePath))
 	raw, err := os.ReadFile(path)
 	if err == nil {
 		return strings.TrimSpace(string(raw)), nil
@@ -660,7 +774,7 @@ func (s *Store) ensureSeedFile(relativePath, seedPath string) error {
 		return fmt.Errorf("read embedded seed %q: %w", seedPath, err)
 	}
 
-	path := filepath.Join(s.rootDir, relativePath)
+	path := filepath.Join(s.root(), relativePath)
 	if _, err := os.Stat(path); err == nil {
 		return nil
 	} else if !os.IsNotExist(err) {
@@ -705,7 +819,7 @@ func isYAMLSeparator(line string) bool {
 }
 
 func (s *Store) listTurnPaths() ([]string, error) {
-	base := filepath.Join(s.rootDir, "history", "turns")
+	base := filepath.Join(s.root(), "history", "turns")
 	entries := make([]string, 0, 64)
 
 	err := filepath.WalkDir(base, func(path string, d fs.DirEntry, walkErr error) error {
@@ -884,7 +998,7 @@ func (s *Store) loadMessagesLocked(
 
 	out := make([]conversation.Message, 0, len(records)*2)
 	for _, turn := range records {
-		out = append(out, copyMessages(turn.Messages)...)
+		out = append(out, promptVisibleMessages(turn.Messages)...)
 	}
 	return out, nil
 }
@@ -918,25 +1032,25 @@ func (s *Store) loadMessagesSinceSeqLocked(
 
 	out := make([]conversation.Message, 0, len(records)*2)
 	for _, turn := range records {
-		out = append(out, copyMessages(turn.Messages)...)
+		out = append(out, promptVisibleMessages(turn.Messages)...)
 	}
 	return out, nil
 }
 
 func (s *Store) headStatePath() string {
-	return filepath.Join(s.rootDir, headStateRelativePath)
+	return filepath.Join(s.root(), headStateRelativePath)
 }
 
 func (s *Store) consolidationCheckpointPath() string {
-	return filepath.Join(s.rootDir, consolidationCheckpointRelativePath)
+	return filepath.Join(s.root(), consolidationCheckpointRelativePath)
 }
 
 func (s *Store) semanticExtractionCheckpointPath() string {
-	return filepath.Join(s.rootDir, semanticExtractionCheckpointRelativePath)
+	return filepath.Join(s.root(), semanticExtractionCheckpointRelativePath)
 }
 
 func (s *Store) workingMemoryPath() string {
-	return filepath.Join(s.rootDir, workingDirPath, workingMemoryFileName)
+	return filepath.Join(s.root(), workingDirPath, workingMemoryFileName)
 }
 
 func (s *Store) syncHeadStateWithHistory() (bool, error) {
@@ -967,7 +1081,7 @@ func (s *Store) syncHeadStateWithHistory() (bool, error) {
 
 func (s *Store) turnPath(ts time.Time, seq int64) string {
 	return filepath.Join(
-		s.rootDir,
+		s.root(),
 		"history",
 		"turns",
 		ts.Format("2006"),
@@ -997,48 +1111,45 @@ func copyMessages(in []conversation.Message) []conversation.Message {
 	return conversation.CloneMessages(sanitizeStoredMessages(in))
 }
 
+func promptVisibleMessages(in []conversation.Message) []conversation.Message {
+	stored := copyMessages(in)
+	out := make([]conversation.Message, 0, len(stored))
+	for _, message := range stored {
+		out = append(
+			out,
+			conversation.PromptVisibleExternalEventMessages(message)...,
+		)
+	}
+	return out
+}
+
+// withoutExternalEventMetadata enforces RecordDeliveredAssistantEvent as the
+// only persistence path that may establish trusted delivery provenance.
+// Ordinary turns ultimately contain model-authored messages, so even
+// well-formed metadata on that path must be treated as untrusted.
+func withoutExternalEventMetadata(
+	in []conversation.Message,
+) []conversation.Message {
+	out := conversation.CloneMessages(in)
+	for i := range out {
+		out[i].ExternalEvent = nil
+	}
+	return out
+}
+
 func writeJSONFileAtomic(path string, value any) error {
 	data, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal JSON for %q: %w", path, err)
 	}
 	data = append(data, '\n')
-	return writeBytesFileAtomic(path, data)
+	return atomicfile.WriteBytes(path, data)
 }
 
 func writeTextFileAtomic(path, text string) error {
-	return writeBytesFileAtomic(path, []byte(text))
+	return atomicfile.WriteBytes(path, []byte(text))
 }
 
-func writeBytesFileAtomic(path string, data []byte) (err error) {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("create parent dir %q: %w", dir, err)
-	}
-
-	tmp, err := os.CreateTemp(dir, ".tmp-*")
-	if err != nil {
-		return fmt.Errorf("create temp file for %q: %w", path, err)
-	}
-	defer func() {
-		if err != nil {
-			_ = os.Remove(tmp.Name())
-		}
-	}()
-
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("write temp file for %q: %w", path, err)
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("sync temp file for %q: %w", path, err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close temp file for %q: %w", path, err)
-	}
-	if err := os.Rename(tmp.Name(), path); err != nil {
-		return fmt.Errorf("rename temp file for %q: %w", path, err)
-	}
-	return nil
+func writeBytesFileAtomic(path string, data []byte) error {
+	return atomicfile.WriteBytes(path, data)
 }

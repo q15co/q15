@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/bus"
 	channelport "github.com/q15co/q15/systems/agent/internal/channel"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
+	"github.com/q15co/q15/systems/agent/internal/turnctx"
 )
 
 type fakeObservedAgent struct {
@@ -72,6 +74,38 @@ func (f *fakeEndpoint) OpenCalls() int {
 	return f.openCalls
 }
 
+type fakeOutboundEndpoint struct {
+	channel string
+
+	mu       sync.Mutex
+	messages []bus.OutboundMessage
+	deliver  func(context.Context, bus.OutboundMessage) error
+}
+
+func (f *fakeOutboundEndpoint) Channel() string {
+	return f.channel
+}
+
+func (f *fakeOutboundEndpoint) Deliver(
+	ctx context.Context,
+	msg bus.OutboundMessage,
+) error {
+	f.mu.Lock()
+	f.messages = append(f.messages, msg)
+	f.mu.Unlock()
+
+	if f.deliver != nil {
+		return f.deliver(ctx, msg)
+	}
+	return nil
+}
+
+func (f *fakeOutboundEndpoint) Messages() []bus.OutboundMessage {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]bus.OutboundMessage(nil), f.messages...)
+}
+
 type fakeSession struct {
 	mu sync.Mutex
 
@@ -119,6 +153,18 @@ func TestBuildEndpointRegistry_RejectsDuplicates(t *testing.T) {
 	)
 	if err == nil {
 		t.Fatal("buildEndpointRegistry() error = nil, want non-nil")
+	}
+}
+
+func TestBuildOutboundEndpointRegistryRejectsDuplicates(t *testing.T) {
+	t.Parallel()
+
+	_, err := buildOutboundEndpointRegistry(
+		&fakeOutboundEndpoint{channel: bus.ChannelTelegram},
+		&fakeOutboundEndpoint{channel: bus.ChannelTelegram},
+	)
+	if err == nil {
+		t.Fatal("buildOutboundEndpointRegistry() error = nil, want non-nil")
 	}
 }
 
@@ -217,6 +263,371 @@ func TestRunAgentWorker_FinishesSessionAndForwardsEvents(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for worker exit")
 	}
+}
+
+func TestRunAgentWorkerPropagatesTurnOrigin(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	messageBus := bus.New(1)
+	session := &fakeSession{}
+	want := turnctx.Origin{
+		Channel:   bus.ChannelTelegram,
+		ChatID:    "chat-123",
+		UserID:    "user-456",
+		MessageID: "message-789",
+	}
+	origins := make(chan turnctx.Origin, 1)
+	agentImpl := &fakeObservedAgent{
+		reply: func(ctx context.Context, _ conversation.Message, _ agent.RunObserver) (agent.ReplyResult, error) {
+			origin, ok := turnctx.OriginFrom(ctx)
+			if !ok {
+				t.Error("OriginFrom() ok = false, want true")
+			}
+			origins <- origin
+			return agent.ReplyResult{Text: "done"}, nil
+		},
+	}
+	endpoint := &fakeEndpoint{
+		channel: bus.ChannelTelegram,
+		open: func(context.Context, bus.InboundMessage) (channelport.AgentSession, error) {
+			return session, nil
+		},
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- runAgentWorker(ctx, messageBus, agentImpl, endpoint)
+	}()
+
+	if err := messageBus.PublishInbound(ctx, bus.InboundMessage{
+		Channel:   want.Channel,
+		ChatID:    want.ChatID,
+		UserID:    want.UserID,
+		MessageID: want.MessageID,
+		Text:      "hello",
+	}); err != nil {
+		t.Fatalf("PublishInbound() error = %v", err)
+	}
+
+	select {
+	case got := <-origins:
+		if got != want {
+			t.Fatalf("turn origin = %#v, want %#v", got, want)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for turn origin")
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("runAgentWorker() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for worker exit")
+	}
+}
+
+func TestRunOutboundWorkerDeliversMessage(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	messageBus := bus.New(1)
+	endpoint := &fakeOutboundEndpoint{channel: bus.ChannelTelegram}
+	done := make(chan error, 1)
+	go func() {
+		done <- runOutboundWorker(ctx, messageBus, endpoint)
+	}()
+
+	want := bus.OutboundMessage{
+		Channel: bus.ChannelTelegram,
+		ChatID:  "chat-123",
+		Text:    "scheduled result",
+	}
+	if err := messageBus.PublishOutbound(ctx, want); err != nil {
+		t.Fatalf("PublishOutbound() error = %v", err)
+	}
+
+	waitForCondition(t, 2*time.Second, func() bool {
+		return len(endpoint.Messages()) == 1
+	})
+	if got := endpoint.Messages()[0]; got != want {
+		t.Fatalf("delivered message = %#v, want %#v", got, want)
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("runOutboundWorker() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for outbound worker exit")
+	}
+}
+
+func TestRunOutboundWorkerContinuesAfterDeliveryError(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	messageBus := bus.New(2)
+	var calls int
+	var mu sync.Mutex
+	endpoint := &fakeOutboundEndpoint{
+		channel: bus.ChannelTelegram,
+		deliver: func(context.Context, bus.OutboundMessage) error {
+			mu.Lock()
+			defer mu.Unlock()
+			calls++
+			if calls == 1 {
+				return errors.New("temporary failure")
+			}
+			return nil
+		},
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- runOutboundWorker(ctx, messageBus, endpoint)
+	}()
+
+	for _, text := range []string{"first", "second"} {
+		if err := messageBus.PublishOutbound(ctx, bus.OutboundMessage{
+			Channel: bus.ChannelTelegram,
+			ChatID:  "chat-123",
+			Text:    text,
+		}); err != nil {
+			t.Fatalf("PublishOutbound(%q) error = %v", text, err)
+		}
+	}
+
+	waitForCondition(t, 2*time.Second, func() bool {
+		return len(endpoint.Messages()) == 2
+	})
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("runOutboundWorker() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for outbound worker exit")
+	}
+}
+
+func TestRunOutboundWorkerAcknowledgesEndpointDeliveryResult(t *testing.T) {
+	t.Parallel()
+
+	deliveryErr := errors.New("telegram unavailable")
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{name: "success"},
+		{name: "delivery error", err: deliveryErr},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx, cancel := context.WithCancel(context.Background())
+			messageBus := bus.New(1)
+			endpoint := &fakeOutboundEndpoint{
+				channel: bus.ChannelTelegram,
+				deliver: func(context.Context, bus.OutboundMessage) error {
+					return tt.err
+				},
+			}
+			done := make(chan error, 1)
+			go func() {
+				done <- runOutboundWorker(ctx, messageBus, endpoint)
+			}()
+
+			err := messageBus.PublishOutboundAndWaitForDelivery(
+				ctx,
+				bus.OutboundMessage{
+					Channel: bus.ChannelTelegram,
+					ChatID:  "chat-123",
+					Text:    "scheduled result",
+				},
+			)
+			if !errors.Is(err, tt.err) {
+				t.Fatalf(
+					"PublishOutboundAndWaitForDelivery() error = %v, want %v",
+					err,
+					tt.err,
+				)
+			}
+
+			cancel()
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatalf("runOutboundWorker() error = %v", err)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("timed out waiting for outbound worker exit")
+			}
+		})
+	}
+}
+
+func TestRunOutboundWorkerAcknowledgesUnknownChannel(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	messageBus := bus.New(1)
+	endpoint := &fakeOutboundEndpoint{channel: bus.ChannelTelegram}
+	done := make(chan error, 1)
+	go func() {
+		done <- runOutboundWorker(ctx, messageBus, endpoint)
+	}()
+
+	err := messageBus.PublishOutboundAndWaitForDelivery(
+		ctx,
+		bus.OutboundMessage{
+			Channel: "missing",
+			ChatID:  "chat-123",
+			Text:    "scheduled result",
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), `channel "missing"`) {
+		t.Fatalf(
+			"PublishOutboundAndWaitForDelivery() error = %v, want unknown channel",
+			err,
+		)
+	}
+	if got := len(endpoint.Messages()); got != 0 {
+		t.Fatalf("endpoint messages = %d, want 0", got)
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("runOutboundWorker() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for outbound worker exit")
+	}
+}
+
+func TestRunRuntimeWorkersWaitsForCanceledWorkerCleanup(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	started := make(chan struct{})
+	sawCancellation := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- runRuntimeWorkers(
+			ctx,
+			cancel,
+			time.Second,
+			func(ctx context.Context) error {
+				close(started)
+				<-ctx.Done()
+				close(sawCancellation)
+				<-release
+				return nil
+			},
+		)
+	}()
+
+	<-started
+	cancel()
+	<-sawCancellation
+	select {
+	case err := <-done:
+		t.Fatalf("runRuntimeWorkers() returned before cleanup completed: %v", err)
+	default:
+	}
+
+	close(release)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("runRuntimeWorkers() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for runtime worker cleanup")
+	}
+}
+
+func TestRunRuntimeWorkersCancelsAndJoinsSiblingsAfterFailure(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	workerErr := errors.New("worker failed")
+	siblingStarted := make(chan struct{})
+	siblingCanceled := make(chan struct{})
+
+	err := runRuntimeWorkers(
+		ctx,
+		cancel,
+		time.Second,
+		func(context.Context) error {
+			<-siblingStarted
+			return workerErr
+		},
+		func(ctx context.Context) error {
+			close(siblingStarted)
+			<-ctx.Done()
+			close(siblingCanceled)
+			return nil
+		},
+	)
+	if !errors.Is(err, workerErr) {
+		t.Fatalf("runRuntimeWorkers() error = %v, want %v", err, workerErr)
+	}
+	select {
+	case <-siblingCanceled:
+	default:
+		t.Fatal("runRuntimeWorkers() returned before canceled sibling exited")
+	}
+}
+
+func TestRunRuntimeWorkersBoundsShutdownJoin(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	started := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- runRuntimeWorkers(
+			ctx,
+			cancel,
+			20*time.Millisecond,
+			func(context.Context) error {
+				close(started)
+				<-release
+				return nil
+			},
+		)
+	}()
+
+	<-started
+	cancel()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "shutdown timed out") {
+			t.Fatalf("runRuntimeWorkers() error = %v, want shutdown timeout", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for bounded runtime worker shutdown")
+	}
+	close(release)
 }
 
 func TestUserMessageFromInboundBuildsOrderedTextAndImageParts(t *testing.T) {
