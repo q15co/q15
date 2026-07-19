@@ -114,6 +114,7 @@ jobs:
             local file="$1"
             shift
             for pattern in "$@"; do
+              # shellcheck disable=SC2254 # glob match is intentional
               case "${file}" in
                 ${pattern}) return 0 ;;
               esac
@@ -161,14 +162,17 @@ jobs:
             ANY=true
           fi
 
-          echo "agent=${AGENT}" >> "${GITHUB_OUTPUT}"
-          echo "exec=${EXEC}" >> "${GITHUB_OUTPUT}"
-          echo "proxy=${PROXY}" >> "${GITHUB_OUTPUT}"
-          echo "any=${ANY}" >> "${GITHUB_OUTPUT}"
           echo "agent=${AGENT}"
           echo "exec=${EXEC}"
           echo "proxy=${PROXY}"
           echo "any=${ANY}"
+
+          {
+            echo "agent=${AGENT}"
+            echo "exec=${EXEC}"
+            echo "proxy=${PROXY}"
+            echo "any=${ANY}"
+          } >> "${GITHUB_OUTPUT}"
 
           build_entry() {
             local service="$1"
@@ -200,8 +204,8 @@ jobs:
           else
             BUILD_JSON="[$(printf '%s\n' "${build_entries[@]}" | paste -sd ',' -)]"
           fi
-          echo "build-matrix=${BUILD_JSON}" >> "${GITHUB_OUTPUT}"
           echo "build-matrix=${BUILD_JSON}"
+          echo "build-matrix=${BUILD_JSON}" >> "${GITHUB_OUTPUT}"
 
           publish_entry() {
             local service="$1"
@@ -225,8 +229,8 @@ jobs:
           else
             PUBLISH_JSON="[$(printf '%s\n' "${publish_entries[@]}" | paste -sd ',' -)]"
           fi
-          echo "publish-matrix=${PUBLISH_JSON}" >> "${GITHUB_OUTPUT}"
           echo "publish-matrix=${PUBLISH_JSON}"
+          echo "publish-matrix=${PUBLISH_JSON}" >> "${GITHUB_OUTPUT}"
 
   build:
     name: Build ${{ matrix.service }} (${{ matrix.platform }})
