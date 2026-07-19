@@ -1,8 +1,9 @@
-# Canonical image-first deployment example. Pin Q15_IMAGE_TAG to one published
-# immutable runtime tag, typically sha-<short-sha>, across all three services.
+# Canonical image-first deployment example. Each q15 service can be pinned to
+# its own immutable runtime tag, typically sha-<short-sha>. When a push only
+# changes one service, the other two tags can stay on their last known-good tag.
 services:
   q15-proxy:
-    image: ghcr.io/q15co/q15-proxy:${Q15_IMAGE_TAG:?set Q15_IMAGE_TAG to a published sha-<short-sha> tag}
+    image: ghcr.io/q15co/q15-proxy:${Q15_PROXY_TAG:-main}
     restart: unless-stopped
     init: true
     healthcheck:
@@ -29,7 +30,7 @@ services:
         target: /var/lib/q15/proxy
 
   q15-exec:
-    image: ghcr.io/q15co/q15-exec:${Q15_IMAGE_TAG:?set Q15_IMAGE_TAG to a published sha-<short-sha> tag}
+    image: ghcr.io/q15co/q15-exec:${Q15_EXEC_TAG:-main}
     restart: unless-stopped
     init: true
     depends_on:
@@ -80,7 +81,7 @@ services:
         target: /qdrant/storage
 
   q15-agent:
-    image: ghcr.io/q15co/q15-agent:${Q15_IMAGE_TAG:?set Q15_IMAGE_TAG to a published sha-<short-sha> tag}
+    image: ghcr.io/q15co/q15-agent:${Q15_AGENT_TAG:-main}
     restart: unless-stopped
     init: true
     depends_on:

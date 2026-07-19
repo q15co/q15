@@ -118,12 +118,11 @@ Published runtime tags:
 
 Tag guidance for downstream consumers:
 
-- Use one pinned `sha-<short-sha>` tag across `q15-agent`, `q15-exec`, and `q15-proxy` for
-  long-running deployments.
+- Pin each service to its own immutable `sha-<short-sha>` tag (`Q15_AGENT_TAG`, `Q15_EXEC_TAG`,
+  `Q15_PROXY_TAG`) so deployments can update services independently.
 - Treat `main` as a moving integration tag for fast-moving or development consumption, not the
   default for long-lived stacks.
-- If release tags are added later, treat them the same way: pin one immutable tag across the whole
-  stack.
+- If release tags are added later, treat them the same way: pin one immutable tag per service.
 
 GHCR runtime images are intended to be publicly pullable without registry auth for ordinary
 self-hosted consumption. Maintain the GitHub package visibility for `q15-agent`, `q15-exec`, and
@@ -499,7 +498,8 @@ Supporting notes live in [deploy/compose/README.md](/deploy/compose/README.md).
 This deployment-oriented example:
 
 - uses `image:` only, with no `build:`
-- requires `Q15_IMAGE_TAG` and applies the same tag to `q15-agent`, `q15-exec`, and `q15-proxy`
+- accepts per-service tags (`Q15_AGENT_TAG`, `Q15_EXEC_TAG`, `Q15_PROXY_TAG`) so each service can
+  be pinned independently; defaults to `main` when a tag is not set
 - mounts persistent named volumes for `/workspace`, `/memory`, `/skills`, `/nix`,
   `/var/lib/q15/agent`, and `/var/lib/q15/proxy`
 - mounts `agent-config.yaml`, `proxy-policy.yaml`, and `auth.json` at the exact runtime paths the
@@ -511,7 +511,10 @@ Bring it up with:
 
 ```bash
 make compose-secrets-init
-Q15_IMAGE_TAG=sha-<short-sha> docker compose -f deploy/compose/docker-compose.image-first.yml up -d
+Q15_AGENT_TAG=sha-<short-sha> \
+Q15_EXEC_TAG=sha-<short-sha> \
+Q15_PROXY_TAG=sha-<short-sha> \
+  docker compose -f deploy/compose/docker-compose.image-first.yml up -d
 ```
 
 `/workspace` may start empty in this example, but it is expected to persist long-term for one stack.
@@ -597,10 +600,10 @@ The intended workflow is:
 
 For Compose and Kubernetes alike:
 
-- Update by changing the pinned image tag in the deployment repo or `Q15_IMAGE_TAG` and rolling the
-  stack.
-- Roll back by restoring the previous pinned `sha-<short-sha>` tag across all three services.
+- Update by changing the pinned image tags (`Q15_AGENT_TAG`, `Q15_EXEC_TAG`, `Q15_PROXY_TAG`) in the
+  deployment repo and rolling the stack.
+- Roll back by restoring the previous pinned `sha-<short-sha>` tag for the affected service(s).
 - Preserve the existing persistent storage for `/workspace`, `/memory`, `/skills`, `/nix`,
   `/var/lib/q15/agent`, and `/var/lib/q15/proxy` during normal upgrades and downgrades.
-- If release tags are added later, treat them the same way as `sha-*`: pin one immutable tag across
-  the full stack and keep rollback history in the deployment repo.
+- If release tags are added later, treat them the same way as `sha-*`: pin one immutable tag per
+  service and keep rollback history in the deployment repo.
