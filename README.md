@@ -498,8 +498,8 @@ Supporting notes live in [deploy/compose/README.md](/deploy/compose/README.md).
 This deployment-oriented example:
 
 - uses `image:` only, with no `build:`
-- accepts per-service tags (`Q15_AGENT_TAG`, `Q15_EXEC_TAG`, `Q15_PROXY_TAG`) so each service can
-  be pinned independently; defaults to `main` when a tag is not set
+- accepts per-service tags (`Q15_AGENT_TAG`, `Q15_EXEC_TAG`, `Q15_PROXY_TAG`) so each service can be
+  pinned independently; defaults to `main` when a tag is not set
 - mounts persistent named volumes for `/workspace`, `/memory`, `/skills`, `/nix`,
   `/var/lib/q15/agent`, and `/var/lib/q15/proxy`
 - mounts `agent-config.yaml`, `proxy-policy.yaml`, and `auth.json` at the exact runtime paths the
