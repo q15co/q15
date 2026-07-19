@@ -60,53 +60,193 @@ jobs:
           version: "~> v2"
           args: check
 
+  # Detect which service images actually need to be built for this push.
+  # This keeps the 3 services × 2 platforms matrix from running on every
+  # unrelated main-branch change, while still building every service on the
+  # first push to main or any shared-path change.
+  detect-changes:
+    name: Detect changed services
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      build-matrix: ${{ steps.detect.outputs.build-matrix }}
+      publish-matrix: ${{ steps.detect.outputs.publish-matrix }}
+      agent: ${{ steps.detect.outputs.agent }}
+      exec: ${{ steps.detect.outputs.exec }}
+      proxy: ${{ steps.detect.outputs.proxy }}
+      any: ${{ steps.detect.outputs.any }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Detect changed services
+        id: detect
+        run: |
+          set -euo pipefail
+
+          PREV_SHA="${{ github.event.before }}"
+          HEAD_SHA="${{ github.sha }}"
+
+          echo "previous commit: ${PREV_SHA}"
+          echo "current commit:  ${HEAD_SHA}"
+
+          # On the first push to a branch, github.event.before is all zeros.
+          # In that case (or any other missing-previous-commit scenario), treat
+          # every tracked file as changed so that all service images are built.
+          if [[ -z "${PREV_SHA:-}" || "${PREV_SHA}" == "0000000000000000000000000000000000000000" ]]; then
+            echo "No previous commit available; treating all files as changed to build every service."
+            CHANGED_FILES=$(git ls-tree -r --name-only "${HEAD_SHA}")
+          else
+            echo "Detecting changed files between ${PREV_SHA} and ${HEAD_SHA} ..."
+            if git diff --name-only "${PREV_SHA}" "${HEAD_SHA}" > /tmp/changed_files 2> /tmp/diff_err; then
+              CHANGED_FILES=$(cat /tmp/changed_files)
+            else
+              echo "git diff failed; building all services as a safe fallback." >&2
+              cat /tmp/diff_err >&2
+              CHANGED_FILES=$(git ls-tree -r --name-only "${HEAD_SHA}")
+            fi
+          fi
+
+          matches_any() {
+            local file="$1"
+            shift
+            for pattern in "$@"; do
+              # shellcheck disable=SC2254 # glob match is intentional
+              case "${file}" in
+                ${pattern}) return 0 ;;
+              esac
+            done
+            return 1
+          }
+
+          AGENT=false
+          EXEC=false
+          PROXY=false
+
+          while IFS= read -r file; do
+            [[ -n "${file}" ]] || continue
+
+            if matches_any "${file}" \
+                "systems/agent/**" \
+                "libs/**" \
+                "go.work" \
+                "go.work.sum" \
+                "docker/agent.Dockerfile"; then
+              AGENT=true
+            fi
+
+            if matches_any "${file}" \
+                "systems/exec/**" \
+                "libs/exec-contract/**" \
+                "go.work" \
+                "go.work.sum" \
+                "docker/exec.Dockerfile"; then
+              EXEC=true
+            fi
+
+            if matches_any "${file}" \
+                "systems/proxy/**" \
+                "libs/proxy-contract/**" \
+                "go.work" \
+                "go.work.sum" \
+                "docker/proxy.Dockerfile"; then
+              PROXY=true
+            fi
+          done <<< "${CHANGED_FILES}"
+
+          ANY=false
+          if [[ "${AGENT}" == true || "${EXEC}" == true || "${PROXY}" == true ]]; then
+            ANY=true
+          fi
+
+          echo "agent=${AGENT}"
+          echo "exec=${EXEC}"
+          echo "proxy=${PROXY}"
+          echo "any=${ANY}"
+
+          {
+            echo "agent=${AGENT}"
+            echo "exec=${EXEC}"
+            echo "proxy=${PROXY}"
+            echo "any=${ANY}"
+          } >> "${GITHUB_OUTPUT}"
+
+          build_entry() {
+            local service="$1"
+            local image="$2"
+            local dockerfile="$3"
+            local platform="$4"
+            local platform_id="$5"
+            local runner="$6"
+            printf '{"service":"%s","image":"%s","dockerfile":"%s","platform":"%s","platform_id":"%s","runner":"%s"}' \
+              "${service}" "${image}" "${dockerfile}" "${platform}" "${platform_id}" "${runner}"
+          }
+
+          build_entries=()
+          if [[ "${AGENT}" == true ]]; then
+            build_entries+=("$(build_entry q15-agent ghcr.io/q15co/q15-agent docker/agent.Dockerfile linux/amd64 amd64 ubuntu-24.04)")
+            build_entries+=("$(build_entry q15-agent ghcr.io/q15co/q15-agent docker/agent.Dockerfile linux/arm64 arm64 ubuntu-24.04-arm)")
+          fi
+          if [[ "${EXEC}" == true ]]; then
+            build_entries+=("$(build_entry q15-exec ghcr.io/q15co/q15-exec docker/exec.Dockerfile linux/amd64 amd64 ubuntu-24.04)")
+            build_entries+=("$(build_entry q15-exec ghcr.io/q15co/q15-exec docker/exec.Dockerfile linux/arm64 arm64 ubuntu-24.04-arm)")
+          fi
+          if [[ "${PROXY}" == true ]]; then
+            build_entries+=("$(build_entry q15-proxy ghcr.io/q15co/q15-proxy docker/proxy.Dockerfile linux/amd64 amd64 ubuntu-24.04)")
+            build_entries+=("$(build_entry q15-proxy ghcr.io/q15co/q15-proxy docker/proxy.Dockerfile linux/arm64 arm64 ubuntu-24.04-arm)")
+          fi
+
+          if [[ ${#build_entries[@]} -eq 0 ]]; then
+            BUILD_JSON="[]"
+          else
+            BUILD_JSON="[$(printf '%s\n' "${build_entries[@]}" | paste -sd ',' -)]"
+          fi
+          echo "build-matrix=${BUILD_JSON}"
+          echo "build-matrix=${BUILD_JSON}" >> "${GITHUB_OUTPUT}"
+
+          publish_entry() {
+            local service="$1"
+            local image="$2"
+            printf '{"service":"%s","image":"%s"}' "${service}" "${image}"
+          }
+
+          publish_entries=()
+          if [[ "${AGENT}" == true ]]; then
+            publish_entries+=("$(publish_entry q15-agent ghcr.io/q15co/q15-agent)")
+          fi
+          if [[ "${EXEC}" == true ]]; then
+            publish_entries+=("$(publish_entry q15-exec ghcr.io/q15co/q15-exec)")
+          fi
+          if [[ "${PROXY}" == true ]]; then
+            publish_entries+=("$(publish_entry q15-proxy ghcr.io/q15co/q15-proxy)")
+          fi
+
+          if [[ ${#publish_entries[@]} -eq 0 ]]; then
+            PUBLISH_JSON="[]"
+          else
+            PUBLISH_JSON="[$(printf '%s\n' "${publish_entries[@]}" | paste -sd ',' -)]"
+          fi
+          echo "publish-matrix=${PUBLISH_JSON}"
+          echo "publish-matrix=${PUBLISH_JSON}" >> "${GITHUB_OUTPUT}"
+
   build:
     name: Build ${{ matrix.service }} (${{ matrix.platform }})
-    needs: verify
+    needs: [verify, detect-changes]
+    # Only run when at least one service-relevant path changed.
+    if: needs.detect-changes.outputs.any == 'true'
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       packages: write
     strategy:
       fail-fast: false
+      # The matrix is generated dynamically from the detect-changes job so that
+      # only the services whose paths changed are built.
       matrix:
-        include:
-          - service: q15-agent
-            image: ghcr.io/q15co/q15-agent
-            dockerfile: docker/agent.Dockerfile
-            platform: linux/amd64
-            platform_id: amd64
-            runner: ubuntu-24.04
-          - service: q15-agent
-            image: ghcr.io/q15co/q15-agent
-            dockerfile: docker/agent.Dockerfile
-            platform: linux/arm64
-            platform_id: arm64
-            runner: ubuntu-24.04-arm
-          - service: q15-exec
-            image: ghcr.io/q15co/q15-exec
-            dockerfile: docker/exec.Dockerfile
-            platform: linux/amd64
-            platform_id: amd64
-            runner: ubuntu-24.04
-          - service: q15-exec
-            image: ghcr.io/q15co/q15-exec
-            dockerfile: docker/exec.Dockerfile
-            platform: linux/arm64
-            platform_id: arm64
-            runner: ubuntu-24.04-arm
-          - service: q15-proxy
-            image: ghcr.io/q15co/q15-proxy
-            dockerfile: docker/proxy.Dockerfile
-            platform: linux/amd64
-            platform_id: amd64
-            runner: ubuntu-24.04
-          - service: q15-proxy
-            image: ghcr.io/q15co/q15-proxy
-            dockerfile: docker/proxy.Dockerfile
-            platform: linux/arm64
-            platform_id: arm64
-            runner: ubuntu-24.04-arm
+        include: ${{ fromJSON(needs.detect-changes.outputs.build-matrix) }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -158,20 +298,16 @@ jobs:
   publish:
     name: Publish ${{ matrix.service }} manifest
     runs-on: ubuntu-24.04
-    needs: build
+    needs: [build, detect-changes]
+    # Only publish manifests for services that were actually built.
+    if: needs.detect-changes.outputs.any == 'true'
     permissions:
       contents: read
       packages: write
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - service: q15-agent
-            image: ghcr.io/q15co/q15-agent
-          - service: q15-exec
-            image: ghcr.io/q15co/q15-exec
-          - service: q15-proxy
-            image: ghcr.io/q15co/q15-proxy
+        include: ${{ fromJSON(needs.detect-changes.outputs.publish-matrix) }}
     steps:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
