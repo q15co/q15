@@ -21,19 +21,13 @@ const (
 	maxEmptyAssistantRetries         = 3
 )
 
-// SystemTextSource returns dynamic text to append to the base system prompt on
-// each user turn.
-type SystemTextSource func() string
-
 // Loop coordinates model calls, tool execution, and turn persistence.
 type Loop struct {
-	mu                sync.Mutex
-	engine            *Engine
-	store             ConversationStore
-	systemText        string
-	systemTextSources []SystemTextSource
-	maxTurns          int
-	recentTurns       int
+	mu             sync.Mutex
+	engine         *Engine
+	store          ConversationStore
+	contextBuilder *ContextBuilder
+	maxTurns       int
 }
 
 var _ Agent = (*Loop)(nil)
@@ -93,43 +87,28 @@ func NewLoopWithPlannerAndModelRefSource(
 	recentTurns int,
 	systemTextSources ...SystemTextSource,
 ) *Loop {
-	systemText = strings.TrimSpace(systemText)
-	if systemText == "" {
-		systemText = DefaultSystemPrompt
-	}
-	if recentTurns == 0 {
-		recentTurns = defaultRecentTurns
-	}
 	if planner == nil {
 		planner = modelselection.Passthrough{}
 	}
 	engine := NewEngineWithPlannerAndModelRefSource(modelClient, planner, tools, modelRefSource)
 	return &Loop{
-		engine:            engine,
-		store:             store,
-		systemText:        systemText,
-		systemTextSources: append([]SystemTextSource(nil), systemTextSources...),
-		maxTurns:          engine.maxTurns,
-		recentTurns:       recentTurns,
+		engine: engine,
+		store:  store,
+		contextBuilder: NewContextBuilder(
+			systemText,
+			store,
+			recentTurns,
+			systemTextSources...,
+		),
+		maxTurns: engine.maxTurns,
 	}
 }
 
 func (l *Loop) renderSystemText() string {
-	if l == nil {
+	if l == nil || l.contextBuilder == nil {
 		return DefaultSystemPrompt
 	}
-	parts := []string{l.systemText}
-	for _, source := range l.systemTextSources {
-		if source == nil {
-			continue
-		}
-		text := strings.TrimSpace(source())
-		if text == "" {
-			continue
-		}
-		parts = append(parts, text)
-	}
-	return strings.Join(parts, "\n\n")
+	return l.contextBuilder.SystemText()
 }
 
 func normalizeModelRefs(modelRefs []string) []string {
@@ -192,68 +171,14 @@ func (l *Loop) Reply(
 
 	// Keep the canonical system prefix ordered from most stable to least stable
 	// so providers can reuse cached prefixes across working-memory changes.
-	systemText := l.renderSystemText()
-	systemMessages := []conversation.Message{systemMessage(systemText)}
-	if l.store != nil {
-		if coreStore, ok := l.store.(CoreMemoryStore); ok {
-			coreMemory, err := coreStore.LoadCoreMemory(ctx)
-			if err != nil {
-				emitRunEvent(ctx, observer, RunEvent{
-					Type: RunEventRunFailed,
-					Err:  err,
-				})
-				return ReplyResult{}, fmt.Errorf("load core memory: %w", err)
-			}
-			if message, ok := injectCoreMemory(coreMemory); ok {
-				systemMessages = append(systemMessages, message)
-			}
-		}
-		if skillStore, ok := l.store.(SkillCatalogStore); ok {
-			skillCatalog, err := skillStore.LoadSkillCatalog(ctx)
-			if err != nil {
-				emitRunEvent(ctx, observer, RunEvent{
-					Type: RunEventRunFailed,
-					Err:  err,
-				})
-				return ReplyResult{}, fmt.Errorf("load skill catalog: %w", err)
-			}
-			if message, ok := injectSkillCatalog(skillCatalog); ok {
-				systemMessages = append(systemMessages, message)
-			}
-		}
-		if workingStore, ok := l.store.(WorkingMemoryStore); ok {
-			workingMemory, err := workingStore.LoadWorkingMemory(ctx)
-			if err != nil {
-				emitRunEvent(ctx, observer, RunEvent{
-					Type: RunEventRunFailed,
-					Err:  err,
-				})
-				return ReplyResult{}, fmt.Errorf("load working memory: %w", err)
-			}
-			if message, ok := injectWorkingMemory(workingMemory); ok {
-				systemMessages = append(systemMessages, message)
-			}
-		}
+	messages, err := l.contextBuilder.Build(ctx, userMessage)
+	if err != nil {
+		emitRunEvent(ctx, observer, RunEvent{
+			Type: RunEventRunFailed,
+			Err:  err,
+		})
+		return ReplyResult{}, err
 	}
-
-	var recentMessages []conversation.Message
-	if l.store != nil {
-		var err error
-		recentMessages, err = l.store.LoadRecentMessages(ctx, l.recentTurns)
-		if err != nil {
-			emitRunEvent(ctx, observer, RunEvent{
-				Type: RunEventRunFailed,
-				Err:  err,
-			})
-			return ReplyResult{}, fmt.Errorf("load recent messages: %w", err)
-		}
-	}
-
-	messages := make([]conversation.Message, 0, len(systemMessages)+len(recentMessages)+1)
-	messages = append(messages, copyMessages(systemMessages)...)
-	messages = append(messages, copyMessages(recentMessages)...)
-
-	messages = append(messages, copyMessages([]conversation.Message{userMessage})...)
 	result, err := l.engine.Run(ctx, EngineRequest{
 		Messages:         messages,
 		UseTools:         true,

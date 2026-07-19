@@ -11,7 +11,7 @@ import (
 // SchemaVersion is the current persisted transcript schema version. New writes
 // always use this version; older versions are accepted only during startup
 // migration.
-const SchemaVersion = 4
+const SchemaVersion = 5
 
 // PortableReasoningUnavailableText is an explicit placeholder used when a
 // provider only exposed opaque replay state and no portable reasoning text.
@@ -127,15 +127,44 @@ type UserTemporalMetadata struct {
 	SincePrevUserMessage *Duration `json:"since_prev_user_message,omitempty"`
 }
 
+// ExternalEventSource identifies a non-conversational event that was delivered
+// to the user and then recorded in the canonical transcript.
+type ExternalEventSource string
+
+// Canonical external event sources.
+const (
+	ExternalEventSourceScheduledJob ExternalEventSource = "scheduled_job"
+)
+
+// ExternalEventMetadata records the stable identity and delivery context of an
+// externally delivered assistant event.
+type ExternalEventMetadata struct {
+	Source      ExternalEventSource `json:"source"`
+	JobID       string              `json:"job_id"`
+	RunID       string              `json:"run_id"`
+	Channel     string              `json:"channel"`
+	ChatID      string              `json:"chat_id"`
+	DeliveredAt time.Time           `json:"delivered_at"`
+}
+
+// DeliveredAssistantEvent is an assistant event that has already been
+// acknowledged by its delivery transport and is ready for transcript
+// recording. Text is persisted verbatim.
+type DeliveredAssistantEvent struct {
+	Text     string
+	Metadata ExternalEventMetadata
+}
+
 // Message is one canonical conversation message.
 //
 // This is the canonical persisted and replayable transcript shape. Providers,
 // the loop, and stores should map to and from this model rather than
 // reintroducing alternative message types as sources of truth.
 type Message struct {
-	Role         Role                  `json:"role"`
-	Parts        []Part                `json:"parts,omitempty"`
-	UserTemporal *UserTemporalMetadata `json:"user_temporal,omitempty"`
+	Role          Role                   `json:"role"`
+	Parts         []Part                 `json:"parts,omitempty"`
+	UserTemporal  *UserTemporalMetadata  `json:"user_temporal,omitempty"`
+	ExternalEvent *ExternalEventMetadata `json:"external_event,omitempty"`
 }
 
 // Part is one canonical transcript part. Only fields relevant to the current
@@ -264,6 +293,17 @@ func UserMessageParts(parts ...Part) Message {
 // AssistantMessage creates an assistant message from ordered parts.
 func AssistantMessage(parts ...Part) Message {
 	return Message{Role: AssistantRole, Parts: CloneParts(parts)}
+}
+
+// DeliveredAssistantEventMessage creates one canonical assistant message for
+// an externally delivered event. The event text is preserved byte-for-byte.
+func DeliveredAssistantEventMessage(event DeliveredAssistantEvent) Message {
+	metadata := NormalizeExternalEventMetadata(event.Metadata)
+	return Message{
+		Role:          AssistantRole,
+		Parts:         []Part{Text(event.Text, TextDispositionFinal)},
+		ExternalEvent: &metadata,
+	}
 }
 
 // ToolResultMessage creates a tool-role message with one tool-result part.

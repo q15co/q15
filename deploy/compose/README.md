@@ -4,8 +4,9 @@ This directory contains the checked-in Compose-facing config, policy, and secret
 
 - [docker-compose.image-first.yml](/deploy/compose/docker-compose.image-first.yml) is the canonical
   downstream deployment example. It uses published `ghcr.io/q15co/q15-*` images only, requires
-  `Q15_IMAGE_TAG`, and mounts persistent storage for `/workspace`, `/memory`, `/skills`, `/nix`, and
-  `/var/lib/q15/proxy`, plus persistent Qdrant storage for embedding collections.
+  `Q15_IMAGE_TAG`, and mounts persistent storage for `/workspace`, `/memory`, `/skills`, `/nix`,
+  `/var/lib/q15/agent`, and `/var/lib/q15/proxy`, plus persistent Qdrant storage for embedding
+  collections.
 - [docker-compose.yml](/docker-compose.yml) in the repo root is the local-development stack. It
   keeps `build:` enabled and uses a named `q15_workspace` volume for `/workspace`; it is not the
   image-first deployment example for downstream consumers.
@@ -22,7 +23,8 @@ For a long-running image-first deployment:
 
 ```bash
 make compose-secrets-init
-Q15_IMAGE_TAG=sha-<short-sha> docker compose -f deploy/compose/docker-compose.image-first.yml up -d
+Q15_IMAGE_TAG=sha-<short-sha> docker compose -f deploy/compose/docker-compose.image-first.yml \
+  up -d --wait
 ```
 
 Notes:
@@ -32,6 +34,12 @@ Notes:
 - `/workspace` is expected to persist long-term for one stack. It may be empty on first startup.
 - `/memory` should also persist across updates. `q15-agent` eagerly upgrades stored turn history to
   the latest transcript schema on startup.
+- `/var/lib/q15/agent` is agent-owned durable runtime state. Scheduled-job definitions and run
+  provenance live under `/var/lib/q15/agent/schedule/` and must persist across updates.
+- Scheduled-job tool access is stored per job: the main agent selects the job's `allowed_tools` at
+  creation or update time. It is not configured as a deployment-wide allow-list.
+- Compose health checks gate the executor on the proxy and the agent on the executor and Qdrant.
+  Keep `--wait` in deployment commands so a successful update means the whole stack is ready.
 - `/etc/q15/auth` must be a writable directory mount containing `auth.json`. A single-file
   `auth.json` bind mount can keep pointing at an old inode after `q15-auth login` atomically
   replaces the host file.

@@ -5,9 +5,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/q15co/q15/libs/exec-contract/execpb"
 	"github.com/q15co/q15/systems/agent/internal/agent"
@@ -20,7 +23,10 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/fileops"
 	q15media "github.com/q15co/q15/systems/agent/internal/media"
 	"github.com/q15co/q15/systems/agent/internal/memory"
+	"github.com/q15co/q15/systems/agent/internal/memoryrepo"
 	"github.com/q15co/q15/systems/agent/internal/modelcatalog"
+	"github.com/q15co/q15/systems/agent/internal/schedule"
+	"github.com/q15co/q15/systems/agent/internal/schedulestore"
 	"github.com/q15co/q15/systems/agent/internal/selectionstore"
 	q15skills "github.com/q15co/q15/systems/agent/internal/skills"
 )
@@ -42,6 +48,15 @@ type runtimeEnvironmentInfo struct {
 // channel, then runs the interactive agent and cognition loop until the context
 // is canceled or a worker fails.
 func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.Registry) error {
+	if err := clearRuntimeReady(runtimeReadyPath); err != nil {
+		return fmt.Errorf("clear stale runtime readiness: %w", err)
+	}
+	defer func() {
+		if err := clearRuntimeReady(runtimeReadyPath); err != nil {
+			log.Printf("q15: runtime event=readiness_cleanup_failed error=%q", err)
+		}
+	}()
+
 	token := strings.TrimSpace(rt.TelegramToken)
 	if token == "" {
 		return errors.New("telegram token is required")
@@ -129,6 +144,70 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 	if err != nil {
 		return fmt.Errorf("build base tool registry for agent %q: %w", rt.Name, err)
 	}
+
+	memoryRepository := memoryrepo.New(rt.MemoryLocalDir, nil)
+	memoryStore := memory.NewStore(memoryRepository, rt.Name)
+	if err := memoryStore.Init(ctx); err != nil {
+		return fmt.Errorf("initialize memory store for agent %q: %w", rt.Name, err)
+	}
+	scheduleStore := schedulestore.New(filepath.Join(rt.StateLocalDir, "schedule"))
+	if err := scheduleStore.Init(ctx); err != nil {
+		return fmt.Errorf("initialize schedule store for agent %q: %w", rt.Name, err)
+	}
+	store := &runtimeStore{
+		memory: memoryStore,
+		skills: skillManager,
+	}
+	messageBus := bus.New(bus.DefaultBufferSize)
+	scheduledExecutor, err := newScheduledJobExecutor(
+		modelAdapter,
+		baseToolRegistry,
+		func(toolDefinitions []agent.ToolDefinition) *agent.ContextBuilder {
+			return agent.NewContextBuilder(
+				composeSystemPrompt(
+					agent.DefaultSystemPromptForName(rt.Name),
+					rt.Name,
+					runtimeInfo,
+					toolDefinitions,
+				),
+				store,
+				rt.MemoryRecentTurns,
+			)
+		},
+	)
+	if err != nil {
+		return fmt.Errorf("configure scheduled job executor for agent %q: %w", rt.Name, err)
+	}
+	scheduledToolNames := make(map[string]struct{}, len(baseToolRegistry.Definitions()))
+	for _, definition := range baseToolRegistry.Definitions() {
+		scheduledToolNames[definition.Name] = struct{}{}
+	}
+	scheduleManager, err := schedule.NewManager(ctx, schedule.Config{
+		Store:     scheduleStore,
+		Executor:  scheduledExecutor,
+		Publisher: messageBus,
+		DeliveryRecorder: &scheduledDeliveryRecorder{
+			store: store,
+		},
+		MaxJobs:        rt.Tools.Schedule.MaxJobs,
+		MaxTurns:       rt.Tools.Schedule.MaxRunTurns,
+		AllowedUserIDs: rt.TelegramAllowedUserIDs,
+		DefaultModel: func() schedule.ModelTarget {
+			provider, ref := selection.Current()
+			return schedule.ModelTarget{Provider: provider, Ref: ref}
+		},
+		ModelExists: func(target schedule.ModelTarget) bool {
+			_, ok := registry.Lookup(target.Provider, target.Ref)
+			return ok
+		},
+		ToolExists: func(name string) bool {
+			_, ok := scheduledToolNames[name]
+			return ok
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("configure schedule manager for agent %q: %w", rt.Name, err)
+	}
 	toolRegistry, err := agent.NewToolRegistry(buildRuntimeTools(
 		baseToolList,
 		registry,
@@ -139,6 +218,7 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 		mediaStore,
 		skillManager,
 		dumpWriter,
+		scheduleManager,
 	)...)
 	if err != nil {
 		return fmt.Errorf("build tool registry for agent %q: %w", rt.Name, err)
@@ -151,14 +231,6 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 		toolRegistry.Definitions(),
 	)
 
-	memoryStore := memory.NewStore(rt.MemoryLocalDir, rt.Name, nil)
-	if err := memoryStore.Init(ctx); err != nil {
-		return fmt.Errorf("initialize memory store for agent %q: %w", rt.Name, err)
-	}
-	store := &runtimeStore{
-		memory: memoryStore,
-		skills: skillManager,
-	}
 	entryPoints := newRuntimeEntryPoints(runtimeEntryPointsConfig{
 		modelClient:               modelClient,
 		planner:                   modelAdapter,
@@ -182,7 +254,16 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 	if cognitionController != nil {
 		store.AddAppendObserver(cognitionController.NotifyStateChange)
 	}
-	return runTelegramLoop(ctx, token, mediaStore, rt, botAgent, cognitionController)
+	return runTelegramLoop(
+		ctx,
+		messageBus,
+		token,
+		mediaStore,
+		rt,
+		botAgent,
+		cognitionController,
+		scheduleManager,
+	)
 }
 
 // buildSkillManager constructs the skill manager and the shared file-operation
@@ -208,20 +289,30 @@ func buildSkillManager(
 	return skillManager, settings
 }
 
-// runTelegramLoop starts the channel and runs the interactive agent and
-// cognition controller workers, returning when the context is canceled or a
+// runTelegramLoop starts the channel and runs inbound replies, outbound
+// delivery, scheduled jobs, and cognition until the context is canceled or a
 // worker fails.
 func runTelegramLoop(
 	ctx context.Context,
+	messageBus *bus.Bus,
 	token string,
 	mediaStore q15media.Store,
 	rt config.AgentRuntime,
 	botAgent agent.Agent,
 	cognitionController *cognition.Controller,
+	scheduleManager *schedule.Manager,
 ) error {
-	messageBus := bus.New(bus.DefaultBufferSize)
+	if messageBus == nil {
+		return errors.New("message bus is required")
+	}
+	if scheduleManager == nil {
+		return errors.New("schedule manager is required")
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	channel, err := telegram.NewChannel(token, func(msg telegram.IncomingMessage) {
-		err := messageBus.PublishInbound(ctx, telegramInboundMessage(msg))
+		err := messageBus.PublishInbound(runCtx, telegramInboundMessage(msg))
 		if err != nil && !errors.Is(err, context.Canceled) {
 			fmt.Fprintf(os.Stderr, "publish inbound error: %v\n", err)
 		}
@@ -232,30 +323,31 @@ func runTelegramLoop(
 	if err != nil {
 		return err
 	}
-	if err := channel.Start(ctx); err != nil {
+	if err := channel.Start(runCtx); err != nil {
 		return err
 	}
+	if err := markRuntimeReady(runtimeReadyPath, time.Now()); err != nil {
+		return fmt.Errorf("mark agent runtime ready: %w", err)
+	}
+	log.Printf("q15: runtime event=ready")
 
 	telegramEndpoint := telegram.NewAgentEndpoint(channel)
-	errCh := make(chan error, 2)
-	go func() {
-		errCh <- runAgentWorker(ctx, messageBus, botAgent, telegramEndpoint)
-	}()
+	workers := []runtimeWorker{
+		func(workerCtx context.Context) error {
+			return runAgentWorker(workerCtx, messageBus, botAgent, telegramEndpoint)
+		},
+		func(workerCtx context.Context) error {
+			return runOutboundWorker(workerCtx, messageBus, telegramEndpoint)
+		},
+		func(workerCtx context.Context) error {
+			return scheduleManager.Run(workerCtx)
+		},
+	}
 	if cognitionController != nil {
-		go func() {
-			errCh <- cognitionController.Run(ctx)
-		}()
+		workers = append(workers, cognitionController.Run)
 	}
 
-	select {
-	case <-ctx.Done():
-		return nil
-	case err := <-errCh:
-		if errors.Is(err, context.Canceled) {
-			return nil
-		}
-		return err
-	}
+	return runRuntimeWorkers(runCtx, cancel, runtimeWorkerShutdownTimeout, workers...)
 }
 
 // cognitionJobs registers the built-in background cognition jobs.

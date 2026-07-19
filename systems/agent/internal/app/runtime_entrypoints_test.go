@@ -10,6 +10,7 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/cognition"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
 	"github.com/q15co/q15/systems/agent/internal/memory"
+	"github.com/q15co/q15/systems/agent/internal/memoryrepo"
 	"github.com/q15co/q15/systems/agent/internal/modelselection"
 )
 
@@ -218,7 +219,7 @@ func TestRuntimeEntryPointsBuildInteractiveAndCognitionPaths(t *testing.T) {
 
 func TestRuntimeEntryPointsInteractiveReplayUsesCheckpointAwareHistory(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "memory")
-	mem := memory.NewStore(root, "Jared", &fakeMemoryCommitter{})
+	mem := memory.NewStore(memoryrepo.New(root, &fakeMemoryCommitter{}), "Jared")
 	if err := mem.Init(context.Background()); err != nil {
 		t.Fatalf("Init() error = %v", err)
 	}
@@ -296,6 +297,10 @@ func (f *fakeMemoryCommitter) EnsureRepo(context.Context, string) error {
 	return nil
 }
 
-func (f *fakeMemoryCommitter) CommitAll(context.Context, string, string) (string, error) {
-	return "sha-test", nil
+func (f *fakeMemoryCommitter) CommitPaths(context.Context, string, string, []string) error {
+	return nil
+}
+
+func (f *fakeMemoryCommitter) ResetPaths(context.Context, string, []string) error {
+	return nil
 }

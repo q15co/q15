@@ -18,6 +18,7 @@ type fakeAgentRunChannel struct {
 	mu sync.Mutex
 
 	sendTexts        []string
+	sendTextChatIDs  []string
 	sendMessageTexts []string
 	sendPhotos       []fakeSentPhoto
 	sendAudios       []fakeSentAudio
@@ -70,10 +71,10 @@ func (f *fakeAgentRunChannel) SendText(
 	text string,
 ) error {
 	_ = ctx
-	_ = chatID
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.sendTexts = append(f.sendTexts, text)
+	f.sendTextChatIDs = append(f.sendTextChatIDs, chatID)
 	return f.sendErr
 }
 
@@ -318,6 +319,47 @@ func waitForCondition(t *testing.T, timeout time.Duration, fn func() bool) {
 		time.Sleep(2 * time.Millisecond)
 	}
 	t.Fatal("timed out waiting for condition")
+}
+
+func TestAgentEndpointDeliverSendsText(t *testing.T) {
+	t.Parallel()
+
+	channel := &fakeAgentRunChannel{}
+	endpoint := newAgentEndpoint(channel)
+
+	err := endpoint.Deliver(context.Background(), bus.OutboundMessage{
+		Channel: bus.ChannelTelegram,
+		ChatID:  "chat-123",
+		Text:    "scheduled result",
+	})
+	if err != nil {
+		t.Fatalf("Deliver() error = %v", err)
+	}
+
+	channel.mu.Lock()
+	defer channel.mu.Unlock()
+	if len(channel.sendTexts) != 1 || channel.sendTexts[0] != "scheduled result" {
+		t.Fatalf("sendTexts = %#v, want [scheduled result]", channel.sendTexts)
+	}
+	if len(channel.sendTextChatIDs) != 1 || channel.sendTextChatIDs[0] != "chat-123" {
+		t.Fatalf("sendTextChatIDs = %#v, want [chat-123]", channel.sendTextChatIDs)
+	}
+}
+
+func TestAgentEndpointDeliverReturnsSendError(t *testing.T) {
+	t.Parallel()
+
+	want := errors.New("send failed")
+	endpoint := newAgentEndpoint(&fakeAgentRunChannel{sendErr: want})
+
+	err := endpoint.Deliver(context.Background(), bus.OutboundMessage{
+		Channel: bus.ChannelTelegram,
+		ChatID:  "chat-123",
+		Text:    "scheduled result",
+	})
+	if !errors.Is(err, want) {
+		t.Fatalf("Deliver() error = %v, want %v", err, want)
+	}
 }
 
 func TestAgentEndpoint_OpenSession_HandlesProgressCommandLocally(t *testing.T) {

@@ -38,7 +38,20 @@ type routedModelAdapter struct {
 // modelClientFactory builds a provider client for one discovered model.
 type modelClientFactory func(modelcatalog.Model, q15media.Store) (agent.ModelClient, error)
 
-var _ agent.ModelClient = (*routedModelAdapter)(nil)
+// providerModelBinder resolves one exact provider and agent-side model ref to
+// a client pinned to the current roster entry. Binding once per scheduled run
+// prevents a roster refresh between model turns from changing its target.
+type providerModelBinder interface {
+	BindProviderModel(string, string) (agent.ModelClient, error)
+}
+
+var errProviderModelUnavailable = errors.New("provider model is not in the current roster")
+
+var (
+	_ agent.ModelClient   = (*routedModelAdapter)(nil)
+	_ providerModelBinder = (*routedModelAdapter)(nil)
+	_ agent.ModelClient   = boundProviderModelClient{}
+)
 
 // Complete resolves the model ref to a live model, reuses or builds the
 // provider client, suppresses tools for non-tool models, and adapts media to
@@ -57,7 +70,71 @@ func (r *routedModelAdapter) Complete(
 			model,
 		)
 	}
+	return r.completeModel(ctx, m, messages, tools)
+}
 
+// BindProviderModel resolves an exact provider and agent-side model ref once.
+// The returned client deliberately bypasses selection and ref-only lookup, so
+// it cannot silently fall back or change target during a multi-turn run.
+func (r *routedModelAdapter) BindProviderModel(
+	providerName string,
+	modelRef string,
+) (agent.ModelClient, error) {
+	providerName = strings.TrimSpace(providerName)
+	modelRef = strings.TrimSpace(modelRef)
+	var (
+		m  modelcatalog.Model
+		ok bool
+	)
+	if r != nil && r.registry != nil {
+		m, ok = r.registry.Lookup(providerName, modelRef)
+	}
+	if !ok {
+		return nil, fmt.Errorf(
+			"%w: model %q for provider %q (provider down or model deprecated)",
+			errProviderModelUnavailable,
+			modelRef,
+			providerName,
+		)
+	}
+	return boundProviderModelClient{
+		adapter: r,
+		model:   m,
+		ref:     modelRef,
+	}, nil
+}
+
+type boundProviderModelClient struct {
+	adapter *routedModelAdapter
+	model   modelcatalog.Model
+	ref     string
+}
+
+func (c boundProviderModelClient) Complete(
+	ctx context.Context,
+	modelRef string,
+	messages []conversation.Message,
+	tools []agent.ToolDefinition,
+) (agent.ModelClientResult, error) {
+	modelRef = strings.TrimSpace(modelRef)
+	if modelRef != c.ref {
+		return agent.ModelClientResult{}, fmt.Errorf(
+			"bound model ref %q does not match requested ref %q",
+			c.ref,
+			modelRef,
+		)
+	}
+	return c.adapter.completeModel(ctx, c.model, messages, tools)
+}
+
+// completeModel applies the provider client, capability, and media adaptation
+// path shared by ref-only and provider-qualified completion.
+func (r *routedModelAdapter) completeModel(
+	ctx context.Context,
+	m modelcatalog.Model,
+	messages []conversation.Message,
+	tools []agent.ToolDefinition,
+) (agent.ModelClientResult, error) {
 	client, err := r.getOrCreateClient(m)
 	if err != nil {
 		return agent.ModelClientResult{}, err

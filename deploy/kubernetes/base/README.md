@@ -31,7 +31,8 @@ The runtime contract is fixed in the binaries. Overlays only need to provide:
 - `Secret/q15-proxy-env` with keys matching the uppercased proxy secret aliases in
   `proxy-policy.yaml`
   - Example: `GITHUB_TOKEN`
-- PVCs named `q15-workspace`, `q15-memory`, `q15-skills`, `q15-exec-nix`, and `q15-proxy-state`
+- PVCs named `q15-workspace`, `q15-memory`, `q15-skills`, `q15-agent-state`, `q15-exec-nix`, and
+  `q15-proxy-state`
 
 Provider discovery is mandatory: provider rosters are the source of truth for available models and
 capabilities. The interactive and cognition models are runtime state, persisted under
@@ -58,6 +59,12 @@ the working layer under `/memory/working/` with the canonical prompt-visible act
 zettelkasten notebook folders under `/memory/notes/inbox/`, `/memory/notes/zettel/`, and
 `/memory/notes/maps/`. The notes tree remains auxiliary notebook space, not implicit working memory.
 
+`q15-agent-state` is private durable runtime state for `q15-agent`, mounted at `/var/lib/q15/agent`.
+Scheduled-job definitions and append-only run provenance live below `/var/lib/q15/agent/schedule/`;
+this state is intentionally separate from the Git-backed memory tree. Each job persists its own
+`allowed_tools`, selected by the main agent when the job is created or updated; there is no
+deployment-wide scheduled-job tool allow-list.
+
 The supported Kubernetes topology is one namespace per q15 stack. Within that namespace, one stack
 contains:
 
@@ -66,8 +73,8 @@ contains:
 - one `q15-proxy`
 - stack-local config and secret inputs for agent config, proxy policy, `auth.json`, provider or API
   keys, and runtime tokens
-- stack-owned PVCs for `/workspace`, `/memory`, `/skills`, `/nix`, and `/var/lib/q15/proxy`, with
-  `/workspace` carrying the stack's durable project and working state
+- stack-owned PVCs for `/workspace`, `/memory`, `/skills`, `/var/lib/q15/agent`, `/nix`, and
+  `/var/lib/q15/proxy`, with `/workspace` carrying the stack's durable project and working state
 
 The namespace is the isolation boundary. The checked-in base already encodes one pod for each
 runtime service with `replicas: 1`, and it uses namespace-scoped Service names `q15-exec` and

@@ -23,8 +23,8 @@ func (s *Store) LoadCognitionArtifact(
 ) (cognition.Artifact, error) {
 	_ = ctx
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	release := s.repository.Acquire()
+	defer release()
 
 	normalized, path, err := s.cognitionArtifactPath(relativePath)
 	if err != nil {
@@ -55,8 +55,8 @@ func (s *Store) StoreCognitionArtifact(
 	ctx context.Context,
 	artifact cognition.Artifact,
 ) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	release := s.repository.Acquire()
+	defer release()
 
 	normalized, path, err := s.cognitionArtifactPath(artifact.RelativePath)
 	if err != nil {
@@ -75,10 +75,10 @@ func (s *Store) StoreCognitionArtifact(
 	if err := writeBytesFileAtomic(path, data); err != nil {
 		return fmt.Errorf("write cognition artifact %q: %w", path, err)
 	}
-	if _, err := s.committer.CommitAll(
+	if err := s.repository.Commit(
 		ctx,
-		s.rootDir,
 		fmt.Sprintf("memory: update cognition artifact %s", normalized),
+		filepath.ToSlash(filepath.Join(cognitionDirPath, normalized)),
 	); err != nil {
 		return fmt.Errorf("commit cognition artifact %q: %w", normalized, err)
 	}
@@ -89,8 +89,8 @@ func (s *Store) StoreCognitionArtifact(
 func (s *Store) LoadHead(ctx context.Context) (int64, time.Time, error) {
 	_ = ctx
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	release := s.repository.Acquire()
+	defer release()
 
 	head, err := s.readHeadState()
 	if err != nil {
@@ -106,8 +106,8 @@ func (s *Store) LoadConsolidationCheckpoint(
 ) (cognition.ConsolidationCheckpoint, error) {
 	_ = ctx
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	release := s.repository.Acquire()
+	defer release()
 
 	checkpoint, err := s.readConsolidationCheckpoint()
 	if err != nil {
@@ -123,8 +123,8 @@ func (s *Store) LoadSemanticExtractionCheckpoint(
 ) (cognition.SemanticExtractionCheckpoint, error) {
 	_ = ctx
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	release := s.repository.Acquire()
+	defer release()
 
 	checkpoint, err := s.readSemanticExtractionCheckpoint()
 	if err != nil {
@@ -139,8 +139,8 @@ func (s *Store) StoreConsolidationCheckpoint(
 	ctx context.Context,
 	checkpoint cognition.ConsolidationCheckpoint,
 ) (cognition.ConsolidationCheckpoint, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	release := s.repository.Acquire()
+	defer release()
 
 	state := consolidationCheckpointStateFromCognition(checkpoint)
 
@@ -177,7 +177,11 @@ func (s *Store) StoreConsolidationCheckpoint(
 			err,
 		)
 	}
-	if _, err := s.committer.CommitAll(ctx, s.rootDir, "memory: update consolidation checkpoint"); err != nil {
+	if err := s.repository.Commit(
+		ctx,
+		"memory: update consolidation checkpoint",
+		consolidationCheckpointRelativePath,
+	); err != nil {
 		return cognition.ConsolidationCheckpoint{}, fmt.Errorf(
 			"commit consolidation checkpoint: %w",
 			err,
@@ -192,8 +196,8 @@ func (s *Store) StoreSemanticExtractionCheckpoint(
 	ctx context.Context,
 	checkpoint cognition.SemanticExtractionCheckpoint,
 ) (cognition.SemanticExtractionCheckpoint, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	release := s.repository.Acquire()
+	defer release()
 
 	state := semanticExtractionCheckpointStateFromCognition(checkpoint)
 
@@ -230,10 +234,10 @@ func (s *Store) StoreSemanticExtractionCheckpoint(
 			err,
 		)
 	}
-	if _, err := s.committer.CommitAll(
+	if err := s.repository.Commit(
 		ctx,
-		s.rootDir,
 		"memory: update semantic extraction checkpoint",
+		semanticExtractionCheckpointRelativePath,
 	); err != nil {
 		return cognition.SemanticExtractionCheckpoint{}, fmt.Errorf(
 			"commit semantic extraction checkpoint: %w",
@@ -247,8 +251,8 @@ func (s *Store) StoreSemanticExtractionCheckpoint(
 func (s *Store) LoadJobState(ctx context.Context, jobType string) (cognition.JobState, error) {
 	_ = ctx
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	release := s.repository.Acquire()
+	defer release()
 
 	path := s.jobStatePath(jobType)
 	data, err := os.ReadFile(path)
@@ -273,8 +277,8 @@ func (s *Store) StoreJobState(
 	jobType string,
 	state cognition.JobState,
 ) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	release := s.repository.Acquire()
+	defer release()
 
 	path := s.jobStatePath(jobType)
 	state.LastScheduledFor = normalizeScheduleMap(state.LastScheduledFor)
@@ -296,10 +300,15 @@ func (s *Store) StoreJobState(
 	if err := writeBytesFileAtomic(path, data); err != nil {
 		return fmt.Errorf("write cognition job state %q: %w", path, err)
 	}
-	if _, err := s.committer.CommitAll(
+	if err := s.repository.Commit(
 		ctx,
-		s.rootDir,
 		fmt.Sprintf("memory: update cognition trigger state %s", sanitizeCognitionName(jobType)),
+		filepath.ToSlash(
+			filepath.Join(
+				cognitionJobsPath,
+				sanitizeCognitionName(jobType)+".json",
+			),
+		),
 	); err != nil {
 		return fmt.Errorf("commit cognition job state %q: %w", jobType, err)
 	}
@@ -308,8 +317,8 @@ func (s *Store) StoreJobState(
 
 // AppendRunRecord appends one persisted cognition run record.
 func (s *Store) AppendRunRecord(ctx context.Context, record cognition.RunRecord) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	release := s.repository.Acquire()
+	defer release()
 
 	jobType := strings.TrimSpace(record.Type)
 	if jobType == "" {
@@ -329,10 +338,21 @@ func (s *Store) AppendRunRecord(ctx context.Context, record cognition.RunRecord)
 	if err := writeJSONFileAtomic(path, record); err != nil {
 		return fmt.Errorf("write cognition run record %q: %w", path, err)
 	}
-	if _, err := s.committer.CommitAll(
+	relative := filepath.Join(
+		cognitionRunsPath,
+		startedAt.Format("2006"),
+		startedAt.Format("01"),
+		startedAt.Format("02"),
+		fmt.Sprintf(
+			"%s-%s.json",
+			startedAt.Format("150405.000000000"),
+			sanitizeCognitionName(jobType),
+		),
+	)
+	if err := s.repository.Commit(
 		ctx,
-		s.rootDir,
 		fmt.Sprintf("memory: record cognition run %s", sanitizeCognitionName(jobType)),
+		filepath.ToSlash(relative),
 	); err != nil {
 		return fmt.Errorf("commit cognition run record %q: %w", jobType, err)
 	}
@@ -341,7 +361,7 @@ func (s *Store) AppendRunRecord(ctx context.Context, record cognition.RunRecord)
 
 func (s *Store) jobStatePath(jobType string) string {
 	return filepath.Join(
-		s.rootDir,
+		s.root(),
 		cognitionJobsPath,
 		sanitizeCognitionName(jobType)+".json",
 	)
@@ -349,7 +369,7 @@ func (s *Store) jobStatePath(jobType string) string {
 
 func (s *Store) runRecordPath(jobType string, startedAt time.Time) string {
 	return filepath.Join(
-		s.rootDir,
+		s.root(),
 		cognitionRunsPath,
 		startedAt.Format("2006"),
 		startedAt.Format("01"),
@@ -498,7 +518,7 @@ func (s *Store) cognitionArtifactPath(relativePath string) (string, string, erro
 		return "", "", err
 	}
 	return normalized, filepath.Join(
-		s.rootDir,
+		s.root(),
 		cognitionDirPath,
 		filepath.FromSlash(normalized),
 	), nil

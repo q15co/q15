@@ -45,6 +45,7 @@ func (c Config) ResolveAgentRuntime() (*AgentRuntime, error) {
 	if memoryRecentTurns == 0 {
 		memoryRecentTurns = defaultMemoryRecentTurns
 	}
+	scheduleRuntime := resolveScheduleRuntime(agentCfg.Tools.Schedule)
 
 	return &AgentRuntime{
 		Name:              strings.TrimSpace(agentCfg.Name),
@@ -52,6 +53,7 @@ func (c Config) ResolveAgentRuntime() (*AgentRuntime, error) {
 		MemoryLocalDir:    "/memory",
 		MediaLocalDir:     runtimeMediaLocalDir,
 		SkillsLocalDir:    runtimeSkillsLocalDir,
+		StateLocalDir:     runtimeStateLocalDir,
 		MemoryRecentTurns: memoryRecentTurns,
 		Execution:         ExecutionRuntime{ServiceAddress: runtimeExecutionServiceAddr},
 		Tools: ToolsRuntime{
@@ -59,6 +61,7 @@ func (c Config) ResolveAgentRuntime() (*AgentRuntime, error) {
 				BraveAPIKey: braveAPIKey,
 			},
 			Embeddings: embeddingsRuntime,
+			Schedule:   scheduleRuntime,
 		},
 		TelegramToken:          token,
 		TelegramAllowedUserIDs: allowedUserIDs,
@@ -83,6 +86,22 @@ func ResolveProviderAPIKey(provider Provider, providerType string) (string, erro
 			provider.Name,
 			provider.Type,
 		)
+	}
+}
+
+func resolveScheduleRuntime(tool ScheduleTool) ScheduleToolRuntime {
+	maxJobs := tool.MaxJobs
+	if maxJobs == 0 {
+		maxJobs = defaultScheduleMaxJobs
+	}
+	maxRunTurns := tool.MaxRunTurns
+	if maxRunTurns == 0 {
+		maxRunTurns = defaultScheduleMaxRunTurns
+	}
+
+	return ScheduleToolRuntime{
+		MaxJobs:     maxJobs,
+		MaxRunTurns: maxRunTurns,
 	}
 }
 

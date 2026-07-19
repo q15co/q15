@@ -10,7 +10,7 @@ import (
 // ConversationStore persists the canonical conversation.Message transcript
 // between replies.
 type ConversationStore interface {
-	LoadRecentMessages(ctx context.Context, turns int) ([]conversation.Message, error)
+	ContextStore
 	LoadLastUserTimestamp(ctx context.Context) (time.Time, bool, error)
 	AppendTurn(ctx context.Context, messages []conversation.Message) error
 }

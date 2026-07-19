@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
+	"github.com/q15co/q15/systems/agent/internal/cronexpr"
 )
 
 // RunCause values identify the trigger class that launched a cognition job.
@@ -165,7 +166,7 @@ type registeredJob struct {
 type compiledScheduleRule struct {
 	id   string
 	spec string
-	expr cronExpr
+	expr cronexpr.Expression
 }
 
 type pendingRun struct {
@@ -254,7 +255,7 @@ func NewController(
 			if spec == "" {
 				return nil, fmt.Errorf("job %q schedule rule %q spec is required", jobType, ruleID)
 			}
-			expr, err := parseCronExpr(spec)
+			expr, err := cronexpr.Parse(spec)
 			if err != nil {
 				return nil, fmt.Errorf("job %q schedule rule %q: %w", jobType, ruleID, err)
 			}
@@ -688,13 +689,13 @@ func (c *Controller) latestDue(
 		base = last
 	}
 
-	due, ok := rule.expr.next(base)
+	due, ok := rule.expr.Next(base)
 	if !ok || due.After(now) {
 		return time.Time{}, false
 	}
 	latest := due
 	for {
-		nextDue, ok := rule.expr.next(latest)
+		nextDue, ok := rule.expr.Next(latest)
 		if !ok || nextDue.After(now) {
 			return latest, true
 		}
@@ -718,7 +719,7 @@ func (c *Controller) nextScheduledAt(ctx context.Context, now time.Time) (time.T
 			if !ok || base.IsZero() {
 				base = c.started
 			}
-			candidate, ok := rule.expr.next(base)
+			candidate, ok := rule.expr.Next(base)
 			if !ok {
 				continue
 			}

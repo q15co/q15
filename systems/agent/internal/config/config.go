@@ -3,9 +3,14 @@ package config
 
 const (
 	defaultMemoryRecentTurns    = 6
+	defaultScheduleMaxJobs      = 64
+	defaultScheduleMaxRunTurns  = 16
+	maxScheduleJobs             = 1000
+	maxScheduleRunTurns         = 128
 	runtimeWorkspaceLocalDir    = "/workspace"
 	runtimeMediaLocalDir        = "/media"
 	runtimeSkillsLocalDir       = "/skills"
+	runtimeStateLocalDir        = "/var/lib/q15/agent"
 	runtimeExecutionServiceAddr = "q15-exec:50051"
 )
 
@@ -54,6 +59,7 @@ type Agent struct {
 type Tools struct {
 	WebSearch  WebSearchTool  `yaml:"web_search"`
 	Embeddings EmbeddingsTool `yaml:"embeddings"`
+	Schedule   ScheduleTool   `yaml:"schedule"`
 }
 
 // WebSearchTool defines optional web_search settings.
@@ -67,6 +73,12 @@ type EmbeddingsTool struct {
 	GeminiAPIKeyEnv string `yaml:"gemini_api_key_env"`
 	Model           string `yaml:"model"`
 	Dimensions      int    `yaml:"dimensions"`
+}
+
+// ScheduleTool defines execution limits for agent-created scheduled jobs.
+type ScheduleTool struct {
+	MaxJobs     int `yaml:"max_jobs"`
+	MaxRunTurns int `yaml:"max_run_turns"`
 }
 
 // Telegram defines Telegram integration settings for an agent.
@@ -86,6 +98,7 @@ type ExecutionRuntime struct {
 type ToolsRuntime struct {
 	WebSearch  WebSearchToolRuntime
 	Embeddings EmbeddingsToolRuntime
+	Schedule   ScheduleToolRuntime
 }
 
 // WebSearchToolRuntime is the resolved runtime configuration for web_search.
@@ -102,6 +115,12 @@ type EmbeddingsToolRuntime struct {
 	Dimensions   int
 }
 
+// ScheduleToolRuntime is the resolved scheduled-job policy.
+type ScheduleToolRuntime struct {
+	MaxJobs     int
+	MaxRunTurns int
+}
+
 // AgentRuntime is the resolved runtime config for the configured agent. It
 // carries runtime bits only; the current model selection is resolved live via
 // the modelcatalog.Registry and persisted via internal/selectionstore.
@@ -111,6 +130,7 @@ type AgentRuntime struct {
 	MemoryLocalDir         string
 	MediaLocalDir          string
 	SkillsLocalDir         string
+	StateLocalDir          string
 	MemoryRecentTurns      int
 	Execution              ExecutionRuntime
 	Tools                  ToolsRuntime

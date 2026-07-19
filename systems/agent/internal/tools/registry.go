@@ -14,6 +14,7 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/fileops"
 	q15media "github.com/q15co/q15/systems/agent/internal/media"
 	"github.com/q15co/q15/systems/agent/internal/modelcatalog"
+	scheduled "github.com/q15co/q15/systems/agent/internal/schedule"
 
 	"github.com/q15co/q15/systems/agent/internal/selectionstore"
 	embedtools "github.com/q15co/q15/systems/agent/internal/tools/embed"
@@ -21,6 +22,7 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/tools/files"
 	mediatools "github.com/q15co/q15/systems/agent/internal/tools/media"
 	modeltools "github.com/q15co/q15/systems/agent/internal/tools/models"
+	scheduletools "github.com/q15co/q15/systems/agent/internal/tools/schedule"
 	"github.com/q15co/q15/systems/agent/internal/tools/skills"
 	"github.com/q15co/q15/systems/agent/internal/tools/subagent"
 	"github.com/q15co/q15/systems/agent/internal/tools/web"
@@ -151,6 +153,31 @@ func NewEmbedSearch(service *embed.Service) *embedtools.Search {
 // NewEmbedStatus delegates to embedtools.NewStatus.
 func NewEmbedStatus(service *embed.Service) *embedtools.Status {
 	return embedtools.NewStatus(service)
+}
+
+// NewScheduleCreate delegates to schedule.NewCreate.
+func NewScheduleCreate(manager *scheduled.Manager) *scheduletools.Create {
+	return scheduletools.NewCreate(manager)
+}
+
+// NewScheduleList delegates to schedule.NewList.
+func NewScheduleList(manager *scheduled.Manager) *scheduletools.List {
+	return scheduletools.NewList(manager)
+}
+
+// NewScheduleRuns delegates to schedule.NewRuns.
+func NewScheduleRuns(manager *scheduled.Manager) *scheduletools.Runs {
+	return scheduletools.NewRuns(manager)
+}
+
+// NewScheduleUpdate delegates to schedule.NewUpdate.
+func NewScheduleUpdate(manager *scheduled.Manager) *scheduletools.Update {
+	return scheduletools.NewUpdate(manager)
+}
+
+// NewScheduleDelete delegates to schedule.NewDelete.
+func NewScheduleDelete(manager *scheduled.Manager) *scheduletools.Delete {
+	return scheduletools.NewDelete(manager)
 }
 
 // NewSubAgentManager constructs a delegated sub-agent session manager.

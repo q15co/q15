@@ -8,6 +8,14 @@ services:
       dockerfile: docker/proxy.Dockerfile
     restart: unless-stopped
     init: true
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "bash -ec ': >/dev/tcp/127.0.0.1/50052; : >/dev/tcp/127.0.0.1/18080'"
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
     environment:
       GITHUB_TOKEN_FILE: /run/secrets/github_token
     configs:
@@ -28,7 +36,16 @@ services:
     restart: unless-stopped
     init: true
     depends_on:
-      - q15-proxy
+      q15-proxy:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "bash -ec ': >/dev/tcp/127.0.0.1/50051'"
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 60s
     environment:
       TZ: Europe/Berlin
     volumes:
@@ -52,6 +69,14 @@ services:
     image: qdrant/qdrant:v1.17.1
     restart: unless-stopped
     init: true
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "bash -ec ': >/dev/tcp/127.0.0.1/6334'"
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
     volumes:
       - type: volume
         source: q15_qdrant_storage
@@ -65,8 +90,20 @@ services:
     restart: unless-stopped
     init: true
     depends_on:
-      - q15-exec
-      - q15-qdrant
+      q15-exec:
+        condition: service_healthy
+      q15-qdrant:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          test -s /tmp/q15-agent-ready &&
+          kill -0 1
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 60s
     environment:
       HOME: /root
       GODEBUG: updatemaxprocs=0
@@ -99,6 +136,9 @@ services:
       - type: volume
         source: q15_skills
         target: /skills
+      - type: volume
+        source: q15_agent_state
+        target: /var/lib/q15/agent
     secrets:
       - moonshot_api_key
       - ollama_api_key
@@ -109,6 +149,7 @@ services:
       - q15_telegram_allowed_user_ids
 
 volumes:
+  q15_agent_state:
   q15_exec_nix_store:
   q15_media:
   q15_memory:

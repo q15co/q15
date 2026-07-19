@@ -12,6 +12,9 @@ agent:
   tools:
     web_search:
       brave_api_key_env: BRAVE_API_KEY
+    schedule:
+      max_jobs: 64
+      max_run_turns: 16
   telegram:
     token_env: Q15_TELEGRAM_TOKEN
     allowed_user_ids_env: Q15_TELEGRAM_ALLOWED_USER_IDS
