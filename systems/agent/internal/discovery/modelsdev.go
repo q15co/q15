@@ -352,7 +352,7 @@ func providerSlug(p Provider) string {
 	name := strings.ToLower(strings.TrimSpace(p.Name))
 	baseHost := baseURLHost(p.BaseURL)
 
-	switch providertypes.MustNormalize(p.Type) {
+	switch providertypes.NormalizeOrEmpty(p.Type) {
 	case providertypes.Ollama:
 		// Ollama Cloud (ollama.com host or name containing "cloud") maps to the
 		// "ollama-cloud" slug. Local Ollama (localhost / other hosts) has no

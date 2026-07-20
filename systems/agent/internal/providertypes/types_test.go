@@ -34,8 +34,8 @@ func TestNormalize(t *testing.T) {
 			if got != tc.want || ok != tc.ok {
 				t.Fatalf("Normalize(%q) = (%q, %v), want (%q, %v)", tc.in, got, ok, tc.want, tc.ok)
 			}
-			if got := MustNormalize(tc.in); got != tc.want {
-				t.Fatalf("MustNormalize(%q) = %q, want %q", tc.in, got, tc.want)
+			if got := NormalizeOrEmpty(tc.in); got != tc.want {
+				t.Fatalf("NormalizeOrEmpty(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
 	}

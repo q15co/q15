@@ -35,7 +35,7 @@ func (c Config) validate() error {
 		if strings.TrimSpace(provider.Type) == "" {
 			return fmt.Errorf("providers[%d].type is required", i)
 		}
-		normalizedType := providertypes.MustNormalize(provider.Type)
+		normalizedType := providertypes.NormalizeOrEmpty(provider.Type)
 		if normalizedType == "" {
 			return fmt.Errorf("providers[%d].type %q is not supported", i, provider.Type)
 		}

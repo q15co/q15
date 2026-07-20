@@ -230,7 +230,7 @@ func defaultModelClientFactory(
 // factory uses default HTTP transports.
 func makeDumpAwareFactory(rt http.RoundTripper) modelClientFactory {
 	return func(m modelcatalog.Model, mediaStore q15media.Store) (agent.ModelClient, error) {
-		switch providertypes.MustNormalize(m.ProviderType) {
+		switch providertypes.NormalizeOrEmpty(m.ProviderType) {
 		case providertypes.Ollama:
 			return ollama.NewClient(m.ProviderBaseURL, m.ProviderAPIKey, mediaStore, rt)
 		case providertypes.OpenAICompatible:
