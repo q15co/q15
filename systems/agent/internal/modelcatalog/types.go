@@ -85,9 +85,6 @@ type Model struct {
 
 // Options controls discovery behavior for one provider.
 type Options struct {
-	// Enabled selects whether discovery runs for this provider. When false the
-	// caller skips this provider entirely (no HTTP).
-	Enabled bool
 	// ModelsDev selects whether roster entries are enriched from the models.dev
 	// catalog.
 	ModelsDev bool
