@@ -94,7 +94,7 @@ func Start(ctx context.Context) error {
 func buildProviderDescriptors(configProviders []config.Provider) ([]modelcatalog.Provider, error) {
 	out := make([]modelcatalog.Provider, 0, len(configProviders))
 	for _, p := range configProviders {
-		providerType := providertypes.MustNormalize(p.Type)
+		providerType := providertypes.NormalizeOrEmpty(p.Type)
 		if providerType == "" {
 			return nil, fmt.Errorf("provider %q has unsupported type %q", p.Name, p.Type)
 		}

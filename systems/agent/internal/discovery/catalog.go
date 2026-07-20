@@ -55,7 +55,7 @@ func NewCatalog(httpClient *http.Client) Catalog {
 // Discover queries the provider's roster endpoint, optionally enriches from
 // models.dev, then applies include/exclude glob filters.
 func (c *defaultCatalog) Discover(ctx context.Context, p Provider) ([]Model, error) {
-	providerType := providertypes.MustNormalize(p.Type)
+	providerType := providertypes.NormalizeOrEmpty(p.Type)
 	roster, ok := c.rosters[providerType]
 	if !ok {
 		return nil, fmt.Errorf("discovery: unsupported provider type %q", p.Type)

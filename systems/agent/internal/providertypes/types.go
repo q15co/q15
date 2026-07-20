@@ -26,10 +26,10 @@ func Normalize(providerType string) (string, bool) {
 	}
 }
 
-// MustNormalize returns the canonical provider type string, or the empty string
-// when providerType is unsupported. It is a convenience for legacy call sites
+// NormalizeOrEmpty returns the canonical provider type string, or the empty
+// string when providerType is unsupported. It is a convenience for call sites
 // that already treat empty as unsupported.
-func MustNormalize(providerType string) string {
+func NormalizeOrEmpty(providerType string) string {
 	providerType, ok := Normalize(providerType)
 	if !ok {
 		return ""
