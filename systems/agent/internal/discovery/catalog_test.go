@@ -82,7 +82,6 @@ func TestNewCatalog_OllamaEndToEndWithEnrichment(t *testing.T) {
 			BaseURL: ollamaServer.URL, // mock roster endpoint
 			APIKey:  "test-key",
 			Options: Options{
-				Enabled:   true,
 				ModelsDev: true,
 				Include:   []string{"kimi-*", "nemotron:*"},
 				Exclude:   []string{"*:latest"},
@@ -140,7 +139,7 @@ func TestNewCatalog_OpenAICompatibleWithoutEnrichment(t *testing.T) {
 		Type:    "openai-compatible",
 		BaseURL: server.URL,
 		APIKey:  "secret",
-		Options: Options{Enabled: true},
+		Options: Options{},
 	})
 	if err != nil {
 		t.Fatalf("Discover: %v", err)
@@ -159,7 +158,7 @@ func TestNewCatalog_CodexReturnsEmpty(t *testing.T) {
 	catalog := NewCatalog(http.DefaultClient)
 	models, err := catalog.Discover(context.Background(), Provider{
 		Type:    "openai-codex",
-		Options: Options{Enabled: true},
+		Options: Options{},
 	})
 	if err != nil {
 		t.Fatalf("Discover: %v", err)
@@ -173,7 +172,7 @@ func TestNewCatalog_UnsupportedProviderType(t *testing.T) {
 	catalog := NewCatalog(http.DefaultClient)
 	_, err := catalog.Discover(context.Background(), Provider{
 		Type:    "imaginary",
-		Options: Options{Enabled: true},
+		Options: Options{},
 	})
 	if err == nil {
 		t.Fatal("expected error for unsupported provider type")
