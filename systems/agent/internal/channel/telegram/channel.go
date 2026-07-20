@@ -1261,6 +1261,13 @@ func detectInboundAttachment(message *telego.Message) (telegramInboundAttachment
 			filename:    strings.TrimSpace(message.Video.FileName),
 			contentType: strings.TrimSpace(message.Video.MimeType),
 		}, true
+	case message.Animation != nil:
+		return telegramInboundAttachment{
+			kind:        telegramAttachmentAnimation,
+			fileID:      message.Animation.FileID,
+			filename:    strings.TrimSpace(message.Animation.FileName),
+			contentType: strings.TrimSpace(message.Animation.MimeType),
+		}, true
 	case message.Document != nil:
 		return telegramInboundAttachment{
 			kind:        telegramAttachmentDocument,
@@ -1275,13 +1282,6 @@ func detectInboundAttachment(message *telego.Message) (telegramInboundAttachment
 			fileID:      message.Sticker.FileID,
 			filename:    name,
 			contentType: contentType,
-		}, true
-	case message.Animation != nil:
-		return telegramInboundAttachment{
-			kind:        telegramAttachmentAnimation,
-			fileID:      message.Animation.FileID,
-			filename:    strings.TrimSpace(message.Animation.FileName),
-			contentType: strings.TrimSpace(message.Animation.MimeType),
 		}, true
 	case message.VideoNote != nil:
 		return telegramInboundAttachment{
