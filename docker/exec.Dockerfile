@@ -15,14 +15,25 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 FROM nixos/nix:latest
 
-RUN nix --extra-experimental-features 'nix-command flakes' build --no-link nixpkgs#tzdata nixpkgs#fontconfig.out nixpkgs#dejavu_fonts && \
+RUN nix --extra-experimental-features 'nix-command flakes' build --no-link \
+        nixpkgs#tzdata nixpkgs#fontconfig.out \
+        nixpkgs#dejavu_fonts nixpkgs#inter nixpkgs#liberation_ttf nixpkgs#noto-fonts && \
     TZDATA_PATH="$(nix --extra-experimental-features 'nix-command flakes' eval --raw nixpkgs#tzdata.outPath)" && \
     FONTCONFIG_PATH="$(nix --extra-experimental-features 'nix-command flakes' eval --raw nixpkgs#fontconfig.out.outPath)" && \
-    mkdir -p /etc/fonts /var/lib/q15/bootstrap-nix && \
+    DEJAVU_PATH="$(nix --extra-experimental-features 'nix-command flakes' eval --raw nixpkgs#dejavu_fonts.outPath)" && \
+    INTER_PATH="$(nix --extra-experimental-features 'nix-command flakes' eval --raw nixpkgs#inter.outPath)" && \
+    LIBERATION_PATH="$(nix --extra-experimental-features 'nix-command flakes' eval --raw nixpkgs#liberation_ttf.outPath)" && \
+    NOTO_PATH="$(nix --extra-experimental-features 'nix-command flakes' eval --raw nixpkgs#noto-fonts.outPath)" && \
+    mkdir -p /etc/fonts /usr/share/fonts /var/lib/q15/bootstrap-nix && \
     ln -sfn "${TZDATA_PATH}/share/zoneinfo" /etc/zoneinfo && \
     ln -sfn "${FONTCONFIG_PATH}/etc/fonts/fonts.conf" /etc/fonts/fonts.conf && \
+    ln -sfn "${DEJAVU_PATH}/share/fonts" /usr/share/fonts/dejavu && \
+    ln -sfn "${INTER_PATH}/share/fonts" /usr/share/fonts/inter && \
+    ln -sfn "${LIBERATION_PATH}/share/fonts" /usr/share/fonts/liberation && \
+    ln -sfn "${NOTO_PATH}/share/fonts" /usr/share/fonts/noto && \
     test -d /etc/zoneinfo && \
     test -e /etc/fonts/fonts.conf && \
+    test -d /usr/share/fonts/dejavu && \
     cp -al /nix/. /var/lib/q15/bootstrap-nix/
 
 ENV TZDIR=/etc/zoneinfo
