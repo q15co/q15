@@ -46,7 +46,6 @@ func (a Agent) TelegramAllowedUserIDs() ([]int64, error) {
 }
 
 // BraveAPIKey resolves the optional Brave Search API key for web_search.
-// BraveAPIKey resolves the optional Brave Search API key for web_search.
 func (a Agent) BraveAPIKey() (string, error) {
 	envName := strings.TrimSpace(a.Tools.WebSearch.BraveAPIKeyEnv)
 	if envName == "" {
@@ -63,8 +62,6 @@ func (a Agent) BraveAPIKey() (string, error) {
 	return value, nil
 }
 
-// EmbeddingsRuntime resolves optional embeddings configuration. It stays
-// disabled unless both the Qdrant URL and Gemini API key env names are set.
 // EmbeddingsRuntime resolves optional embeddings configuration. It stays
 // disabled unless both the Qdrant URL and Gemini API key env names are set.
 func (a Agent) EmbeddingsRuntime() (EmbeddingsToolRuntime, error) {
