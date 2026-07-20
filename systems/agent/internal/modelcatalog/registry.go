@@ -32,7 +32,8 @@ type Registry struct {
 }
 
 // New builds a live roster registry. providers is the immutable provider list
-// (with resolved API keys). interval and timeout default to 10m / 10s when zero.
+// (with resolved API keys). interval and timeout default to 24h / 60s when zero;
+// callers should pass explicit values (app.Start uses 10m / 10s).
 func New(providers []Provider, catalog Catalog, interval, timeout time.Duration) *Registry {
 	if interval <= 0 {
 		interval = defaultRefreshInterval
@@ -90,10 +91,11 @@ func (r *Registry) Refresh(ctx context.Context) {
 	r.mu.Unlock()
 }
 
-// Run does one refresh, then ticks at the configured interval until ctx is
-// done. It never returns an error.
+// Run ticks at the configured interval, refreshing the roster until ctx is
+// done. It does not perform an initial refresh — the caller is responsible for
+// ensuring a populated roster before starting Run (app.Start does this
+// synchronously). It never returns an error.
 func (r *Registry) Run(ctx context.Context) error {
-	r.Refresh(ctx)
 	ticker := time.NewTicker(r.interval)
 	defer ticker.Stop()
 	for {
