@@ -34,7 +34,7 @@ func markdownToTelegramHTML(text string) string {
 	inlineCodes := extractInlineCodes(text)
 	text = inlineCodes.text
 
-	tables := extractTables(text)
+	tables := extractTables(text, inlineCodes.codes)
 	text = tables.text
 
 	text = reBlockquote.ReplaceAllString(text, "$1")
@@ -58,7 +58,6 @@ func markdownToTelegramHTML(text string) string {
 	text = reListItem.ReplaceAllString(text, "• ")
 
 	for i, table := range tables.tables {
-		table = restoreInlineCodePlaceholders(table, inlineCodes.codes)
 		escaped := escapeHTML(table)
 		text = strings.ReplaceAll(
 			text,
@@ -139,7 +138,7 @@ type tableMatch struct {
 	tables []string
 }
 
-func extractTables(text string) tableMatch {
+func extractTables(text string, inlineCodes []string) tableMatch {
 	lines := strings.Split(text, "\n")
 
 	tables := make([]string, 0)
@@ -154,7 +153,7 @@ func extractTables(text string) tableMatch {
 				j++
 			}
 			if j > i+2 {
-				table := renderTable(lines[i:j])
+				table := renderTable(lines[i:j], inlineCodes)
 				placeholder := fmt.Sprintf("\x00TB%d\x00", len(tables))
 				tables = append(tables, table)
 				out.WriteString(placeholder)
@@ -200,10 +199,17 @@ func isTableSeparatorLine(line string) bool {
 	return true
 }
 
-func renderTable(lines []string) string {
+func renderTable(lines []string, inlineCodes []string) string {
 	if len(lines) < 3 {
 		return strings.Join(lines, "\n")
 	}
+
+	// Restore inline code placeholders so column widths reflect actual content.
+	restored := make([]string, len(lines))
+	for i, line := range lines {
+		restored[i] = restoreInlineCodePlaceholders(line, inlineCodes)
+	}
+	lines = restored
 
 	rows := make([][]string, 0, len(lines)-1)
 	rows = append(rows, splitTableCells(lines[0]))
@@ -218,18 +224,121 @@ func renderTable(lines []string) string {
 		}
 	}
 
-	var out strings.Builder
+	// Pad rows to uniform column count.
 	for i, row := range rows {
 		if len(row) < colCount {
-			padding := make([]string, colCount-len(row))
-			row = append(row, padding...)
+			rows[i] = append(row, make([]string, colCount-len(row))...)
 		}
-		out.WriteString(strings.Join(row, " | "))
-		if i < len(rows)-1 {
+	}
+
+	// Calculate natural column widths (in runes).
+	colWidths := make([]int, colCount)
+	for _, row := range rows {
+		for i, cell := range row {
+			if w := len([]rune(cell)); w > colWidths[i] {
+				colWidths[i] = w
+			}
+		}
+	}
+
+	// Telegram mobile wraps <pre> blocks at ~40 monospace characters.
+	// Truncate columns if the table exceeds the mobile-friendly width.
+	const maxTableWidth = 48
+	colWidths = fitColumnWidths(colWidths, maxTableWidth)
+
+	// Truncate and pad each cell to its column width.
+	for i, row := range rows {
+		for j, cell := range row {
+			rows[i][j] = fitCell(cell, colWidths[j])
+		}
+	}
+
+	// Render rows with a separator line after the header.
+	var out strings.Builder
+	for i, row := range rows {
+		if i > 0 {
 			out.WriteByte('\n')
+		}
+		line := strings.Join(row, " | ")
+		out.WriteString(strings.TrimRight(line, " "))
+
+		if i == 0 {
+			out.WriteByte('\n')
+			seps := make([]string, colCount)
+			for j := range seps {
+				seps[j] = strings.Repeat("-", colWidths[j])
+			}
+			sepLine := strings.Join(seps, " | ")
+			out.WriteString(strings.TrimRight(sepLine, " "))
 		}
 	}
 	return out.String()
+}
+
+// fitColumnWidths reduces column widths proportionally so the total table
+// width fits within maxTotal characters. Columns that are already narrow
+// enough keep their natural width; the savings are redistributed to wider
+// columns.
+func fitColumnWidths(widths []int, maxTotal int) []int {
+	n := len(widths)
+	sepWidth := 3 * (n - 1) // " | " between columns
+	available := maxTotal - sepWidth
+	if available < n {
+		available = n
+	}
+
+	total := 0
+	for _, w := range widths {
+		total += w
+	}
+	if total <= available {
+		return widths
+	}
+
+	const minCol = 3
+	result := make([]int, n)
+	for i := range result {
+		result[i] = minCol
+	}
+
+	remaining := available - n*minCol
+	if remaining > 0 {
+		origExcess := total - n*minCol
+		if origExcess > 0 {
+			for i := range result {
+				excess := widths[i] - minCol
+				if excess > 0 {
+					result[i] += remaining * excess / origExcess
+				}
+			}
+			used := 0
+			for _, w := range result {
+				used += w
+			}
+			leftover := available - used
+			for i := 0; i < n && leftover > 0; i++ {
+				if widths[i] > result[i] {
+					result[i]++
+					leftover--
+				}
+			}
+		}
+	}
+
+	return result
+}
+
+// fitCell truncates s to width runes, adding an ellipsis if truncated,
+// then pads with spaces to exactly width runes.
+func fitCell(s string, width int) string {
+	runes := []rune(s)
+	if len(runes) <= width {
+		return s + strings.Repeat(" ", width-len(runes))
+	}
+	if width <= 3 {
+		return string(runes[:width])
+	}
+	return string(runes[:width-1]) + "…"
 }
 
 func splitTableCells(line string) []string {

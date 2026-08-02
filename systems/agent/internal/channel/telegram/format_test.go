@@ -130,7 +130,7 @@ func TestMarkdownToTelegramHTML_MixedContent(t *testing.T) {
 func TestMarkdownToTelegramHTML_TableConversion(t *testing.T) {
 	input := "| A | B |\n|---|---|\n| a1 | b1 |\n| a2 | b2 |"
 	got := markdownToTelegramHTML(input)
-	want := "<pre>A | B\na1 | b1\na2 | b2</pre>"
+	want := "<pre>A  | B\n-- | --\na1 | b1\na2 | b2</pre>"
 	if got != want {
 		t.Fatalf("markdownToTelegramHTML() = %q, want %q", got, want)
 	}
@@ -149,16 +149,17 @@ func TestMarkdownToTelegramHTML_TableConversionLargeExample(t *testing.T) {
 	got := markdownToTelegramHTML(input)
 
 	assertContains(t, got, "<pre>")
-	assertContains(t, got, "Concept | React | Vue | Svelte")
+	assertContains(t, got, "Concept   | React    | Vue        | Svelte")
+	assertContains(t, got, "--------- | -------- | ---------- | ------------")
 	assertContains(
 		t,
 		got,
-		"Run once on component mount | useEffect(() =&gt; { ... }, []) | onMounted(() =&gt; { ... }) | onMount(() =&gt; { ... })",
+		"Run side… | useEffe… | watch(() … | $: { /* run…",
 	)
 	assertContains(
 		t,
 		got,
-		"Typical data fetch pattern | useEffect + useState | onMounted or watch/watchEffect + ref/reactive | onMount + local vars/stores",
+		"Typical … | useEffe… | onMounted… | onMount + l…",
 	)
 	assertContains(t, got, "</pre>")
 }
@@ -173,8 +174,8 @@ func TestMarkdownToTelegramHTML_TableWithInlineCode(t *testing.T) {
 
 	assertContains(t, got, "Package | Install Cmd")
 	assertContains(t, got, "<pre>")
-	assertContains(t, got, "yay | yay -S ripgrep")
-	assertContains(t, got, "pacman | pacman -S ripgrep")
+	assertContains(t, got, "yay     | yay -S ripgrep")
+	assertContains(t, got, "pacman  | pacman -S ripgrep")
 	assertContains(t, got, "</pre>")
 	assertNotContains(t, got, "IC0")
 	assertNotContains(t, got, "IC1")
@@ -198,11 +199,11 @@ func TestMarkdownToTelegramHTML_TableWithoutEdgePipesAndEscapedPipeCell(t *testi
 	got := markdownToTelegramHTML(input)
 
 	assertContains(t, got, "<pre>")
-	assertContains(t, got, "Syntax | Description | Example")
-	assertContains(t, got, "Row | Regular data line | Adriaan | 30 | Düsseldorf")
-	assertContains(t, got, "Alignment Center | :---: | Centered text")
-	assertContains(t, got, "Name | Age | City")
-	assertContains(t, got, "Johnny | 5 | Home")
+	assertContains(t, got, "Syntax       | Description   | Example")
+	assertContains(t, got, "Row          | Regular data… | Adriaan | 30 | D…")
+	assertContains(t, got, "Alignment C… | :---:         | Centered text")
+	assertContains(t, got, "Name      | Age | City")
+	assertContains(t, got, "Johnny    | 5   | Home")
 	assertContains(t, got, "</pre>")
 }
 
