@@ -3,6 +3,7 @@ package modelcatalog
 import (
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestMerge_FillsZeroFields(t *testing.T) {
@@ -192,5 +193,75 @@ func TestModelKey_StripsTagAndLowercases(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("ModelKey(%q) = %q, want %q", tc.input, got, tc.want)
 		}
+	}
+}
+
+func TestCandidateKeys(t *testing.T) {
+	tests := []struct {
+		input string
+		want  []string
+	}{
+		// No tag — single candidate.
+		{"deepseek-v4-flash", []string{"deepseek-v4-flash"}},
+		// Versioned tag — full ID first, then stripped.
+		{"deepseek-v4-flash:0731", []string{"deepseek-v4-flash:0731", "deepseek-v4-flash"}},
+		// Versioned + deployment suffix — three candidates.
+		{"deepseek-v4-flash:0731-cloud", []string{"deepseek-v4-flash:0731-cloud", "deepseek-v4-flash:0731", "deepseek-v4-flash"}},
+		// Bare deployment marker — full ID, then stripped.
+		{"kimi-k2.7-code:cloud", []string{"kimi-k2.7-code:cloud", "kimi-k2.7-code"}},
+		// Size tag preserved.
+		{"gpt-oss:20b", []string{"gpt-oss:20b", "gpt-oss"}},
+		// Empty.
+		{"", nil},
+		// Uppercase normalized.
+		{"DeepSeek-V4-Flash:0731", []string{"deepseek-v4-flash:0731", "deepseek-v4-flash"}},
+	}
+	for _, tc := range tests {
+		got := CandidateKeys(tc.input)
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("CandidateKeys(%q) = %v, want %v", tc.input, got, tc.want)
+		}
+	}
+}
+
+func TestMerge_VersionedTagHitsCorrectEnrichment(t *testing.T) {
+	// Two base models: the old unversioned and the new versioned.
+	base := []Model{
+		{ProviderModel: "deepseek-v4-flash", Name: "deepseek-v4-flash", Source: SourceOllama},
+		{ProviderModel: "deepseek-v4-flash:0731", Name: "deepseek-v4-flash:0731", Source: SourceOllama},
+	}
+	// Two enriched entries from models.dev with distinct keys.
+	enriched := []Model{
+		{
+			ProviderModel: "deepseek-v4-flash",
+			Name:          "DeepSeek V4 Flash",
+			ReleaseDate:   time.Date(2026, 4, 24, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			ProviderModel: "deepseek-v4-flash:0731",
+			Name:          "DeepSeek V4 Flash 0731",
+			ReleaseDate:   time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC),
+		},
+	}
+
+	out := Merge(base, enriched)
+	if len(out) != 2 {
+		t.Fatalf("expected 2 models, got %d", len(out))
+	}
+
+	// The unversioned model must enrich from the old entry.
+	if out[0].Name != "DeepSeek V4 Flash" {
+		t.Errorf("unversioned Name = %q, want %q", out[0].Name, "DeepSeek V4 Flash")
+	}
+	if !out[0].ReleaseDate.Equal(time.Date(2026, 4, 24, 0, 0, 0, 0, time.UTC)) {
+		t.Errorf("unversioned ReleaseDate = %v, want 2026-04-24", out[0].ReleaseDate)
+	}
+
+	// The versioned model must enrich from the new entry, not the old one.
+	if out[1].Name != "DeepSeek V4 Flash 0731" {
+		t.Errorf("versioned Name = %q, want %q", out[1].Name, "DeepSeek V4 Flash 0731")
+	}
+	if !out[1].ReleaseDate.Equal(time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)) {
+		t.Errorf("versioned ReleaseDate = %v, want 2026-07-31", out[1].ReleaseDate)
 	}
 }

@@ -133,11 +133,85 @@ func TestRegistry_DeriveRef(t *testing.T) {
 		{"org/gpt-4o", "org-gpt-4o"},
 		{"plain", "plain"},
 		{"  spaced  ", "spaced"},
+		// Version tags are preserved so colliding models stay distinguishable.
+		{"deepseek-v4-flash:0731", "deepseek-v4-flash-0731"},
+		{"deepseek-v4-flash:0731-cloud", "deepseek-v4-flash-0731"},
+		{"gpt-oss:20b", "gpt-oss-20b"},
+		{"gemma4:31b", "gemma4-31b"},
+		{"mistral-large-3:675b", "mistral-large-3-675b"},
+		// Bare deployment markers are stripped entirely.
+		{"deepseek-v4-flash:cloud", "deepseek-v4-flash"},
+		// No tag — base name only.
+		{"deepseek-v4-flash", "deepseek-v4-flash"},
+		// Multiple colons: remaining ":" is replaced with "-".
+		{"a:b:c", "a-b-c"},
 	}
 	for _, tc := range tests {
 		if got := deriveRef(tc.in); got != tc.want {
 			t.Errorf("deriveRef(%q) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+func TestRegistry_LegacyRefAlias(t *testing.T) {
+	// A versioned model should be reachable by both its new ref and the
+	// legacy tag-stripped ref (backward compat for persisted configs).
+	cat := &fakeCatalog{models: map[string][]Model{
+		"a": {
+			{ProviderModel: "gpt-oss:20b", Capabilities: Capabilities{Text: true}},
+		},
+	}}
+	reg := New([]Provider{{Name: "a", Type: "ollama"}}, cat, time.Hour, time.Second)
+	reg.Refresh(context.Background())
+
+	// New ref (version tag preserved).
+	m, ok := reg.LookupByRef("gpt-oss-20b")
+	if !ok {
+		t.Fatal("LookupByRef(gpt-oss-20b) not found")
+	}
+	if m.ProviderModel != "gpt-oss:20b" {
+		t.Errorf("ProviderModel = %q, want gpt-oss:20b", m.ProviderModel)
+	}
+
+	// Legacy ref (tag-stripped, backward compat).
+	m2, ok := reg.LookupByRef("gpt-oss")
+	if !ok {
+		t.Fatal("LookupByRef(gpt-oss) not found — legacy alias should resolve")
+	}
+	if m2.ProviderModel != "gpt-oss:20b" {
+		t.Errorf("legacy alias ProviderModel = %q, want gpt-oss:20b", m2.ProviderModel)
+	}
+}
+
+func TestRegistry_LegacyRefAliasDoesNotOverrideUnversionedModel(t *testing.T) {
+	// When both a versioned and unversioned model exist, the unversioned
+	// model owns the stripped ref; the versioned model's legacy alias
+	// must not override it.
+	cat := &fakeCatalog{models: map[string][]Model{
+		"a": {
+			{ProviderModel: "deepseek-v4-flash", Capabilities: Capabilities{Text: true}},
+			{ProviderModel: "deepseek-v4-flash:0731", Capabilities: Capabilities{Text: true}},
+		},
+	}}
+	reg := New([]Provider{{Name: "a", Type: "ollama"}}, cat, time.Hour, time.Second)
+	reg.Refresh(context.Background())
+
+	// The stripped ref "deepseek-v4-flash" must resolve to the unversioned model.
+	m, ok := reg.LookupByRef("deepseek-v4-flash")
+	if !ok {
+		t.Fatal("LookupByRef(deepseek-v4-flash) not found")
+	}
+	if m.ProviderModel != "deepseek-v4-flash" {
+		t.Errorf("stripped ref resolved to %q, want deepseek-v4-flash (unversioned)", m.ProviderModel)
+	}
+
+	// The versioned model must be reachable by its own unique ref.
+	m2, ok := reg.LookupByRef("deepseek-v4-flash-0731")
+	if !ok {
+		t.Fatal("LookupByRef(deepseek-v4-flash-0731) not found")
+	}
+	if m2.ProviderModel != "deepseek-v4-flash:0731" {
+		t.Errorf("versioned ref resolved to %q, want deepseek-v4-flash:0731", m2.ProviderModel)
 	}
 }
 

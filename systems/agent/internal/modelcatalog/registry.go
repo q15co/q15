@@ -32,7 +32,7 @@ type Registry struct {
 }
 
 // New builds a live roster registry. providers is the immutable provider list
-// (with resolved API keys). interval and timeout default to 10m / 10s when zero.
+// (with resolved API keys). interval and timeout default to 24h / 60s when zero.
 func New(providers []Provider, catalog Catalog, interval, timeout time.Duration) *Registry {
 	if interval <= 0 {
 		interval = defaultRefreshInterval
@@ -82,6 +82,16 @@ func (r *Registry) Refresh(ctx context.Context) {
 		if _, exists := byRef[m.Ref]; !exists {
 			byRef[m.Ref] = m
 		}
+		// Backward compat: register the legacy tag-stripped ref as an alias
+		// when it doesn't collide with an existing ref. This lets persisted
+		// configs using the old stripped form (e.g. "gpt-oss" for
+		// "gpt-oss:20b") continue to resolve after the version-tag-preserving
+		// change to deriveRef.
+		if legacy := ModelKey(m.ProviderModel); legacy != m.Ref {
+			if _, exists := byRef[legacy]; !exists {
+				byRef[legacy] = m
+			}
+		}
 	}
 
 	r.mu.Lock()
@@ -130,9 +140,11 @@ func (r *Registry) Snapshot() []Model {
 	return out
 }
 
-// LookupByRef finds one model by its agent-side ref (tag-stripped provider
-// model id). Returns ok=false when the model is not in the current roster
-// (provider down or model deprecated).
+// LookupByRef finds one model by its agent-side ref. Returns ok=false when
+// the model is not in the current roster (provider down or model deprecated).
+// The ref is the agent-side identifier produced by deriveRef: version tags
+// are preserved (e.g. "deepseek-v4-flash-0731"), deployment suffixes are
+// stripped (e.g. "kimi-k2.7-code").
 func (r *Registry) LookupByRef(ref string) (Model, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -184,12 +196,53 @@ func (r *Registry) IsEmpty() bool {
 	return len(r.snap) == 0
 }
 
-// deriveRef produces the agent-side ref from a provider model ID: Ollama
-// ":tag" suffixes are stripped and "/" separators are replaced with "-".
-func deriveRef(providerModel string) string {
-	s := strings.TrimSpace(providerModel)
-	if idx := strings.Index(s, ":"); idx > 0 {
-		s = s[:idx]
+// deploymentSuffixes are Ollama deployment markers stripped from tags during
+// ref derivation and candidate-key generation. They identify the hosting
+// environment (cloud, local) and are not part of the model identity.
+var deploymentSuffixes = []string{"-cloud", "-local"}
+
+// bareDeploymentMarkers are tag values that consist solely of a deployment
+// marker (no version/size component). They are dropped entirely.
+var bareDeploymentMarkers = map[string]bool{"cloud": true, "local": true}
+
+// stripDeploymentSuffix removes known deployment suffixes from a tag. It is
+// shared between deriveRef and CandidateKeys so both stay in lockstep.
+func stripDeploymentSuffix(tag string) string {
+	for _, suffix := range deploymentSuffixes {
+		tag = strings.TrimSuffix(tag, suffix)
 	}
-	return strings.ReplaceAll(s, "/", "-")
+	return tag
+}
+
+// deriveRef produces the agent-side ref from a provider model ID. Version
+// tags are preserved (e.g. "deepseek-v4-flash:0731" → "deepseek-v4-flash-0731")
+// so colliding models remain distinguishable. Deployment suffixes like
+// "-cloud" are stripped from the tag, and bare deployment markers ("cloud",
+// "local") are dropped entirely. "/" and remaining ":" separators are replaced
+// with "-".
+func deriveRef(providerModel string) string {
+	s := strings.ToLower(strings.TrimSpace(providerModel))
+
+	if idx := strings.Index(s, ":"); idx > 0 {
+		base := s[:idx]
+		tag := s[idx+1:]
+
+		// Strip deployment suffixes (e.g. "0731-cloud" → "0731").
+		tag = stripDeploymentSuffix(tag)
+		// Strip bare deployment markers.
+		if bareDeploymentMarkers[tag] {
+			tag = ""
+		}
+
+		if tag == "" {
+			s = base
+		} else {
+			s = base + "-" + tag
+		}
+	}
+
+	// Replace all path/colon separators with "-".
+	s = strings.ReplaceAll(s, "/", "-")
+	s = strings.ReplaceAll(s, ":", "-")
+	return s
 }

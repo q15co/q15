@@ -12,23 +12,31 @@ import (
 // that, for example, a roster model with Text and an enriched entry with
 // ImageInput both survive.
 //
-// ProviderModel matching is normalized by stripping Ollama-style ":tag"
-// suffixes (e.g. "kimi-k2.7-code:cloud" matches "kimi-k2.7-code") and
-// lowercasing, so models.dev entries (which use clean IDs) align with tagged
-// roster entries.
+// ProviderModel matching uses CandidateKeys: the full provider model ID is
+// tried first (so versioned tags like "deepseek-v4-flash:0731" hit the
+// correct models.dev entry), then deployment suffixes are stripped from the
+// tag, then the tag is stripped entirely as a backward-compatible fallback.
+//
+// Enriched entries are keyed by their exact lowercased ProviderModel (as
+// emitted by Enrich via modelFromModelsDev). Base entries are matched via
+// CandidateKeys so a tagged base ID (e.g. "kimi-k2:cloud") finds an untagged
+// enriched entry ("kimi-k2") through the fallback step.
 func Merge(base, enriched []Model) []Model {
 	if len(base) == 0 {
 		return nil
 	}
 	byKey := make(map[string]Model, len(enriched))
 	for _, e := range enriched {
-		byKey[ModelKey(e.ProviderModel)] = e
+		byKey[strings.ToLower(strings.TrimSpace(e.ProviderModel))] = e
 	}
 
 	out := make([]Model, len(base))
 	for i, b := range base {
-		if e, ok := byKey[ModelKey(b.ProviderModel)]; ok {
-			b = mergeModel(b, e)
+		for _, key := range CandidateKeys(b.ProviderModel) {
+			if e, ok := byKey[key]; ok {
+				b = mergeModel(b, e)
+				break
+			}
 		}
 		out[i] = b
 	}
@@ -149,4 +157,52 @@ func ModelKey(providerModel string) string {
 		s = s[:idx]
 	}
 	return strings.ToLower(s)
+}
+
+// CandidateKeys returns progressively less-specific lookup keys for a provider
+// model ID, so versioned tags (e.g. "deepseek-v4-flash:0731") match the
+// correct models.dev entry before falling back to the stripped base name
+// ("deepseek-v4-flash"). This handles three real-world patterns:
+//
+//  1. Full ID as-is — the Ollama Cloud API returns clean IDs like
+//     "deepseek-v4-flash:0731" that match models.dev keys directly.
+//  2. Deployment suffix stripped — if a provider returns "model:0731-cloud",
+//     the "-cloud" suffix is stripped to yield "model:0731".
+//  3. Tag stripped entirely — backward-compatible fallback for unversioned
+//     models.dev entries (e.g. "model:cloud" → "model").
+//
+// All keys are lowercased. Deduplication guarantees no repeated candidates.
+func CandidateKeys(providerModel string) []string {
+	s := strings.ToLower(strings.TrimSpace(providerModel))
+	if s == "" {
+		return nil
+	}
+
+	var out []string
+	seen := make(map[string]bool)
+	add := func(k string) {
+		if k != "" && !seen[k] {
+			seen[k] = true
+			out = append(out, k)
+		}
+	}
+
+	// 1. Full provider model as-is.
+	add(s)
+
+	if idx := strings.Index(s, ":"); idx > 0 {
+		base := s[:idx]
+		tag := s[idx+1:]
+
+		// 2. Strip deployment suffixes from the tag (e.g. "0731-cloud" → "0731").
+		stripped := stripDeploymentSuffix(tag)
+		if stripped != "" && stripped != tag {
+			add(base + ":" + stripped)
+		}
+
+		// 3. Strip the entire tag (backward compat, bare deployment markers).
+		add(base)
+	}
+
+	return out
 }

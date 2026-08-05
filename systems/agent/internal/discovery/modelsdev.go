@@ -138,12 +138,24 @@ func (c *modelsDevClient) Enrich(ctx context.Context, p Provider, base []Model) 
 
 	enriched := make([]Model, 0, len(base))
 	for _, b := range base {
-		key := modelcatalog.ModelKey(b.ProviderModel)
-		md, ok := providerData.Models[key]
-		if !ok {
+		// Try progressively less-specific keys so versioned tags (e.g.
+		// "deepseek-v4-flash:0731") hit the correct models.dev entry before
+		// falling back to the stripped base name ("deepseek-v4-flash").
+		var matchedKey string
+		var md modelsDevModel
+		found := false
+		for _, key := range modelcatalog.CandidateKeys(b.ProviderModel) {
+			if entry, ok := providerData.Models[key]; ok {
+				matchedKey = key
+				md = entry
+				found = true
+				break
+			}
+		}
+		if !found {
 			continue
 		}
-		enriched = append(enriched, modelFromModelsDev(key, md))
+		enriched = append(enriched, modelFromModelsDev(matchedKey, md))
 	}
 	return enriched, nil
 }
