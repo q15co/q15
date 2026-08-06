@@ -206,7 +206,10 @@ func TestCandidateKeys(t *testing.T) {
 		// Versioned tag — full ID first, then stripped.
 		{"deepseek-v4-flash:0731", []string{"deepseek-v4-flash:0731", "deepseek-v4-flash"}},
 		// Versioned + deployment suffix — three candidates.
-		{"deepseek-v4-flash:0731-cloud", []string{"deepseek-v4-flash:0731-cloud", "deepseek-v4-flash:0731", "deepseek-v4-flash"}},
+		{
+			"deepseek-v4-flash:0731-cloud",
+			[]string{"deepseek-v4-flash:0731-cloud", "deepseek-v4-flash:0731", "deepseek-v4-flash"},
+		},
 		// Bare deployment marker — full ID, then stripped.
 		{"kimi-k2.7-code:cloud", []string{"kimi-k2.7-code:cloud", "kimi-k2.7-code"}},
 		// Size tag preserved.
@@ -228,7 +231,11 @@ func TestMerge_VersionedTagHitsCorrectEnrichment(t *testing.T) {
 	// Two base models: the old unversioned and the new versioned.
 	base := []Model{
 		{ProviderModel: "deepseek-v4-flash", Name: "deepseek-v4-flash", Source: SourceOllama},
-		{ProviderModel: "deepseek-v4-flash:0731", Name: "deepseek-v4-flash:0731", Source: SourceOllama},
+		{
+			ProviderModel: "deepseek-v4-flash:0731",
+			Name:          "deepseek-v4-flash:0731",
+			Source:        SourceOllama,
+		},
 	}
 	// Two enriched entries from models.dev with distinct keys.
 	enriched := []Model{

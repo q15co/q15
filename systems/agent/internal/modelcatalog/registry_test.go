@@ -202,7 +202,10 @@ func TestRegistry_LegacyRefAliasDoesNotOverrideUnversionedModel(t *testing.T) {
 		t.Fatal("LookupByRef(deepseek-v4-flash) not found")
 	}
 	if m.ProviderModel != "deepseek-v4-flash" {
-		t.Errorf("stripped ref resolved to %q, want deepseek-v4-flash (unversioned)", m.ProviderModel)
+		t.Errorf(
+			"stripped ref resolved to %q, want deepseek-v4-flash (unversioned)",
+			m.ProviderModel,
+		)
 	}
 
 	// The versioned model must be reachable by its own unique ref.
