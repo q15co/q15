@@ -24,7 +24,7 @@
           curl
           git
           gnumake
-          go_1_25
+          go_1_26
           nodejs_24
           python312
         ];
