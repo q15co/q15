@@ -114,15 +114,31 @@ Runtime services are published as OCI images to GHCR on verified pushes to `main
 Published runtime tags:
 
 - `main`
-- `sha-<short-sha>`
+- `sha-<full-sha>`
+- `sha-<short-sha>` (convenience alias)
 
-Tag guidance for downstream consumers:
+Every runtime-changing push also publishes an atomic stack release as an annotated OCI index in the
+`q15-agent` package:
 
-- Pin each service to its own immutable `sha-<short-sha>` tag (`Q15_AGENT_TAG`, `Q15_EXEC_TAG`,
-  `Q15_PROXY_TAG`) so deployments can update services independently.
-- Treat `main` as a moving integration tag for fast-moving or development consumption, not the
-  default for long-lived stacks.
-- If release tags are added later, treat them the same way: pin one immutable tag per service.
+- `release-<full-sha>` is the immutable release record.
+- `release-main` moves only after the complete release record has been published and verified.
+
+The release record contains the exact multi-platform digests for `q15-agent`, `q15-exec`, and
+`q15-proxy`. Unchanged services retain their previous digest, so the pipeline builds only services
+whose source or contract dependency changed. Consumers resolve one release record, then pin all
+three service images by digest. They never run from `main` or `release-main` directly.
+
+The build dependency graph is:
+
+- `libs/exec-contract/**` rebuilds `q15-agent` and `q15-exec`.
+- `libs/proxy-contract/**` rebuilds `q15-exec` and `q15-proxy`.
+- Service implementation and Dockerfile changes rebuild only that service.
+- Workspace-level Go dependency changes rebuild all three services.
+- Docker build-context policy changes rebuild all three services.
+
+This separates component build identity from stack compatibility: `sha-*` identifies a component
+build, while `release-*` records one compatible three-image deployment. Treat `main` as a moving
+integration tag only.
 
 GHCR runtime images are intended to be publicly pullable without registry auth for ordinary
 self-hosted consumption. Maintain the GitHub package visibility for `q15-agent`, `q15-exec`, and

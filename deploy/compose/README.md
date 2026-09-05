@@ -3,10 +3,12 @@
 This directory contains the checked-in Compose-facing config, policy, and secret templates for q15.
 
 - [docker-compose.image-first.yml](/deploy/compose/docker-compose.image-first.yml) is the canonical
-  downstream deployment example. It uses published `ghcr.io/q15co/q15-*` images only, accepts
-  per-service tags (`Q15_AGENT_TAG`, `Q15_EXEC_TAG`, `Q15_PROXY_TAG`), and mounts persistent storage
-  for `/workspace`, `/memory`, `/skills`, `/nix`, `/var/lib/q15/agent`, and `/var/lib/q15/proxy`,
-  plus persistent Qdrant storage for embedding collections.
+  downstream deployment example. It uses published `ghcr.io/q15co/q15-*` images only, requires one
+  digest-pinned image reference per service, and mounts persistent storage for `/workspace`,
+  `/memory`, `/skills`, `/nix`, `/var/lib/q15/agent`, and `/var/lib/q15/proxy`, plus persistent
+  Qdrant storage for embedding collections.
+- [release.env.example](/deploy/compose/release.env.example) documents the environment-file shape
+  produced by a release resolver.
 - [docker-compose.yml](/docker-compose.yml) in the repo root is the local-development stack. It
   keeps `build:` enabled and uses a named `q15_workspace` volume for `/workspace`; it is not the
   image-first deployment example for downstream consumers.
@@ -23,17 +25,20 @@ For a long-running image-first deployment:
 
 ```bash
 make compose-secrets-init
-Q15_AGENT_TAG=sha-<short-sha> \
-Q15_EXEC_TAG=sha-<short-sha> \
-Q15_PROXY_TAG=sha-<short-sha> \
-  docker compose -f deploy/compose/docker-compose.image-first.yml up -d --wait
+cp deploy/compose/release.env.example deploy/compose/release.env
+# Resolve q15-agent:release-main and replace the placeholders with its three digests.
+docker compose --env-file deploy/compose/release.env \
+  -f deploy/compose/docker-compose.image-first.yml up -d --wait
 ```
 
 Notes:
 
-- Pin `Q15_AGENT_TAG`, `Q15_EXEC_TAG`, and `Q15_PROXY_TAG` to immutable published tags for
-  `q15-agent`, `q15-exec`, and `q15-proxy` respectively. Do not use `main` as the default for
-  long-running stacks.
+- Resolve the single `ghcr.io/q15co/q15-agent:release-main` release pointer, verify its release
+  annotations, and write the three recorded digests as `Q15_AGENT_IMAGE`, `Q15_EXEC_IMAGE`, and
+  `Q15_PROXY_IMAGE`. Pinning the resolved digests makes the deployed result independent of later tag
+  movement.
+- Use `release-<full-sha>` instead of `release-main` when selecting or rolling back to a specific
+  release. Never place either moving tag directly in a long-running service's `image:` field.
 - `/workspace` is expected to persist long-term for one stack. It may be empty on first startup.
 - `/memory` should also persist across updates. `q15-agent` eagerly upgrades stored turn history to
   the latest transcript schema on startup.

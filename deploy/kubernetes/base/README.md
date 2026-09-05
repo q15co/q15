@@ -94,7 +94,8 @@ Canonical runtime images:
 Published runtime tags today:
 
 - `main`
-- `sha-<short-sha>`
+- `sha-<full-sha>`
+- `sha-<short-sha>` (convenience alias)
 
 The checked-in base keeps the moving `:main` tags as placeholders:
 
@@ -102,10 +103,10 @@ The checked-in base keeps the moving `:main` tags as placeholders:
 - `ghcr.io/q15co/q15-exec:main`
 - `ghcr.io/q15co/q15-proxy:main`
 
-Downstream overlays should replace those placeholders with one pinned `sha-<short-sha>` tag across
-all three services before long-running deployment rollout. Treat `main` as a fast-moving integration
-tag only. If release tags are added later, they should be consumed with the same immutable-pin
-discipline.
+Downstream overlays should resolve one `ghcr.io/q15co/q15-agent:release-main` stack release and
+replace those placeholders with the three exact OCI digest references recorded in it. Use the
+immutable `release-<full-sha>` record for an explicit rollout or rollback. Treat `main` as a
+fast-moving integration tag only, and do not deploy directly from the moving release pointer.
 
 Typical overlay responsibilities:
 
@@ -118,8 +119,9 @@ Typical overlay responsibilities:
 
 Update and rollback guidance:
 
-- Update by changing the pinned image tag in the deployment repo or overlay and rolling the stack.
-- Roll back by restoring the previous pinned tag while preserving the existing PVCs.
+- Update by resolving a release record, changing all affected digest pins in one deployment commit,
+  and rolling the stack.
+- Roll back by restoring the previous release's digest tuple while preserving the existing PVCs.
 - Do not rotate or drop the contract-required PVCs during normal upgrades or downgrades.
 - The checked-in `q15-exec` Deployment bootstraps a fresh `q15-exec-nix` PVC in an init container
   when the mounted volume is missing the image-provided Nix runtime markers. That preserves a
