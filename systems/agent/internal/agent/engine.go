@@ -131,7 +131,7 @@ func (e *Engine) Run(ctx context.Context, req EngineRequest) (EngineResult, erro
 
 	for turn := 0; turn < e.maxTurns; turn++ {
 		requestMessages := copyMessages(messages)
-		requestMessages = applySystemTextSource(requestMessages, req.SystemTextSource)
+		requestMessages = applySystemTextSource(ctx, requestMessages, req.SystemTextSource)
 		if emptyAssistantRetries > 0 {
 			requestMessages = append(
 				requestMessages,
@@ -262,13 +262,14 @@ func (e *Engine) Run(ctx context.Context, req EngineRequest) (EngineResult, erro
 }
 
 func applySystemTextSource(
+	ctx context.Context,
 	messages []conversation.Message,
 	source SystemTextSource,
 ) []conversation.Message {
 	if source == nil {
 		return messages
 	}
-	text := strings.TrimSpace(source())
+	text := strings.TrimSpace(source(ctx))
 	if text == "" {
 		return messages
 	}

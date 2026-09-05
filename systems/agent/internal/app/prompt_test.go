@@ -1,13 +1,16 @@
 package app
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/q15co/q15/libs/exec-contract/execpb"
 	"github.com/q15co/q15/systems/agent/internal/agent"
+	"github.com/q15co/q15/systems/agent/internal/bus"
 	"github.com/q15co/q15/systems/agent/internal/modelcatalog"
+	"github.com/q15co/q15/systems/agent/internal/turnctx"
 )
 
 func TestComposeSystemPromptIncludesRuntimeAndExecGuidance(t *testing.T) {
@@ -174,5 +177,34 @@ func TestRenderCurrentModelPromptQuotesDiscoveredValues(t *testing.T) {
 	}
 	if got := strings.Count(prompt, "</current_model>"); got != 1 {
 		t.Fatalf("current model prompt closing tags = %d, want 1:\n%s", got, prompt)
+	}
+}
+
+func TestRenderResponseFormatPromptIsTelegramScoped(t *testing.T) {
+	t.Parallel()
+
+	telegramCtx := turnctx.WithOrigin(context.Background(), turnctx.Origin{
+		Channel: bus.ChannelTelegram,
+	})
+	prompt := renderResponseFormatPrompt(telegramCtx)
+	for _, want := range []string{
+		`<response_format channel="telegram">`,
+		"Telegram rich Markdown",
+		"spoilers (`||text||`)",
+		"highlights (`==text==`)",
+		"compact tables such as `|-|-|` are valid",
+		"Never emit `tg://`",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("Telegram response format prompt missing %q:\n%s", want, prompt)
+		}
+	}
+
+	if got := renderResponseFormatPrompt(context.Background()); got != "" {
+		t.Fatalf("response format prompt without origin = %q, want empty", got)
+	}
+	otherCtx := turnctx.WithOrigin(context.Background(), turnctx.Origin{Channel: "other"})
+	if got := renderResponseFormatPrompt(otherCtx); got != "" {
+		t.Fatalf("response format prompt for other channel = %q, want empty", got)
 	}
 }

@@ -9,8 +9,9 @@ import (
 )
 
 // SystemTextSource returns dynamic text to append to the base system prompt on
-// each model turn.
-type SystemTextSource func() string
+// each model turn. The run context lets sources render transport-scoped or
+// other request-scoped guidance without leaking it into unrelated entrypoints.
+type SystemTextSource func(context.Context) string
 
 // ContextStore supplies the persisted conversation replay used to build a
 // prompt. Richer memory and skill sources are discovered through the focused
@@ -51,16 +52,19 @@ func NewContextBuilder(
 }
 
 // SystemText renders the stable base prompt plus the latest dynamic snippets.
-func (b *ContextBuilder) SystemText() string {
+func (b *ContextBuilder) SystemText(ctx context.Context) string {
 	if b == nil {
 		return DefaultSystemPrompt
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	parts := []string{b.systemText}
 	for _, source := range b.systemTextSources {
 		if source == nil {
 			continue
 		}
-		text := strings.TrimSpace(source())
+		text := strings.TrimSpace(source(ctx))
 		if text != "" {
 			parts = append(parts, text)
 		}
@@ -74,7 +78,7 @@ func (b *ContextBuilder) Build(
 	ctx context.Context,
 	input ...conversation.Message,
 ) ([]conversation.Message, error) {
-	systemMessages := []conversation.Message{systemMessage(b.SystemText())}
+	systemMessages := []conversation.Message{systemMessage(b.SystemText(ctx))}
 	if b != nil && b.store != nil {
 		if coreStore, ok := b.store.(CoreMemoryStore); ok {
 			coreMemory, err := coreStore.LoadCoreMemory(ctx)

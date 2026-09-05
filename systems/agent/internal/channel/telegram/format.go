@@ -4,8 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-
-	"github.com/mymmrac/telego"
+	"unicode/utf8"
 )
 
 var (
@@ -221,11 +220,11 @@ func parseTableAligns(cells []string) []string {
 		right := strings.HasSuffix(cell, ":")
 		switch {
 		case left && right:
-			aligns = append(aligns, telego.CellAlignCenter)
+			aligns = append(aligns, "center")
 		case right:
-			aligns = append(aligns, telego.CellAlignRight)
+			aligns = append(aligns, "right")
 		case left:
-			aligns = append(aligns, telego.CellAlignLeft)
+			aligns = append(aligns, "left")
 		default:
 			aligns = append(aligns, "")
 		}
@@ -247,7 +246,7 @@ func isTableSeparatorLine(line string) bool {
 		if cell == "" {
 			return false
 		}
-		if strings.Count(cell, "-") < 3 {
+		if strings.Count(cell, "-") < 1 {
 			return false
 		}
 		if strings.Trim(cell, "-: ") != "" {
@@ -317,8 +316,10 @@ func splitUnescapedPipes(s string) []string {
 	parts := make([]string, 0, 4)
 	var current strings.Builder
 	escaped := false
+	codeDelimiterWidth := 0
 
-	for _, r := range s {
+	for i := 0; i < len(s); {
+		r, width := utf8.DecodeRuneInString(s[i:])
 		if escaped {
 			if r == '|' {
 				current.WriteRune('|')
@@ -327,19 +328,35 @@ func splitUnescapedPipes(s string) []string {
 				current.WriteRune(r)
 			}
 			escaped = false
+			i += width
 			continue
 		}
 
 		if r == '\\' {
 			escaped = true
+			i += width
 			continue
 		}
-		if r == '|' {
+		if r == '`' {
+			runWidth := delimiterWidth(s[i:], '`')
+			current.WriteString(s[i : i+runWidth])
+			switch {
+			case codeDelimiterWidth == 0:
+				codeDelimiterWidth = runWidth
+			case codeDelimiterWidth == runWidth:
+				codeDelimiterWidth = 0
+			}
+			i += runWidth
+			continue
+		}
+		if r == '|' && codeDelimiterWidth == 0 {
 			parts = append(parts, current.String())
 			current.Reset()
+			i += width
 			continue
 		}
 		current.WriteRune(r)
+		i += width
 	}
 	if escaped {
 		current.WriteRune('\\')
@@ -379,197 +396,4 @@ func renderTaskItem(taskLine string) string {
 	}
 
 	return reTaskItem.ReplaceAllString(taskLine, prefix+marker+" ")
-}
-
-// contentSegmentKind distinguishes prose segments (regular HTML message
-// path) from table segments (native rich-message table rendering).
-type contentSegmentKind int
-
-const (
-	segmentHTML contentSegmentKind = iota
-	segmentTable
-)
-
-// contentSegment is one top-level piece of a markdown document: either the
-// raw markdown of a prose chunk (tables already carved out) or a parsed
-// table with the inline-code contents its cells contain.
-type contentSegment struct {
-	kind  contentSegmentKind
-	raw   string      // segmentHTML: raw markdown chunk
-	table parsedTable // segmentTable
-	codes []string    // segmentTable: inline-code contents in cells
-}
-
-// markdownToSegments splits markdown into ordered prose and table segments.
-// Tables are carved out at their exact positions so prose chunks can be
-// formatted, chunked, and sent independently while tables render natively.
-func markdownToSegments(text string) []contentSegment {
-	if strings.TrimSpace(text) == "" {
-		return nil
-	}
-
-	codeBlocks := extractCodeBlocks(text)
-	inlineCodes := extractInlineCodes(codeBlocks.text)
-	tables := extractTables(inlineCodes.text)
-
-	restore := func(chunk string) string {
-		chunk = restoreInlineCodePlaceholders(chunk, inlineCodes.codes)
-		return restoreCodeBlockPlaceholders(chunk, codeBlocks.codes)
-	}
-
-	segments := make([]contentSegment, 0, 2*len(tables.tables)+1)
-	rest := tables.text
-	for i, table := range tables.tables {
-		placeholder := fmt.Sprintf("\x00TB%d\x00", i)
-		idx := strings.Index(rest, placeholder)
-		if idx < 0 {
-			// Defensive: the placeholder should always be present. Drop the
-			// marker so it never leaks into sent text.
-			rest = strings.ReplaceAll(rest, placeholder, "")
-			continue
-		}
-		if chunk := strings.TrimSpace(rest[:idx]); chunk != "" {
-			segments = append(segments, contentSegment{kind: segmentHTML, raw: restore(chunk)})
-		}
-		segments = append(
-			segments,
-			contentSegment{kind: segmentTable, table: table, codes: inlineCodes.codes},
-		)
-		rest = rest[idx+len(placeholder):]
-	}
-	if chunk := strings.TrimSpace(rest); chunk != "" {
-		segments = append(segments, contentSegment{kind: segmentHTML, raw: restore(chunk)})
-	}
-
-	return segments
-}
-
-func hasMarkdownTable(text string) bool {
-	for _, segment := range markdownToSegments(text) {
-		if segment.kind == segmentTable {
-			return true
-		}
-	}
-	return false
-}
-
-// restoreCodeBlockPlaceholders turns fenced-code placeholders back into
-// fenced blocks so restored prose can be re-parsed and re-chunked safely.
-func restoreCodeBlockPlaceholders(text string, codes []string) string {
-	for i, code := range codes {
-		text = strings.ReplaceAll(
-			text,
-			fmt.Sprintf("\x00CB%d\x00", i),
-			"```"+code+"```",
-		)
-	}
-	return text
-}
-
-// tableCellRichText converts one raw markdown table cell into Telegram rich
-// text. Supported inline markdown: `code`, **bold**, and [text](url) links;
-// everything else stays plain text. Returns nil for empty cells.
-func tableCellRichText(cell string, codes []string) telego.RichText {
-	for i, code := range codes {
-		// Inline-code placeholders carry the bare code content, so restore
-		// them with their backtick markers for the rich text scanner.
-		cell = strings.ReplaceAll(
-			cell,
-			fmt.Sprintf("\x00IC%d\x00", i),
-			"`"+code+"`",
-		)
-	}
-	parts := inlineMarkdownToRichText(cell)
-	switch len(parts) {
-	case 0:
-		return nil
-	case 1:
-		return parts[0]
-	default:
-		list := telego.RichTextList(parts)
-		return &list
-	}
-}
-
-// inlineMarkdownToRichText scans inline markdown into rich text nodes,
-// keeping plain runs as bare strings the way Telegram expects.
-func inlineMarkdownToRichText(text string) []telego.RichText {
-	parts := make([]telego.RichText, 0, 4)
-	var plain strings.Builder
-	flush := func() {
-		if plain.Len() > 0 {
-			parts = append(parts, richPlain(plain.String()))
-			plain.Reset()
-		}
-	}
-
-	for text != "" {
-		span, node, ok := nextInlineRichNode(text)
-		if !ok {
-			plain.WriteString(text)
-			break
-		}
-		plain.WriteString(text[:span[0]])
-		flush()
-		parts = append(parts, node)
-		text = text[span[1]:]
-	}
-	flush()
-
-	return parts
-}
-
-// nextInlineRichNode finds the earliest inline code, bold, or link marker
-// and returns its span plus the corresponding rich text node.
-func nextInlineRichNode(text string) ([]int, telego.RichText, bool) {
-	best := -1
-	span := []int{0, 0}
-	var node telego.RichText
-
-	if m := reInlineCode.FindStringSubmatchIndex(text); m != nil {
-		best = m[0]
-		span = []int{m[0], m[1]}
-		node = &telego.RichTextCode{Type: telego.TextTypeCode, Text: richPlain(text[m[2]:m[3]])}
-	}
-	if m := reBoldStar.FindStringSubmatchIndex(text); m != nil && (best < 0 || m[0] < best) {
-		best = m[0]
-		span = []int{m[0], m[1]}
-		node = &telego.RichTextBold{Type: telego.TextTypeBold, Text: richPlain(text[m[2]:m[3]])}
-	}
-	if m := reLink.FindStringSubmatchIndex(text); m != nil && (best < 0 || m[0] < best) {
-		best = m[0]
-		span = []int{m[0], m[1]}
-		node = &telego.RichTextURL{
-			Type: telego.TextTypeURL,
-			Text: linkTextRichText(text[m[2]:m[3]]),
-			URL:  text[m[4]:m[5]],
-		}
-	}
-	if best < 0 {
-		return nil, nil, false
-	}
-
-	return span, node, true
-}
-
-// linkTextRichText converts the inner text of a markdown link into rich text
-// so links can contain code or bold markers.
-func linkTextRichText(text string) telego.RichText {
-	parts := inlineMarkdownToRichText(text)
-	switch len(parts) {
-	case 0:
-		return richPlain("")
-	case 1:
-		return parts[0]
-	default:
-		list := telego.RichTextList(parts)
-		return &list
-	}
-}
-
-// richPlain returns a plain rich text node as a pointer, matching the
-// RichText interface's pointer-receiver methods.
-func richPlain(text string) telego.RichText {
-	plain := telego.RichTextPlain(text)
-	return &plain
 }

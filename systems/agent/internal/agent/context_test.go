@@ -43,7 +43,7 @@ func TestContextBuilderBuildsSharedPromptEnvelopeInStableOrder(t *testing.T) {
 		"base prompt",
 		contextBuilderTestStore{},
 		3,
-		func() string { return "dynamic context" },
+		func(context.Context) string { return "dynamic context" },
 	)
 
 	messages, err := builder.Build(context.Background(), conversation.UserMessage("task"))

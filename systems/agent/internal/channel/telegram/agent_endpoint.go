@@ -434,35 +434,14 @@ func (s *agentRunSession) sendFinalText(ctx context.Context, statusMessageID, fi
 		}
 		return
 	}
-	if hasMarkdownTable(finalText) {
-		// Tables must go through SendText's segmented rich-message path. The
-		// regular edit path only supports HTML and would render them as legacy
-		// <pre> blocks; splitting before SendText could also cut a table in two.
-		if err := s.channel.SendText(ctx, s.chatID, finalText); err != nil {
-			s.logError("telegram final send error: %v", err)
+
+	if err := s.channel.EditText(ctx, s.chatID, statusMessageID, finalText); err != nil {
+		s.logError("telegram placeholder edit error: %v", err)
+		if textDeliveryStarted(err) {
 			return
 		}
-		s.deleteStatusMessage(ctx, statusMessageID)
-		return
-	}
-
-	chunks := SplitText(finalText)
-	if len(chunks) == 0 {
-		chunks = []string{finalText}
-	}
-
-	if err := s.channel.EditText(ctx, s.chatID, statusMessageID, chunks[0]); err != nil {
-		s.logError("telegram placeholder edit error: %v", err)
 		if err := s.channel.SendText(ctx, s.chatID, finalText); err != nil {
 			s.logError("telegram final fallback send error: %v", err)
-		}
-		return
-	}
-
-	for _, chunk := range chunks[1:] {
-		if _, err := s.channel.SendTextMessage(ctx, s.chatID, chunk); err != nil {
-			s.logError("telegram continuation send error: %v", err)
-			return
 		}
 	}
 }

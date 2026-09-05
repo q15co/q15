@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -8,8 +9,11 @@ import (
 	"time"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
+	"github.com/q15co/q15/systems/agent/internal/bus"
+	"github.com/q15co/q15/systems/agent/internal/channel/telegram"
 	"github.com/q15co/q15/systems/agent/internal/modelcatalog"
 	"github.com/q15co/q15/systems/agent/internal/selectionstore"
+	"github.com/q15co/q15/systems/agent/internal/turnctx"
 )
 
 // composeSystemPrompt assembles the static base system prompt from the default
@@ -82,6 +86,32 @@ func renderCurrentModelPrompt(
 	}, "\n")
 	body = strings.TrimSpace(body)
 	return agent.RenderPromptElement("current_model", nil, body)
+}
+
+// buildInteractiveSystemTextHints returns the request-sensitive system prompt
+// sections shared by every model turn in one interactive run.
+func buildInteractiveSystemTextHints(
+	registry *modelcatalog.Registry,
+	selection *modelcatalog.Selection,
+	store *selectionstore.Store,
+) []agent.SystemTextSource {
+	return []agent.SystemTextSource{
+		func(context.Context) string {
+			return renderCurrentModelPrompt(registry, selection, store)
+		},
+		renderResponseFormatPrompt,
+	}
+}
+
+// renderResponseFormatPrompt returns the output contract for the transport
+// that owns the current interactive turn. Unattended jobs and future channels
+// do not inherit Telegram-only syntax by accident.
+func renderResponseFormatPrompt(ctx context.Context) string {
+	origin, ok := turnctx.OriginFrom(ctx)
+	if !ok || strings.TrimSpace(origin.Channel) != bus.ChannelTelegram {
+		return ""
+	}
+	return telegram.ResponseFormatPrompt()
 }
 
 // renderCognitionOverrides renders per-job cognition model overrides. Jobs

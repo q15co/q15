@@ -273,305 +273,262 @@ func TestStartRestartsWhenTelegoLongPollingStops(t *testing.T) {
 	}
 }
 
-func TestSendText_UsesHTMLParseMode(t *testing.T) {
-	caller := &mockAPICaller{
-		responses: []*ta.Response{
-			{
-				Ok:     true,
-				Result: []byte(`{}`),
-			},
-		},
-	}
+func TestSendText_UsesSafeRichMarkdown(t *testing.T) {
+	caller := &mockAPICaller{responses: []*ta.Response{{
+		Ok:     true,
+		Result: []byte(`{"message_id":11}`),
+	}}}
 	ch := newTestChannelWithCaller(t, caller)
 
-	err := ch.SendText(t.Context(), "12345", "**bold**")
-	if err != nil {
+	if err := ch.SendText(t.Context(), "12345", "**bold**"); err != nil {
 		t.Fatalf("SendText() error = %v", err)
 	}
 
 	if len(caller.calls) != 1 {
 		t.Fatalf("calls = %d, want 1", len(caller.calls))
 	}
-	if !strings.HasSuffix(caller.calls[0].url, "/sendMessage") {
-		t.Fatalf("first URL = %q, want suffix /sendMessage", caller.calls[0].url)
+	call := caller.calls[0]
+	if !strings.HasSuffix(call.url, "/sendRichMessage") {
+		t.Fatalf("URL = %q, want suffix /sendRichMessage", call.url)
 	}
-	if got := caller.calls[0].body["parse_mode"]; got != telego.ModeHTML {
-		t.Fatalf("parse_mode = %#v, want %q", got, telego.ModeHTML)
+	rich := richMessageBody(t, call)
+	if got := rich["markdown"]; got != "**bold**" {
+		t.Fatalf("markdown = %#v, want %q", got, "**bold**")
 	}
-	if got := caller.calls[0].body["text"]; got != "<b>bold</b>" {
-		t.Fatalf("text = %#v, want %q", got, "<b>bold</b>")
+	if got := rich["skip_entity_detection"]; got != true {
+		t.Fatalf("skip_entity_detection = %#v, want true", got)
+	}
+	if _, ok := rich["media"]; ok {
+		t.Fatalf("media = %#v, want omitted", rich["media"])
 	}
 }
 
-func TestSendText_SplitsLongMessages(t *testing.T) {
-	prevLimit := telegramTextChunkRunes
-	telegramTextChunkRunes = 8
-	defer func() {
-		telegramTextChunkRunes = prevLimit
-	}()
-
+func TestSendText_RichMarkdownCoversModernFormatting(t *testing.T) {
 	caller := &mockAPICaller{}
 	ch := newTestChannelWithCaller(t, caller)
+	input := "# Heading\n\n" +
+		"1. ordered\n2. list\n\n" +
+		"- unordered\n- [x] task\n\n" +
+		"> quotation\n\n---\n\n" +
+		"```go\nfmt.Println(\"q15\")\n```\n\n" +
+		"||spoiler|| ==highlight== $x^2$ [link](https://example.com)\n\n" +
+		"$$E = mc^2$$\n\n" +
+		"Reference[^one].\n\n[^one]: Footnote.\n\n" +
+		"| A | B |\n|-|-|\n| one | two |"
 
-	err := ch.SendText(t.Context(), "12345", "alpha beta")
-	if err != nil {
+	if err := ch.SendText(t.Context(), "12345", input); err != nil {
 		t.Fatalf("SendText() error = %v", err)
 	}
-
-	if len(caller.calls) != 2 {
-		t.Fatalf("calls = %d, want 2", len(caller.calls))
+	if len(caller.calls) != 1 {
+		t.Fatalf("calls = %d, want 1 complete rich message", len(caller.calls))
 	}
-	if got := caller.calls[0].body["text"]; got != "alpha" {
-		t.Fatalf("first chunk text = %#v, want %q", got, "alpha")
-	}
-	if got := caller.calls[1].body["text"]; got != "beta" {
-		t.Fatalf("second chunk text = %#v, want %q", got, "beta")
+	markdown := richMarkdownBody(t, caller.calls[0])
+	for _, want := range []string{
+		"# Heading",
+		"1. ordered",
+		"- unordered",
+		"- [x] task",
+		"> quotation",
+		"---",
+		"```go",
+		"||spoiler||",
+		"==highlight==",
+		"$x^2$",
+		"$$E = mc^2$$",
+		"[link](https://example.com)",
+		"Reference[^one].",
+		"[^one]: Footnote.",
+		"<table bordered striped>",
+	} {
+		if !strings.Contains(markdown, want) {
+			t.Fatalf("rich markdown = %q, want substring %q", markdown, want)
+		}
 	}
 }
 
-func TestSendTextMessage_ChunksLongProse(t *testing.T) {
-	prevLimit := telegramTextChunkRunes
-	telegramTextChunkRunes = 8
+func TestSendText_SanitizesInteractiveRichContent(t *testing.T) {
+	caller := &mockAPICaller{}
+	ch := newTestChannelWithCaller(t, caller)
+	input := "<tg-button type=\"callback_data\" data=\"owned\">Run</tg-button>\n\n" +
+		"[safe](https://example.com) [callback](tg://user?id=7) " +
+		"[script](javascript:alert(1))\n\n" +
+		"![photo](https://example.com/photo.jpg)\n\n" +
+		"`<tg-button>code is inert</tg-button>`"
+
+	if err := ch.SendText(t.Context(), "12345", input); err != nil {
+		t.Fatalf("SendText() error = %v", err)
+	}
+	markdown := richMarkdownBody(t, caller.calls[0])
+	for _, unwanted := range []string{
+		"<tg-button type=",
+		"](tg://",
+		"](javascript:",
+		"![photo]",
+	} {
+		if strings.Contains(markdown, unwanted) {
+			t.Fatalf("rich markdown = %q, must not contain %q", markdown, unwanted)
+		}
+	}
+	for _, want := range []string{
+		"&lt;tg-button type=",
+		"[safe](https://example.com)",
+		"callback",
+		"script",
+		"Image: [photo](https://example.com/photo.jpg)",
+		"`<tg-button>code is inert</tg-button>`",
+	} {
+		if !strings.Contains(markdown, want) {
+			t.Fatalf("rich markdown = %q, want substring %q", markdown, want)
+		}
+	}
+}
+
+func TestSendText_SplitsAtRichMarkdownBlockBoundaries(t *testing.T) {
+	previous := telegramRichTextRunes
+	telegramRichTextRunes = 20
 	defer func() {
-		telegramTextChunkRunes = prevLimit
+		telegramRichTextRunes = previous
 	}()
 
 	caller := &mockAPICaller{}
 	ch := newTestChannelWithCaller(t, caller)
+	input := "# First\n\n1234567890\n\n# Second\n\nabcdefghij"
 
-	messageID, err := ch.SendTextMessage(t.Context(), "12345", "alpha beta")
-	if err != nil {
-		t.Fatalf("SendTextMessage() error = %v", err)
+	if err := ch.SendText(t.Context(), "12345", input); err != nil {
+		t.Fatalf("SendText() error = %v", err)
 	}
-
 	if len(caller.calls) != 2 {
 		t.Fatalf("calls = %d, want 2", len(caller.calls))
 	}
-	if got := caller.calls[0].body["text"]; got != "alpha" {
-		t.Fatalf("first chunk text = %#v, want %q", got, "alpha")
+	first := richMarkdownBody(t, caller.calls[0])
+	second := richMarkdownBody(t, caller.calls[1])
+	if first != "# First\n\n1234567890" {
+		t.Fatalf("first chunk = %q", first)
 	}
-	if got := caller.calls[1].body["text"]; got != "beta" {
-		t.Fatalf("second chunk text = %#v, want %q", got, "beta")
-	}
-	if messageID != "0" {
-		t.Fatalf("last message id = %q, want default 0", messageID)
+	if second != "# Second\n\nabcdefghij" {
+		t.Fatalf("second chunk = %q", second)
 	}
 }
 
-func TestSendTextMessage_RendersTableViaRichMessage(t *testing.T) {
-	caller := &mockAPICaller{
-		responses: []*ta.Response{
-			{Ok: true, Result: []byte(`{"message_id": 11}`)},
-			{Ok: true, Result: []byte(`{"message_id": 12}`)},
-			{Ok: true, Result: []byte(`{"message_id": 13}`)},
-		},
-	}
+func TestSendTextMessage_RendersRelaxedTableAsBorderedRichHTML(t *testing.T) {
+	caller := &mockAPICaller{responses: []*ta.Response{{
+		Ok:     true,
+		Result: []byte(`{"message_id":13}`),
+	}}}
 	ch := newTestChannelWithCaller(t, caller)
+	input := "Before.\n\n| name | value |\n|-|-:|\n| `q|15` | **ok** |\n\nAfter."
 
-	text := "Before.\n\n| name | value |\n|---|---:|\n| `q15` | **ok** |\n\nAfter."
-	messageID, err := ch.SendTextMessage(t.Context(), "12345", text)
+	messageID, err := ch.SendTextMessage(t.Context(), "12345", input)
 	if err != nil {
 		t.Fatalf("SendTextMessage() error = %v", err)
 	}
 	if messageID != "13" {
-		t.Fatalf("last message id = %q, want 13", messageID)
+		t.Fatalf("message ID = %q, want 13", messageID)
 	}
-
-	if len(caller.calls) != 3 {
-		t.Fatalf("calls = %d, want 3", len(caller.calls))
+	if len(caller.calls) != 1 {
+		t.Fatalf("calls = %d, want 1", len(caller.calls))
 	}
-	if !strings.HasSuffix(caller.calls[0].url, "/sendMessage") {
-		t.Fatalf("first URL = %q, want /sendMessage", caller.calls[0].url)
-	}
-	if got := caller.calls[0].body["text"]; got != "Before." {
-		t.Fatalf("prose before table = %#v, want %q", got, "Before.")
-	}
-
-	if !strings.HasSuffix(caller.calls[1].url, "/sendRichMessage") {
-		t.Fatalf("table URL = %q, want /sendRichMessage", caller.calls[1].url)
-	}
-	rich, ok := caller.calls[1].body["rich_message"].(map[string]any)
-	if !ok {
-		t.Fatalf("rich_message = %#v", caller.calls[1].body["rich_message"])
-	}
-	blocks, ok := rich["blocks"].([]any)
-	if !ok || len(blocks) != 1 {
-		t.Fatalf("blocks = %#v", rich["blocks"])
-	}
-	block, ok := blocks[0].(map[string]any)
-	if !ok || block["type"] != "table" {
-		t.Fatalf("block = %#v", blocks[0])
-	}
-	if block["is_bordered"] != true || block["is_striped"] != true {
-		t.Fatalf("table flags = %#v", block)
-	}
-	rows, ok := block["cells"].([]any)
-	if !ok || len(rows) != 2 {
-		t.Fatalf("cells = %#v", block["cells"])
-	}
-
-	header, ok := rows[0].([]any)
-	if !ok || len(header) != 2 {
-		t.Fatalf("header row = %#v", rows[0])
-	}
-	nameCell, ok := header[0].(map[string]any)
-	if !ok || nameCell["is_header"] != true || nameCell["text"] != "name" ||
-		nameCell["align"] != "left" {
-		t.Fatalf("header cell 0 = %#v", header[0])
-	}
-	valueCell, ok := header[1].(map[string]any)
-	if !ok || valueCell["align"] != "right" {
-		t.Fatalf("header cell 1 = %#v", header[1])
-	}
-
-	body, ok := rows[1].([]any)
-	if !ok || len(body) != 2 {
-		t.Fatalf("body row = %#v", rows[1])
-	}
-	codeCell, ok := body[0].(map[string]any)
-	if !ok {
-		t.Fatalf("body cell 0 = %#v", body[0])
-	}
-	if _, hasHeader := codeCell["is_header"]; hasHeader {
-		t.Fatalf("body cell 0 has is_header: %#v", codeCell)
-	}
-	codeText, ok := codeCell["text"].(map[string]any)
-	if !ok || codeText["type"] != "code" || codeText["text"] != "q15" {
-		t.Fatalf("body cell 0 text = %#v, want code q15", codeCell["text"])
-	}
-	boldText, ok := body[1].(map[string]any)
-	if !ok {
-		t.Fatalf("body cell 1 = %#v", body[1])
-	}
-	boldNode, ok := boldText["text"].(map[string]any)
-	if !ok || boldNode["type"] != "bold" || boldNode["text"] != "ok" {
-		t.Fatalf("body cell 1 text = %#v, want bold ok", boldText["text"])
-	}
-
-	if !strings.HasSuffix(caller.calls[2].url, "/sendMessage") {
-		t.Fatalf("last URL = %q, want /sendMessage", caller.calls[2].url)
-	}
-	if got := caller.calls[2].body["text"]; got != "After." {
-		t.Fatalf("prose after table = %#v, want %q", got, "After.")
+	markdown := richMarkdownBody(t, caller.calls[0])
+	for _, want := range []string{
+		"Before.",
+		"<table bordered striped>",
+		"<th>name</th>",
+		`<th align="right">value</th>`,
+		"<code>q|15</code>",
+		"<b>ok</b>",
+		"</table>",
+		"After.",
+	} {
+		if !strings.Contains(markdown, want) {
+			t.Fatalf("rich markdown = %q, want substring %q", markdown, want)
+		}
 	}
 }
 
-type richRejectingCaller struct {
-	mock mockAPICaller
-}
-
-func (c *richRejectingCaller) Call(
-	ctx context.Context,
-	url string,
-	data *ta.RequestData,
-) (*ta.Response, error) {
-	if strings.HasSuffix(url, "/sendRichMessage") {
-		return &ta.Response{
-			Ok: false,
-			Result: []byte(
-				`{"ok":false,"error_code":404,"description":"rich messages unsupported"}`,
-			),
-		}, nil
-	}
-	return c.mock.Call(ctx, url, data)
-}
-
-func TestSendTextMessage_RichTableFallsBackToPreformatted(t *testing.T) {
-	caller := &richRejectingCaller{mock: mockAPICaller{
-		responses: []*ta.Response{
-			{Ok: true, Result: []byte(`{"message_id": 11}`)},
-			{Ok: true, Result: []byte(`{"message_id": 12}`)},
-			{Ok: true, Result: []byte(`{"message_id": 13}`)},
-		},
+func TestSendTextMessage_RichTableFallsBackInDocumentOrder(t *testing.T) {
+	caller := &mockAPICaller{responses: []*ta.Response{
+		telegramAPIError(400, "rich parse rejected"),
+		{Ok: true, Result: []byte(`{"message_id":14}`)},
 	}}
 	ch := newTestChannelWithCaller(t, caller)
+	input := "Before.\n\n| A | B |\n|-|-|\n| 1 | 2 |\n\nAfter."
 
-	text := "Before.\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\nAfter."
-	messageID, err := ch.SendTextMessage(t.Context(), "12345", text)
+	messageID, err := ch.SendTextMessage(t.Context(), "12345", input)
 	if err != nil {
 		t.Fatalf("SendTextMessage() error = %v", err)
 	}
-	if messageID != "13" {
-		t.Fatalf("last message id = %q, want 13", messageID)
+	if messageID != "14" {
+		t.Fatalf("message ID = %q, want 14", messageID)
 	}
-
-	// Rich attempt bypasses the recording mock, so calls are:
-	// prose before, fallback <pre>, prose after.
-	if len(caller.mock.calls) != 3 {
-		t.Fatalf("calls = %d, want 3", len(caller.mock.calls))
+	if len(caller.calls) != 2 {
+		t.Fatalf("calls = %d, want rich attempt plus HTML fallback", len(caller.calls))
 	}
-	if got := caller.mock.calls[1].body["text"]; got != "<pre>a | b\n1 | 2</pre>" {
-		t.Fatalf("fallback text = %#v, want legacy <pre> rendering", got)
+	fallback, ok := caller.calls[1].body["text"].(string)
+	if !ok {
+		t.Fatalf("fallback text = %#v", caller.calls[1].body["text"])
 	}
-	if got := caller.mock.calls[2].body["text"]; got != "After." {
-		t.Fatalf("prose after table = %#v, want %q", got, "After.")
+	before := strings.Index(fallback, "Before.")
+	table := strings.Index(fallback, "<pre>A | B\n1 | 2</pre>")
+	after := strings.Index(fallback, "After.")
+	if before < 0 || table <= before || after <= table {
+		t.Fatalf("fallback order = %q", fallback)
 	}
 }
 
-func TestSendText_FallbacksToPlainText(t *testing.T) {
-	caller := &mockAPICaller{
-		responses: []*ta.Response{
-			{
-				Ok: false,
-				Error: &ta.Error{
-					ErrorCode:   400,
-					Description: "Bad Request: can't parse entities",
-				},
-			},
-			{
-				Ok:     true,
-				Result: []byte(`{}`),
-			},
-		},
+func TestSendText_TooDeepForRichUsesLegacyPath(t *testing.T) {
+	caller := &mockAPICaller{}
+	ch := newTestChannelWithCaller(t, caller)
+	input := strings.Repeat("> ", telegramRichNestingLimit) + "too deep"
+
+	if err := ch.SendText(t.Context(), "12345", input); err != nil {
+		t.Fatalf("SendText() error = %v", err)
 	}
+	if len(caller.calls) != 1 {
+		t.Fatalf("calls = %d, want 1", len(caller.calls))
+	}
+	if !strings.HasSuffix(caller.calls[0].url, "/sendMessage") {
+		t.Fatalf("URL = %q, want legacy /sendMessage", caller.calls[0].url)
+	}
+}
+
+func TestSendText_RichAndHTMLFailuresFallBackToPlainText(t *testing.T) {
+	caller := &mockAPICaller{responses: []*ta.Response{
+		telegramAPIError(400, "rich parse rejected"),
+		telegramAPIError(400, "HTML parse rejected"),
+		{Ok: true, Result: []byte(`{"message_id":12}`)},
+	}}
 	ch := newTestChannelWithCaller(t, caller)
 	original := "**bold** <raw>"
 
-	err := ch.SendText(t.Context(), "99", original)
-	if err != nil {
+	if err := ch.SendText(t.Context(), "99", original); err != nil {
 		t.Fatalf("SendText() error = %v", err)
 	}
-
-	if len(caller.calls) != 2 {
-		t.Fatalf("calls = %d, want 2", len(caller.calls))
+	if len(caller.calls) != 3 {
+		t.Fatalf("calls = %d, want 3", len(caller.calls))
 	}
-
-	first := caller.calls[0].body
-	if got := first["parse_mode"]; got != telego.ModeHTML {
-		t.Fatalf("first parse_mode = %#v, want %q", got, telego.ModeHTML)
+	if !strings.HasSuffix(caller.calls[0].url, "/sendRichMessage") {
+		t.Fatalf("first URL = %q, want rich send", caller.calls[0].url)
 	}
-	if got := first["text"]; got != "<b>bold</b> &lt;raw&gt;" {
-		t.Fatalf("first text = %#v, want %q", got, "<b>bold</b> &lt;raw&gt;")
+	if got := caller.calls[1].body["text"]; got != "<b>bold</b> &lt;raw&gt;" {
+		t.Fatalf("HTML fallback = %#v", got)
 	}
-
-	second := caller.calls[1].body
-	if _, ok := second["parse_mode"]; ok {
-		t.Fatalf("second call parse_mode should be omitted, got %#v", second["parse_mode"])
+	if _, ok := caller.calls[2].body["parse_mode"]; ok {
+		t.Fatalf(
+			"plain fallback parse_mode = %#v, want omitted",
+			caller.calls[2].body["parse_mode"],
+		)
 	}
-	if got := second["text"]; got != original {
-		t.Fatalf("second text = %#v, want %q", got, original)
+	if got := caller.calls[2].body["text"]; got != original {
+		t.Fatalf("plain fallback = %#v, want %q", got, original)
 	}
 }
 
-func TestSendText_ReturnsErrorWhenBothAttemptsFail(t *testing.T) {
-	caller := &mockAPICaller{
-		responses: []*ta.Response{
-			{
-				Ok: false,
-				Error: &ta.Error{
-					ErrorCode:   400,
-					Description: "Bad Request: can't parse entities",
-				},
-			},
-			{
-				Ok: false,
-				Error: &ta.Error{
-					ErrorCode:   500,
-					Description: "Internal Server Error",
-				},
-			},
-		},
-	}
+func TestSendText_ReturnsErrorWhenAllAttemptsFail(t *testing.T) {
+	caller := &mockAPICaller{responses: []*ta.Response{
+		telegramAPIError(400, "rich parse rejected"),
+		telegramAPIError(400, "HTML parse rejected"),
+		telegramAPIError(500, "plain send rejected"),
+	}}
 	ch := newTestChannelWithCaller(t, caller)
 
 	err := ch.SendText(t.Context(), "99", "**bold**")
@@ -581,9 +538,41 @@ func TestSendText_ReturnsErrorWhenBothAttemptsFail(t *testing.T) {
 	if !strings.Contains(err.Error(), "send telegram message:") {
 		t.Fatalf("error = %q, want wrapped send telegram message error", err.Error())
 	}
-	if len(caller.calls) != 2 {
-		t.Fatalf("calls = %d, want 2", len(caller.calls))
+	if len(caller.calls) != 3 {
+		t.Fatalf("calls = %d, want 3", len(caller.calls))
 	}
+}
+
+func telegramAPIError(code int, description string) *ta.Response {
+	return &ta.Response{
+		Ok: false,
+		Error: &ta.Error{
+			ErrorCode:   code,
+			Description: description,
+		},
+	}
+}
+
+func richMessageBody(t *testing.T, call apiCall) map[string]any {
+	t.Helper()
+	rich, ok := call.body["rich_message"].(map[string]any)
+	if !ok {
+		t.Fatalf("rich_message = %#v", call.body["rich_message"])
+	}
+	return rich
+}
+
+func richMarkdownBody(t *testing.T, call apiCall) string {
+	t.Helper()
+	if !strings.HasSuffix(call.url, "/sendRichMessage") {
+		t.Fatalf("URL = %q, want suffix /sendRichMessage", call.url)
+	}
+	rich := richMessageBody(t, call)
+	markdown, ok := rich["markdown"].(string)
+	if !ok {
+		t.Fatalf("markdown = %#v", rich["markdown"])
+	}
+	return markdown
 }
 
 func TestSendPhoto_UsesHTMLCaptionAndMultipart(t *testing.T) {
@@ -757,37 +746,85 @@ func TestSendPhoto_RejectsNonImageRef(t *testing.T) {
 	}
 }
 
-func TestEditText_FallbacksToPlainText(t *testing.T) {
-	caller := &mockAPICaller{
-		responses: []*ta.Response{
-			{
-				Ok: false,
-				Error: &ta.Error{
-					ErrorCode:   400,
-					Description: "Bad Request: can't parse entities",
-				},
-			},
-			{
-				Ok:     true,
-				Result: []byte(`{}`),
-			},
-		},
-	}
+func TestEditText_UsesRichMessage(t *testing.T) {
+	caller := &mockAPICaller{}
 	ch := newTestChannelWithCaller(t, caller)
+	input := "# Final\n\n| A | B |\n|-|-|\n| 1 | 2 |"
 
-	err := ch.EditText(t.Context(), "123", "456", "**bold**")
-	if err != nil {
+	if err := ch.EditText(t.Context(), "123", "456", input); err != nil {
 		t.Fatalf("EditText() error = %v", err)
 	}
-
-	if len(caller.calls) != 2 {
-		t.Fatalf("calls = %d, want 2", len(caller.calls))
+	if len(caller.calls) != 1 {
+		t.Fatalf("calls = %d, want 1", len(caller.calls))
 	}
 	if !strings.HasSuffix(caller.calls[0].url, "/editMessageText") {
 		t.Fatalf("first URL = %q, want suffix /editMessageText", caller.calls[0].url)
 	}
-	if got := caller.calls[1].body["text"]; got != "**bold**" {
+	rich := richMessageBody(t, caller.calls[0])
+	markdown, ok := rich["markdown"].(string)
+	if !ok || !strings.Contains(markdown, "# Final") ||
+		!strings.Contains(markdown, "<table bordered striped>") {
+		t.Fatalf("rich markdown = %#v", rich["markdown"])
+	}
+	if _, ok := caller.calls[0].body["text"]; ok {
+		t.Fatalf("text = %#v, want omitted", caller.calls[0].body["text"])
+	}
+}
+
+func TestEditText_RichAndHTMLFailuresFallBackToPlainText(t *testing.T) {
+	caller := &mockAPICaller{responses: []*ta.Response{
+		telegramAPIError(400, "rich edit rejected"),
+		telegramAPIError(400, "HTML edit rejected"),
+		{Ok: true, Result: []byte(`{}`)},
+	}}
+	ch := newTestChannelWithCaller(t, caller)
+
+	if err := ch.EditText(t.Context(), "123", "456", "**bold**"); err != nil {
+		t.Fatalf("EditText() error = %v", err)
+	}
+	if len(caller.calls) != 3 {
+		t.Fatalf("calls = %d, want 3", len(caller.calls))
+	}
+	if _, ok := caller.calls[0].body["rich_message"]; !ok {
+		t.Fatalf("first rich_message = %#v, want present", caller.calls[0].body["rich_message"])
+	}
+	if got := caller.calls[1].body["text"]; got != "<b>bold</b>" {
+		t.Fatalf("HTML fallback text = %#v", got)
+	}
+	if got := caller.calls[2].body["text"]; got != "**bold**" {
 		t.Fatalf("plain fallback text = %#v, want %q", got, "**bold**")
+	}
+}
+
+func TestEditText_ContinuationFailureReportsPartialDelivery(t *testing.T) {
+	previous := telegramRichTextRunes
+	telegramRichTextRunes = 20
+	defer func() {
+		telegramRichTextRunes = previous
+	}()
+
+	caller := &mockAPICaller{responses: []*ta.Response{
+		{Ok: true, Result: []byte(`{"message_id":456}`)},
+		telegramAPIError(400, "rich continuation rejected"),
+		telegramAPIError(400, "HTML continuation rejected"),
+		telegramAPIError(500, "plain continuation rejected"),
+	}}
+	ch := newTestChannelWithCaller(t, caller)
+
+	err := ch.EditText(
+		t.Context(),
+		"123",
+		"456",
+		"# First\n\n1234567890\n\n# Second\n\nabcdefghij",
+	)
+	if err == nil {
+		t.Fatal("EditText() error = nil, want continuation failure")
+	}
+	if !textDeliveryStarted(err) {
+		t.Fatalf("error = %v, want partial-delivery classification", err)
+	}
+	if len(caller.calls) != 4 {
+		t.Fatalf("calls = %d, want edit plus three continuation attempts", len(caller.calls))
 	}
 }
 

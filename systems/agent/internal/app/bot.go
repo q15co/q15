@@ -238,9 +238,11 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 		interactiveModelRefSource: interactiveModelRefSource,
 		cognitionRefResolver:      cognitionRefResolver,
 		interactivePrompt:         systemPrompt,
-		interactiveSystemTextHints: []agent.SystemTextSource{
-			func() string { return renderCurrentModelPrompt(registry, selection, selectionStore) },
-		},
+		interactiveSystemTextHints: buildInteractiveSystemTextHints(
+			registry,
+			selection,
+			selectionStore,
+		),
 		interactiveStore: store,
 		controllerStore:  store,
 		loader:           store,

@@ -260,10 +260,10 @@ func (c *Channel) SendText(ctx context.Context, chatID, text string) error {
 	return err
 }
 
-// SendTextMessage sends markdown text as one or more Telegram messages and
-// returns the ID of the last message sent. Prose is rendered through the
-// regular HTML message path (chunked as needed); markdown tables are rendered
-// natively via sendRichMessage, falling back to a <pre> block if that fails.
+// SendTextMessage sends a complete Markdown document as one or more Telegram
+// rich messages and returns the ID of the last message sent. Rich rendering is
+// the primary path; each rejected rich chunk falls back to the established
+// HTML and then plain-text send path.
 func (c *Channel) SendTextMessage(ctx context.Context, chatID, text string) (string, error) {
 	chatID = strings.TrimSpace(chatID)
 	text = strings.TrimSpace(text)
@@ -281,27 +281,48 @@ func (c *Channel) SendTextMessage(ctx context.Context, chatID, text string) (str
 	}
 
 	lastID := ""
-	for _, segment := range markdownToSegments(text) {
-		switch segment.kind {
-		case segmentHTML:
-			for _, chunk := range SplitText(segment.raw) {
-				messageID, err := c.sendHTMLMessage(ctx, id, chunk)
-				if err != nil {
-					return lastID, err
-				}
-				lastID = messageID
-			}
-		case segmentTable:
-			messageID, err := c.sendRichTable(ctx, id, segment.table, segment.codes)
-			if err != nil {
-				html, plain := tablePreformatted(segment.table, segment.codes)
-				messageID, err = c.sendPreformattedHTMLMessage(ctx, id, html, plain)
-				if err != nil {
-					return lastID, err
-				}
-			}
-			lastID = messageID
+	for _, chunk := range planRichText(text) {
+		messageID, sendErr := c.sendTextChunk(ctx, id, chunk)
+		if sendErr != nil {
+			return lastID, sendErr
 		}
+		lastID = messageID
+	}
+	return lastID, nil
+}
+
+// sendTextChunk sends one planned document chunk, preserving one-attempt
+// ordering across the rich, HTML, and plain-text paths.
+func (c *Channel) sendTextChunk(
+	ctx context.Context,
+	chatID int64,
+	chunk richTextChunk,
+) (string, error) {
+	if chunk.rich {
+		msg, err := c.bot.SendRichMessage(ctx, &telego.SendRichMessageParams{
+			ChatID: telego.ChatID{ID: chatID},
+			RichMessage: telego.InputRichMessage{
+				Markdown:            chunk.richMarkdown,
+				SkipEntityDetection: true,
+			},
+		})
+		if err == nil {
+			return strconv.Itoa(msg.MessageID), nil
+		}
+	}
+	return c.sendLegacyText(ctx, chatID, chunk.fallback)
+}
+
+// sendLegacyText chunks one rich-message fallback to the regular message
+// limit, then uses the legacy HTML/plain-text chain for every chunk.
+func (c *Channel) sendLegacyText(ctx context.Context, chatID int64, raw string) (string, error) {
+	lastID := ""
+	for _, chunk := range SplitText(raw) {
+		messageID, err := c.sendHTMLMessage(ctx, chatID, chunk)
+		if err != nil {
+			return lastID, err
+		}
+		lastID = messageID
 	}
 	return lastID, nil
 }
@@ -326,108 +347,6 @@ func (c *Channel) sendHTMLMessage(ctx context.Context, chatID int64, raw string)
 		}
 	}
 	return strconv.Itoa(msg.MessageID), nil
-}
-
-// sendPreformattedHTMLMessage sends an already-HTML-formatted message (such
-// as the legacy <pre> table fallback), falling back to the given plain text
-// if Telegram rejects the HTML.
-func (c *Channel) sendPreformattedHTMLMessage(
-	ctx context.Context,
-	chatID int64,
-	html, plain string,
-) (string, error) {
-	msg, err := c.bot.SendMessage(ctx, &telego.SendMessageParams{
-		ChatID:    telego.ChatID{ID: chatID},
-		Text:      html,
-		ParseMode: telego.ModeHTML,
-	})
-	if err != nil {
-		var plainErr error
-		msg, plainErr = c.bot.SendMessage(ctx, &telego.SendMessageParams{
-			ChatID: telego.ChatID{ID: chatID},
-			Text:   plain,
-		})
-		if plainErr != nil {
-			return "", fmt.Errorf("send telegram message: %w", plainErr)
-		}
-	}
-	return strconv.Itoa(msg.MessageID), nil
-}
-
-// sendRichTable sends one parsed markdown table as a native Telegram rich
-// message table (bordered and striped), preserving header cells and column
-// alignment.
-func (c *Channel) sendRichTable(
-	ctx context.Context,
-	chatID int64,
-	table parsedTable,
-	codes []string,
-) (string, error) {
-	cells := make([][]telego.RichBlockTableCell, 0, len(table.rows)+1)
-
-	header := make([]telego.RichBlockTableCell, len(table.header))
-	for j, cell := range table.header {
-		header[j] = tableRichCell(tableCellRichText(cell, codes), true, table.aligns, j)
-	}
-	cells = append(cells, header)
-
-	for _, row := range table.rows {
-		rowCells := make([]telego.RichBlockTableCell, len(row))
-		for j, cell := range row {
-			rowCells[j] = tableRichCell(tableCellRichText(cell, codes), false, table.aligns, j)
-		}
-		cells = append(cells, rowCells)
-	}
-
-	msg, err := c.bot.SendRichMessage(ctx, &telego.SendRichMessageParams{
-		ChatID: telego.ChatID{ID: chatID},
-		RichMessage: telego.InputRichMessage{
-			Blocks: []telego.InputRichBlock{
-				&telego.InputRichBlockTable{
-					Type:       telego.BlockTypeTable,
-					Cells:      cells,
-					IsBordered: true,
-					IsStriped:  true,
-				},
-			},
-		},
-	})
-	if err != nil {
-		return "", fmt.Errorf("send telegram rich table: %w", err)
-	}
-	return strconv.Itoa(msg.MessageID), nil
-}
-
-// tableRichCell builds one rich table cell. Telegram requires align and
-// valign on every cell, so unspecified alignment falls back to left/top.
-func tableRichCell(
-	text telego.RichText,
-	isHeader bool,
-	aligns []string,
-	col int,
-) telego.RichBlockTableCell {
-	align := telego.CellAlignLeft
-	if col < len(aligns) {
-		switch aligns[col] {
-		case telego.CellAlignCenter:
-			align = telego.CellAlignCenter
-		case telego.CellAlignRight:
-			align = telego.CellAlignRight
-		}
-	}
-	return telego.RichBlockTableCell{
-		Text:     text,
-		IsHeader: isHeader,
-		Align:    align,
-		Valign:   telego.CallValignTop,
-	}
-}
-
-// tablePreformatted renders the legacy <pre> fallback for a parsed table: the
-// HTML to send directly, plus the plain text used if the HTML is rejected.
-func tablePreformatted(table parsedTable, codes []string) (html, plain string) {
-	rendered := restoreInlineCodePlaceholders(renderTable(table.lines), codes)
-	return "<pre>" + escapeHTML(rendered) + "</pre>", rendered
 }
 
 // SendPhoto sends one Telegram photo resolved from a media-store ref.
@@ -953,7 +872,27 @@ func (c *Channel) DeleteMessage(ctx context.Context, chatID, messageID string) e
 	return nil
 }
 
-// EditText edits one Telegram message in place.
+type partialTextDeliveryError struct {
+	err error
+}
+
+func (e *partialTextDeliveryError) Error() string {
+	return e.err.Error()
+}
+
+func (e *partialTextDeliveryError) Unwrap() error {
+	return e.err
+}
+
+func textDeliveryStarted(err error) bool {
+	var partial *partialTextDeliveryError
+	return errors.As(err, &partial)
+}
+
+// EditText replaces one Telegram message with a complete Markdown document.
+// The first rich chunk is edited in place and any continuation chunks are
+// sent in order. If rich editing is rejected, the first chunk uses the legacy
+// HTML/plain-text edit chain before any continuation is sent.
 func (c *Channel) EditText(ctx context.Context, chatID, messageID, text string) error {
 	chatID = strings.TrimSpace(chatID)
 	messageID = strings.TrimSpace(messageID)
@@ -978,26 +917,72 @@ func (c *Channel) EditText(ctx context.Context, chatID, messageID, text string) 
 		return fmt.Errorf("invalid message id %q: %w", messageID, err)
 	}
 
-	formatted := markdownToTelegramHTML(text)
-	_, err = c.bot.EditMessageText(ctx, &telego.EditMessageTextParams{
-		ChatID:    telego.ChatID{ID: chatValue},
-		MessageID: msgValue,
+	chunks := planRichText(text)
+	if len(chunks) == 0 {
+		return errors.New("text is required")
+	}
+
+	legacyContinuations, err := c.editTextChunk(ctx, chatValue, msgValue, chunks[0])
+	if err != nil {
+		return err
+	}
+	for _, continuation := range legacyContinuations {
+		if _, sendErr := c.sendHTMLMessage(ctx, chatValue, continuation); sendErr != nil {
+			return &partialTextDeliveryError{err: sendErr}
+		}
+	}
+	for _, chunk := range chunks[1:] {
+		if _, sendErr := c.sendTextChunk(ctx, chatValue, chunk); sendErr != nil {
+			return &partialTextDeliveryError{err: sendErr}
+		}
+	}
+	return nil
+}
+
+func (c *Channel) editTextChunk(
+	ctx context.Context,
+	chatID int64,
+	messageID int,
+	chunk richTextChunk,
+) ([]string, error) {
+	if chunk.rich {
+		_, err := c.bot.EditMessageText(ctx, &telego.EditMessageTextParams{
+			ChatID:    telego.ChatID{ID: chatID},
+			MessageID: messageID,
+			RichMessage: &telego.InputRichMessage{
+				Markdown:            chunk.richMarkdown,
+				SkipEntityDetection: true,
+			},
+		})
+		if err == nil {
+			return nil, nil
+		}
+	}
+
+	legacyChunks := SplitText(chunk.fallback)
+	if len(legacyChunks) == 0 {
+		return nil, errors.New("text is required")
+	}
+	formatted := markdownToTelegramHTML(legacyChunks[0])
+	_, err := c.bot.EditMessageText(ctx, &telego.EditMessageTextParams{
+		ChatID:    telego.ChatID{ID: chatID},
+		MessageID: messageID,
 		Text:      formatted,
 		ParseMode: telego.ModeHTML,
 	})
 	if err == nil {
-		return nil
+		return legacyChunks[1:], nil
 	}
 
 	_, plainErr := c.bot.EditMessageText(ctx, &telego.EditMessageTextParams{
-		ChatID:    telego.ChatID{ID: chatValue},
-		MessageID: msgValue,
-		Text:      text,
+		ChatID:    telego.ChatID{ID: chatID},
+		MessageID: messageID,
+		Text:      legacyChunks[0],
 	})
 	if plainErr != nil {
-		return fmt.Errorf("edit telegram message: %w", plainErr)
+		return nil, fmt.Errorf("edit telegram message: %w", plainErr)
 	}
-	return nil
+	return legacyChunks[1:], nil
 }
 
 // StartTyping starts a typing keepalive and returns a stop function.

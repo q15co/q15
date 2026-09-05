@@ -122,9 +122,9 @@ func (e *scheduledJobExecutor) buildContext(
 		if err != nil {
 			return nil, nil, fmt.Errorf("build scheduled agent context: %w", err)
 		}
-		systemTextSource := func() string {
+		systemTextSource := func(sourceCtx context.Context) string {
 			return strings.Join([]string{
-				contextBuilder.SystemText(),
+				contextBuilder.SystemText(sourceCtx),
 				runContext,
 			}, "\n\n")
 		}

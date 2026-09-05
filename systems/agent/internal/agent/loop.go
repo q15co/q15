@@ -104,11 +104,11 @@ func NewLoopWithPlannerAndModelRefSource(
 	}
 }
 
-func (l *Loop) renderSystemText() string {
+func (l *Loop) renderSystemText(ctx context.Context) string {
 	if l == nil || l.contextBuilder == nil {
 		return DefaultSystemPrompt
 	}
-	return l.contextBuilder.SystemText()
+	return l.contextBuilder.SystemText(ctx)
 }
 
 func normalizeModelRefs(modelRefs []string) []string {
