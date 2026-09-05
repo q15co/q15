@@ -1,9 +1,8 @@
-# Canonical image-first deployment example. Each q15 service can be pinned to
-# its own immutable runtime tag, typically sha-<short-sha>. When a push only
-# changes one service, the other two tags can stay on their last known-good tag.
+# Canonical image-first deployment example. Resolve one published q15 stack
+# release and pin each service to the immutable OCI digest recorded in it.
 services:
   q15-proxy:
-    image: ghcr.io/q15co/q15-proxy:${Q15_PROXY_TAG:-main}
+    image: ${Q15_PROXY_IMAGE:?set Q15_PROXY_IMAGE to a release-pinned digest reference}
     restart: unless-stopped
     init: true
     healthcheck:
@@ -30,7 +29,7 @@ services:
         target: /var/lib/q15/proxy
 
   q15-exec:
-    image: ghcr.io/q15co/q15-exec:${Q15_EXEC_TAG:-main}
+    image: ${Q15_EXEC_IMAGE:?set Q15_EXEC_IMAGE to a release-pinned digest reference}
     restart: unless-stopped
     init: true
     depends_on:
@@ -81,7 +80,7 @@ services:
         target: /qdrant/storage
 
   q15-agent:
-    image: ghcr.io/q15co/q15-agent:${Q15_AGENT_TAG:-main}
+    image: ${Q15_AGENT_IMAGE:?set Q15_AGENT_IMAGE to a release-pinned digest reference}
     restart: unless-stopped
     init: true
     depends_on:

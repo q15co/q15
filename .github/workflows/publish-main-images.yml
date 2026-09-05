@@ -76,11 +76,15 @@ jobs:
       exec: ${{ steps.detect.outputs.exec }}
       proxy: ${{ steps.detect.outputs.proxy }}
       any: ${{ steps.detect.outputs.any }}
+      release: ${{ steps.detect.outputs.release }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
 
       - name: Detect changed services
         id: detect
@@ -90,88 +94,93 @@ jobs:
           PREV_SHA="${{ github.event.before }}"
           HEAD_SHA="${{ github.sha }}"
 
+          REMOTE_MAIN_SHA="$(git ls-remote origin refs/heads/main | awk '{ print $1 }')"
+          [[ -n "${REMOTE_MAIN_SHA}" ]] || {
+            echo "could not resolve the current main branch head" >&2
+            exit 1
+          }
+
           echo "previous commit: ${PREV_SHA}"
           echo "current commit:  ${HEAD_SHA}"
 
-          # On the first push to a branch, github.event.before is all zeros.
-          # In that case (or any other missing-previous-commit scenario), treat
-          # every tracked file as changed so that all service images are built.
-          if [[ -z "${PREV_SHA:-}" || "${PREV_SHA}" == "0000000000000000000000000000000000000000" ]]; then
-            echo "No previous commit available; treating all files as changed to build every service."
-            CHANGED_FILES=$(git ls-tree -r --name-only "${HEAD_SHA}")
+          CHANGED_FILES=""
+          if [[ "${REMOTE_MAIN_SHA}" != "${HEAD_SHA}" ]]; then
+            echo "This run is stale; current main is ${REMOTE_MAIN_SHA}. Skipping publication."
           else
-            echo "Detecting changed files between ${PREV_SHA} and ${HEAD_SHA} ..."
-            if git diff --name-only "${PREV_SHA}" "${HEAD_SHA}" > /tmp/changed_files 2> /tmp/diff_err; then
-              CHANGED_FILES=$(cat /tmp/changed_files)
+            BASE_SHA=""
+            if docker buildx imagetools inspect --raw ghcr.io/q15co/q15-agent:release-main \
+              > /tmp/previous_release.json 2> /tmp/previous_release_error; then
+              RELEASED_SHA="$(jq -r '.annotations["io.q15.release.revision"] // empty' /tmp/previous_release.json)"
+              if [[ "${RELEASED_SHA}" =~ ^[0-9a-f]{40}$ ]] &&
+                git cat-file -e "${RELEASED_SHA}^{commit}" 2>/dev/null &&
+                git merge-base --is-ancestor "${RELEASED_SHA}" "${HEAD_SHA}"; then
+                BASE_SHA="${RELEASED_SHA}"
+                echo "Detecting cumulative changes since published release ${BASE_SHA} ..."
+              else
+                echo "Published release revision is not a usable ancestor; using push metadata." >&2
+              fi
             else
-              echo "git diff failed; building all services as a safe fallback." >&2
-              cat /tmp/diff_err >&2
-              CHANGED_FILES=$(git ls-tree -r --name-only "${HEAD_SHA}")
+              echo "No usable release pointer found; using push metadata to bootstrap it."
+              cat /tmp/previous_release_error >&2
+            fi
+
+            if [[ -n "${BASE_SHA}" ]]; then
+              CHANGED_FILES="$(git diff --name-only "${BASE_SHA}" "${HEAD_SHA}")"
+            # On the first push to a branch, github.event.before is all zeros.
+            # In that case (or any other missing-previous-commit scenario), treat
+            # every tracked file as changed so that all service images are built.
+            elif [[ -z "${PREV_SHA:-}" || "${PREV_SHA}" == "0000000000000000000000000000000000000000" ]]; then
+              echo "No previous commit available; treating all files as changed to build every service."
+              CHANGED_FILES="$(git ls-tree -r --name-only "${HEAD_SHA}")"
+            else
+              echo "Detecting changed files between ${PREV_SHA} and ${HEAD_SHA} ..."
+              if git diff --name-only "${PREV_SHA}" "${HEAD_SHA}" > /tmp/changed_files 2> /tmp/diff_err; then
+                CHANGED_FILES="$(cat /tmp/changed_files)"
+              else
+                echo "git diff failed; building all services as a safe fallback." >&2
+                cat /tmp/diff_err >&2
+                CHANGED_FILES="$(git ls-tree -r --name-only "${HEAD_SHA}")"
+              fi
             fi
           fi
 
-          matches_any() {
-            local file="$1"
-            shift
-            for pattern in "$@"; do
-              # shellcheck disable=SC2254 # glob match is intentional
-              case "${file}" in
-                ${pattern}) return 0 ;;
-              esac
-            done
-            return 1
-          }
-
-          AGENT=false
-          EXEC=false
-          PROXY=false
+          IMPACT_JSON="$(printf '%s\n' "${CHANGED_FILES}" | ./scripts/image-build-impact.sh)"
+          AGENT="$(jq -r '.agent' <<< "${IMPACT_JSON}")"
+          EXEC="$(jq -r '.exec' <<< "${IMPACT_JSON}")"
+          PROXY="$(jq -r '.proxy' <<< "${IMPACT_JSON}")"
+          RELEASE=false
 
           while IFS= read -r file; do
             [[ -n "${file}" ]] || continue
 
-            if matches_any "${file}" \
-                "systems/agent/**" \
-                "libs/**" \
-                "go.work" \
-                "go.work.sum" \
-                "docker/agent.Dockerfile"; then
-              AGENT=true
-            fi
-
-            if matches_any "${file}" \
-                "systems/exec/**" \
-                "libs/exec-contract/**" \
-                "go.work" \
-                "go.work.sum" \
-                "docker/exec.Dockerfile"; then
-              EXEC=true
-            fi
-
-            if matches_any "${file}" \
-                "systems/proxy/**" \
-                "libs/proxy-contract/**" \
-                "go.work" \
-                "go.work.sum" \
-                "docker/proxy.Dockerfile"; then
-              PROXY=true
+            # Re-publish the release pointer when its assembly logic changes,
+            # even when no runtime image needs rebuilding. This also seeds the
+            # first release manifest after introducing the release pipeline.
+            if [[ ${file} == ".github/workflows/publish-main-images.yml" ||
+              ${file} == "scripts/image-build-impact.sh" ||
+              ${file} == "scripts/image-build-impact-test.sh" ]]; then
+              RELEASE=true
             fi
           done <<< "${CHANGED_FILES}"
 
           ANY=false
           if [[ "${AGENT}" == true || "${EXEC}" == true || "${PROXY}" == true ]]; then
             ANY=true
+            RELEASE=true
           fi
 
           echo "agent=${AGENT}"
           echo "exec=${EXEC}"
           echo "proxy=${PROXY}"
           echo "any=${ANY}"
+          echo "release=${RELEASE}"
 
           {
             echo "agent=${AGENT}"
             echo "exec=${EXEC}"
             echo "proxy=${PROXY}"
             echo "any=${ANY}"
+            echo "release=${RELEASE}"
           } >> "${GITHUB_OUTPUT}"
 
           build_entry() {
@@ -335,6 +344,7 @@ jobs:
             latest=false
           tags: |
             type=raw,value=main
+            type=raw,value=sha-${{ github.sha }}
             type=sha,format=short,prefix=sha-
 
       - name: Create multi-arch manifest
@@ -343,6 +353,16 @@ jobs:
           TAGS: ${{ steps.meta.outputs.tags }}
         run: |
           set -euo pipefail
+
+          current_main_sha="$(git ls-remote "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git" refs/heads/main | awk '{ print $1 }')"
+          [[ -n "${current_main_sha}" ]] || {
+            echo "could not resolve the current main branch head" >&2
+            exit 1
+          }
+          if [[ "${current_main_sha}" != "${GITHUB_SHA}" ]]; then
+            echo "refusing to publish stale component manifests for ${GITHUB_SHA}; current main is ${current_main_sha}" >&2
+            exit 1
+          fi
           tags_input=${TAGS:-}
           max_attempts=3
           attempt=1
@@ -370,9 +390,10 @@ jobs:
             echo "creating manifest for ${IMAGE} (attempt ${attempt}/${max_attempts})"
             if timeout --foreground 2m docker buildx imagetools create "${tags[@]}" "${refs[@]}"; then
               exit 0
+            else
+              status=$?
             fi
 
-            status=$?
             if [ "$attempt" -eq "$max_attempts" ]; then
               echo "failed to create manifest for ${IMAGE} after ${max_attempts} attempts" >&2
               exit "$status"
@@ -384,4 +405,209 @@ jobs:
           done
 
       - name: Inspect published manifest
-        run: docker buildx imagetools inspect "${{ matrix.image }}:main"
+        run: |
+          docker buildx imagetools inspect "${{ matrix.image }}:main"
+          docker buildx imagetools inspect "${{ matrix.image }}:sha-${{ github.sha }}"
+
+  release:
+    name: Publish atomic stack release
+    runs-on: ubuntu-24.04
+    needs: [verify, detect-changes, publish]
+    if: >-
+      always() &&
+      needs.verify.result == 'success' &&
+      needs.detect-changes.result == 'success' &&
+      needs.detect-changes.outputs.release == 'true' &&
+      (needs.detect-changes.outputs.any != 'true' || needs.publish.result == 'success')
+    permissions:
+      contents: read
+      packages: write
+    env:
+      AGENT_CHANGED: ${{ needs.detect-changes.outputs.agent }}
+      EXEC_CHANGED: ${{ needs.detect-changes.outputs.exec }}
+      PROXY_CHANGED: ${{ needs.detect-changes.outputs.proxy }}
+      AGENT_IMAGE: ghcr.io/q15co/q15-agent
+      EXEC_IMAGE: ghcr.io/q15co/q15-exec
+      PROXY_IMAGE: ghcr.io/q15co/q15-proxy
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve and publish release manifest
+        id: release
+        run: |
+          set -euo pipefail
+
+          current_main_sha="$(git ls-remote "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git" refs/heads/main | awk '{ print $1 }')"
+          [[ -n "${current_main_sha}" ]] || {
+            echo "could not resolve the current main branch head" >&2
+            exit 1
+          }
+          if [[ "${current_main_sha}" != "${GITHUB_SHA}" ]]; then
+            echo "refusing to publish stale release ${GITHUB_SHA}; current main is ${current_main_sha}" >&2
+            exit 1
+          fi
+
+          inspect_raw() {
+            local ref="$1"
+            local destination="$2"
+            local attempt
+            local status=1
+
+            for attempt in 1 2 3; do
+              echo "inspecting ${ref} (attempt ${attempt}/3)" >&2
+              if timeout --foreground 2m docker buildx imagetools inspect --raw "${ref}" > "${destination}.tmp"; then
+                mv "${destination}.tmp" "${destination}"
+                return 0
+              else
+                status=$?
+              fi
+              rm -f "${destination}.tmp"
+              if [[ "${attempt}" -lt 3 ]]; then
+                sleep 10
+              fi
+            done
+
+            return "${status}"
+          }
+
+          resolve_digest() {
+            local component="$1"
+            local image="$2"
+            local changed="$3"
+            local previous_digest="$4"
+            local ref
+            local raw_file="/tmp/${component}-source-index.json"
+
+            if [[ "${changed}" == true ]]; then
+              ref="${image}:sha-${GITHUB_SHA}"
+            elif [[ -n "${previous_digest}" ]]; then
+              ref="${image}@${previous_digest}"
+            else
+              ref="${image}:main"
+            fi
+
+            inspect_raw "${ref}" "${raw_file}"
+            jq -e '
+              .schemaVersion == 2 and
+              .mediaType == "application/vnd.oci.image.index.v1+json" and
+              ([
+                .manifests[] |
+                select(.platform.os == "linux") |
+                .platform.architecture
+              ] | unique | sort) == ["amd64", "arm64"]
+            ' "${raw_file}" >/dev/null
+
+            printf 'sha256:%s\n' "$(sha256sum "${raw_file}" | cut -d ' ' -f 1)"
+          }
+
+          retry_create() {
+            local attempt
+            local status=1
+
+            for attempt in 1 2 3; do
+              echo "publishing release manifest (attempt ${attempt}/3)" >&2
+              if timeout --foreground 2m docker buildx imagetools create "$@"; then
+                return 0
+              else
+                status=$?
+              fi
+              if [[ "${attempt}" -lt 3 ]]; then
+                sleep 10
+              fi
+            done
+
+            return "${status}"
+          }
+
+          previous_agent_digest=""
+          previous_exec_digest=""
+          previous_proxy_digest=""
+          previous_release_file="/tmp/previous-release-index.json"
+          if inspect_raw "${AGENT_IMAGE}:release-main" "${previous_release_file}"; then
+            if jq -e '.annotations["io.q15.release.schema"] == "1"' "${previous_release_file}" >/dev/null; then
+              previous_agent_digest="$(jq -er '.annotations["io.q15.release.agent"]' "${previous_release_file}")"
+              previous_exec_digest="$(jq -er '.annotations["io.q15.release.exec"]' "${previous_release_file}")"
+              previous_proxy_digest="$(jq -er '.annotations["io.q15.release.proxy"]' "${previous_release_file}")"
+            else
+              echo "existing release pointer has an unsupported schema" >&2
+              exit 1
+            fi
+          else
+            echo "No previous stack release exists; bootstrapping unchanged components from main."
+          fi
+
+          agent_digest="$(resolve_digest agent "${AGENT_IMAGE}" "${AGENT_CHANGED}" "${previous_agent_digest}")"
+          exec_digest="$(resolve_digest exec "${EXEC_IMAGE}" "${EXEC_CHANGED}" "${previous_exec_digest}")"
+          proxy_digest="$(resolve_digest proxy "${PROXY_IMAGE}" "${PROXY_CHANGED}" "${previous_proxy_digest}")"
+
+          release_tag="release-${GITHUB_SHA}"
+          release_ref="${AGENT_IMAGE}:${release_tag}"
+          metadata_file="/tmp/release-metadata.json"
+
+          retry_create \
+            --tag "${release_ref}" \
+            --annotation "index:org.opencontainers.image.source=https://github.com/q15co/q15" \
+            --annotation "index:io.q15.release.schema=1" \
+            --annotation "index:io.q15.release.revision=${GITHUB_SHA}" \
+            --annotation "index:io.q15.release.agent=${agent_digest}" \
+            --annotation "index:io.q15.release.exec=${exec_digest}" \
+            --annotation "index:io.q15.release.proxy=${proxy_digest}" \
+            --metadata-file "${metadata_file}" \
+            "${AGENT_IMAGE}@${agent_digest}"
+
+          release_digest="$(jq -er '.["containerimage.descriptor"].digest' "${metadata_file}")"
+
+          # The immutable release is complete before the single moving pointer
+          # advances, so consumers can resolve the whole stack atomically.
+          retry_create \
+            --tag "${AGENT_IMAGE}:release-main" \
+            "${AGENT_IMAGE}@${release_digest}"
+
+          pointer_file="/tmp/release-main-index.json"
+          inspect_raw "${AGENT_IMAGE}:release-main" "${pointer_file}"
+          jq -e \
+            --arg revision "${GITHUB_SHA}" \
+            --arg agent "${agent_digest}" \
+            --arg exec "${exec_digest}" \
+            --arg proxy "${proxy_digest}" '
+              .annotations["io.q15.release.schema"] == "1" and
+              .annotations["io.q15.release.revision"] == $revision and
+              .annotations["io.q15.release.agent"] == $agent and
+              .annotations["io.q15.release.exec"] == $exec and
+              .annotations["io.q15.release.proxy"] == $proxy
+            ' "${pointer_file}" >/dev/null
+
+          {
+            echo "release-ref=${release_ref}"
+            echo "release-digest=${release_digest}"
+            echo "agent-digest=${agent_digest}"
+            echo "exec-digest=${exec_digest}"
+            echo "proxy-digest=${proxy_digest}"
+          } >> "${GITHUB_OUTPUT}"
+
+          {
+            echo "## q15 stack release"
+            echo
+            echo "| Component | Digest | Rebuilt |"
+            echo "| --- | --- | --- |"
+            echo "| q15-agent | \`${agent_digest}\` | \`${AGENT_CHANGED}\` |"
+            echo "| q15-exec | \`${exec_digest}\` | \`${EXEC_CHANGED}\` |"
+            echo "| q15-proxy | \`${proxy_digest}\` | \`${PROXY_CHANGED}\` |"
+            echo
+            echo "Immutable release: \`${release_ref}\`"
+            echo
+            echo "Moving pointer: \`${AGENT_IMAGE}:release-main\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Inspect published release
+        run: |
+          docker buildx imagetools inspect "${{ steps.release.outputs.release-ref }}"
+          docker buildx imagetools inspect "${AGENT_IMAGE}:release-main"
