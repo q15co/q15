@@ -277,6 +277,37 @@ func TestMarkdownToSegments_CodeBlockPipesNotATable(t *testing.T) {
 	}
 }
 
+func TestHasMarkdownTable(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		want bool
+	}{
+		{
+			name: "table",
+			text: "| a | b |\n|---|---|\n| 1 | 2 |",
+			want: true,
+		},
+		{
+			name: "fenced code",
+			text: "```\n| a | b |\n|---|---|\n| 1 | 2 |\n```",
+			want: false,
+		},
+		{
+			name: "prose",
+			text: "a | b",
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := hasMarkdownTable(tt.text); got != tt.want {
+				t.Fatalf("hasMarkdownTable() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestTablePreformattedHTML_MatchesLegacyRendering(t *testing.T) {
 	table := "| a | b |\n|---|---|\n| 1 | `x` |"
 
