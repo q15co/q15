@@ -132,9 +132,10 @@ func (r *Registry) Snapshot() []Model {
 	return out
 }
 
-// LookupByRef finds one model by its agent-side ref (tag-stripped provider
-// model id). Returns ok=false when the model is not in the current roster
-// (provider down or model deprecated).
+// LookupByRef finds one model by its agent-side ref. Version tags are preserved
+// in normalized form (for example, "gpt-oss:20b" becomes "gpt-oss-20b"),
+// while deployment markers are stripped. Returns ok=false when the model is not
+// in the current roster (provider down or model deprecated).
 func (r *Registry) LookupByRef(ref string) (Model, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -186,12 +187,24 @@ func (r *Registry) IsEmpty() bool {
 	return len(r.snap) == 0
 }
 
-// deriveRef produces the agent-side ref from a provider model ID: Ollama
-// ":tag" suffixes are stripped and "/" separators are replaced with "-".
+// deriveRef produces the agent-side ref from a provider model ID. Version tags
+// are preserved so tagged variants do not collide. Deployment suffixes
+// ("-cloud", "-local") and bare deployment markers ("cloud", "local") are
+// stripped, while "/" and remaining ":" separators are normalized to "-".
 func deriveRef(providerModel string) string {
-	s := strings.TrimSpace(providerModel)
-	if idx := strings.Index(s, ":"); idx > 0 {
-		s = s[:idx]
+	s := strings.ToLower(strings.TrimSpace(providerModel))
+	base, tag, tagged := strings.Cut(s, ":")
+	if tagged && base != "" {
+		tag = stripDeploymentSuffix(tag)
+		if tag == "cloud" || tag == "local" {
+			tag = ""
+		}
+		if tag == "" {
+			s = base
+		} else {
+			s = base + ":" + tag
+		}
 	}
-	return strings.ReplaceAll(s, "/", "-")
+	s = strings.ReplaceAll(s, "/", "-")
+	return strings.ReplaceAll(s, ":", "-")
 }

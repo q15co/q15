@@ -138,12 +138,19 @@ func (c *modelsDevClient) Enrich(ctx context.Context, p Provider, base []Model) 
 
 	enriched := make([]Model, 0, len(base))
 	for _, b := range base {
-		key := modelcatalog.ModelKey(b.ProviderModel)
-		md, ok := providerData.Models[key]
-		if !ok {
+		var matchedKey string
+		var matchedModel modelsDevModel
+		for _, key := range modelcatalog.CandidateKeys(b.ProviderModel) {
+			if md, ok := providerData.Models[key]; ok {
+				matchedKey = key
+				matchedModel = md
+				break
+			}
+		}
+		if matchedKey == "" {
 			continue
 		}
-		enriched = append(enriched, modelFromModelsDev(key, md))
+		enriched = append(enriched, modelFromModelsDev(matchedKey, matchedModel))
 	}
 	return enriched, nil
 }

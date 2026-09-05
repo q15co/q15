@@ -181,7 +181,7 @@ func TestMediaAdaptiveClientPassesBoundProviderModel(t *testing.T) {
 	}
 	if _, err := client.Complete(
 		context.Background(),
-		"gemma3", // engine's agent-facing ref — must NOT reach the provider
+		"gemma3-4b", // engine's agent-facing ref — must NOT reach the provider
 		[]conversation.Message{conversation.UserMessage("hello")},
 		nil,
 	); err != nil {
@@ -218,7 +218,7 @@ func TestMediaAdaptiveClientFallsBackToEngineModelWhenUnbound(t *testing.T) {
 
 // TestManagerStartSendsTaggedProviderModelToClient is the end-to-end
 // regression for #127. A sub-agent spawned with the agent-facing ref
-// "gemma3" (whose ProviderModel is the tagged "gemma3:4b") must send
+// "gemma3-4b" (whose ProviderModel is the tagged "gemma3:4b") must send
 // "gemma3:4b" to the provider client on every completion call. The session
 // model stays the agent-facing ref.
 func TestManagerStartSendsTaggedProviderModelToClient(t *testing.T) {
@@ -227,9 +227,9 @@ func TestManagerStartSendsTaggedProviderModelToClient(t *testing.T) {
 		{ProviderModel: "gemma3:4b", Capabilities: modelcatalog.Capabilities{Text: true}},
 	})
 
-	// deriveRef("gemma3:4b") == "gemma3", so the agent-facing ref is "gemma3".
+	// deriveRef("gemma3:4b") == "gemma3-4b", preserving the version tag.
 	session, err := manager.Start(context.Background(), StartRequest{
-		ModelRef: "gemma3", // agent-facing ref
+		ModelRef: "gemma3-4b", // agent-facing ref
 		Task:     "summarize this",
 	})
 	if err != nil {
@@ -249,8 +249,8 @@ func TestManagerStartSendsTaggedProviderModelToClient(t *testing.T) {
 		)
 	}
 	// The session model remains the agent-facing ref, not the provider tag.
-	if session.Model != "gemma3" {
-		t.Fatalf("session model = %q, want agent-facing ref %q", session.Model, "gemma3")
+	if session.Model != "gemma3-4b" {
+		t.Fatalf("session model = %q, want agent-facing ref %q", session.Model, "gemma3-4b")
 	}
 }
 

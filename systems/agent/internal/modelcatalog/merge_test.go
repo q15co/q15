@@ -3,6 +3,7 @@ package modelcatalog
 import (
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestMerge_FillsZeroFields(t *testing.T) {
@@ -176,21 +177,77 @@ func TestApplyFilters_InvalidPatternIgnored(t *testing.T) {
 	}
 }
 
-func TestModelKey_StripsTagAndLowercases(t *testing.T) {
+func TestCandidateKeys(t *testing.T) {
 	tests := []struct {
 		input string
-		want  string
+		want  []string
 	}{
-		{"kimi-k2:cloud", "kimi-k2"},
-		{"Kimi-K2", "kimi-k2"},
-		{"llama3", "llama3"},
-		{"  Spaced  ", "spaced"},
-		{"", ""},
+		{"deepseek-v4-flash", []string{"deepseek-v4-flash"}},
+		{
+			"deepseek-v4-flash:0731",
+			[]string{"deepseek-v4-flash:0731", "deepseek-v4-flash"},
+		},
+		{
+			"deepseek-v4-flash:0731-cloud",
+			[]string{
+				"deepseek-v4-flash:0731-cloud",
+				"deepseek-v4-flash:0731",
+				"deepseek-v4-flash",
+			},
+		},
+		{"kimi-k2.7-code:cloud", []string{"kimi-k2.7-code:cloud", "kimi-k2.7-code"}},
+		{"gpt-oss:20b", []string{"gpt-oss:20b", "gpt-oss"}},
+		{"Gemma4:31B-LOCAL", []string{"gemma4:31b-local", "gemma4:31b", "gemma4"}},
+		{"  Spaced  ", []string{"spaced"}},
+		{"", nil},
 	}
 	for _, tc := range tests {
-		got := ModelKey(tc.input)
-		if got != tc.want {
-			t.Errorf("ModelKey(%q) = %q, want %q", tc.input, got, tc.want)
+		got := CandidateKeys(tc.input)
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("CandidateKeys(%q) = %v, want %v", tc.input, got, tc.want)
 		}
+	}
+}
+
+func TestMerge_VersionedTagHitsCorrectEnrichment(t *testing.T) {
+	oldRelease := time.Date(2026, 4, 24, 0, 0, 0, 0, time.UTC)
+	newRelease := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
+	base := []Model{
+		{
+			ProviderModel: "deepseek-v4-flash",
+			Name:          "deepseek-v4-flash",
+			Source:        SourceOllama,
+		},
+		{
+			ProviderModel: "deepseek-v4-flash:0731",
+			Name:          "deepseek-v4-flash:0731",
+			Source:        SourceOllama,
+		},
+	}
+	enriched := []Model{
+		{
+			ProviderModel: "deepseek-v4-flash:0731",
+			Name:          "DeepSeek V4 Flash 0731",
+			ReleaseDate:   newRelease,
+		},
+		{
+			ProviderModel: "deepseek-v4-flash",
+			Name:          "DeepSeek V4 Flash",
+			ReleaseDate:   oldRelease,
+		},
+	}
+
+	out := Merge(base, enriched)
+	if got := out[0].Name; got != "DeepSeek V4 Flash" {
+		t.Errorf("unversioned Name = %q, want %q", got, "DeepSeek V4 Flash")
+	}
+	if got := out[0].ReleaseDate; !got.Equal(oldRelease) {
+		t.Errorf("unversioned ReleaseDate = %v, want %v", got, oldRelease)
+	}
+	if got := out[1].Name; got != "DeepSeek V4 Flash 0731" {
+		t.Errorf("versioned Name = %q, want %q", got, "DeepSeek V4 Flash 0731")
+	}
+	if got := out[1].ReleaseDate; !got.Equal(newRelease) {
+		t.Errorf("versioned ReleaseDate = %v, want %v", got, newRelease)
 	}
 }

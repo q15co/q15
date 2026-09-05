@@ -40,6 +40,16 @@ func sampleModelsDevPayload() modelsDevFile {
 					StructuredOutput: true,
 					// ollama-cloud models have NO cost block (0 of 43 as of 2026-06-21).
 				},
+				"deepseek-v4-flash": {
+					Name:        "DeepSeek V4 Flash",
+					ReleaseDate: "2026-04-24",
+					Limit:       modelsDevLimit{Context: 128000},
+				},
+				"deepseek-v4-flash:0731": {
+					Name:        "DeepSeek V4 Flash 0731",
+					ReleaseDate: "2026-07-31",
+					Limit:       modelsDevLimit{Context: 256000},
+				},
 				"minimax-m3": {
 					Name:  "minimax-m3",
 					Limit: modelsDevLimit{Context: 1000000, Output: 8192},
@@ -287,6 +297,39 @@ func TestModelsDevClient_EnrichRealOllamaCloudShape(t *testing.T) {
 	}
 	if !e.StructuredOutput {
 		t.Error("StructuredOutput should be true")
+	}
+}
+
+func TestModelsDevClient_EnrichPrefersVersionedCatalogKey(t *testing.T) {
+	newCacheDir(t)
+	payload := writeModelsDevPayload(t, sampleModelsDevPayload())
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(payload)
+	}))
+	defer server.Close()
+
+	client := newModelsDevClient(server.Client())
+	client.sourceURL = server.URL
+	enriched, err := client.Enrich(
+		context.Background(),
+		Provider{Type: "ollama", Name: "ollama-cloud", BaseURL: "https://ollama.com"},
+		[]Model{{ProviderModel: "deepseek-v4-flash:0731", Source: sourceOllama}},
+	)
+	if err != nil {
+		t.Fatalf("Enrich: %v", err)
+	}
+	if len(enriched) != 1 {
+		t.Fatalf("enriched models = %d, want 1", len(enriched))
+	}
+	if got := enriched[0].ProviderModel; got != "deepseek-v4-flash:0731" {
+		t.Errorf("ProviderModel = %q, want %q", got, "deepseek-v4-flash:0731")
+	}
+	if got := enriched[0].Name; got != "DeepSeek V4 Flash 0731" {
+		t.Errorf("Name = %q, want %q", got, "DeepSeek V4 Flash 0731")
+	}
+	wantRelease := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
+	if got := enriched[0].ReleaseDate; !got.Equal(wantRelease) {
+		t.Errorf("ReleaseDate = %v, want %v", got, wantRelease)
 	}
 }
 
