@@ -507,6 +507,59 @@ func TestAgentRunSession_ProgressShowsPlaceholderAndEditsFinal(t *testing.T) {
 	)
 }
 
+func TestAgentRunSession_TableFinalReplacesPlaceholder(t *testing.T) {
+	withTelegramProgressDurations(
+		5*time.Millisecond,
+		time.Hour,
+		time.Hour,
+		5*time.Millisecond,
+		func() {
+			channel := &fakeAgentRunChannel{}
+			session := newAgentRunSession(channel, "123", "42", progressModeProgress)
+			ctx := context.Background()
+
+			session.start(ctx)
+			waitForCondition(t, 200*time.Millisecond, func() bool {
+				channel.mu.Lock()
+				defer channel.mu.Unlock()
+				return len(channel.sendMessageTexts) == 1
+			})
+
+			finalText := "| name | value |\n|---|---|\n| q15 | ok |"
+			session.Finish(ctx, agent.ReplyResult{Text: finalText})
+
+			channel.mu.Lock()
+			defer channel.mu.Unlock()
+			if len(channel.deletedMessages) != 1 || channel.deletedMessages[0] != "1" {
+				t.Fatalf("deletedMessages = %#v, want [1]", channel.deletedMessages)
+			}
+			if len(channel.sendTexts) != 1 || channel.sendTexts[0] != finalText {
+				t.Fatalf("sendTexts = %#v, want [%q]", channel.sendTexts, finalText)
+			}
+			if len(channel.editTexts) != 0 {
+				t.Fatalf("editTexts = %#v, want none", channel.editTexts)
+			}
+		},
+	)
+}
+
+func TestAgentRunSession_TableFinalPreservesPlaceholderOnSendFailure(t *testing.T) {
+	channel := &fakeAgentRunChannel{sendErr: errors.New("send failed")}
+	session := newAgentRunSession(channel, "123", "42", progressModeQuiet)
+
+	session.sendFinalText(
+		context.Background(),
+		"status-message",
+		"| name | value |\n|---|---|\n| q15 | ok |",
+	)
+
+	channel.mu.Lock()
+	defer channel.mu.Unlock()
+	if len(channel.deletedMessages) != 0 {
+		t.Fatalf("deletedMessages = %#v, want none", channel.deletedMessages)
+	}
+}
+
 func TestAgentRunSession_QuietWaitsForHardStall(t *testing.T) {
 	withTelegramProgressDurations(
 		5*time.Millisecond,

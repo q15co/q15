@@ -444,6 +444,15 @@ func markdownToSegments(text string) []contentSegment {
 	return segments
 }
 
+func hasMarkdownTable(text string) bool {
+	for _, segment := range markdownToSegments(text) {
+		if segment.kind == segmentTable {
+			return true
+		}
+	}
+	return false
+}
+
 // restoreCodeBlockPlaceholders turns fenced-code placeholders back into
 // fenced blocks so restored prose can be re-parsed and re-chunked safely.
 func restoreCodeBlockPlaceholders(text string, codes []string) string {
