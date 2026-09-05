@@ -3,6 +3,7 @@ package modelcatalog
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -17,6 +18,18 @@ func (f *fakeCatalog) Discover(_ context.Context, p Provider) ([]Model, error) {
 		return nil, err
 	}
 	return f.models[p.Name], nil
+}
+
+// callCountingCatalog wraps fakeCatalog to count how many times Discover is
+// invoked. It is used to verify that Run does not refresh more than expected.
+type callCountingCatalog struct {
+	fakeCatalog
+	calls int64
+}
+
+func (c *callCountingCatalog) Discover(ctx context.Context, p Provider) ([]Model, error) {
+	atomic.AddInt64(&c.calls, 1)
+	return c.fakeCatalog.Discover(ctx, p)
 }
 
 func TestRegistry_SnapshotReflectsSuccesses(t *testing.T) {
@@ -145,5 +158,36 @@ func TestRegistry_IsEmpty(t *testing.T) {
 	reg := New(nil, nil, time.Hour, time.Second)
 	if !reg.IsEmpty() {
 		t.Fatal("empty registry should report IsEmpty")
+	}
+}
+
+// TestRegistry_RunDoesNotRefreshInitially models the agent startup path: the
+// caller refreshes synchronously to validate the roster, then starts Run in the
+// background. Run must not perform its own initial refresh — it only ticks.
+func TestRegistry_RunDoesNotRefreshInitially(t *testing.T) {
+	cat := &callCountingCatalog{fakeCatalog: fakeCatalog{models: map[string][]Model{
+		"a": {{ProviderModel: "m"}},
+	}}}
+	reg := New([]Provider{{Name: "a", Type: "ollama"}}, cat, time.Hour, time.Second)
+
+	reg.Refresh(context.Background())
+	if got := atomic.LoadInt64(&cat.calls); got != 1 {
+		t.Fatalf("initial Refresh calls = %d, want 1", got)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = reg.Run(ctx)
+	}()
+
+	// Let Run start up; with an hour-long interval it should not tick.
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	if got := atomic.LoadInt64(&cat.calls); got != 1 {
+		t.Fatalf("after Run: calls = %d, want 1 (Run must not refresh on its own)", got)
 	}
 }
