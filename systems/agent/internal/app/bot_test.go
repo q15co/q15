@@ -12,6 +12,7 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/modelcatalog"
 	"github.com/q15co/q15/systems/agent/internal/modelselection"
 	q15tools "github.com/q15co/q15/systems/agent/internal/tools"
+	"github.com/q15co/q15/systems/agent/internal/turnctx"
 )
 
 func TestCognitionJobsRegistersBuiltInCognitionJobs(t *testing.T) {
@@ -77,10 +78,13 @@ func TestSwitchModelUpdatesNextModelTurnPrompt(t *testing.T) {
 		"base",
 		nil,
 		0,
-		func() string { return renderCurrentModelPrompt(registry, selection, store) },
+		buildInteractiveSystemTextHints(registry, selection, store)...,
 	)
 
-	out, err := loop.Reply(context.Background(), conversation.UserMessage("switch"), nil)
+	runCtx := turnctx.WithOrigin(context.Background(), turnctx.Origin{
+		Channel: bus.ChannelTelegram,
+	})
+	out, err := loop.Reply(runCtx, conversation.UserMessage("switch"), nil)
 	if err != nil {
 		t.Fatalf("Reply() error = %v", err)
 	}
@@ -102,5 +106,11 @@ func TestSwitchModelUpdatesNextModelTurnPrompt(t *testing.T) {
 	if !strings.Contains(secondPrompt, `provider: "q"`) ||
 		!strings.Contains(secondPrompt, `model: "new"`) {
 		t.Fatalf("second prompt missing updated selection:\n%s", secondPrompt)
+	}
+	for i, prompt := range []string{firstPrompt, secondPrompt} {
+		if !strings.Contains(prompt, `<response_format channel="telegram">`) ||
+			!strings.Contains(prompt, "spoilers (`||text||`)") {
+			t.Fatalf("model call %d missing Telegram response format:\n%s", i, prompt)
+		}
 	}
 }

@@ -392,7 +392,7 @@ func TestEngineRunReadsModelRefSourceEachModelTurn(t *testing.T) {
 	if _, err := engine.Run(context.Background(), EngineRequest{
 		Messages:         []conversation.Message{conversation.SystemMessage("prompt")},
 		UseTools:         true,
-		SystemTextSource: func() string { return systemText },
+		SystemTextSource: func(context.Context) string { return systemText },
 	}); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
