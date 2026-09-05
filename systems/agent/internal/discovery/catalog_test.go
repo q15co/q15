@@ -6,8 +6,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-
-	"github.com/q15co/q15/systems/agent/internal/modelcatalog"
 )
 
 func TestNewCatalog_OllamaEndToEndWithEnrichment(t *testing.T) {
@@ -98,11 +96,11 @@ func TestNewCatalog_OllamaEndToEndWithEnrichment(t *testing.T) {
 			t.Fatal("models.dev was never fetched")
 		}
 
-		byKey := map[string]Model{}
+		byProviderModel := map[string]Model{}
 		for _, m := range models {
-			byKey[modelcatalog.ModelKey(m.ProviderModel)] = m
+			byProviderModel[m.ProviderModel] = m
 		}
-		kimi := byKey["kimi-k2"]
+		kimi := byProviderModel["kimi-k2:cloud"]
 		if kimi.MaxContextTokens != 256000 {
 			t.Errorf("kimi MaxContextTokens = %d, want 256000", kimi.MaxContextTokens)
 		}

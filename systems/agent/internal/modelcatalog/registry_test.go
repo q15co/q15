@@ -143,14 +143,52 @@ func TestRegistry_RefreshReplacesSnapshotAtomically(t *testing.T) {
 func TestRegistry_DeriveRef(t *testing.T) {
 	tests := []struct{ in, want string }{
 		{"kimi-k2.7-code:cloud", "kimi-k2.7-code"},
+		{"kimi-k2.7-code:local", "kimi-k2.7-code"},
+		{"deepseek-v4-flash:0731", "deepseek-v4-flash-0731"},
+		{"deepseek-v4-flash:0731-cloud", "deepseek-v4-flash-0731"},
+		{"gpt-oss:20b", "gpt-oss-20b"},
+		{"gemma4:31b", "gemma4-31b"},
+		{"mistral-large-3:675b", "mistral-large-3-675b"},
+		{"a:b:c", "a-b-c"},
 		{"org/gpt-4o", "org-gpt-4o"},
 		{"plain", "plain"},
-		{"  spaced  ", "spaced"},
+		{"  Spaced  ", "spaced"},
 	}
 	for _, tc := range tests {
 		if got := deriveRef(tc.in); got != tc.want {
 			t.Errorf("deriveRef(%q) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+func TestRegistry_VersionedModelsHaveDistinctReachableRefs(t *testing.T) {
+	cat := &fakeCatalog{models: map[string][]Model{
+		"ollama-cloud": {
+			{ProviderModel: "deepseek-v4-flash"},
+			{ProviderModel: "deepseek-v4-flash:0731"},
+		},
+	}}
+	reg := New(
+		[]Provider{{Name: "ollama-cloud", Type: "ollama"}},
+		cat,
+		time.Hour,
+		time.Second,
+	)
+	reg.Refresh(context.Background())
+
+	oldModel, ok := reg.Lookup("ollama-cloud", "deepseek-v4-flash")
+	if !ok {
+		t.Fatal("unversioned model ref is not reachable")
+	}
+	if oldModel.ProviderModel != "deepseek-v4-flash" {
+		t.Errorf("unversioned ref resolved to %q", oldModel.ProviderModel)
+	}
+	newModel, ok := reg.Lookup("ollama-cloud", "deepseek-v4-flash-0731")
+	if !ok {
+		t.Fatal("versioned model ref is not reachable")
+	}
+	if newModel.ProviderModel != "deepseek-v4-flash:0731" {
+		t.Errorf("versioned ref resolved to %q", newModel.ProviderModel)
 	}
 }
 

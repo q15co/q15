@@ -40,9 +40,11 @@ type Model struct {
 	// ProviderModel is the provider-side model identifier (e.g.
 	// "kimi-k2.7-code:cloud" for an Ollama model including its tag).
 	ProviderModel string
-	// Ref is the agent-side model reference: the tag-stripped, slash-normalized
-	// provider model id (e.g. "kimi-k2.7-code"). It is what the engine, the
-	// selection planner, and the agent.model config value use.
+	// Ref is the agent-side model reference: deployment markers are stripped,
+	// version tags are preserved with normalized separators, and slashes become
+	// hyphens (e.g. "kimi-k2.7-code:cloud" becomes "kimi-k2.7-code", while
+	// "gpt-oss:20b" becomes "gpt-oss-20b"). It is what the engine, the selection
+	// planner, and persisted runtime selections use.
 	Ref string
 	// Name is a human-readable label. When no label is known it equals
 	// ProviderModel.
