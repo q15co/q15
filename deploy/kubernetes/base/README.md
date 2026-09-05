@@ -93,9 +93,9 @@ Canonical runtime images:
 
 Published runtime tags today:
 
-- `main`
-- `sha-<full-sha>`
-- `sha-<short-sha>` (convenience alias)
+- `main` for the latest successful component build
+- `stable` for the latest verified three-image release
+- `YYYY.MM.DD.<run-number>` for one immutable release
 
 The checked-in base keeps the moving `:main` tags as placeholders:
 
@@ -103,15 +103,14 @@ The checked-in base keeps the moving `:main` tags as placeholders:
 - `ghcr.io/q15co/q15-exec:main`
 - `ghcr.io/q15co/q15-proxy:main`
 
-Downstream overlays should resolve one `ghcr.io/q15co/q15-agent:release-main` stack release and
-replace those placeholders with the three exact OCI digest references recorded in it. Use the
-immutable `release-<full-sha>` record for an explicit rollout or rollback. Treat `main` as a
-fast-moving integration tag only, and do not deploy directly from the moving release pointer.
+Downstream overlays should replace those placeholders with `stable` for normal updates or the same
+immutable DateVer on all three images for a pinned rollout or rollback. Treat `main` as a
+fast-moving integration tag only.
 
 Typical overlay responsibilities:
 
 - Choose the namespace for one stack instance
-- Pin image names and tags with `images`
+- Pin image names and the synchronized release tag with `images`
 - Replace the generated config files or patch them with environment-specific values
 - Provide Secret material for that stack
 - Define the required PVCs, including StorageClasses, access modes, and retention policy suitable
@@ -119,9 +118,9 @@ Typical overlay responsibilities:
 
 Update and rollback guidance:
 
-- Update by resolving a release record, changing all affected digest pins in one deployment commit,
-  and rolling the stack.
-- Roll back by restoring the previous release's digest tuple while preserving the existing PVCs.
+- Update by selecting the synchronized `stable` tag and rolling the stack.
+- Roll back by restoring the previous DateVer on all three images while preserving the existing
+  PVCs.
 - Do not rotate or drop the contract-required PVCs during normal upgrades or downgrades.
 - The checked-in `q15-exec` Deployment bootstraps a fresh `q15-exec-nix` PVC in an init container
   when the mounted volume is missing the image-provided Nix runtime markers. That preserves a

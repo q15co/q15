@@ -10,7 +10,8 @@ permissions:
 
 concurrency:
   group: publish-main-images-${{ github.ref }}
-  cancel-in-progress: true
+  # Let a release finish moving all three stable tags before the next run.
+  cancel-in-progress: false
 
 jobs:
   verify:
@@ -108,7 +109,7 @@ jobs:
             echo "This run is stale; current main is ${REMOTE_MAIN_SHA}. Skipping publication."
           else
             BASE_SHA=""
-            if docker buildx imagetools inspect --raw ghcr.io/q15co/q15-agent:release-main \
+            if docker buildx imagetools inspect --raw ghcr.io/q15co/q15-agent:stable \
               > /tmp/previous_release.json 2> /tmp/previous_release_error; then
               RELEASED_SHA="$(jq -r '.annotations["io.q15.release.revision"] // empty' /tmp/previous_release.json)"
               if [[ "${RELEASED_SHA}" =~ ^[0-9a-f]{40}$ ]] &&
@@ -120,7 +121,7 @@ jobs:
                 echo "Published release revision is not a usable ancestor; using push metadata." >&2
               fi
             else
-              echo "No usable release pointer found; using push metadata to bootstrap it."
+              echo "No usable stable tag found; using push metadata to bootstrap it."
               cat /tmp/previous_release_error >&2
             fi
 
@@ -153,9 +154,8 @@ jobs:
           while IFS= read -r file; do
             [[ -n "${file}" ]] || continue
 
-            # Re-publish the release pointer when its assembly logic changes,
-            # even when no runtime image needs rebuilding. This also seeds the
-            # first release manifest after introducing the release pipeline.
+            # Re-publish the synchronized release tags when their assembly
+            # logic changes, even when no runtime image needs rebuilding.
             if [[ ${file} == ".github/workflows/publish-main-images.yml" ||
               ${file} == "scripts/image-build-impact.sh" ||
               ${file} == "scripts/image-build-impact-test.sh" ]]; then
@@ -344,8 +344,6 @@ jobs:
             latest=false
           tags: |
             type=raw,value=main
-            type=raw,value=sha-${{ github.sha }}
-            type=sha,format=short,prefix=sha-
 
       - name: Create multi-arch manifest
         env:
@@ -407,10 +405,9 @@ jobs:
       - name: Inspect published manifest
         run: |
           docker buildx imagetools inspect "${{ matrix.image }}:main"
-          docker buildx imagetools inspect "${{ matrix.image }}:sha-${{ github.sha }}"
 
   release:
-    name: Publish atomic stack release
+    name: Publish synchronized release tags
     runs-on: ubuntu-24.04
     needs: [verify, detect-changes, publish]
     if: >-
@@ -440,20 +437,26 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Resolve and publish release manifest
+      - name: Publish stable and DateVer tags
         id: release
         run: |
           set -euo pipefail
 
-          current_main_sha="$(git ls-remote "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git" refs/heads/main | awk '{ print $1 }')"
-          [[ -n "${current_main_sha}" ]] || {
-            echo "could not resolve the current main branch head" >&2
-            exit 1
+          release_version="$(date -u +%Y.%m.%d).${GITHUB_RUN_NUMBER}"
+          [[ "${release_version}" =~ ^[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.[0-9]+$ ]]
+
+          assert_current_main() {
+            local current_main_sha
+            current_main_sha="$(git ls-remote "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git" refs/heads/main | awk '{ print $1 }')"
+            [[ -n "${current_main_sha}" ]] || {
+              echo "could not resolve the current main branch head" >&2
+              exit 1
+            }
+            if [[ "${current_main_sha}" != "${GITHUB_SHA}" ]]; then
+              echo "refusing to publish stale release ${GITHUB_SHA}; current main is ${current_main_sha}" >&2
+              exit 1
+            fi
           }
-          if [[ "${current_main_sha}" != "${GITHUB_SHA}" ]]; then
-            echo "refusing to publish stale release ${GITHUB_SHA}; current main is ${current_main_sha}" >&2
-            exit 1
-          fi
 
           inspect_raw() {
             local ref="$1"
@@ -478,23 +481,11 @@ jobs:
             return "${status}"
           }
 
-          resolve_digest() {
-            local component="$1"
-            local image="$2"
-            local changed="$3"
-            local previous_digest="$4"
-            local ref
-            local raw_file="/tmp/${component}-source-index.json"
+          raw_digest() {
+            printf 'sha256:%s\n' "$(sha256sum "$1" | cut -d ' ' -f 1)"
+          }
 
-            if [[ "${changed}" == true ]]; then
-              ref="${image}:sha-${GITHUB_SHA}"
-            elif [[ -n "${previous_digest}" ]]; then
-              ref="${image}@${previous_digest}"
-            else
-              ref="${image}:main"
-            fi
-
-            inspect_raw "${ref}" "${raw_file}"
+          validate_platforms() {
             jq -e '
               .schemaVersion == 2 and
               .mediaType == "application/vnd.oci.image.index.v1+json" and
@@ -503,9 +494,7 @@ jobs:
                 select(.platform.os == "linux") |
                 .platform.architecture
               ] | unique | sort) == ["amd64", "arm64"]
-            ' "${raw_file}" >/dev/null
-
-            printf 'sha256:%s\n' "$(sha256sum "${raw_file}" | cut -d ' ' -f 1)"
+            ' "$1" >/dev/null
           }
 
           retry_create() {
@@ -513,7 +502,7 @@ jobs:
             local status=1
 
             for attempt in 1 2 3; do
-              echo "publishing release manifest (attempt ${attempt}/3)" >&2
+              echo "publishing release tag (attempt ${attempt}/3)" >&2
               if timeout --foreground 2m docker buildx imagetools create "$@"; then
                 return 0
               else
@@ -527,87 +516,101 @@ jobs:
             return "${status}"
           }
 
-          previous_agent_digest=""
-          previous_exec_digest=""
-          previous_proxy_digest=""
-          previous_release_file="/tmp/previous-release-index.json"
-          if inspect_raw "${AGENT_IMAGE}:release-main" "${previous_release_file}"; then
-            if jq -e '.annotations["io.q15.release.schema"] == "1"' "${previous_release_file}" >/dev/null; then
-              previous_agent_digest="$(jq -er '.annotations["io.q15.release.agent"]' "${previous_release_file}")"
-              previous_exec_digest="$(jq -er '.annotations["io.q15.release.exec"]' "${previous_release_file}")"
-              previous_proxy_digest="$(jq -er '.annotations["io.q15.release.proxy"]' "${previous_release_file}")"
+          resolve_main_digest() {
+            local component="$1"
+            local image="$2"
+            local raw_file="/tmp/${component}-main-index.json"
+
+            inspect_raw "${image}:main" "${raw_file}"
+            validate_platforms "${raw_file}"
+            raw_digest "${raw_file}"
+          }
+
+          publish_datever() {
+            local component="$1"
+            local image="$2"
+            local source_digest="$3"
+            local release_ref="${image}:${release_version}"
+            local raw_file="/tmp/${component}-datever-index.json"
+            local metadata_file="/tmp/${component}-datever-metadata.json"
+            local release_digest
+
+            if inspect_raw "${release_ref}" "${raw_file}"; then
+              jq -e \
+                --arg version "${release_version}" \
+                --arg revision "${GITHUB_SHA}" \
+                --arg component "${component}" \
+                --arg source_digest "${source_digest}" '
+                  .annotations["io.q15.release.version"] == $version and
+                  .annotations["io.q15.release.revision"] == $revision and
+                  .annotations["io.q15.release.component"] == $component and
+                  .annotations["io.q15.release.source-digest"] == $source_digest
+                ' "${raw_file}" >/dev/null || {
+                  echo "immutable tag ${release_ref} already exists with different release metadata" >&2
+                  exit 1
+                }
+              validate_platforms "${raw_file}"
             else
-              echo "existing release pointer has an unsupported schema" >&2
-              exit 1
+              retry_create \
+                --tag "${release_ref}" \
+                --annotation "index:org.opencontainers.image.source=https://github.com/q15co/q15" \
+                --annotation "index:io.q15.release.version=${release_version}" \
+                --annotation "index:io.q15.release.revision=${GITHUB_SHA}" \
+                --annotation "index:io.q15.release.component=${component}" \
+                --annotation "index:io.q15.release.source-digest=${source_digest}" \
+                --metadata-file "${metadata_file}" \
+                "${image}@${source_digest}"
+              inspect_raw "${release_ref}" "${raw_file}"
+              validate_platforms "${raw_file}"
+              release_digest="$(jq -er '.["containerimage.descriptor"].digest' "${metadata_file}")"
+              [[ "$(raw_digest "${raw_file}")" == "${release_digest}" ]]
             fi
-          else
-            echo "No previous stack release exists; bootstrapping unchanged components from main."
-          fi
 
-          agent_digest="$(resolve_digest agent "${AGENT_IMAGE}" "${AGENT_CHANGED}" "${previous_agent_digest}")"
-          exec_digest="$(resolve_digest exec "${EXEC_IMAGE}" "${EXEC_CHANGED}" "${previous_exec_digest}")"
-          proxy_digest="$(resolve_digest proxy "${PROXY_IMAGE}" "${PROXY_CHANGED}" "${previous_proxy_digest}")"
+            raw_digest "${raw_file}" > "/tmp/${component}-release-digest"
+          }
 
-          release_tag="release-${GITHUB_SHA}"
-          release_ref="${AGENT_IMAGE}:${release_tag}"
-          metadata_file="/tmp/release-metadata.json"
+          assert_current_main
+          agent_digest="$(resolve_main_digest agent "${AGENT_IMAGE}")"
+          exec_digest="$(resolve_main_digest exec "${EXEC_IMAGE}")"
+          proxy_digest="$(resolve_main_digest proxy "${PROXY_IMAGE}")"
 
-          retry_create \
-            --tag "${release_ref}" \
-            --annotation "index:org.opencontainers.image.source=https://github.com/q15co/q15" \
-            --annotation "index:io.q15.release.schema=1" \
-            --annotation "index:io.q15.release.revision=${GITHUB_SHA}" \
-            --annotation "index:io.q15.release.agent=${agent_digest}" \
-            --annotation "index:io.q15.release.exec=${exec_digest}" \
-            --annotation "index:io.q15.release.proxy=${proxy_digest}" \
-            --metadata-file "${metadata_file}" \
-            "${AGENT_IMAGE}@${agent_digest}"
+          # Publish and verify every immutable DateVer before moving any
+          # stable tag. Unchanged components are retagged without rebuilding.
+          publish_datever agent "${AGENT_IMAGE}" "${agent_digest}"
+          publish_datever exec "${EXEC_IMAGE}" "${exec_digest}"
+          publish_datever proxy "${PROXY_IMAGE}" "${proxy_digest}"
 
-          release_digest="$(jq -er '.["containerimage.descriptor"].digest' "${metadata_file}")"
+          assert_current_main
+          # q15-agent moves last because its stable annotation is the
+          # completed-release marker used by the next change-detection run.
+          for specification in \
+            "exec|${EXEC_IMAGE}" \
+            "proxy|${PROXY_IMAGE}" \
+            "agent|${AGENT_IMAGE}"; do
+            IFS='|' read -r component image <<< "${specification}"
+            release_digest="$(< "/tmp/${component}-release-digest")"
+            retry_create --tag "${image}:stable" "${image}@${release_digest}"
+            inspect_raw "${image}:stable" "/tmp/${component}-stable-index.json"
+            [[ "$(raw_digest "/tmp/${component}-stable-index.json")" == "${release_digest}" ]]
+          done
 
-          # The immutable release is complete before the single moving pointer
-          # advances, so consumers can resolve the whole stack atomically.
-          retry_create \
-            --tag "${AGENT_IMAGE}:release-main" \
-            "${AGENT_IMAGE}@${release_digest}"
-
-          pointer_file="/tmp/release-main-index.json"
-          inspect_raw "${AGENT_IMAGE}:release-main" "${pointer_file}"
-          jq -e \
-            --arg revision "${GITHUB_SHA}" \
-            --arg agent "${agent_digest}" \
-            --arg exec "${exec_digest}" \
-            --arg proxy "${proxy_digest}" '
-              .annotations["io.q15.release.schema"] == "1" and
-              .annotations["io.q15.release.revision"] == $revision and
-              .annotations["io.q15.release.agent"] == $agent and
-              .annotations["io.q15.release.exec"] == $exec and
-              .annotations["io.q15.release.proxy"] == $proxy
-            ' "${pointer_file}" >/dev/null
-
+          echo "release-version=${release_version}" >> "${GITHUB_OUTPUT}"
           {
-            echo "release-ref=${release_ref}"
-            echo "release-digest=${release_digest}"
-            echo "agent-digest=${agent_digest}"
-            echo "exec-digest=${exec_digest}"
-            echo "proxy-digest=${proxy_digest}"
-          } >> "${GITHUB_OUTPUT}"
-
-          {
-            echo "## q15 stack release"
+            echo "## q15 ${release_version}"
             echo
-            echo "| Component | Digest | Rebuilt |"
-            echo "| --- | --- | --- |"
-            echo "| q15-agent | \`${agent_digest}\` | \`${AGENT_CHANGED}\` |"
-            echo "| q15-exec | \`${exec_digest}\` | \`${EXEC_CHANGED}\` |"
-            echo "| q15-proxy | \`${proxy_digest}\` | \`${PROXY_CHANGED}\` |"
-            echo
-            echo "Immutable release: \`${release_ref}\`"
-            echo
-            echo "Moving pointer: \`${AGENT_IMAGE}:release-main\`"
+            echo "| Component | Source digest | Rebuilt | Published tags |"
+            echo "| --- | --- | --- | --- |"
+            echo "| q15-agent | \`${agent_digest}\` | \`${AGENT_CHANGED}\` | \`stable\`, \`${release_version}\` |"
+            echo "| q15-exec | \`${exec_digest}\` | \`${EXEC_CHANGED}\` | \`stable\`, \`${release_version}\` |"
+            echo "| q15-proxy | \`${proxy_digest}\` | \`${PROXY_CHANGED}\` | \`stable\`, \`${release_version}\` |"
           } >> "${GITHUB_STEP_SUMMARY}"
 
-      - name: Inspect published release
+      - name: Inspect synchronized release tags
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.release-version }}
         run: |
-          docker buildx imagetools inspect "${{ steps.release.outputs.release-ref }}"
-          docker buildx imagetools inspect "${AGENT_IMAGE}:release-main"
+          set -euo pipefail
+          for image in "${AGENT_IMAGE}" "${EXEC_IMAGE}" "${PROXY_IMAGE}"; do
+            docker buildx imagetools inspect "${image}:${RELEASE_VERSION}"
+            docker buildx imagetools inspect "${image}:stable"
+          done

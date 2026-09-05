@@ -113,20 +113,14 @@ Runtime services are published as OCI images to GHCR on verified pushes to `main
 
 Published runtime tags:
 
-- `main`
-- `sha-<full-sha>`
-- `sha-<short-sha>` (convenience alias)
+- `main` tracks the latest successful component build.
+- `stable` tracks the latest verified three-image release.
+- `YYYY.MM.DD.<run-number>` identifies one immutable release, for example `2026.09.05.164`.
 
-Every runtime-changing push also publishes an atomic stack release as an annotated OCI index in the
-`q15-agent` package:
-
-- `release-<full-sha>` is the immutable release record.
-- `release-main` moves only after the complete release record has been published and verified.
-
-The release record contains the exact multi-platform digests for `q15-agent`, `q15-exec`, and
-`q15-proxy`. Unchanged services retain their previous digest, so the pipeline builds only services
-whose source or contract dependency changed. Consumers resolve one release record, then pin all
-three service images by digest. They never run from `main` or `release-main` directly.
+The release job publishes the same DateVer on `q15-agent`, `q15-exec`, and `q15-proxy`, verifies all
+three multi-platform indexes, and then moves each package's `stable` tag to that release. Unchanged
+services reuse their existing image index and are retagged without rebuilding. Deployments pull
+`stable` only after the publish workflow succeeds.
 
 The build dependency graph is:
 
@@ -136,9 +130,8 @@ The build dependency graph is:
 - Workspace-level Go dependency changes rebuild all three services.
 - Docker build-context policy changes rebuild all three services.
 
-This separates component build identity from stack compatibility: `sha-*` identifies a component
-build, while `release-*` records one compatible three-image deployment. Treat `main` as a moving
-integration tag only.
+This separates component build identity from stack compatibility: `main` is a moving integration
+tag, while a synchronized DateVer identifies one compatible three-image deployment.
 
 GHCR runtime images are intended to be publicly pullable without registry auth for ordinary
 self-hosted consumption. Maintain the GitHub package visibility for `q15-agent`, `q15-exec`, and
@@ -514,8 +507,7 @@ Supporting notes live in [deploy/compose/README.md](/deploy/compose/README.md).
 This deployment-oriented example:
 
 - uses `image:` only, with no `build:`
-- accepts per-service tags (`Q15_AGENT_TAG`, `Q15_EXEC_TAG`, `Q15_PROXY_TAG`) so each service can be
-  pinned independently; defaults to `main` when a tag is not set
+- accepts one `Q15_IMAGE_TAG` for all q15 services and defaults to `stable`
 - mounts persistent named volumes for `/workspace`, `/memory`, `/skills`, `/nix`,
   `/var/lib/q15/agent`, and `/var/lib/q15/proxy`
 - mounts `agent-config.yaml`, `proxy-policy.yaml`, and `auth.json` at the exact runtime paths the
@@ -527,10 +519,8 @@ Bring it up with:
 
 ```bash
 make compose-secrets-init
-Q15_AGENT_TAG=sha-<short-sha> \
-Q15_EXEC_TAG=sha-<short-sha> \
-Q15_PROXY_TAG=sha-<short-sha> \
-  docker compose -f deploy/compose/docker-compose.image-first.yml up -d
+Q15_IMAGE_TAG=stable docker compose \
+  -f deploy/compose/docker-compose.image-first.yml up -d
 ```
 
 `/workspace` may start empty in this example, but it is expected to persist long-term for one stack.
@@ -569,8 +559,8 @@ It expects a separate deployment repo or overlay to provide:
 - Secrets
 - PVCs
 
-For long-running deployments, replace those placeholder tags with one pinned `sha-<short-sha>` tag
-across all three services. Treat `main` as a moving integration tag only.
+For long-running deployments, use `stable` for normal updates or replace the placeholders with one
+immutable DateVer across all three services. Treat `main` as a moving integration tag only.
 
 The supported Kubernetes model is one namespace per long-running q15 stack. One stack contains:
 
@@ -616,10 +606,7 @@ The intended workflow is:
 
 For Compose and Kubernetes alike:
 
-- Update by changing the pinned image tags (`Q15_AGENT_TAG`, `Q15_EXEC_TAG`, `Q15_PROXY_TAG`) in the
-  deployment repo and rolling the stack.
-- Roll back by restoring the previous pinned `sha-<short-sha>` tag for the affected service(s).
+- Update by pulling the synchronized `stable` tag and rolling the stack.
+- Roll back by selecting the previous `YYYY.MM.DD.<run-number>` tag across all three services.
 - Preserve the existing persistent storage for `/workspace`, `/memory`, `/skills`, `/nix`,
   `/var/lib/q15/agent`, and `/var/lib/q15/proxy` during normal upgrades and downgrades.
-- If release tags are added later, treat them the same way as `sha-*`: pin one immutable tag per
-  service and keep rollback history in the deployment repo.
