@@ -329,6 +329,185 @@ func TestSendText_SplitsLongMessages(t *testing.T) {
 	}
 }
 
+func TestSendTextMessage_ChunksLongProse(t *testing.T) {
+	prevLimit := telegramTextChunkRunes
+	telegramTextChunkRunes = 8
+	defer func() {
+		telegramTextChunkRunes = prevLimit
+	}()
+
+	caller := &mockAPICaller{}
+	ch := newTestChannelWithCaller(t, caller)
+
+	messageID, err := ch.SendTextMessage(t.Context(), "12345", "alpha beta")
+	if err != nil {
+		t.Fatalf("SendTextMessage() error = %v", err)
+	}
+
+	if len(caller.calls) != 2 {
+		t.Fatalf("calls = %d, want 2", len(caller.calls))
+	}
+	if got := caller.calls[0].body["text"]; got != "alpha" {
+		t.Fatalf("first chunk text = %#v, want %q", got, "alpha")
+	}
+	if got := caller.calls[1].body["text"]; got != "beta" {
+		t.Fatalf("second chunk text = %#v, want %q", got, "beta")
+	}
+	if messageID != "0" {
+		t.Fatalf("last message id = %q, want default 0", messageID)
+	}
+}
+
+func TestSendTextMessage_RendersTableViaRichMessage(t *testing.T) {
+	caller := &mockAPICaller{
+		responses: []*ta.Response{
+			{Ok: true, Result: []byte(`{"message_id": 11}`)},
+			{Ok: true, Result: []byte(`{"message_id": 12}`)},
+			{Ok: true, Result: []byte(`{"message_id": 13}`)},
+		},
+	}
+	ch := newTestChannelWithCaller(t, caller)
+
+	text := "Before.\n\n| name | value |\n|---|---:|\n| `q15` | **ok** |\n\nAfter."
+	messageID, err := ch.SendTextMessage(t.Context(), "12345", text)
+	if err != nil {
+		t.Fatalf("SendTextMessage() error = %v", err)
+	}
+	if messageID != "13" {
+		t.Fatalf("last message id = %q, want 13", messageID)
+	}
+
+	if len(caller.calls) != 3 {
+		t.Fatalf("calls = %d, want 3", len(caller.calls))
+	}
+	if !strings.HasSuffix(caller.calls[0].url, "/sendMessage") {
+		t.Fatalf("first URL = %q, want /sendMessage", caller.calls[0].url)
+	}
+	if got := caller.calls[0].body["text"]; got != "Before." {
+		t.Fatalf("prose before table = %#v, want %q", got, "Before.")
+	}
+
+	if !strings.HasSuffix(caller.calls[1].url, "/sendRichMessage") {
+		t.Fatalf("table URL = %q, want /sendRichMessage", caller.calls[1].url)
+	}
+	rich, ok := caller.calls[1].body["rich_message"].(map[string]any)
+	if !ok {
+		t.Fatalf("rich_message = %#v", caller.calls[1].body["rich_message"])
+	}
+	blocks, ok := rich["blocks"].([]any)
+	if !ok || len(blocks) != 1 {
+		t.Fatalf("blocks = %#v", rich["blocks"])
+	}
+	block, ok := blocks[0].(map[string]any)
+	if !ok || block["type"] != "table" {
+		t.Fatalf("block = %#v", blocks[0])
+	}
+	if block["is_bordered"] != true || block["is_striped"] != true {
+		t.Fatalf("table flags = %#v", block)
+	}
+	rows, ok := block["cells"].([]any)
+	if !ok || len(rows) != 2 {
+		t.Fatalf("cells = %#v", block["cells"])
+	}
+
+	header, ok := rows[0].([]any)
+	if !ok || len(header) != 2 {
+		t.Fatalf("header row = %#v", rows[0])
+	}
+	nameCell, ok := header[0].(map[string]any)
+	if !ok || nameCell["is_header"] != true || nameCell["text"] != "name" ||
+		nameCell["align"] != "left" {
+		t.Fatalf("header cell 0 = %#v", header[0])
+	}
+	valueCell, ok := header[1].(map[string]any)
+	if !ok || valueCell["align"] != "right" {
+		t.Fatalf("header cell 1 = %#v", header[1])
+	}
+
+	body, ok := rows[1].([]any)
+	if !ok || len(body) != 2 {
+		t.Fatalf("body row = %#v", rows[1])
+	}
+	codeCell, ok := body[0].(map[string]any)
+	if !ok {
+		t.Fatalf("body cell 0 = %#v", body[0])
+	}
+	if _, hasHeader := codeCell["is_header"]; hasHeader {
+		t.Fatalf("body cell 0 has is_header: %#v", codeCell)
+	}
+	codeText, ok := codeCell["text"].(map[string]any)
+	if !ok || codeText["type"] != "code" || codeText["text"] != "q15" {
+		t.Fatalf("body cell 0 text = %#v, want code q15", codeCell["text"])
+	}
+	boldText, ok := body[1].(map[string]any)
+	if !ok {
+		t.Fatalf("body cell 1 = %#v", body[1])
+	}
+	boldNode, ok := boldText["text"].(map[string]any)
+	if !ok || boldNode["type"] != "bold" || boldNode["text"] != "ok" {
+		t.Fatalf("body cell 1 text = %#v, want bold ok", boldText["text"])
+	}
+
+	if !strings.HasSuffix(caller.calls[2].url, "/sendMessage") {
+		t.Fatalf("last URL = %q, want /sendMessage", caller.calls[2].url)
+	}
+	if got := caller.calls[2].body["text"]; got != "After." {
+		t.Fatalf("prose after table = %#v, want %q", got, "After.")
+	}
+}
+
+type richRejectingCaller struct {
+	mock mockAPICaller
+}
+
+func (c *richRejectingCaller) Call(
+	ctx context.Context,
+	url string,
+	data *ta.RequestData,
+) (*ta.Response, error) {
+	if strings.HasSuffix(url, "/sendRichMessage") {
+		return &ta.Response{
+			Ok: false,
+			Result: []byte(
+				`{"ok":false,"error_code":404,"description":"rich messages unsupported"}`,
+			),
+		}, nil
+	}
+	return c.mock.Call(ctx, url, data)
+}
+
+func TestSendTextMessage_RichTableFallsBackToPreformatted(t *testing.T) {
+	caller := &richRejectingCaller{mock: mockAPICaller{
+		responses: []*ta.Response{
+			{Ok: true, Result: []byte(`{"message_id": 11}`)},
+			{Ok: true, Result: []byte(`{"message_id": 12}`)},
+			{Ok: true, Result: []byte(`{"message_id": 13}`)},
+		},
+	}}
+	ch := newTestChannelWithCaller(t, caller)
+
+	text := "Before.\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\nAfter."
+	messageID, err := ch.SendTextMessage(t.Context(), "12345", text)
+	if err != nil {
+		t.Fatalf("SendTextMessage() error = %v", err)
+	}
+	if messageID != "13" {
+		t.Fatalf("last message id = %q, want 13", messageID)
+	}
+
+	// Rich attempt bypasses the recording mock, so calls are:
+	// prose before, fallback <pre>, prose after.
+	if len(caller.mock.calls) != 3 {
+		t.Fatalf("calls = %d, want 3", len(caller.mock.calls))
+	}
+	if got := caller.mock.calls[1].body["text"]; got != "<pre>a | b\n1 | 2</pre>" {
+		t.Fatalf("fallback text = %#v, want legacy <pre> rendering", got)
+	}
+	if got := caller.mock.calls[2].body["text"]; got != "After." {
+		t.Fatalf("prose after table = %#v, want %q", got, "After.")
+	}
+}
+
 func TestSendText_FallbacksToPlainText(t *testing.T) {
 	caller := &mockAPICaller{
 		responses: []*ta.Response{
