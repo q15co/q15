@@ -1,8 +1,8 @@
-# Canonical image-first deployment example. Resolve one published q15 stack
-# release and pin each service to the immutable OCI digest recorded in it.
+# Canonical image-first deployment example. All q15 services use the same
+# synchronized stable or immutable DateVer tag.
 services:
   q15-proxy:
-    image: ${Q15_PROXY_IMAGE:?set Q15_PROXY_IMAGE to a release-pinned digest reference}
+    image: ghcr.io/q15co/q15-proxy:${Q15_IMAGE_TAG:-stable}
     restart: unless-stopped
     init: true
     healthcheck:
@@ -29,7 +29,7 @@ services:
         target: /var/lib/q15/proxy
 
   q15-exec:
-    image: ${Q15_EXEC_IMAGE:?set Q15_EXEC_IMAGE to a release-pinned digest reference}
+    image: ghcr.io/q15co/q15-exec:${Q15_IMAGE_TAG:-stable}
     restart: unless-stopped
     init: true
     depends_on:
@@ -80,7 +80,7 @@ services:
         target: /qdrant/storage
 
   q15-agent:
-    image: ${Q15_AGENT_IMAGE:?set Q15_AGENT_IMAGE to a release-pinned digest reference}
+    image: ghcr.io/q15co/q15-agent:${Q15_IMAGE_TAG:-stable}
     restart: unless-stopped
     init: true
     depends_on:
