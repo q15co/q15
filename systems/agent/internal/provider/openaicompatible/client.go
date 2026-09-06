@@ -110,7 +110,16 @@ func (c *Client) Complete(
 	return agent.ModelClientResult{
 		Messages:     assistantMessage,
 		FinishReason: choice.FinishReason,
+		Usage:        modelUsage(chatCompletion.Usage),
 	}, nil
+}
+
+func modelUsage(usage openai.CompletionUsage) agent.ModelUsage {
+	return agent.ModelUsage{
+		InputTokens:  usage.PromptTokens,
+		OutputTokens: usage.CompletionTokens,
+		TotalTokens:  usage.TotalTokens,
+	}
 }
 
 func mapMessages(

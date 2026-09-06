@@ -56,6 +56,35 @@ prompt-visible user message:
 - The shipped `q15-agent` and `q15-exec` images also include timezone data so shell tools can
   resolve named zones such as `Europe/Berlin` correctly.
 
+## Telegram Replies And Progress
+
+In private chats, Ollama and OpenAI-compatible providers can show a growing reply draft while the
+model generates. Updates reuse one draft per run, are coalesced to at most one per second, and
+refresh every 20 seconds during longer waits. Completion sends the final reply through the normal
+safe rich message path. Telegram's Stop button cancels the current run and discards its unfinished
+draft; the worker remains available for the next message.
+
+Use `/progress quiet`, `/progress progress`, or `/progress verbose` to choose the amount of
+feedback:
+
+- `quiet` keeps partial replies and routine tool activity hidden, with the existing long-wait
+  notice.
+- `progress` shows the current action with a short command, file, or search preview.
+- `verbose` allows a longer preview of that same action.
+
+Tool progress shows bounded, single-line arguments rather than command output. It shares the active
+draft when available, so the chat does not accumulate a message for every tool call. Unsupported
+chats, batch providers, oversized previews, and draft API errors retain progress plus final-message
+delivery. Drafts use the same untrusted Markdown rendering boundary as final text.
+
+Internally, `agent.StreamingModelClient` is an optional extension of `ModelClient`. Providers send
+ordered content-only callbacks; reasoning and tool-call arguments remain in the assembled final
+result. The engine emits synchronous `model_turn_delta` events between model-turn and tool/run
+lifecycle events. Synchronous delivery supplies backpressure without an event queue; observers own
+bounded buffering and display throttling. Each `model_turn_started` begins a fresh attempt, allowing
+consumers to replace a failed model's partial preview during fallback. Runs without an observer keep
+using `Complete`. Incomplete provider streams return errors and cannot become final transcript text.
+
 ## Development Setup
 
 The standard contributor and agent workflow is:

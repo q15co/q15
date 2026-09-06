@@ -29,6 +29,7 @@ type apiCall struct {
 }
 
 type mockAPICaller struct {
+	mu        sync.Mutex
 	calls     []apiCall
 	responses []*ta.Response
 	callErr   error
@@ -45,6 +46,9 @@ func (m *mockAPICaller) Call(
 	url string,
 	data *ta.RequestData,
 ) (*ta.Response, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	if m.callErr != nil {
 		return nil, m.callErr
 	}
@@ -89,6 +93,12 @@ func (m *mockAPICaller) Call(
 	resp := m.responses[0]
 	m.responses = m.responses[1:]
 	return resp, nil
+}
+
+func (m *mockAPICaller) Calls() []apiCall {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]apiCall(nil), m.calls...)
 }
 
 func parseMultipartAPICall(
@@ -152,7 +162,7 @@ type closingThenUpdateCaller struct {
 }
 
 func (c *closingThenUpdateCaller) Call(
-	_ context.Context,
+	ctx context.Context,
 	_ string,
 	_ *ta.RequestData,
 ) (*ta.Response, error) {
@@ -181,10 +191,10 @@ func (c *closingThenUpdateCaller) Call(
 			]`),
 		}, nil
 	}
-	return &ta.Response{
-		Ok:     true,
-		Result: []byte(`[]`),
-	}, nil
+	// Telegram keeps an empty long poll open until an update or cancellation.
+	// Waiting here also prevents a busy loop from starving the update handler.
+	<-ctx.Done()
+	return nil, ctx.Err()
 }
 
 func (c *closingThenUpdateCaller) Calls() int {
@@ -229,7 +239,7 @@ var testTelegramPNGBytes = []byte{
 	0xae, 0x42, 0x60, 0x82,
 }
 
-func TestStartRestartsWhenTelegoLongPollingStops(t *testing.T) {
+func TestSuperviseLongPollingRestartsWhenTelegoLongPollingStops(t *testing.T) {
 	prevRestartDelay := telegramLongPollRestartDelay
 	telegramLongPollRestartDelay = time.Millisecond
 	t.Cleanup(func() {
@@ -243,11 +253,21 @@ func TestStartRestartsWhenTelegoLongPollingStops(t *testing.T) {
 		got <- msg
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	if err := ch.Start(ctx); err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ch.superviseLongPolling(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		// Join the supervisor before the earlier cleanup restores its retry delay.
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("long-poll supervisor did not stop after cancellation")
+		}
+	})
 
 	select {
 	case msg := <-got:
@@ -264,7 +284,7 @@ func TestStartRestartsWhenTelegoLongPollingStops(t *testing.T) {
 		if msg.Text != "after timeout" {
 			t.Fatalf("Text = %q, want after timeout", msg.Text)
 		}
-	case <-time.After(time.Second):
+	case <-ctx.Done():
 		t.Fatal("timed out waiting for recovered Telegram update")
 	}
 
@@ -829,12 +849,6 @@ func TestEditText_ContinuationFailureReportsPartialDelivery(t *testing.T) {
 }
 
 func TestStartTyping_SendsImmediateChatAction(t *testing.T) {
-	prevInterval := telegramTypingKeepaliveInterval
-	telegramTypingKeepaliveInterval = 10 * time.Millisecond
-	defer func() {
-		telegramTypingKeepaliveInterval = prevInterval
-	}()
-
 	caller := &mockAPICaller{}
 	ch := newTestChannelWithCaller(t, caller)
 
@@ -844,15 +858,16 @@ func TestStartTyping_SendsImmediateChatAction(t *testing.T) {
 	}
 	defer stop()
 
-	time.Sleep(15 * time.Millisecond)
-
-	if len(caller.calls) == 0 {
-		t.Fatal("expected at least one typing call")
+	// StartTyping sends the first action synchronously. Snapshot it immediately;
+	// the keepalive goroutine may append more calls at any time.
+	calls := caller.Calls()
+	if len(calls) == 0 {
+		t.Fatal("expected a typing call before StartTyping returned")
 	}
-	if !strings.HasSuffix(caller.calls[0].url, "/sendChatAction") {
-		t.Fatalf("first URL = %q, want suffix /sendChatAction", caller.calls[0].url)
+	if !strings.HasSuffix(calls[0].url, "/sendChatAction") {
+		t.Fatalf("first URL = %q, want suffix /sendChatAction", calls[0].url)
 	}
-	if got := caller.calls[0].body["action"]; got != telego.ChatActionTyping {
+	if got := calls[0].body["action"]; got != telego.ChatActionTyping {
 		t.Fatalf("action = %#v, want %q", got, telego.ChatActionTyping)
 	}
 }

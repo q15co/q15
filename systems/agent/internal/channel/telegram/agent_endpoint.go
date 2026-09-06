@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
@@ -259,6 +260,7 @@ type agentRunSession struct {
 	desiredStatus   string
 	lastStep        string
 	finished        bool
+	draft           *runDraft
 
 	showTimer     *time.Timer
 	softTimer     *time.Timer
@@ -277,6 +279,7 @@ func newAgentRunSession(
 		chatID:    strings.TrimSpace(chatID),
 		messageID: strings.TrimSpace(messageID),
 		mode:      mode,
+		draft:     newRunDraft(channel, chatID, mode),
 	}
 }
 
@@ -309,18 +312,34 @@ func (s *agentRunSession) start(ctx context.Context) {
 func (s *agentRunSession) OnRunEvent(ctx context.Context, event agent.RunEvent) {
 	switch event.Type {
 	case agent.RunEventModelTurnStarted:
+		s.resetDraft(ctx)
 		s.noteActivity(ctx, thinkingStatus)
+	case agent.RunEventModelTurnDelta:
+		s.appendDraft(ctx, event.Delta)
 	case agent.RunEventToolStarted:
 		s.noteActivity(ctx, summarizeToolCall(event.ToolCall, s.mode))
 	case agent.RunEventToolFinished:
-		s.noteActivity(ctx, "")
+		s.noteActivity(ctx, summarizeToolFinished(event.ToolCall, event.Err))
 	}
 }
 
 func (s *agentRunSession) Finish(ctx context.Context, result agent.ReplyResult) {
+	s.opMu.Lock()
 	s.mu.Lock()
 	if s.finished {
 		s.mu.Unlock()
+		s.opMu.Unlock()
+		return
+	}
+	if ctx.Err() != nil {
+		s.mu.Unlock()
+		s.opMu.Unlock()
+		cleanupCtx, cancel := context.WithTimeout(
+			context.WithoutCancel(ctx),
+			telegramDraftRequestTimeout,
+		)
+		defer cancel()
+		s.Abort(cleanupCtx, "canceled")
 		return
 	}
 	s.finished = true
@@ -328,6 +347,11 @@ func (s *agentRunSession) Finish(ctx context.Context, result agent.ReplyResult) 
 	statusMessageID := s.statusMessageID
 	typingStop := s.typingStop
 	s.mu.Unlock()
+	if s.draft != nil && s.draft.sent {
+		s.deleteStatusMessage(ctx, s.draft.orphanStatusID)
+		s.deleteStatusMessage(ctx, statusMessageID)
+		statusMessageID = ""
+	}
 
 	if typingStop != nil {
 		typingStop()
@@ -336,7 +360,6 @@ func (s *agentRunSession) Finish(ctx context.Context, result agent.ReplyResult) 
 	finalText := strings.TrimSpace(result.Text)
 	attachments := normalizeTelegramAttachments(result)
 
-	s.opMu.Lock()
 	if len(attachments) == 0 {
 		if finalText == "" {
 			finalText = "(assistant returned no text)"
@@ -446,39 +469,56 @@ func (s *agentRunSession) sendFinalText(ctx context.Context, statusMessageID, fi
 	}
 }
 
-func (s *agentRunSession) deleteStatusMessage(ctx context.Context, statusMessageID string) {
+func (s *agentRunSession) deleteStatusMessage(ctx context.Context, statusMessageID string) bool {
 	statusMessageID = strings.TrimSpace(statusMessageID)
 	if statusMessageID == "" {
-		return
+		return true
 	}
-	if err := s.channel.DeleteMessage(ctx, s.chatID, statusMessageID); err != nil {
+	deleteCtx, cancel := context.WithTimeout(ctx, telegramDraftRequestTimeout)
+	defer cancel()
+	if err := s.channel.DeleteMessage(deleteCtx, s.chatID, statusMessageID); err != nil {
 		s.logError("telegram placeholder delete error: %v", err)
+		return false
 	}
+	return true
 }
 
 func (s *agentRunSession) Abort(ctx context.Context, reason string) {
+	s.opMu.Lock()
 	s.mu.Lock()
 	if s.finished {
 		s.mu.Unlock()
+		s.opMu.Unlock()
 		return
 	}
 	s.finished = true
 	s.stopTimersLocked()
 	statusMessageID := s.statusMessageID
 	typingStop := s.typingStop
+	hadDraft := s.draft != nil && s.draft.sent
 	s.mu.Unlock()
+	if hadDraft {
+		s.deleteStatusMessage(ctx, s.draft.orphanStatusID)
+		s.deleteStatusMessage(ctx, statusMessageID)
+		statusMessageID = ""
+	}
 
 	if typingStop != nil {
 		typingStop()
 	}
 
 	if statusMessageID != "" && strings.TrimSpace(reason) != "" {
-		s.opMu.Lock()
 		if err := s.channel.EditText(ctx, s.chatID, statusMessageID, stoppedStatus(reason)); err != nil {
 			s.logError("telegram stop status edit error: %v", err)
 		}
-		s.opMu.Unlock()
+	} else if hadDraft {
+		// A normal message clears any remaining ephemeral preview, including
+		// when cancellation originates from shutdown rather than Telegram.
+		if err := s.channel.SendText(ctx, s.chatID, stoppedStatus(reason)); err != nil {
+			s.logError("telegram draft stop send error: %v", err)
+		}
 	}
+	s.opMu.Unlock()
 
 	if s.messageID != "" {
 		if err := s.channel.ClearReaction(ctx, s.chatID, s.messageID); err != nil {
@@ -495,6 +535,10 @@ func (s *agentRunSession) noteActivity(ctx context.Context, summary string) {
 	}
 	if summary != "" {
 		s.lastStep = summary
+	}
+	if s.draftVisibleLocked() && summary != "" {
+		s.draft.status = summary
+		s.scheduleDraftLocked(ctx, telegramDraftUpdateInterval)
 	}
 	s.resetStallTimersLocked(ctx)
 	hasStatus := s.statusMessageID != ""
@@ -513,7 +557,7 @@ func (s *agentRunSession) showStatus(ctx context.Context, text string) {
 	}
 
 	s.mu.Lock()
-	if s.finished || s.statusMessageID != "" {
+	if s.finished || s.statusMessageID != "" || s.draftVisibleLocked() {
 		s.mu.Unlock()
 		return
 	}
@@ -523,13 +567,15 @@ func (s *agentRunSession) showStatus(ctx context.Context, text string) {
 	defer s.opMu.Unlock()
 
 	s.mu.Lock()
-	if s.finished || s.statusMessageID != "" {
+	if s.finished || s.statusMessageID != "" || s.draftVisibleLocked() {
 		s.mu.Unlock()
 		return
 	}
 	s.mu.Unlock()
 
-	messageID, err := s.channel.SendTextMessage(ctx, s.chatID, text)
+	statusCtx, cancel := context.WithTimeout(ctx, telegramDraftRequestTimeout)
+	defer cancel()
+	messageID, err := s.channel.SendTextMessage(statusCtx, s.chatID, text)
 	if err != nil {
 		s.logError("telegram status send error: %v", err)
 		return
@@ -549,7 +595,7 @@ func (s *agentRunSession) scheduleStatusEdit(ctx context.Context, text string) {
 	}
 
 	s.mu.Lock()
-	if s.finished || s.statusMessageID == "" || text == s.lastSentStatus {
+	if s.finished || s.statusMessageID == "" || text == s.lastSentStatus || s.draftVisibleLocked() {
 		s.mu.Unlock()
 		return
 	}
@@ -565,7 +611,7 @@ func (s *agentRunSession) scheduleStatusEdit(ctx context.Context, text string) {
 
 func (s *agentRunSession) flushStatusEdit(ctx context.Context) {
 	s.mu.Lock()
-	if s.finished || s.statusMessageID == "" {
+	if s.finished || s.statusMessageID == "" || s.draftVisibleLocked() {
 		s.mu.Unlock()
 		return
 	}
@@ -581,7 +627,7 @@ func (s *agentRunSession) flushStatusEdit(ctx context.Context) {
 	defer s.opMu.Unlock()
 
 	s.mu.Lock()
-	if s.finished || s.statusMessageID == "" {
+	if s.finished || s.statusMessageID == "" || s.draftVisibleLocked() {
 		s.mu.Unlock()
 		return
 	}
@@ -593,7 +639,9 @@ func (s *agentRunSession) flushStatusEdit(ctx context.Context) {
 	if text == "" || text == lastSent {
 		return
 	}
-	if err := s.channel.EditText(ctx, s.chatID, messageID, text); err != nil {
+	statusCtx, cancel := context.WithTimeout(ctx, telegramDraftRequestTimeout)
+	defer cancel()
+	if err := s.channel.EditText(statusCtx, s.chatID, messageID, text); err != nil {
 		s.logError("telegram status edit error: %v", err)
 		return
 	}
@@ -656,6 +704,7 @@ func (s *agentRunSession) currentWorkingTextLocked() string {
 }
 
 func (s *agentRunSession) stopTimersLocked() {
+	s.stopDraftLocked()
 	if s.showTimer != nil {
 		s.showTimer.Stop()
 		s.showTimer = nil
@@ -683,10 +732,15 @@ func summarizeToolCall(call agent.ToolCall, mode progressMode) string {
 	if name == "" {
 		return thinkingStatus
 	}
+	limit := 56
+	if mode == progressModeVerbose {
+		limit = 96
+	}
 
 	switch name {
 	case "read_file", "write_file", "edit_file":
 		if path := normalizeDisplayPath(extractStringArg(call.Arguments, "path")); path != "" {
+			path = truncatePath(path, limit)
 			switch name {
 			case "read_file":
 				return formatStatusMessage("📖", "Reading", path)
@@ -707,29 +761,55 @@ func summarizeToolCall(call agent.ToolCall, mode progressMode) string {
 	case "apply_patch":
 		return "🩹 Applying patch"
 	case "exec":
-		if mode == progressModeVerbose {
-			if command := extractStringArg(call.Arguments, "command"); command != "" {
-				return formatStatusMessage("💻", "Running", truncateSingleLine(command, 96))
-			}
+		if command := extractStringArg(call.Arguments, "command"); command != "" {
+			return formatStatusMessage("💻", "Running", truncateSingleLine(command, limit))
 		}
 		return "💻 Running command"
+	case "exec_read", "exec_write", "exec_kill":
+		action := "Checking command"
+		if name == "exec_write" {
+			action = "Sending command input"
+		} else if name == "exec_kill" {
+			action = "Stopping command"
+		}
+		return formatStatusMessage(
+			"💻",
+			action,
+			truncateSingleLine(extractStringArg(call.Arguments, "session_id"), limit),
+		)
 	case "web_fetch":
-		if mode == progressModeVerbose {
-			if rawURL := extractStringArg(call.Arguments, "url"); rawURL != "" {
-				return formatStatusMessage("🌐", "Fetching", summarizeURL(rawURL))
-			}
+		if rawURL := extractStringArg(call.Arguments, "url"); rawURL != "" {
+			return formatStatusMessage(
+				"🌐",
+				"Fetching",
+				truncateSingleLine(summarizeURL(rawURL), limit),
+			)
 		}
 		return "🌐 Fetching webpage"
 	case "web_search":
-		if mode == progressModeVerbose {
-			if query := extractStringArg(call.Arguments, "query"); query != "" {
-				return formatStatusMessage("🌐", "Searching for", truncateSingleLine(query, 96))
-			}
+		if query := extractStringArg(call.Arguments, "query"); query != "" {
+			return formatStatusMessage("🌐", "Searching for", truncateSingleLine(query, limit))
 		}
 		return "🌐 Searching the web"
 	default:
-		return "⚙️ " + humanizeAction(name)
+		return "⚙️ " + inlineCode(truncateSingleLine(humanizeAction(name), limit))
 	}
+}
+
+func summarizeToolFinished(call agent.ToolCall, err error) string {
+	if err != nil {
+		switch call.Name {
+		case "exec", "exec_read", "exec_write", "exec_kill":
+			return "⚠️ Command step failed"
+		case "read_file", "write_file", "edit_file", "apply_patch":
+			return "⚠️ File step failed"
+		default:
+			return "⚠️ Tool step failed"
+		}
+	}
+	// A tool result can describe an active process; avoid claiming that the
+	// command completed or succeeded before the model interprets its result.
+	return "🧠 Reviewing result…"
 }
 
 func humanizeAction(name string) string {
@@ -804,14 +884,29 @@ func summarizeURL(raw string) string {
 }
 
 func truncateSingleLine(text string, limit int) string {
-	text = strings.Join(strings.Fields(strings.TrimSpace(text)), " ")
-	if limit <= 0 || len(text) <= limit {
+	text = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			return ' '
+		}
+		return r
+	}, text)
+	text = strings.Join(strings.Fields(text), " ")
+	if limit <= 0 || utf8.RuneCountInString(text) <= limit {
 		return text
 	}
 	if limit <= 3 {
-		return text[:limit]
+		return string([]rune(text)[:limit])
 	}
-	return text[:limit-3] + "..."
+	return string([]rune(text)[:limit-3]) + "..."
+}
+
+func truncatePath(path string, limit int) string {
+	path = truncateSingleLine(path, 0)
+	runes := []rune(path)
+	if len(runes) <= limit {
+		return path
+	}
+	return "..." + string(runes[len(runes)-(limit-3):])
 }
 
 func normalizeDisplayPath(path string) string {

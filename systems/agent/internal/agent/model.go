@@ -62,6 +62,13 @@ type ReplyResult struct {
 	MediaRefs []string
 }
 
+// ModelUsage reports provider token counts, or zero when unavailable.
+type ModelUsage struct {
+	InputTokens  int64
+	OutputTokens int64
+	TotalTokens  int64
+}
+
 // ModelClientResult is the output of one model completion call.
 type ModelClientResult struct {
 	// Messages are the ordered canonical conversation.Message items returned by
@@ -69,6 +76,8 @@ type ModelClientResult struct {
 	Messages []conversation.Message
 	// FinishReason is the provider-reported completion reason when available.
 	FinishReason string
+	// Usage contains token counts reported by the provider.
+	Usage ModelUsage
 }
 
 // ModelClient adapts a model provider to the loop using canonical
@@ -82,6 +91,26 @@ type ModelClient interface {
 		model string,
 		messages []conversation.Message,
 		tools []ToolDefinition,
+	) (ModelClientResult, error)
+}
+
+// StreamingModelClient optionally exposes assistant text during a completion.
+// Complete remains the fallback for clients that do not implement this interface.
+type StreamingModelClient interface {
+	ModelClient
+	// CompleteStream returns the same canonical result as Complete. onDelta receives
+	// nonempty content fragments in order, synchronously, before this method returns.
+	// Thinking, tool arguments, and media are never sent to onDelta. A nil callback
+	// is valid. Cancellation or an incomplete stream must return an error.
+	//
+	// Callbacks provide backpressure: implementations must not queue unbounded work
+	// or spawn a goroutine per fragment. Consumers own rendering and throttling.
+	CompleteStream(
+		ctx context.Context,
+		model string,
+		messages []conversation.Message,
+		tools []ToolDefinition,
+		onDelta func(string),
 	) (ModelClientResult, error)
 }
 

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/bus"
@@ -1187,8 +1188,12 @@ func TestSummarizeToolCall_ProgressAndVerboseModes(t *testing.T) {
 		Name:      "exec",
 		Arguments: `{"command":"git status --short"}`,
 	}, progressModeProgress)
-	if progressSummary != "💻 Running command" {
-		t.Fatalf("progress summary = %q, want %q", progressSummary, "💻 Running command")
+	if progressSummary != "💻 Running `git status --short`" {
+		t.Fatalf(
+			"progress summary = %q, want %q",
+			progressSummary,
+			"💻 Running `git status --short`",
+		)
 	}
 
 	verboseSummary := summarizeToolCall(agent.ToolCall{
@@ -1200,7 +1205,101 @@ func TestSummarizeToolCall_ProgressAndVerboseModes(t *testing.T) {
 	}
 
 	fallbackSummary := summarizeToolCall(agent.ToolCall{Name: "custom_tool"}, progressModeProgress)
-	if fallbackSummary != "⚙️ custom tool" {
-		t.Fatalf("fallback summary = %q, want %q", fallbackSummary, "⚙️ custom tool")
+	if fallbackSummary != "⚙️ `custom tool`" {
+		t.Fatalf("fallback summary = %q, want %q", fallbackSummary, "⚙️ `custom tool`")
+	}
+}
+
+func TestToolProgressPreviewsAreConciseAndReadable(t *testing.T) {
+	tests := []struct {
+		name string
+		call agent.ToolCall
+		want string
+	}{
+		{
+			"command",
+			agent.ToolCall{Name: "exec", Arguments: `{"command":"go test\n\t./..."}`},
+			"💻 Running `go test ./...`",
+		},
+		{
+			"path",
+			agent.ToolCall{Name: "read_file", Arguments: `{"path":"/workspace/a/../main.go"}`},
+			"📖 Reading `/workspace/main.go`",
+		},
+		{
+			"search",
+			agent.ToolCall{Name: "web_search", Arguments: `{"query":"Go context cancellation"}`},
+			"🌐 Searching for `Go context cancellation`",
+		},
+		{
+			"fetch",
+			agent.ToolCall{
+				Name:      "web_fetch",
+				Arguments: `{"url":"https://example.com/path?secret=hidden"}`,
+			},
+			"🌐 Fetching `example.com`",
+		},
+		{
+			"poll",
+			agent.ToolCall{Name: "exec_read", Arguments: `{"session_id":"sess-1"}`},
+			"💻 Checking command `sess-1`",
+		},
+		{
+			"input",
+			agent.ToolCall{
+				Name:      "exec_write",
+				Arguments: `{"session_id":"sess-1","data":"never show input"}`,
+			},
+			"💻 Sending command input `sess-1`",
+		},
+		{
+			"stop",
+			agent.ToolCall{Name: "exec_kill", Arguments: `{"session_id":"sess-1"}`},
+			"💻 Stopping command `sess-1`",
+		},
+		{"invalid arguments", agent.ToolCall{Name: "exec", Arguments: "{"}, "💻 Running command"},
+		{
+			"code boundary",
+			agent.ToolCall{
+				Name:      "exec",
+				Arguments: "{\"command\":\"echo `hello`\\u001b[31m\\u202eevil\"}",
+			},
+			"💻 Running `echo 'hello' [31m evil`",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := summarizeToolCall(tt.call, progressModeProgress); got != tt.want {
+				t.Fatalf("summary = %q, want %q", got, tt.want)
+			}
+		})
+	}
+	command := agent.ToolCall{
+		Name:      "exec",
+		Arguments: `{"command":"` + strings.Repeat("界", 150) + `"}`,
+	}
+	progress := summarizeToolCall(command, progressModeProgress)
+	verbose := summarizeToolCall(command, progressModeVerbose)
+	if !utf8.ValidString(progress) || !utf8.ValidString(verbose) ||
+		utf8.RuneCountInString(progress) >= utf8.RuneCountInString(verbose) ||
+		utf8.RuneCountInString(verbose) > 110 {
+		t.Fatalf("preview bounds: progress=%q verbose=%q", progress, verbose)
+	}
+	path := agent.ToolCall{
+		Name:      "read_file",
+		Arguments: `{"path":"/` + strings.Repeat("long/", 100) + `main.go"}`,
+	}
+	if got := summarizeToolCall(path, progressModeProgress); !strings.HasSuffix(got, "main.go`") ||
+		utf8.RuneCountInString(got) > 70 {
+		t.Fatalf("path preview lost filename or exceeds bound: %q", got)
+	}
+}
+
+func TestToolFinishedStatusDoesNotClaimCommandCompletion(t *testing.T) {
+	if got := summarizeToolFinished(agent.ToolCall{Name: "exec"}, nil); got != "🧠 Reviewing result…" {
+		t.Fatalf("finished summary = %q", got)
+	}
+	if got := summarizeToolFinished(agent.ToolCall{Name: "exec"}, errors.New("sensitive tool output")); got != "⚠️ Command step failed" {
+		t.Fatalf("failed summary = %q", got)
 	}
 }

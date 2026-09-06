@@ -185,6 +185,13 @@ func (e *Engine) Run(ctx context.Context, req EngineRequest) (EngineResult, erro
 		}
 
 		for _, call := range toolCalls {
+			if err := ctx.Err(); err != nil {
+				return EngineResult{
+					Messages: copyMessages(messages[start:]),
+					ModelRef: modelRef,
+					Turn:     turn,
+				}, err
+			}
 			emitRunEvent(ctx, req.Observer, RunEvent{
 				Type:     RunEventToolStarted,
 				Turn:     turn,
@@ -209,6 +216,13 @@ func (e *Engine) Run(ctx context.Context, req EngineRequest) (EngineResult, erro
 			})
 
 			messages = append(messages, toolResultMessage(call.ID, toolResult, err != nil))
+			if err := ctx.Err(); err != nil {
+				return EngineResult{
+					Messages: copyMessages(messages[start:]),
+					ModelRef: modelRef,
+					Turn:     turn,
+				}, err
+			}
 
 			if assessment := loopDetector.Record(call, output); assessment.Critical {
 				stopSummary := formatStopSummary(
@@ -293,6 +307,9 @@ func (e *Engine) runTool(
 	policy ToolCallPolicy,
 	call ToolCall,
 ) (ToolResult, error) {
+	if err := ctx.Err(); err != nil {
+		return ToolResult{}, err
+	}
 	if tools == nil {
 		return ToolResult{}, fmt.Errorf("no tool registry configured for call %q", call.Name)
 	}
@@ -350,6 +367,9 @@ func (e *Engine) completeWithObserver(
 	attemptFailures := make([]ModelAttemptFailure, 0, len(plan.EligibleRefs))
 	lastModelRef := ""
 	for attempt, modelRef := range plan.EligibleRefs {
+		if err := ctx.Err(); err != nil {
+			return lastModelRef, ModelClientResult{}, err
+		}
 		lastModelRef = modelRef
 		emitRunEvent(ctx, observer, RunEvent{
 			Type:     RunEventModelTurnStarted,
@@ -357,7 +377,10 @@ func (e *Engine) completeWithObserver(
 			ModelRef: modelRef,
 		})
 
-		result, err := e.modelClient.Complete(ctx, modelRef, messages, tools)
+		result, err := e.completeModel(ctx, modelRef, messages, tools, turn, observer)
+		if ctx.Err() != nil {
+			return modelRef, ModelClientResult{}, ctx.Err()
+		}
 		if err == nil {
 			log.Printf(
 				"q15: model turn=%d selected ref=%q attempt=%d/%d finish_reason=%q returned_messages=%d",
@@ -392,4 +415,28 @@ func (e *Engine) completeWithObserver(
 		EligibleRefs:    append([]string(nil), plan.EligibleRefs...),
 		AttemptFailures: attemptFailures,
 	}
+}
+
+func (e *Engine) completeModel(
+	ctx context.Context,
+	modelRef string,
+	messages []conversation.Message,
+	tools []ToolDefinition,
+	turn int,
+	observer RunObserver,
+) (ModelClientResult, error) {
+	if client, ok := e.modelClient.(StreamingModelClient); ok && observer != nil {
+		return client.CompleteStream(ctx, modelRef, messages, tools, func(delta string) {
+			if delta == "" || ctx.Err() != nil {
+				return
+			}
+			emitRunEvent(ctx, observer, RunEvent{
+				Type:     RunEventModelTurnDelta,
+				Turn:     turn,
+				ModelRef: modelRef,
+				Delta:    delta,
+			})
+		})
+	}
+	return e.modelClient.Complete(ctx, modelRef, messages, tools)
 }
