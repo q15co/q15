@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -44,6 +45,8 @@ type Channel struct {
 	mediaStore     q15media.Store
 	onMessage      MessageHandler
 	allowedUserIDs map[int64]struct{}
+	draftMu        sync.Mutex
+	draftStops     map[draftKey]context.CancelFunc
 }
 
 var (
@@ -134,7 +137,7 @@ func (c *Channel) superviseLongPolling(ctx context.Context) {
 func (c *Channel) runLongPollingSession(ctx context.Context) error {
 	params := &telego.GetUpdatesParams{
 		Timeout:        telegramLongPollTimeoutSeconds,
-		AllowedUpdates: []string{telego.MessageUpdates},
+		AllowedUpdates: []string{telego.MessageUpdates, "stopped_message_generation"},
 	}
 	updates, err := c.bot.UpdatesViaLongPolling(
 		ctx,
@@ -153,6 +156,12 @@ func (c *Channel) runLongPollingSession(ctx context.Context) error {
 	bh.HandleMessage(func(ctx *th.Context, message telego.Message) error {
 		return c.handleMessage(ctx, &message)
 	}, th.AnyMessage())
+	bh.HandleStoppedMessageGeneration(
+		func(_ *th.Context, stopped telego.MessageGenerationStopped) error {
+			c.handleStoppedMessageGeneration(stopped)
+			return nil
+		},
+	)
 
 	stopHandler := make(chan struct{})
 	go func() {

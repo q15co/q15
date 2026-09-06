@@ -30,6 +30,7 @@ type ModelClientDump struct {
 }
 
 var _ agent.ModelClient = (*ModelClientDump)(nil)
+var _ agent.StreamingModelClient = (*ModelClientDump)(nil)
 
 // NewModelClientDump wraps inner with an optional JSONL writer. If writer is
 // nil, the returned wrapper is a no-op pass-through.
@@ -45,8 +46,37 @@ func (d *ModelClientDump) Complete(
 	messages []conversation.Message,
 	tools []agent.ToolDefinition,
 ) (agent.ModelClientResult, error) {
-	if d.writer == nil {
+	return d.complete(model, messages, tools, func() (agent.ModelClientResult, error) {
 		return d.inner.Complete(ctx, model, messages, tools)
+	})
+}
+
+// CompleteStream preserves optional streaming while capturing the canonical
+// request and final response. Batch-only clients complete without emitting deltas.
+func (d *ModelClientDump) CompleteStream(
+	ctx context.Context,
+	model string,
+	messages []conversation.Message,
+	tools []agent.ToolDefinition,
+	onDelta func(string),
+) (agent.ModelClientResult, error) {
+	streaming, ok := d.inner.(agent.StreamingModelClient)
+	if !ok {
+		return d.Complete(ctx, model, messages, tools)
+	}
+	return d.complete(model, messages, tools, func() (agent.ModelClientResult, error) {
+		return streaming.CompleteStream(ctx, model, messages, tools, onDelta)
+	})
+}
+
+func (d *ModelClientDump) complete(
+	model string,
+	messages []conversation.Message,
+	tools []agent.ToolDefinition,
+	complete func() (agent.ModelClientResult, error),
+) (agent.ModelClientResult, error) {
+	if d.writer == nil {
+		return complete()
 	}
 
 	d.writer.writeJSON(map[string]any{
@@ -59,7 +89,7 @@ func (d *ModelClientDump) Complete(
 		"tools":         tools,
 	})
 
-	result, err := d.inner.Complete(ctx, model, messages, tools)
+	result, err := complete()
 	if err != nil {
 		d.writer.writeJSON(map[string]any{
 			"type":      "canonical_error",
@@ -77,6 +107,7 @@ func (d *ModelClientDump) Complete(
 		"finish_reason": result.FinishReason,
 		"message_count": len(result.Messages),
 		"messages":      result.Messages,
+		"usage":         result.Usage,
 	})
 	return result, nil
 }
@@ -98,8 +129,8 @@ func NewTransportDump(inner http.RoundTripper, writer io.Writer) *TransportDump 
 }
 
 // RoundTrip delegates to the inner transport and writes wire request and
-// response (or error) entries. The request and response bodies are fully
-// captured and restored so callers see no behavioural difference.
+// response (or error) entries. Responses are captured as callers read them and
+// recorded at EOF, a read error, or Close, so streaming remains incremental.
 func (t *TransportDump) RoundTrip(req *http.Request) (*http.Response, error) {
 	if t.writer == nil {
 		return t.inner.RoundTrip(req)
@@ -136,23 +167,78 @@ func (t *TransportDump) RoundTrip(req *http.Request) (*http.Response, error) {
 		return nil, err
 	}
 
-	raw, err := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	if err != nil {
-		log.Printf("q15: dump: read response body: %v", err)
-	}
-	resp.Body = io.NopCloser(bytes.NewReader(raw))
-
-	t.writer.writeJSON(map[string]any{
+	entry := map[string]any{
 		"type":      "wire_response",
 		"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
 		"method":    req.Method,
 		"url":       req.URL.String(),
 		"status":    resp.StatusCode,
-		"body":      bodyField(raw),
-	})
+	}
+	if resp.Body == nil {
+		entry["body"] = nil
+		t.writer.writeJSON(entry)
+	} else {
+		resp.Body = &captureBody{inner: resp.Body, writer: t.writer, entry: entry}
+	}
 
 	return resp, nil
+}
+
+// Keep debugging enabled without retaining an unbounded streaming response.
+const maxCapturedBodyBytes = 8 * 1024 * 1024
+
+type captureBody struct {
+	inner  io.ReadCloser
+	writer *lineWriter
+	entry  map[string]any
+
+	mu        sync.Mutex
+	buffer    bytes.Buffer
+	bytesRead int64
+	finished  bool
+}
+
+func (b *captureBody) Read(p []byte) (int, error) {
+	n, err := b.inner.Read(p)
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.finished {
+		b.bytesRead += int64(n)
+		_, _ = b.buffer.Write(p[:min(n, maxCapturedBodyBytes-b.buffer.Len())])
+		if err != nil {
+			b.finish(err == io.EOF, err)
+		}
+	}
+	return n, err
+}
+
+func (b *captureBody) Close() error {
+	// Closing the underlying body must be able to unblock a concurrent Read.
+	err := b.inner.Close()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.finish(false, err)
+	return err
+}
+
+// finish runs with mu held. It emits at most one entry, including partial bodies
+// when callers close early or the underlying stream fails.
+func (b *captureBody) finish(complete bool, err error) {
+	if b.finished {
+		return
+	}
+	b.finished = true
+	b.entry["body"] = bodyField(b.buffer.Bytes())
+	b.entry["body_complete"] = complete
+	if b.bytesRead > maxCapturedBodyBytes {
+		b.entry["body_truncated"] = true
+		b.entry["body_bytes"] = b.bytesRead
+	}
+	if err != nil && err != io.EOF {
+		b.entry["body_error"] = err.Error()
+	}
+	b.writer.writeJSON(b.entry)
+	b.buffer.Reset()
 }
 
 // --- shared line writer with mutex ---
