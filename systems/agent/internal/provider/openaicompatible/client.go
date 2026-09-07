@@ -419,7 +419,7 @@ func parseAssistantMessage(
 		content = refusal
 	}
 
-	parts := make([]conversation.Part, 0, 2+len(toolCalls))
+	parts := make([]conversation.Part, 0, 2)
 	if reasoningText != "" || reasoningOpaque != "" {
 		var replay map[string]json.RawMessage
 		if reasoningOpaque != "" {

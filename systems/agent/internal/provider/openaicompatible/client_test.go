@@ -209,6 +209,14 @@ func TestParseAssistantMessageExtractsReasoningAndTools(t *testing.T) {
 				"name": "shell",
 				"arguments": "{\"cmd\":\"pwd\"}"
 			}
+		},
+		{
+			"id": "call-2",
+			"type": "function",
+			"function": {
+				"name": "read_file",
+				"arguments": "{\"path\":\"README.md\"}"
+			}
 		}
 	]`), &toolCalls); err != nil {
 		t.Fatalf("json.Unmarshal(toolCalls) error = %v", err)
@@ -224,8 +232,8 @@ func TestParseAssistantMessageExtractsReasoningAndTools(t *testing.T) {
 	if got[0].Role != conversation.AssistantRole {
 		t.Fatalf("role = %q, want assistant", got[0].Role)
 	}
-	if len(got[0].Parts) != 3 {
-		t.Fatalf("parts len = %d, want 3", len(got[0].Parts))
+	if len(got[0].Parts) != 4 {
+		t.Fatalf("parts len = %d, want 4", len(got[0].Parts))
 	}
 	if got[0].Parts[0].Type != conversation.ReasoningPartType ||
 		got[0].Parts[0].Text != "portable summary" {
@@ -239,8 +247,12 @@ func TestParseAssistantMessageExtractsReasoningAndTools(t *testing.T) {
 	if got[0].Parts[1].Type != conversation.TextPartType || got[0].Parts[1].Text != "hello" {
 		t.Fatalf("text part = %#v", got[0].Parts[1])
 	}
-	if got[0].Parts[2].Type != conversation.ToolCallPartType || got[0].Parts[2].Name != "shell" {
-		t.Fatalf("tool call part = %#v", got[0].Parts[2])
+	wantTools := []conversation.Part{
+		conversation.ToolCall("call-1", "shell", `{"cmd":"pwd"}`),
+		conversation.ToolCall("call-2", "read_file", `{"path":"README.md"}`),
+	}
+	if !reflect.DeepEqual(got[0].Parts[2:], wantTools) {
+		t.Fatalf("tool call parts = %#v, want %#v", got[0].Parts[2:], wantTools)
 	}
 }
 
