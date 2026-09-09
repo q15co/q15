@@ -8,18 +8,18 @@ import (
 )
 
 var (
-	reHeading    = regexp.MustCompile(`(?m)^#{1,6}\s+(.+)$`)
-	reBlockquote = regexp.MustCompile(`(?m)^>\s*(.*)$`)
-	reLink       = regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)
-	reBoldStar   = regexp.MustCompile(`\*\*(.+?)\*\*`)
-	reBoldUnder  = regexp.MustCompile(`__(.+?)__`)
-	reItalic     = regexp.MustCompile(`_([^_]+)_`)
-	reStrike     = regexp.MustCompile(`~~(.+?)~~`)
-	reRule       = regexp.MustCompile(`(?m)^\s*-{3,}\s*$`)
-	reTaskItem   = regexp.MustCompile(`(?m)^(\s*)[-*]\s+\[([ xX])\]\s+`)
-	reListItem   = regexp.MustCompile(`(?m)^[-*]\s+`)
-	reCodeBlock  = regexp.MustCompile("```[\\w]*\\n?([\\s\\S]*?)```")
-	reInlineCode = regexp.MustCompile("`([^`]+)`")
+	reHeading      = regexp.MustCompile(`(?m)^#{1,6}\s+(.+)$`)
+	reBlockquote   = regexp.MustCompile(`(?m)^>\s*(.*)$`)
+	reLink         = regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)
+	reBoldStar     = regexp.MustCompile(`\*\*(.+?)\*\*`)
+	reBoldUnder    = regexp.MustCompile(`__(.+?)__`)
+	reItalic       = regexp.MustCompile(`_([^_]+)_`)
+	reStrike       = regexp.MustCompile(`~~(.+?)~~`)
+	reRule         = regexp.MustCompile(`(?m)^\s*-{3,}\s*$`)
+	reTaskItem     = regexp.MustCompile(`(?m)^(\s*)[-*]\s+\[([ xX])\]\s+`)
+	reListItem     = regexp.MustCompile(`(?m)^[-*]\s+`)
+	reCodeLanguage = regexp.MustCompile(`^[\w.+#-]+$`)
+	reInlineCode   = regexp.MustCompile("`([^`]+)`")
 )
 
 const telegramDivider = "<b>──────────────</b>"
@@ -78,11 +78,15 @@ func markdownToTelegramHTML(text string) string {
 	}
 
 	for i, code := range codeBlocks.codes {
-		escaped := escapeHTML(code)
+		escaped := escapeHTML(code.text)
+		opening := "<pre><code>"
+		if code.language != "" {
+			opening = `<pre><code class="language-` + code.language + `">`
+		}
 		text = strings.ReplaceAll(
 			text,
 			fmt.Sprintf("\x00CB%d\x00", i),
-			fmt.Sprintf("<pre><code>%s</code></pre>", escaped),
+			opening+escaped+"</code></pre>",
 		)
 	}
 
@@ -91,25 +95,47 @@ func markdownToTelegramHTML(text string) string {
 
 type codeBlockMatch struct {
 	text  string
-	codes []string
+	codes []fencedCodeBlock
+}
+
+type fencedCodeBlock struct {
+	text     string
+	language string
 }
 
 func extractCodeBlocks(text string) codeBlockMatch {
-	matches := reCodeBlock.FindAllStringSubmatch(text, -1)
-
-	codes := make([]string, 0, len(matches))
-	for _, match := range matches {
-		codes = append(codes, match[1])
+	lines := strings.Split(text, "\n")
+	output := make([]string, 0, len(lines))
+	var codes []fencedCodeBlock
+	for i := 0; i < len(lines); i++ {
+		opening := strings.TrimSpace(lines[i])
+		fence, ok := markdownFence(opening)
+		if !ok {
+			output = append(output, lines[i])
+			continue
+		}
+		end := i + 1
+		for end < len(lines) && !closesMarkdownFence(lines[end], fence) {
+			end++
+		}
+		if end == len(lines) {
+			output = append(output, lines[i])
+			continue
+		}
+		code := fencedCodeBlock{text: strings.Join(lines[i+1:end], "\n")}
+		if end > i+1 {
+			code.text += "\n"
+		}
+		if info := strings.Fields(opening[fence.width:]); len(info) > 0 &&
+			reCodeLanguage.MatchString(info[0]) {
+			code.language = info[0]
+		}
+		output = append(output, fmt.Sprintf("\x00CB%d\x00", len(codes)))
+		codes = append(codes, code)
+		i = end
 	}
 
-	i := 0
-	text = reCodeBlock.ReplaceAllStringFunc(text, func(string) string {
-		placeholder := fmt.Sprintf("\x00CB%d\x00", i)
-		i++
-		return placeholder
-	})
-
-	return codeBlockMatch{text: text, codes: codes}
+	return codeBlockMatch{text: strings.Join(output, "\n"), codes: codes}
 }
 
 type inlineCodeMatch struct {

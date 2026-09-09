@@ -65,17 +65,23 @@ func runAgentWorker(
 				cancel()
 				continue
 			}
+			if cancellable, ok := session.(channelport.CancellableAgentSession); ok {
+				cancellable.SetCancel(cancel)
+			}
 
 			reply, err := a.Reply(runCtx, userMessage, session)
-			if ctx.Err() != nil {
+			if runCtx.Err() != nil {
 				cleanupCtx, cleanupCancel := context.WithTimeout(
-					context.WithoutCancel(ctx),
+					context.WithoutCancel(runCtx),
 					agentSessionAbortTimeout,
 				)
 				session.Abort(cleanupCtx, "canceled")
 				cleanupCancel()
 				cancel()
-				return nil
+				if ctx.Err() != nil {
+					return nil
+				}
+				continue
 			}
 			if err != nil {
 				reply = agent.ReplyResult{Text: formatReplyError(err)}

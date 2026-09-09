@@ -109,6 +109,46 @@ func TestMarkdownToTelegramHTML_FencedCode(t *testing.T) {
 	}
 }
 
+func TestMarkdownToTelegramHTML_FenceWidthAndLanguage(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "embedded shorter fences remain code",
+			input: "````bash\ncat <<'EOF'\n```\n`pwd` & <tag>\nEOF\n````",
+			want:  "<pre><code class=\"language-bash\">cat &lt;&lt;'EOF'\n```\n`pwd` &amp; &lt;tag&gt;\nEOF\n</code></pre>",
+		},
+		{
+			name:  "only a closing fence line ends code",
+			input: "```bash\nprintf '``` is literal'\n```text\n```",
+			want:  "<pre><code class=\"language-bash\">printf '``` is literal'\n```text\n</code></pre>",
+		},
+		{
+			name:  "language uses first info word",
+			input: "~~~c++ title=example\nint n = 1;\n~~~~",
+			want:  "<pre><code class=\"language-c++\">int n = 1;\n</code></pre>",
+		},
+		{
+			name:  "language cannot inject HTML attributes",
+			input: "```bash\" data-injected=\"true\n<tag>\n```",
+			want:  "<pre><code>&lt;tag&gt;\n</code></pre>",
+		},
+		{
+			name:  "multiple blocks preserve surrounding text",
+			input: "Before\n```bash\none\n```\nBetween\n```\ntwo\n```\nAfter",
+			want:  "Before\n<pre><code class=\"language-bash\">one\n</code></pre>\nBetween\n<pre><code>two\n</code></pre>\nAfter",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := markdownToTelegramHTML(tt.input); got != tt.want {
+				t.Fatalf("markdownToTelegramHTML() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestMarkdownToTelegramHTML_EscapeHTML(t *testing.T) {
 	got := markdownToTelegramHTML("a & b < c > d")
 	want := "a &amp; b &lt; c &gt; d"

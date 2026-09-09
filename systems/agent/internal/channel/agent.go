@@ -26,3 +26,10 @@ type AgentSession interface {
 	Finish(ctx context.Context, result agent.ReplyResult)
 	Abort(ctx context.Context, reason string)
 }
+
+// CancellableAgentSession optionally connects transport stop controls to the
+// current run. The worker calls SetCancel before forwarding any run events.
+type CancellableAgentSession interface {
+	AgentSession
+	SetCancel(context.CancelFunc)
+}

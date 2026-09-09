@@ -110,7 +110,16 @@ func (c *Client) Complete(
 	return agent.ModelClientResult{
 		Messages:     assistantMessage,
 		FinishReason: choice.FinishReason,
+		Usage:        modelUsage(chatCompletion.Usage),
 	}, nil
+}
+
+func modelUsage(usage openai.CompletionUsage) agent.ModelUsage {
+	return agent.ModelUsage{
+		InputTokens:  usage.PromptTokens,
+		OutputTokens: usage.CompletionTokens,
+		TotalTokens:  usage.TotalTokens,
+	}
 }
 
 func mapMessages(
@@ -410,7 +419,7 @@ func parseAssistantMessage(
 		content = refusal
 	}
 
-	parts := make([]conversation.Part, 0, 2+len(toolCalls))
+	parts := make([]conversation.Part, 0, 2)
 	if reasoningText != "" || reasoningOpaque != "" {
 		var replay map[string]json.RawMessage
 		if reasoningOpaque != "" {

@@ -38,6 +38,8 @@ type Client struct {
 }
 
 var _ agent.ModelClient = (*Client)(nil)
+var _ agent.StreamingModelClient = (*Client)(nil)
+var _ agent.ReasoningStreamingModelClient = (*Client)(nil)
 
 type chatAPI interface {
 	Chat(context.Context, *ollamaapi.ChatRequest, ollamaapi.ChatResponseFunc) error
@@ -98,11 +100,41 @@ func (c *Client) Complete(
 	messages []conversation.Message,
 	tools []agent.ToolDefinition,
 ) (agent.ModelClientResult, error) {
+	return c.CompleteStream(ctx, model, messages, tools, nil)
+}
+
+// CompleteStream forwards ordered content deltas synchronously while collecting
+// the complete response, including reasoning and tool calls. A nil onDelta is
+// allowed. Slow callbacks apply backpressure to reading the response stream.
+func (c *Client) CompleteStream(
+	ctx context.Context,
+	model string,
+	messages []conversation.Message,
+	tools []agent.ToolDefinition,
+	onDelta func(string),
+) (agent.ModelClientResult, error) {
+	return c.CompleteStreamWithReasoning(ctx, model, messages, tools, onDelta, nil)
+}
+
+// CompleteStreamWithReasoning forwards thinking separately from content while
+// preserving the complete canonical response. Both callbacks are optional and
+// synchronous, so slow callbacks apply backpressure to the response stream.
+func (c *Client) CompleteStreamWithReasoning(
+	ctx context.Context,
+	model string,
+	messages []conversation.Message,
+	tools []agent.ToolDefinition,
+	onDelta func(string),
+	onReasoning func(string),
+) (agent.ModelClientResult, error) {
 	if strings.TrimSpace(model) == "" {
 		return agent.ModelClientResult{}, fmt.Errorf("model name is required")
 	}
 	if c == nil || c.chat == nil {
 		return agent.ModelClientResult{}, fmt.Errorf("ollama chat client is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return agent.ModelClientResult{}, err
 	}
 
 	reqMessages, err := mapMessages(withPromptProfile(messages), c.mediaStore)
@@ -122,9 +154,14 @@ func (c *Client) Complete(
 		Tools:    reqTools,
 	}
 
-	collector := newStreamCollector()
-	if err := c.chat.Chat(ctx, req, collector.Record); err != nil {
+	collector := newStreamCollector(onDelta, onReasoning)
+	if err := c.chat.Chat(ctx, req, func(resp ollamaapi.ChatResponse) error {
+		return collector.Record(ctx, resp)
+	}); err != nil {
 		return agent.ModelClientResult{}, fmt.Errorf("ollama chat: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return agent.ModelClientResult{}, err
 	}
 
 	return collector.Result()
@@ -550,18 +587,26 @@ func mapToolParameters(parameters map[string]any) (ollamaapi.ToolFunctionParamet
 
 type streamCollector struct {
 	sawResponse bool
+	sawDone     bool
 	content     strings.Builder
 	thinking    strings.Builder
 	toolCalls   []ollamaapi.ToolCall
 	finish      string
+	usage       agent.ModelUsage
+	onDelta     func(string)
+	onReasoning func(string)
 }
 
-func newStreamCollector() *streamCollector {
-	return &streamCollector{}
+func newStreamCollector(onDelta, onReasoning func(string)) *streamCollector {
+	return &streamCollector{onDelta: onDelta, onReasoning: onReasoning}
 }
 
-func (c *streamCollector) Record(resp ollamaapi.ChatResponse) error {
+func (c *streamCollector) Record(ctx context.Context, resp ollamaapi.ChatResponse) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	c.sawResponse = true
+	c.sawDone = c.sawDone || resp.Done
 	c.content.WriteString(resp.Message.Content)
 	c.thinking.WriteString(resp.Message.Thinking)
 	if len(resp.Message.ToolCalls) > 0 {
@@ -570,12 +615,31 @@ func (c *streamCollector) Record(resp ollamaapi.ChatResponse) error {
 	if strings.TrimSpace(resp.DoneReason) != "" {
 		c.finish = resp.DoneReason
 	}
-	return nil
+	if resp.Done {
+		c.usage = agent.ModelUsage{
+			InputTokens:  int64(resp.PromptEvalCount),
+			OutputTokens: int64(resp.EvalCount),
+			TotalTokens:  int64(resp.PromptEvalCount) + int64(resp.EvalCount),
+		}
+	}
+	if resp.Message.Thinking != "" && c.onReasoning != nil && ctx.Err() == nil {
+		c.onReasoning(resp.Message.Thinking)
+	}
+	if resp.Message.Content != "" && c.onDelta != nil && ctx.Err() == nil {
+		c.onDelta(resp.Message.Content)
+	}
+	return ctx.Err()
 }
 
 func (c *streamCollector) Result() (agent.ModelClientResult, error) {
 	if !c.sawResponse {
 		return agent.ModelClientResult{}, fmt.Errorf("ollama chat returned no responses")
+	}
+	if !c.sawDone {
+		return agent.ModelClientResult{}, fmt.Errorf(
+			"ollama chat ended before done: %w",
+			io.ErrUnexpectedEOF,
+		)
 	}
 
 	message := ollamaapi.Message{
@@ -591,6 +655,7 @@ func (c *streamCollector) Result() (agent.ModelClientResult, error) {
 	return agent.ModelClientResult{
 		Messages:     messages,
 		FinishReason: c.finish,
+		Usage:        c.usage,
 	}, nil
 }
 
