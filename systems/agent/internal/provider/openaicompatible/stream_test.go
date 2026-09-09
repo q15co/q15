@@ -24,6 +24,7 @@ func TestCompleteStreamMatchesBatch(t *testing.T) {
 		chunks       []string
 		finishReason string
 		deltas       []string
+		reasoning    []string
 	}{
 		{
 			name:    "content and reasoning",
@@ -33,10 +34,19 @@ func TestCompleteStreamMatchesBatch(t *testing.T) {
 				`{"choices":[{"index":0,"delta":{"reasoning_content":"private ","reasoning_opaque":"opaque-"}}]}`,
 				`{"choices":[{"index":0,"delta":{"reasoning_content":"thoughts","reasoning_opaque":"token"}}]}`,
 				`{"choices":[{"index":0,"delta":{"content":"  Hello"}}]}`,
-				`{"choices":[{"index":1,"delta":{"content":"ignored alternative"}},{"index":0,"delta":{"content":" world!  "}}]}`,
+				`{"choices":[{"index":1,"delta":{"content":"ignored alternative","reasoning_content":"ignored reasoning"}},{"index":0,"delta":{"content":" world!  "}}]}`,
 			},
 			finishReason: "stop",
 			deltas:       []string{"  Hello", " world!  "},
+			reasoning:    []string{"private ", "thoughts"},
+		},
+		{
+			name:    "opaque replay only",
+			message: `{"role":"assistant","reasoning_opaque":"opaque-token"}`,
+			chunks: []string{
+				`{"choices":[{"index":0,"delta":{"reasoning_opaque":"opaque-token"}}]}`,
+			},
+			finishReason: "stop",
 		},
 		{
 			name:    "parallel tool fragments",
@@ -143,16 +153,45 @@ func TestCompleteStreamMatchesBatch(t *testing.T) {
 			if !reflect.DeepEqual(streamRequest, batchRequest) {
 				t.Errorf("stream request = %#v, batch request = %#v", streamRequest, batchRequest)
 			}
+			var reasoning []string
+			deltas = nil
+			withReasoning, err := client.CompleteStreamWithReasoning(
+				context.Background(), "model", messages, tools,
+				func(delta string) { deltas = append(deltas, delta) },
+				func(delta string) { reasoning = append(reasoning, delta) },
+			)
+			if err != nil {
+				t.Fatalf("CompleteStreamWithReasoning: %v", err)
+			}
+			if !reflect.DeepEqual(withReasoning, batch) {
+				t.Fatalf("with reasoning = %#v, batch = %#v", withReasoning, batch)
+			}
+			if !reflect.DeepEqual(deltas, tt.deltas) {
+				t.Errorf("content deltas = %#v, want %#v", deltas, tt.deltas)
+			}
+			if !reflect.DeepEqual(reasoning, tt.reasoning) {
+				t.Errorf("reasoning deltas = %#v, want %#v", reasoning, tt.reasoning)
+			}
 		})
 	}
 }
 
-func TestCompleteStreamDeliversBeforeCompletionAndStopsAtDone(t *testing.T) {
+func TestCompleteStreamWithReasoningDeliversBeforeCompletionAndStopsAtDone(t *testing.T) {
+	firstReasoning := make(chan struct{})
 	firstDelta := make(chan struct{})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	client := newStreamTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
+		writeStreamChunk(
+			w,
+			`{"choices":[{"index":0,"delta":{"reasoning_content":"considering","reasoning_opaque":"opaque-token"}}]}`,
+		)
+		select {
+		case <-firstReasoning:
+		case <-r.Context().Done():
+			return
+		}
 		writeStreamChunk(w, `{"choices":[{"index":0,"delta":{"content":"First"}}]}`)
 		select {
 		case <-firstDelta:
@@ -168,11 +207,16 @@ func TestCompleteStreamDeliversBeforeCompletionAndStopsAtDone(t *testing.T) {
 		<-r.Context().Done()
 	})
 	var deltas []string
-	result, err := client.CompleteStream(ctx, "model", nil, nil, func(delta string) {
+	result, err := client.CompleteStreamWithReasoning(ctx, "model", nil, nil, func(delta string) {
 		deltas = append(deltas, delta)
 		if delta == "First" {
 			close(firstDelta)
 		}
+	}, func(delta string) {
+		if delta != "considering" {
+			t.Errorf("reasoning delta = %q, want considering", delta)
+		}
+		close(firstReasoning)
 	})
 	if err != nil {
 		t.Fatalf("CompleteStream: %v", err)
@@ -300,6 +344,61 @@ func TestCompleteStreamCancellation(t *testing.T) {
 	}
 	if !reflect.DeepEqual(result, agent.ModelClientResult{}) {
 		t.Errorf("cancelled stream returned partial result: %#v", result)
+	}
+}
+
+func TestCompleteStreamWithReasoningCancellationStopsBothCallbacks(t *testing.T) {
+	for _, cancelFrom := range []string{"before request", "reasoning", "content"} {
+		t.Run(cancelFrom, func(t *testing.T) {
+			client := newStreamTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				writeStreamChunk(
+					w,
+					`{"choices":[{"index":0,"delta":{"reasoning_content":"first thought","content":"first answer","reasoning_opaque":"secret replay"}}]}`,
+				)
+				writeStreamChunk(
+					w,
+					`{"choices":[{"index":0,"delta":{"reasoning_content":"later thought","content":"later answer"},"finish_reason":"stop"}]}`,
+				)
+				writeStreamChunk(w, "[DONE]")
+			})
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if cancelFrom == "before request" {
+				cancel()
+			}
+			var callbacks []string
+			result, err := client.CompleteStreamWithReasoning(ctx, "model", nil, nil,
+				func(delta string) {
+					callbacks = append(callbacks, "content: "+delta)
+					if cancelFrom == "content" {
+						cancel()
+					}
+				},
+				func(delta string) {
+					callbacks = append(callbacks, "reasoning: "+delta)
+					if cancelFrom == "reasoning" {
+						cancel()
+					}
+				},
+			)
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("error = %v, want context.Canceled", err)
+			}
+			var want []string
+			if cancelFrom != "before request" {
+				want = append(want, "reasoning: first thought")
+			}
+			if cancelFrom == "content" {
+				want = append(want, "content: first answer")
+			}
+			if !reflect.DeepEqual(callbacks, want) {
+				t.Errorf("callbacks = %#v, want %#v", callbacks, want)
+			}
+			if !reflect.DeepEqual(result, agent.ModelClientResult{}) {
+				t.Fatalf("canceled stream returned partial result: %#v", result)
+			}
+		})
 	}
 }
 

@@ -31,6 +31,7 @@ type ModelClientDump struct {
 
 var _ agent.ModelClient = (*ModelClientDump)(nil)
 var _ agent.StreamingModelClient = (*ModelClientDump)(nil)
+var _ agent.ReasoningStreamingModelClient = (*ModelClientDump)(nil)
 
 // NewModelClientDump wraps inner with an optional JSONL writer. If writer is
 // nil, the returned wrapper is a no-op pass-through.
@@ -66,6 +67,32 @@ func (d *ModelClientDump) CompleteStream(
 	}
 	return d.complete(model, messages, tools, func() (agent.ModelClientResult, error) {
 		return streaming.CompleteStream(ctx, model, messages, tools, onDelta)
+	})
+}
+
+// CompleteStreamWithReasoning forwards optional reasoning callbacks without
+// changing the canonical payload capture or the content-only streaming fallback.
+func (d *ModelClientDump) CompleteStreamWithReasoning(
+	ctx context.Context,
+	model string,
+	messages []conversation.Message,
+	tools []agent.ToolDefinition,
+	onDelta func(string),
+	onReasoning func(string),
+) (agent.ModelClientResult, error) {
+	streaming, ok := d.inner.(agent.ReasoningStreamingModelClient)
+	if !ok || onReasoning == nil {
+		return d.CompleteStream(ctx, model, messages, tools, onDelta)
+	}
+	return d.complete(model, messages, tools, func() (agent.ModelClientResult, error) {
+		return streaming.CompleteStreamWithReasoning(
+			ctx,
+			model,
+			messages,
+			tools,
+			onDelta,
+			onReasoning,
+		)
 	})
 }
 

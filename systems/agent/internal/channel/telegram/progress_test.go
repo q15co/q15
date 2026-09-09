@@ -8,6 +8,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	ta "github.com/mymmrac/telego/telegoapi"
 	"github.com/q15co/q15/systems/agent/internal/agent"
 )
 
@@ -17,8 +18,8 @@ func TestCommandProgressPreviewBoundaries(t *testing.T) {
 		value progressMode
 		limit int
 	}{
-		{name: "progress", value: progressModeProgress, limit: 56},
-		{name: "verbose", value: progressModeVerbose, limit: 96},
+		{name: "progress", value: progressModeProgress, limit: 320},
+		{name: "verbose", value: progressModeVerbose, limit: 640},
 	} {
 		for _, size := range []struct {
 			name   string
@@ -39,7 +40,7 @@ func TestCommandProgressPreviewBoundaries(t *testing.T) {
 				if size.offset > 0 {
 					wantDetail = "go test " + strings.Repeat("界", mode.limit-11) + "..."
 				}
-				want := "💻 Running `" + wantDetail + "`"
+				want := "💻 Running command\n\n```bash\n" + wantDetail + "\n```"
 				if got != want {
 					t.Fatalf("summary = %q, want %q", got, want)
 				}
@@ -51,12 +52,136 @@ func TestCommandProgressPreviewBoundaries(t *testing.T) {
 	}
 }
 
+func TestCommandProgressPreviewLineBoundaries(t *testing.T) {
+	for _, mode := range []struct {
+		name  string
+		value progressMode
+		lines int
+	}{
+		{name: "progress", value: progressModeProgress, lines: 5},
+		{name: "verbose", value: progressModeVerbose, lines: 10},
+	} {
+		for _, size := range []struct {
+			name   string
+			offset int
+		}{
+			{name: "below limit", offset: -1},
+			{name: "at limit"},
+			{name: "above limit", offset: 1},
+			{name: "huge command", offset: 10_000},
+		} {
+			t.Run(mode.name+"/"+size.name, func(t *testing.T) {
+				command := strings.Repeat(
+					"printf 'ok'\n",
+					mode.lines+size.offset-1,
+				) + "printf 'end'"
+				got := commandProgressPreview(command, mode.value)
+				want := command
+				if size.offset > 0 {
+					want = strings.Repeat("printf 'ok'\n", mode.lines-1) + "printf 'ok'..."
+				}
+				if got != want {
+					t.Fatalf("preview = %q, want %q", got, want)
+				}
+				if lines := strings.Count(got, "\n") + 1; lines > mode.lines {
+					t.Fatalf("preview has %d lines, limit %d: %q", lines, mode.lines, got)
+				}
+			})
+		}
+	}
+}
+
+func TestCommandProgressPreservesShellSyntaxAndRendering(t *testing.T) {
+	for _, command := range []string{
+		"printf '%s\\n' `pwd`\n\tprintf '%s\\n' \"$PATH\" > /tmp/out",
+		"cat <<'EOF'\n```\n<tg-button> & **literal** `ticks`\n````\nEOF",
+		"cat <<'EOF'\n| A | B |\n|-|-|\n| 1 | 2 |\nEOF",
+		strings.Repeat("`", 640),
+	} {
+		got := summarizeToolCall(agent.ToolCall{
+			Name:      "exec",
+			Arguments: progressTestArgs(t, "command", command),
+		}, progressModeVerbose)
+		chunks := planRichText(got)
+		if len(chunks) != 1 || !chunks[0].rich || chunks[0].richMarkdown != got {
+			t.Fatalf("rich rendering altered the command preview: %#v", chunks)
+		}
+		blocks := parseMarkdownBlocks(got)
+		if len(blocks) != 2 {
+			t.Fatalf("preview escaped the single code block: %#v", blocks)
+		}
+		wantHTML := "💻 Running command\n\n<pre><code class=\"language-bash\">" +
+			escapeHTML(command) + "\n</code></pre>"
+		if html := markdownToTelegramHTML(chunks[0].fallback); html != wantHTML {
+			t.Fatalf("fallback altered the shell syntax or escaping: %q, want %q", html, wantHTML)
+		}
+	}
+}
+
+func TestCommandProgressEditRendersRichAndHTMLFallback(t *testing.T) {
+	caller := &mockAPICaller{responses: []*ta.Response{
+		telegramAPIError(400, "rich edit rejected"),
+		{Ok: true, Result: []byte(`{}`)},
+	}}
+	ch := newTestChannelWithCaller(t, caller)
+	command := "cat <<'EOF'\n```\n<tg-button> & **literal** `ticks`\nEOF"
+	status := summarizeToolCall(agent.ToolCall{
+		Name:      "exec",
+		Arguments: progressTestArgs(t, "command", command),
+	}, progressModeProgress)
+	if err := ch.EditText(t.Context(), "123", "456", status); err != nil {
+		t.Fatalf("EditText() error = %v", err)
+	}
+	if len(caller.calls) != 2 {
+		t.Fatalf("calls = %d, want rich attempt plus HTML fallback", len(caller.calls))
+	}
+	for _, call := range caller.calls {
+		if !strings.HasSuffix(call.url, "/editMessageText") {
+			t.Fatalf("URL = %q, want /editMessageText", call.url)
+		}
+	}
+	if got := richMessageBody(t, caller.calls[0])["markdown"]; got != status {
+		t.Fatalf("rich Markdown = %#v, want %q", got, status)
+	}
+	want := "💻 Running command\n\n<pre><code class=\"language-bash\">" +
+		"cat &lt;&lt;'EOF'\n```\n&lt;tg-button&gt; &amp; **literal** `ticks`\nEOF\n</code></pre>"
+	if got := caller.calls[1].body["text"]; got != want {
+		t.Fatalf("HTML fallback = %#v, want %q", got, want)
+	}
+	if got := caller.calls[1].body["parse_mode"]; got != "HTML" {
+		t.Fatalf("fallback parse mode = %#v, want HTML", got)
+	}
+}
+
+func TestCommandProgressControlsPreserveUsefulWhitespace(t *testing.T) {
+	command := "printf 'a  b'\r\n\tprintf `pwd`\x00\x1b\u0085\u202e\u2066\u2069\rprintf 'end'"
+	got := commandProgressPreview(command, progressModeProgress)
+	want := "printf 'a  b'\n\tprintf `pwd`      \nprintf 'end'"
+	if got != want {
+		t.Fatalf("preview = %q, want %q", got, want)
+	}
+	for _, r := range got {
+		if (unicode.IsControl(r) && r != '\n' && r != '\t') || unicode.Is(unicode.Cf, r) {
+			t.Fatalf("preview contains control character %U: %q", r, got)
+		}
+	}
+	separators := "one\u2028two\u2029three\nfour\nfive\nsix"
+	if got := commandProgressPreview(separators, progressModeProgress); got != "one\ntwo\nthree\nfour\nfive..." {
+		t.Fatalf("Unicode line separators escaped line limit: %q", got)
+	}
+	if got := summarizeToolCall(agent.ToolCall{
+		Name:      "exec",
+		Arguments: progressTestArgs(t, "command", "\x00\x1b\u202e"),
+	}, progressModeProgress); got != "💻 Running command" {
+		t.Fatalf("control-only command = %q, want fallback", got)
+	}
+}
+
 func TestProgressPreviewsRemoveControlCharacters(t *testing.T) {
 	for _, tt := range []struct {
 		name string
 		key  string
 	}{
-		{name: "exec", key: "command"},
 		{name: "exec_read", key: "session_id"},
 		{name: "exec_write", key: "session_id"},
 		{name: "exec_kill", key: "session_id"},

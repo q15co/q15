@@ -114,6 +114,24 @@ type StreamingModelClient interface {
 	) (ModelClientResult, error)
 }
 
+// ReasoningStreamingModelClient optionally exposes provider-supplied reasoning
+// text separately from assistant content. Opaque reasoning replay is never a delta.
+type ReasoningStreamingModelClient interface {
+	StreamingModelClient
+	// CompleteStreamWithReasoning preserves CompleteStream's canonical result,
+	// synchronous ordering, backpressure, and cancellation contract. onReasoning
+	// receives only nonempty reasoning text; onDelta remains content-only. Either
+	// callback may be nil. Consumers must keep reasoning separate from final text.
+	CompleteStreamWithReasoning(
+		ctx context.Context,
+		model string,
+		messages []conversation.Message,
+		tools []ToolDefinition,
+		onDelta func(string),
+		onReasoning func(string),
+	) (ModelClientResult, error)
+}
+
 // Tool is a runnable capability exposed to the model.
 type Tool interface {
 	// Definition returns the static tool metadata exposed to the model.

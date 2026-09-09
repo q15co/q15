@@ -22,6 +22,7 @@ func TestProviderStreamsThroughRuntimeRoutingAndPayloadCapture(t *testing.T) {
 		t.Run(providerType, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
+			firstReasoning := make(chan struct{})
 			firstDelta := make(chan struct{})
 			server := httptest.NewServer(
 				http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -29,10 +30,24 @@ func TestProviderStreamsThroughRuntimeRoutingAndPayloadCapture(t *testing.T) {
 						w.Header().Set("Content-Type", "application/x-ndjson")
 						_, _ = io.WriteString(
 							w,
-							`{"message":{"content":"Hello"},"done":false}`+"\n",
+							`{"message":{"thinking":"Considering"},"done":false}`+"\n",
 						)
 					} else {
 						w.Header().Set("Content-Type", "text/event-stream")
+						_, _ = io.WriteString(w, "data: "+`{"choices":[{"index":0,"delta":{"reasoning_content":"Considering","reasoning_opaque":"private-replay"}}]}`+"\n\n")
+					}
+					w.(http.Flusher).Flush()
+					select {
+					case <-firstReasoning:
+					case <-r.Context().Done():
+						return
+					}
+					if providerType == "ollama" {
+						_, _ = io.WriteString(
+							w,
+							`{"message":{"content":"Hello"},"done":false}`+"\n",
+						)
+					} else {
 						_, _ = io.WriteString(w, "data: "+`{"choices":[{"index":0,"delta":{"content":"Hello"}}]}`+"\n\n")
 					}
 					w.(http.Flusher).Flush()
@@ -76,11 +91,18 @@ func TestProviderStreamsThroughRuntimeRoutingAndPayloadCapture(t *testing.T) {
 				t.Fatal(err)
 			}
 			client := dump.NewModelClientDump(adapter, &canonical)
-			var deltas string
+			var deltas, reasoning string
 			result, err := agent.NewEngine(client, nil, []string{"model"}).
 				Run(ctx, agent.EngineRequest{
 					Messages: []conversation.Message{conversation.UserMessage("hello")},
 					Observer: agent.RunObserverFunc(func(_ context.Context, event agent.RunEvent) {
+						if event.Type == agent.RunEventModelReasoningDelta {
+							if reasoning == "" {
+								close(firstReasoning)
+							}
+							reasoning += event.Delta
+							return
+						}
 						if event.Type != agent.RunEventModelTurnDelta {
 							return
 						}
@@ -90,8 +112,15 @@ func TestProviderStreamsThroughRuntimeRoutingAndPayloadCapture(t *testing.T) {
 						deltas += event.Delta
 					}),
 				})
-			if err != nil || deltas != "Hello world" || result.FinalText != deltas {
-				t.Fatalf("runtime stream: deltas=%q final=%q err=%v", deltas, result.FinalText, err)
+			if err != nil || deltas != "Hello world" || reasoning != "Considering" ||
+				result.FinalText != deltas {
+				t.Fatalf(
+					"runtime stream: deltas=%q reasoning=%q final=%q err=%v",
+					deltas,
+					reasoning,
+					result.FinalText,
+					err,
+				)
 			}
 			if !bytes.Contains(wire.Bytes(), []byte(`"type":"wire_response"`)) ||
 				!bytes.Contains(canonical.Bytes(), []byte(`"type":"canonical_response"`)) {

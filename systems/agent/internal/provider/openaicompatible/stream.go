@@ -18,6 +18,7 @@ import (
 )
 
 var _ agent.StreamingModelClient = (*Client)(nil)
+var _ agent.ReasoningStreamingModelClient = (*Client)(nil)
 
 // CompleteStream streams assistant content synchronously, then returns the same
 // canonical response as Complete. Reasoning and tool arguments stay private to
@@ -28,6 +29,20 @@ func (c *Client) CompleteStream(
 	messages []conversation.Message,
 	tools []agent.ToolDefinition,
 	onDelta func(string),
+) (agent.ModelClientResult, error) {
+	return c.CompleteStreamWithReasoning(ctx, model, messages, tools, onDelta, nil)
+}
+
+// CompleteStreamWithReasoning streams reasoning_content separately from content,
+// while keeping opaque replay state and tool arguments in the canonical result.
+// Both callbacks are optional and execute synchronously.
+func (c *Client) CompleteStreamWithReasoning(
+	ctx context.Context,
+	model string,
+	messages []conversation.Message,
+	tools []agent.ToolDefinition,
+	onDelta func(string),
+	onReasoning func(string),
 ) (agent.ModelClientResult, error) {
 	if strings.TrimSpace(model) == "" {
 		return agent.ModelClientResult{}, fmt.Errorf("model name is required")
@@ -75,7 +90,7 @@ func (c *Client) CompleteStream(
 		if bytes.Equal(data, []byte("[DONE]")) {
 			return accumulated.result()
 		}
-		if err := accumulated.add(data, onDelta); err != nil {
+		if err := accumulated.add(ctx, data, onDelta, onReasoning); err != nil {
 			return agent.ModelClientResult{}, fmt.Errorf("chat completion stream: %w", err)
 		}
 	}
@@ -117,7 +132,11 @@ type toolCallFragments struct {
 	arguments strings.Builder
 }
 
-func (s *completionStream) add(data []byte, onDelta func(string)) error {
+func (s *completionStream) add(
+	ctx context.Context,
+	data []byte,
+	onDelta, onReasoning func(string),
+) error {
 	var chunk struct {
 		Error   json.RawMessage         `json:"error"`
 		Usage   *openai.CompletionUsage `json:"usage"`
@@ -186,11 +205,14 @@ func (s *completionStream) add(data []byte, onDelta func(string)) error {
 			call.arguments.WriteString(fragment.Function.Arguments)
 		}
 		s.finishReason = choice.FinishReason
-		if delta.Content != "" && onDelta != nil {
+		if delta.ReasoningContent != "" && onReasoning != nil && ctx.Err() == nil {
+			onReasoning(delta.ReasoningContent)
+		}
+		if delta.Content != "" && onDelta != nil && ctx.Err() == nil {
 			onDelta(delta.Content)
 		}
 	}
-	return nil
+	return ctx.Err()
 }
 
 func (s *completionStream) result() (agent.ModelClientResult, error) {

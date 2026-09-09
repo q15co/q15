@@ -316,6 +316,8 @@ func (s *agentRunSession) OnRunEvent(ctx context.Context, event agent.RunEvent) 
 		s.noteActivity(ctx, thinkingStatus)
 	case agent.RunEventModelTurnDelta:
 		s.appendDraft(ctx, event.Delta)
+	case agent.RunEventModelReasoningDelta:
+		s.appendReasoningDraft(ctx, event.Delta)
 	case agent.RunEventToolStarted:
 		s.noteActivity(ctx, summarizeToolCall(event.ToolCall, s.mode))
 	case agent.RunEventToolFinished:
@@ -536,9 +538,11 @@ func (s *agentRunSession) noteActivity(ctx context.Context, summary string) {
 	if summary != "" {
 		s.lastStep = summary
 	}
-	if s.draftVisibleLocked() && summary != "" {
+	if s.draft != nil && !s.draft.disabled && summary != "" {
 		s.draft.status = summary
-		s.scheduleDraftLocked(ctx, telegramDraftUpdateInterval)
+		if s.draftVisibleLocked() {
+			s.scheduleDraftLocked(ctx, telegramDraftUpdateInterval)
+		}
 	}
 	s.resetStallTimersLocked(ctx)
 	hasStatus := s.statusMessageID != ""
@@ -552,12 +556,18 @@ func (s *agentRunSession) noteActivity(ctx context.Context, summary string) {
 
 func (s *agentRunSession) showStatus(ctx context.Context, text string) {
 	text = strings.TrimSpace(text)
-	if text == "" {
+	if text == "" || ctx.Err() != nil {
 		return
 	}
 
 	s.mu.Lock()
 	if s.finished || s.statusMessageID != "" || s.draftVisibleLocked() {
+		s.mu.Unlock()
+		return
+	}
+	if s.draft != nil && !s.draft.disabled {
+		s.draft.status = text
+		s.scheduleDraftLocked(ctx, telegramDraftUpdateInterval)
 		s.mu.Unlock()
 		return
 	}
@@ -670,6 +680,9 @@ func (s *agentRunSession) resetStallTimersLocked(ctx context.Context) {
 }
 
 func (s *agentRunSession) showOrUpdateStatus(ctx context.Context, text string) {
+	if ctx.Err() != nil {
+		return
+	}
 	s.mu.Lock()
 	hasStatus := s.statusMessageID != ""
 	s.mu.Unlock()
@@ -761,8 +774,8 @@ func summarizeToolCall(call agent.ToolCall, mode progressMode) string {
 	case "apply_patch":
 		return "🩹 Applying patch"
 	case "exec":
-		if command := extractStringArg(call.Arguments, "command"); command != "" {
-			return formatStatusMessage("💻", "Running", truncateSingleLine(command, limit))
+		if command := commandProgressPreview(extractStringArg(call.Arguments, "command"), mode); command != "" {
+			return "💻 Running command\n\n" + fencedCommandPreview(command)
 		}
 		return "💻 Running command"
 	case "exec_read", "exec_write", "exec_kill":
@@ -794,6 +807,61 @@ func summarizeToolCall(call agent.ToolCall, mode progressMode) string {
 	default:
 		return "⚙️ " + inlineCode(truncateSingleLine(humanizeAction(name), limit))
 	}
+}
+
+func commandProgressPreview(command string, mode progressMode) string {
+	charLimit, lineLimit := 320, 5
+	if mode == progressModeVerbose {
+		charLimit, lineLimit = 640, 10
+	}
+	command = strings.ReplaceAll(command, "\r\n", "\n")
+	command = strings.Map(func(r rune) rune {
+		switch r {
+		case '\n', '\t':
+			return r
+		case '\r', '\u2028', '\u2029':
+			return '\n'
+		default:
+			if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+				return ' '
+			}
+			return r
+		}
+	}, command)
+	runes := []rune(strings.TrimSpace(command))
+	end := min(len(runes), charLimit)
+	lines := 1
+	for i, r := range runes[:end] {
+		if r == '\n' {
+			lines++
+			if lines > lineLimit {
+				end = i
+				break
+			}
+		}
+	}
+	if end == len(runes) {
+		return string(runes)
+	}
+	// Keep the truncation marker within both limits, including when the last
+	// visible line is blank or the command contains multibyte characters.
+	end = min(end, charLimit-3)
+	return strings.TrimRightFunc(string(runes[:end]), unicode.IsSpace) + "..."
+}
+
+func fencedCommandPreview(command string) string {
+	width, run := 3, 0
+	for _, r := range command {
+		if r == '`' {
+			run++
+			width = max(width, run+1)
+		} else {
+			run = 0
+		}
+	}
+	fence := strings.Repeat("`", width)
+	// Both execution service backends run the command using bash -lc.
+	return fence + "bash\n" + command + "\n" + fence
 }
 
 func summarizeToolFinished(call agent.ToolCall, err error) string {

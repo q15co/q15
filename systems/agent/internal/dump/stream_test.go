@@ -34,6 +34,101 @@ func (f *streamingModelClient) CompleteStream(
 	return f.result, f.err
 }
 
+type reasoningModelClient struct {
+	streamingModelClient
+	reasoningCalls int
+}
+
+func (f *reasoningModelClient) CompleteStreamWithReasoning(
+	_ context.Context,
+	_ string,
+	_ []conversation.Message,
+	_ []agent.ToolDefinition,
+	onDelta func(string),
+	onReasoning func(string),
+) (agent.ModelClientResult, error) {
+	f.reasoningCalls++
+	if onReasoning != nil {
+		onReasoning("considering")
+	}
+	if onDelta != nil {
+		onDelta("hello")
+	}
+	return f.result, f.err
+}
+
+func TestCanonicalDumpPreservesReasoningAndCanonicalCapture(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		for _, streamErr := range []error{nil, context.Canceled} {
+			var buf bytes.Buffer
+			var writer io.Writer
+			if enabled {
+				writer = &buf
+			}
+			inner := &reasoningModelClient{
+				streamingModelClient: streamingModelClient{fakeModelClient: fakeModelClient{
+					result: agent.ModelClientResult{
+						Messages: []conversation.Message{conversation.AssistantMessage(
+							conversation.Reasoning(
+								"considering",
+								nil,
+							),
+							conversation.Text("hello", ""),
+						)},
+					},
+					err: streamErr,
+				}},
+			}
+			var fragments []string
+			result, err := NewModelClientDump(inner, writer).CompleteStreamWithReasoning(
+				context.Background(), "model", nil, nil,
+				func(text string) { fragments = append(fragments, "content: "+text) },
+				func(text string) { fragments = append(fragments, "reasoning: "+text) },
+			)
+			if err != streamErr || !reflect.DeepEqual(result, inner.result) ||
+				inner.reasoningCalls != 1 || inner.streamCalls != 0 || inner.calls != 0 ||
+				!reflect.DeepEqual(
+					fragments,
+					[]string{"reasoning: considering", "content: hello"},
+				) {
+				t.Fatalf("reasoning capture result=%#v err=%v fragments=%v", result, err, fragments)
+			}
+			entries := parseJSONL(t, &buf)
+			if !enabled {
+				if len(entries) != 0 {
+					t.Fatalf("nil writer captured entries: %#v", entries)
+				}
+				continue
+			}
+			wantType := "canonical_response"
+			if streamErr != nil {
+				wantType = "canonical_error"
+			}
+			if len(entries) != 2 || entries[0]["type"] != "canonical_request" ||
+				entries[1]["type"] != wantType {
+				t.Fatalf("reasoning capture entries = %#v", entries)
+			}
+		}
+	}
+}
+
+func TestCanonicalDumpReasoningFallsBackToContentStream(t *testing.T) {
+	inner := &streamingModelClient{fakeModelClient: fakeModelClient{
+		result: agent.ModelClientResult{FinishReason: "stop"},
+	}}
+	var buf bytes.Buffer
+	var content string
+	result, err := NewModelClientDump(inner, &buf).CompleteStreamWithReasoning(
+		context.Background(), "model", nil, nil,
+		func(text string) { content += text },
+		func(string) { t.Fatal("content-only provider synthesized reasoning") },
+	)
+	if err != nil || result.FinishReason != "stop" || content != "hello" ||
+		inner.streamCalls != 1 || inner.calls != 0 || len(parseJSONL(t, &buf)) != 2 {
+		t.Fatalf("reasoning fallback result=%#v err=%v content=%q", result, err, content)
+	}
+}
+
 func TestCanonicalDumpPreservesStreamingAndErrors(t *testing.T) {
 	for _, enabled := range []bool{false, true} {
 		for _, streamErr := range []error{nil, context.Canceled} {

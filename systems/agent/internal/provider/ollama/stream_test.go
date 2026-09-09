@@ -21,7 +21,7 @@ func TestStreamCollectorForwardsOnlyContentAndPreservesResponse(t *testing.T) {
 	var deltas []string
 	collector := newStreamCollector(func(delta string) {
 		deltas = append(deltas, delta)
-	})
+	}, nil)
 	var args ollamaapi.ToolCallFunctionArguments
 	if err := json.Unmarshal([]byte(`{"path":"README.md"}`), &args); err != nil {
 		t.Fatal(err)
@@ -43,7 +43,7 @@ func TestStreamCollectorForwardsOnlyContentAndPreservesResponse(t *testing.T) {
 	}
 	wantCounts := []int{0, 1, 1, 2, 2, 3}
 	for i, response := range responses {
-		if err := collector.Record(response); err != nil {
+		if err := collector.Record(context.Background(), response); err != nil {
 			t.Fatalf("Record(%d): %v", i, err)
 		}
 		if len(deltas) != wantCounts[i] {
@@ -134,19 +134,49 @@ func TestCompleteStreamMatchesCompleteForNativeAndBearerClients(t *testing.T) {
 			if streamed.Usage.TotalTokens != 19 || streamed.FinishReason != "stop" {
 				t.Fatalf("lost usage or finish reason: %#v", streamed)
 			}
+			var reasoning []string
+			deltas = nil
+			withReasoning, err := client.CompleteStreamWithReasoning(
+				context.Background(), "model", messages, tools,
+				func(delta string) { deltas = append(deltas, delta) },
+				func(delta string) { reasoning = append(reasoning, delta) },
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(withReasoning, batch) {
+				t.Fatalf("with reasoning = %#v, batch = %#v", withReasoning, batch)
+			}
+			if want := []string{"hel", "lo"}; !reflect.DeepEqual(deltas, want) {
+				t.Errorf("content deltas = %#v, want %#v", deltas, want)
+			}
+			if want := []string{"considering ", "carefully"}; !reflect.DeepEqual(reasoning, want) {
+				t.Errorf("reasoning deltas = %#v, want %#v", reasoning, want)
+			}
 		})
 	}
 }
 
-func TestCompleteStreamEmitsBeforeResponseFinishes(t *testing.T) {
+func TestCompleteStreamWithReasoningEmitsBeforeResponseFinishes(t *testing.T) {
 	for _, apiKey := range []string{"", "ollama-key"} {
 		t.Run("api_key="+apiKey, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
+			firstReasoning := make(chan struct{})
 			firstDelta := make(chan struct{})
 			server := httptest.NewServer(
 				http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 					w.Header().Set("Content-Type", "application/x-ndjson")
+					_, _ = io.WriteString(
+						w,
+						`{"message":{"thinking":"considering"},"done":false}`+"\n",
+					)
+					w.(http.Flusher).Flush()
+					select {
+					case <-firstReasoning:
+					case <-ctx.Done():
+						return
+					}
 					_, _ = io.WriteString(w, `{"message":{"content":"hello"},"done":false}`+"\n")
 					w.(http.Flusher).Flush()
 					select {
@@ -162,12 +192,24 @@ func TestCompleteStreamEmitsBeforeResponseFinishes(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			result, err := client.CompleteStream(ctx, "model", nil, nil, func(delta string) {
-				if delta != "hello" {
-					t.Errorf("delta = %q, want hello", delta)
-				}
-				close(firstDelta)
-			})
+			result, err := client.CompleteStreamWithReasoning(
+				ctx,
+				"model",
+				nil,
+				nil,
+				func(delta string) {
+					if delta != "hello" {
+						t.Errorf("delta = %q, want hello", delta)
+					}
+					close(firstDelta)
+				},
+				func(delta string) {
+					if delta != "considering" {
+						t.Errorf("reasoning delta = %q, want considering", delta)
+					}
+					close(firstReasoning)
+				},
+			)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -260,5 +302,64 @@ func TestCompleteStreamCancellationStopsCallbacks(t *testing.T) {
 				t.Fatalf("canceled stream returned partial result: %#v", result)
 			}
 		})
+	}
+}
+
+func TestCompleteStreamWithReasoningCancellationStopsBothCallbacks(t *testing.T) {
+	for _, apiKey := range []string{"", "ollama-key"} {
+		for _, cancelFrom := range []string{"before request", "reasoning", "content"} {
+			t.Run("api_key="+apiKey+"/"+cancelFrom, func(t *testing.T) {
+				server := httptest.NewServer(
+					http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+						w.Header().Set("Content-Type", "application/x-ndjson")
+						_, _ = io.WriteString(w, strings.Join([]string{
+							`{"message":{"thinking":"first thought","content":"first answer"},"done":false}`,
+							`{"message":{"thinking":"later thought","content":"later answer"},"done":true}`,
+						}, "\n")+"\n")
+					}),
+				)
+				defer server.Close()
+				client, err := NewClient(server.URL, apiKey, nil, server.Client().Transport)
+				if err != nil {
+					t.Fatal(err)
+				}
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				if cancelFrom == "before request" {
+					cancel()
+				}
+				var callbacks []string
+				result, err := client.CompleteStreamWithReasoning(ctx, "model", nil, nil,
+					func(delta string) {
+						callbacks = append(callbacks, "content: "+delta)
+						if cancelFrom == "content" {
+							cancel()
+						}
+					},
+					func(delta string) {
+						callbacks = append(callbacks, "reasoning: "+delta)
+						if cancelFrom == "reasoning" {
+							cancel()
+						}
+					},
+				)
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("error = %v, want context.Canceled", err)
+				}
+				var want []string
+				if cancelFrom != "before request" {
+					want = append(want, "reasoning: first thought")
+				}
+				if cancelFrom == "content" {
+					want = append(want, "content: first answer")
+				}
+				if !reflect.DeepEqual(callbacks, want) {
+					t.Errorf("callbacks = %#v, want %#v", callbacks, want)
+				}
+				if !reflect.DeepEqual(result, agent.ModelClientResult{}) {
+					t.Fatalf("canceled stream returned partial result: %#v", result)
+				}
+			})
+		}
 	}
 }

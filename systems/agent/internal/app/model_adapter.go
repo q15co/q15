@@ -48,11 +48,13 @@ type providerModelBinder interface {
 var errProviderModelUnavailable = errors.New("provider model is not in the current roster")
 
 var (
-	_ agent.ModelClient          = (*routedModelAdapter)(nil)
-	_ providerModelBinder        = (*routedModelAdapter)(nil)
-	_ agent.ModelClient          = boundProviderModelClient{}
-	_ agent.StreamingModelClient = (*routedModelAdapter)(nil)
-	_ agent.StreamingModelClient = boundProviderModelClient{}
+	_ agent.ModelClient                   = (*routedModelAdapter)(nil)
+	_ providerModelBinder                 = (*routedModelAdapter)(nil)
+	_ agent.ModelClient                   = boundProviderModelClient{}
+	_ agent.StreamingModelClient          = (*routedModelAdapter)(nil)
+	_ agent.StreamingModelClient          = boundProviderModelClient{}
+	_ agent.ReasoningStreamingModelClient = (*routedModelAdapter)(nil)
+	_ agent.ReasoningStreamingModelClient = boundProviderModelClient{}
 )
 
 // Complete resolves the model ref to a live model, reuses or builds the
@@ -76,6 +78,19 @@ func (r *routedModelAdapter) CompleteStream(
 	tools []agent.ToolDefinition,
 	onDelta func(string),
 ) (agent.ModelClientResult, error) {
+	return r.CompleteStreamWithReasoning(ctx, model, messages, tools, onDelta, nil)
+}
+
+// CompleteStreamWithReasoning keeps provider reasoning separate from content
+// while applying the same routing and capability adaptation as Complete.
+func (r *routedModelAdapter) CompleteStreamWithReasoning(
+	ctx context.Context,
+	model string,
+	messages []conversation.Message,
+	tools []agent.ToolDefinition,
+	onDelta func(string),
+	onReasoning func(string),
+) (agent.ModelClientResult, error) {
 	model = strings.TrimSpace(model)
 	m, ok := r.lookupModel(model)
 	if !ok {
@@ -84,7 +99,7 @@ func (r *routedModelAdapter) CompleteStream(
 			model,
 		)
 	}
-	return r.completeModel(ctx, m, messages, tools, onDelta)
+	return r.completeModel(ctx, m, messages, tools, onDelta, onReasoning)
 }
 
 // BindProviderModel resolves an exact provider and agent-side model ref once.
@@ -140,6 +155,17 @@ func (c boundProviderModelClient) CompleteStream(
 	tools []agent.ToolDefinition,
 	onDelta func(string),
 ) (agent.ModelClientResult, error) {
+	return c.CompleteStreamWithReasoning(ctx, modelRef, messages, tools, onDelta, nil)
+}
+
+func (c boundProviderModelClient) CompleteStreamWithReasoning(
+	ctx context.Context,
+	modelRef string,
+	messages []conversation.Message,
+	tools []agent.ToolDefinition,
+	onDelta func(string),
+	onReasoning func(string),
+) (agent.ModelClientResult, error) {
 	modelRef = strings.TrimSpace(modelRef)
 	if modelRef != c.ref {
 		return agent.ModelClientResult{}, fmt.Errorf(
@@ -148,7 +174,7 @@ func (c boundProviderModelClient) CompleteStream(
 			modelRef,
 		)
 	}
-	return c.adapter.completeModel(ctx, c.model, messages, tools, onDelta)
+	return c.adapter.completeModel(ctx, c.model, messages, tools, onDelta, onReasoning)
 }
 
 // completeModel applies the provider client, capability, and media adaptation
@@ -159,6 +185,7 @@ func (r *routedModelAdapter) completeModel(
 	messages []conversation.Message,
 	tools []agent.ToolDefinition,
 	onDelta func(string),
+	onReasoning func(string),
 ) (agent.ModelClientResult, error) {
 	client, err := r.getOrCreateClient(m)
 	if err != nil {
@@ -174,6 +201,16 @@ func (r *routedModelAdapter) completeModel(
 		q15media.SupportFromCapabilities(m.Capabilities),
 		r.mediaStore,
 	)
+	if streaming, ok := client.(agent.ReasoningStreamingModelClient); ok && onReasoning != nil {
+		return streaming.CompleteStreamWithReasoning(
+			ctx,
+			m.ProviderModel,
+			adapted,
+			tools,
+			onDelta,
+			onReasoning,
+		)
+	}
 	if streaming, ok := client.(agent.StreamingModelClient); ok && onDelta != nil {
 		return streaming.CompleteStream(ctx, m.ProviderModel, adapted, tools, onDelta)
 	}

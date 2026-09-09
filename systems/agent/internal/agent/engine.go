@@ -425,18 +425,34 @@ func (e *Engine) completeModel(
 	turn int,
 	observer RunObserver,
 ) (ModelClientResult, error) {
-	if client, ok := e.modelClient.(StreamingModelClient); ok && observer != nil {
-		return client.CompleteStream(ctx, modelRef, messages, tools, func(delta string) {
+	if observer == nil {
+		return e.modelClient.Complete(ctx, modelRef, messages, tools)
+	}
+	onDelta := func(eventType RunEventType) func(string) {
+		return func(delta string) {
 			if delta == "" || ctx.Err() != nil {
 				return
 			}
 			emitRunEvent(ctx, observer, RunEvent{
-				Type:     RunEventModelTurnDelta,
+				Type:     eventType,
 				Turn:     turn,
 				ModelRef: modelRef,
 				Delta:    delta,
 			})
-		})
+		}
+	}
+	if client, ok := e.modelClient.(ReasoningStreamingModelClient); ok {
+		return client.CompleteStreamWithReasoning(ctx, modelRef, messages, tools,
+			onDelta(RunEventModelTurnDelta), onDelta(RunEventModelReasoningDelta))
+	}
+	if client, ok := e.modelClient.(StreamingModelClient); ok {
+		return client.CompleteStream(
+			ctx,
+			modelRef,
+			messages,
+			tools,
+			onDelta(RunEventModelTurnDelta),
+		)
 	}
 	return e.modelClient.Complete(ctx, modelRef, messages, tools)
 }

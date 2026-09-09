@@ -39,6 +39,7 @@ type Client struct {
 
 var _ agent.ModelClient = (*Client)(nil)
 var _ agent.StreamingModelClient = (*Client)(nil)
+var _ agent.ReasoningStreamingModelClient = (*Client)(nil)
 
 type chatAPI interface {
 	Chat(context.Context, *ollamaapi.ChatRequest, ollamaapi.ChatResponseFunc) error
@@ -112,6 +113,20 @@ func (c *Client) CompleteStream(
 	tools []agent.ToolDefinition,
 	onDelta func(string),
 ) (agent.ModelClientResult, error) {
+	return c.CompleteStreamWithReasoning(ctx, model, messages, tools, onDelta, nil)
+}
+
+// CompleteStreamWithReasoning forwards thinking separately from content while
+// preserving the complete canonical response. Both callbacks are optional and
+// synchronous, so slow callbacks apply backpressure to the response stream.
+func (c *Client) CompleteStreamWithReasoning(
+	ctx context.Context,
+	model string,
+	messages []conversation.Message,
+	tools []agent.ToolDefinition,
+	onDelta func(string),
+	onReasoning func(string),
+) (agent.ModelClientResult, error) {
 	if strings.TrimSpace(model) == "" {
 		return agent.ModelClientResult{}, fmt.Errorf("model name is required")
 	}
@@ -139,12 +154,9 @@ func (c *Client) CompleteStream(
 		Tools:    reqTools,
 	}
 
-	collector := newStreamCollector(onDelta)
+	collector := newStreamCollector(onDelta, onReasoning)
 	if err := c.chat.Chat(ctx, req, func(resp ollamaapi.ChatResponse) error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		return collector.Record(resp)
+		return collector.Record(ctx, resp)
 	}); err != nil {
 		return agent.ModelClientResult{}, fmt.Errorf("ollama chat: %w", err)
 	}
@@ -582,13 +594,17 @@ type streamCollector struct {
 	finish      string
 	usage       agent.ModelUsage
 	onDelta     func(string)
+	onReasoning func(string)
 }
 
-func newStreamCollector(onDelta func(string)) *streamCollector {
-	return &streamCollector{onDelta: onDelta}
+func newStreamCollector(onDelta, onReasoning func(string)) *streamCollector {
+	return &streamCollector{onDelta: onDelta, onReasoning: onReasoning}
 }
 
-func (c *streamCollector) Record(resp ollamaapi.ChatResponse) error {
+func (c *streamCollector) Record(ctx context.Context, resp ollamaapi.ChatResponse) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	c.sawResponse = true
 	c.sawDone = c.sawDone || resp.Done
 	c.content.WriteString(resp.Message.Content)
@@ -606,10 +622,13 @@ func (c *streamCollector) Record(resp ollamaapi.ChatResponse) error {
 			TotalTokens:  int64(resp.PromptEvalCount) + int64(resp.EvalCount),
 		}
 	}
-	if resp.Message.Content != "" && c.onDelta != nil {
+	if resp.Message.Thinking != "" && c.onReasoning != nil && ctx.Err() == nil {
+		c.onReasoning(resp.Message.Thinking)
+	}
+	if resp.Message.Content != "" && c.onDelta != nil && ctx.Err() == nil {
 		c.onDelta(resp.Message.Content)
 	}
-	return nil
+	return ctx.Err()
 }
 
 func (c *streamCollector) Result() (agent.ModelClientResult, error) {

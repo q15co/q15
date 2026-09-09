@@ -444,8 +444,8 @@ func TestAgentEndpoint_OpenSession_UsesStoredProgressMode(t *testing.T) {
 
 			channel.mu.Lock()
 			defer channel.mu.Unlock()
-			if got := channel.editTexts[0]; got != "💻 Running `git status --short`" {
-				t.Fatalf("editTexts[0] = %q, want %q", got, "💻 Running `git status --short`")
+			if got := channel.editTexts[0]; got != "💻 Running command\n\n```bash\ngit status --short\n```" {
+				t.Fatalf("editTexts[0] = %q, want fenced git command", got)
 			}
 		},
 	)
@@ -672,9 +672,9 @@ func TestAgentRunSession_DebouncesStatusEdits(t *testing.T) {
 			})
 
 			channel.mu.Lock()
-			if got := channel.editTexts[0]; got != "💻 Running `echo hello`" {
+			if got := channel.editTexts[0]; got != "💻 Running command\n\n```bash\necho hello\n```" {
 				channel.mu.Unlock()
-				t.Fatalf("editTexts[0] = %q, want %q", got, "💻 Running `echo hello`")
+				t.Fatalf("editTexts[0] = %q, want fenced echo command", got)
 			}
 			channel.mu.Unlock()
 		},
@@ -1188,11 +1188,11 @@ func TestSummarizeToolCall_ProgressAndVerboseModes(t *testing.T) {
 		Name:      "exec",
 		Arguments: `{"command":"git status --short"}`,
 	}, progressModeProgress)
-	if progressSummary != "💻 Running `git status --short`" {
+	if progressSummary != "💻 Running command\n\n```bash\ngit status --short\n```" {
 		t.Fatalf(
 			"progress summary = %q, want %q",
 			progressSummary,
-			"💻 Running `git status --short`",
+			"💻 Running command\n\n```bash\ngit status --short\n```",
 		)
 	}
 
@@ -1219,7 +1219,7 @@ func TestToolProgressPreviewsAreConciseAndReadable(t *testing.T) {
 		{
 			"command",
 			agent.ToolCall{Name: "exec", Arguments: `{"command":"go test\n\t./..."}`},
-			"💻 Running `go test ./...`",
+			"💻 Running command\n\n```bash\ngo test\n\t./...\n```",
 		},
 		{
 			"path",
@@ -1264,7 +1264,7 @@ func TestToolProgressPreviewsAreConciseAndReadable(t *testing.T) {
 				Name:      "exec",
 				Arguments: "{\"command\":\"echo `hello`\\u001b[31m\\u202eevil\"}",
 			},
-			"💻 Running `echo 'hello' [31m evil`",
+			"💻 Running command\n\n```bash\necho `hello` [31m evil\n```",
 		},
 	}
 	for _, tt := range tests {
@@ -1276,13 +1276,13 @@ func TestToolProgressPreviewsAreConciseAndReadable(t *testing.T) {
 	}
 	command := agent.ToolCall{
 		Name:      "exec",
-		Arguments: `{"command":"` + strings.Repeat("界", 150) + `"}`,
+		Arguments: `{"command":"` + strings.Repeat("界", 700) + `"}`,
 	}
 	progress := summarizeToolCall(command, progressModeProgress)
 	verbose := summarizeToolCall(command, progressModeVerbose)
 	if !utf8.ValidString(progress) || !utf8.ValidString(verbose) ||
 		utf8.RuneCountInString(progress) >= utf8.RuneCountInString(verbose) ||
-		utf8.RuneCountInString(verbose) > 110 {
+		utf8.RuneCountInString(verbose) > 680 {
 		t.Fatalf("preview bounds: progress=%q verbose=%q", progress, verbose)
 	}
 	path := agent.ToolCall{

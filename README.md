@@ -64,26 +64,37 @@ refresh every 20 seconds during longer waits. Completion sends the final reply t
 safe rich message path. Telegram's Stop button cancels the current run and discards its unfinished
 draft; the worker remains available for the next message.
 
+While waiting for a model, the draft uses Telegram's native thinking block. When Ollama or an
+OpenAI-compatible provider streams reasoning text, that block shows a recent excerpt, limited to 640
+characters in progress mode or 1,600 in verbose mode, and at most eight lines. Answer text replaces
+the thinking block as it arrives. Thinking is ephemeral and never added to the final reply.
+Providers without reasoning streaming still get the native thinking indicator in supported chats.
+
 Use `/progress quiet`, `/progress progress`, or `/progress verbose` to choose the amount of
 feedback:
 
-- `quiet` keeps partial replies and routine tool activity hidden, with the existing long-wait
-  notice.
+- `quiet` keeps thinking, partial replies, and routine tool activity hidden, with the existing
+  long-wait notice.
 - `progress` shows the current action with a short command, file, or search preview.
 - `verbose` allows a longer preview of that same action.
 
-Tool progress shows bounded, single-line arguments rather than command output. It shares the active
-draft when available, so the chat does not accumulate a message for every tool call. Unsupported
-chats, batch providers, oversized previews, and draft API errors retain progress plus final-message
-delivery. Drafts use the same untrusted Markdown rendering boundary as final text.
+Commands appear in Bash code blocks, preserving line breaks and shell syntax. Progress mode shows up
+to 320 characters and five lines; verbose mode allows 640 characters and ten lines. File and search
+previews stay on one line. Tool output is not dumped into progress messages. Tool progress shares
+the active draft, so the chat does not accumulate a message for every tool call. Unsupported chats,
+oversized previews, and draft API errors retain the ordinary progress and final-message path. Draft
+answers use the same untrusted Markdown rendering boundary as final text; only the Telegram adapter
+can create a thinking block.
 
 Internally, `agent.StreamingModelClient` is an optional extension of `ModelClient`. Providers send
-ordered content-only callbacks; reasoning and tool-call arguments remain in the assembled final
-result. The engine emits synchronous `model_turn_delta` events between model-turn and tool/run
-lifecycle events. Synchronous delivery supplies backpressure without an event queue; observers own
-bounded buffering and display throttling. Each `model_turn_started` begins a fresh attempt, allowing
-consumers to replace a failed model's partial preview during fallback. Runs without an observer keep
-using `Complete`. Incomplete provider streams return errors and cannot become final transcript text.
+ordered content-only callbacks. The separate optional `agent.ReasoningStreamingModelClient`
+extension provides reasoning text through `model_reasoning_delta` events. Opaque replay and tool
+arguments remain in the canonical result. The engine emits synchronous content and reasoning events
+between model-turn and tool/run lifecycle events. Synchronous delivery supplies backpressure without
+an event queue; observers own bounded buffering and display throttling. Each `model_turn_started`
+begins a fresh attempt, allowing consumers to replace a failed model's partial preview during
+fallback. Runs without an observer keep using `Complete`. Incomplete provider streams return errors
+and cannot become final transcript text.
 
 ## Development Setup
 

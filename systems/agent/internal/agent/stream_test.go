@@ -25,6 +25,153 @@ func (c *streamingTestClient) CompleteStream(
 	return c.stream(ctx, model, messages, tools, onDelta)
 }
 
+type reasoningStreamingTestClient struct {
+	streamingTestClient
+	streamReasoning func(context.Context, string, []conversation.Message, []ToolDefinition, func(string), func(string)) (ModelClientResult, error)
+}
+
+func (c *reasoningStreamingTestClient) CompleteStreamWithReasoning(
+	ctx context.Context,
+	model string,
+	messages []conversation.Message,
+	tools []ToolDefinition,
+	onDelta func(string),
+	onReasoning func(string),
+) (ModelClientResult, error) {
+	return c.streamReasoning(ctx, model, messages, tools, onDelta, onReasoning)
+}
+
+func TestLoopReasoningStreamingPreservesTranscriptAndEventOrder(t *testing.T) {
+	result := ModelClientResult{Messages: []conversation.Message{conversation.AssistantMessage(
+		conversation.Reasoning("consider carefully", nil), conversation.Text("All done", ""),
+	)}}
+	input := userTextMessage("hello")
+	input.UserTemporal = &conversation.UserTemporalMetadata{
+		TimeLocal: time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC),
+	}
+	batchStore := &fakeConversationStore{}
+	batch := NewLoop(&fakeModelClient{results: []ModelClientResult{result}}, nil,
+		[]string{"model"}, DefaultSystemPrompt, batchStore, 3)
+	want, err := batch.Reply(context.Background(), input, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events []RunEvent
+	client := &reasoningStreamingTestClient{streamReasoning: func(
+		ctx context.Context, model string, _ []conversation.Message, _ []ToolDefinition,
+		onDelta func(string), onReasoning func(string),
+	) (ModelClientResult, error) {
+		before := len(events)
+		onReasoning("")
+		onDelta("")
+		if len(events) != before {
+			t.Fatal("empty delta was emitted")
+		}
+		for _, fragment := range []struct {
+			emit func(string)
+			kind RunEventType
+			text string
+		}{
+			{onReasoning, RunEventModelReasoningDelta, "consider "},
+			{onReasoning, RunEventModelReasoningDelta, "carefully"},
+			{onDelta, RunEventModelTurnDelta, "All "},
+			{onDelta, RunEventModelTurnDelta, "done"},
+		} {
+			fragment.emit(fragment.text)
+			last := events[len(events)-1]
+			if last.Type != fragment.kind || last.Delta != fragment.text ||
+				last.ModelRef != model || last.Turn != 0 || last.At.IsZero() {
+				t.Fatalf("delta was not observed synchronously: %#v", last)
+			}
+		}
+		return result, ctx.Err()
+	}}
+	streamStore := &fakeConversationStore{}
+	loop := NewLoop(client, nil, []string{"model"}, DefaultSystemPrompt, streamStore, 3)
+	got, err := loop.Reply(context.Background(), input, RunObserverFunc(
+		func(_ context.Context, event RunEvent) { events = append(events, event) },
+	))
+	if err != nil || !reflect.DeepEqual(got, want) ||
+		!reflect.DeepEqual(streamStore.lastAppend, batchStore.lastAppend) {
+		t.Fatalf(
+			"reasoning stream changed reply or transcript: got %#v, want %#v, err=%v",
+			got,
+			want,
+			err,
+		)
+	}
+	var types []RunEventType
+	for _, event := range events {
+		types = append(types, event.Type)
+	}
+	wantTypes := []RunEventType{RunEventRunStarted, RunEventModelTurnStarted,
+		RunEventModelReasoningDelta, RunEventModelReasoningDelta,
+		RunEventModelTurnDelta, RunEventModelTurnDelta, RunEventRunFinished}
+	if !reflect.DeepEqual(types, wantTypes) || events[len(events)-1].FinalText != "All done" {
+		t.Fatalf("reasoning event order or final text = %#v", events)
+	}
+}
+
+func TestEngineReasoningStreamingFallbackStartsNewAttempt(t *testing.T) {
+	var events []RunEvent
+	client := &reasoningStreamingTestClient{streamReasoning: func(
+		_ context.Context, model string, _ []conversation.Message, _ []ToolDefinition,
+		onDelta func(string), onReasoning func(string),
+	) (ModelClientResult, error) {
+		onReasoning(model + " reasoning")
+		if model == "first" {
+			return assistantResult("incomplete"), errors.New("stream interrupted")
+		}
+		onDelta("complete")
+		return assistantResult("complete"), nil
+	}}
+	got, err := NewEngine(client, nil, []string{"first", "second"}).Run(
+		context.Background(), EngineRequest{Observer: RunObserverFunc(
+			func(_ context.Context, event RunEvent) { events = append(events, event) },
+		)},
+	)
+	if err != nil || got.FinalText != "complete" || len(got.Messages) != 1 {
+		t.Fatalf("reasoning fallback = %#v, %v", got, err)
+	}
+	if len(events) != 5 || events[1].Type != RunEventModelReasoningDelta ||
+		events[2].Type != RunEventModelTurnStarted || events[2].ModelRef != "second" ||
+		events[3].Type != RunEventModelReasoningDelta || events[4].Type != RunEventModelTurnDelta {
+		t.Fatalf("reasoning fallback events = %#v", events)
+	}
+}
+
+func TestLoopReasoningCancellationStopsAllDeltasAndPersistence(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	calls := 0
+	client := &reasoningStreamingTestClient{streamReasoning: func(
+		ctx context.Context, _ string, _ []conversation.Message, _ []ToolDefinition,
+		onDelta func(string), onReasoning func(string),
+	) (ModelClientResult, error) {
+		calls++
+		onReasoning("partial reasoning")
+		onReasoning("discarded reasoning")
+		onDelta("discarded content")
+		return assistantResult("discarded content"), ctx.Err()
+	}}
+	store := &fakeConversationStore{}
+	loop := NewLoop(client, nil, []string{"first", "second"}, DefaultSystemPrompt, store, 3)
+	var events []RunEvent
+	_, err := loop.Reply(ctx, userTextMessage("hello"), RunObserverFunc(
+		func(_ context.Context, event RunEvent) {
+			events = append(events, event)
+			if event.Type == RunEventModelReasoningDelta {
+				cancel()
+			}
+		},
+	))
+	if !errors.Is(err, context.Canceled) || calls != 1 || store.appendCalls != 0 ||
+		len(events) != 4 || events[3].Type != RunEventRunFailed {
+		t.Fatalf("reasoning cancellation: err=%v calls=%d persisted=%d events=%#v",
+			err, calls, store.appendCalls, events)
+	}
+}
+
 func TestLoopStreamingPreservesResultsAndOrdersEvents(t *testing.T) {
 	toolResult := toolCallResult("call-1", "read", `{}`)
 	toolResult.Messages[0].Parts = append(

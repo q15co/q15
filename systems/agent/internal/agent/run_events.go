@@ -12,13 +12,14 @@ type RunEventType string
 
 // Run event types emitted by the orchestration loop.
 const (
-	RunEventRunStarted       RunEventType = "run_started"
-	RunEventModelTurnStarted RunEventType = "model_turn_started"
-	RunEventModelTurnDelta   RunEventType = "model_turn_delta"
-	RunEventToolStarted      RunEventType = "tool_started"
-	RunEventToolFinished     RunEventType = "tool_finished"
-	RunEventRunFinished      RunEventType = "run_finished"
-	RunEventRunFailed        RunEventType = "run_failed"
+	RunEventRunStarted          RunEventType = "run_started"
+	RunEventModelTurnStarted    RunEventType = "model_turn_started"
+	RunEventModelTurnDelta      RunEventType = "model_turn_delta"
+	RunEventModelReasoningDelta RunEventType = "model_reasoning_delta"
+	RunEventToolStarted         RunEventType = "tool_started"
+	RunEventToolFinished        RunEventType = "tool_finished"
+	RunEventRunFinished         RunEventType = "run_finished"
+	RunEventRunFailed           RunEventType = "run_failed"
 )
 
 // RunEvent reports loop progress in a transport-owned, model-agnostic format.
@@ -30,14 +31,15 @@ type RunEvent struct {
 	ToolCall   ToolCall
 	ToolOutput string
 	FinalText  string
-	// Delta is incremental assistant content for ModelTurnDelta. ModelTurnStarted
-	// begins a new attempt; subscribers should replace any previous draft there.
+	// Delta is incremental assistant content for ModelTurnDelta or provider
+	// reasoning text for ModelReasoningDelta. ModelTurnStarted begins a new attempt;
+	// subscribers should replace previous answer and reasoning drafts there.
 	Delta string
 	Err   error
 }
 
 // RunObserver receives structured loop progress events synchronously, in order.
-// Content deltas are raw and unthrottled; subscribers should coalesce rendering
+// Text deltas are raw and unthrottled; subscribers should coalesce rendering
 // work in bounded storage. The engine never queues events or spawns per-event work.
 type RunObserver interface {
 	OnRunEvent(ctx context.Context, event RunEvent)

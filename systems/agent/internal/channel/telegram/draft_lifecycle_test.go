@@ -60,8 +60,8 @@ func TestDraftResetDuringInitialSendReplacesStaleAttemptPromptly(t *testing.T) {
 	s.OnRunEvent(ctx, agent.RunEvent{Type: agent.RunEventModelTurnStarted, ModelRef: "fallback"})
 	close(f.release)
 	waitForCondition(t, 500*time.Millisecond, func() bool { return len(f.snapshotDrafts()) >= 2 })
-	if got := f.snapshotDrafts()[1].text; got != thinkingStatus {
-		t.Fatalf("stale attempt replacement = %q", got)
+	if got := f.snapshotDrafts()[1]; got.text != "" || got.thinking != "Thinking…" {
+		t.Fatalf("stale attempt replacement = %#v", got)
 	}
 	s.Finish(ctx, agent.ReplyResult{Text: "Final"})
 }
@@ -72,7 +72,13 @@ func TestDraftRetriesFailedPlaceholderDeletionAtCompletion(t *testing.T) {
 	ctx := context.Background()
 	s := newAgentRunSession(f, "123", "", progressModeProgress)
 	t.Cleanup(func() { s.Abort(context.Background(), "test cleanup") })
-	s.showStatus(ctx, thinkingStatus)
+	// Start with an existing legacy placeholder to exercise cleanup if a draft
+	// replaces one left by an earlier progress update.
+	statusID, err := f.SendTextMessage(ctx, "123", thinkingStatus)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.statusMessageID = statusID
 	draftDelta(ctx, s, "Partial")
 	waitForCondition(t, time.Second, func() bool {
 		s.mu.Lock()
@@ -120,8 +126,7 @@ func TestStopWinsWhileFinalWaitsForDraftRequest(t *testing.T) {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if len(f.sendTexts) != 0 || len(f.editTexts) != 1 ||
-		f.editTexts[0] != stoppedStatus("canceled") {
+	if len(f.sendTexts) != 0 || len(f.editTexts) != 0 {
 		t.Fatalf("Stop/final race: sends=%v edits=%v", f.sendTexts, f.editTexts)
 	}
 }

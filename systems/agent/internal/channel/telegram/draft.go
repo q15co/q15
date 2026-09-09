@@ -4,9 +4,12 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"html"
 	"math/big"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/mymmrac/telego"
 )
@@ -24,8 +27,13 @@ const telegramDraftMaxBytes = 128 * 1024
 var errDraftUnavailable = errors.New("telegram rich draft unavailable")
 
 type draftChannel interface {
-	SendTextDraft(context.Context, string, int, string, bool) error
+	sendDraft(context.Context, string, int, draftPreview, bool) error
 	registerDraftStop(string, int, context.CancelFunc) func()
+}
+
+type draftPreview struct {
+	text     string
+	thinking string
 }
 
 type draftKey struct {
@@ -33,34 +41,62 @@ type draftKey struct {
 	draftID int
 }
 
-// SendTextDraft applies the same untrusted Markdown boundary as final messages.
+// sendDraft applies the same untrusted Markdown boundary as final messages.
 // A preview must fit one rich message; unsupported documents fall back to the
 // session's progress indicator and complete final delivery.
-func (c *Channel) SendTextDraft(
+func (c *Channel) sendDraft(
 	ctx context.Context,
 	chatID string,
 	draftID int,
-	text string,
+	preview draftPreview,
 	canStop bool,
 ) error {
 	id, err := parseChatID(chatID)
-	if err != nil || id <= 0 || draftID == 0 || len(text) > telegramDraftMaxBytes {
+	if err != nil || id <= 0 || draftID == 0 || len(preview.text) > telegramDraftMaxBytes ||
+		len(preview.thinking) > telegramDraftMaxBytes {
 		return errDraftUnavailable
 	}
-	chunks := planRichText(text)
-	if len(chunks) != 1 || !chunks[0].rich {
+	rich, err := renderDraftPreview(preview)
+	if err != nil {
 		return errDraftUnavailable
 	}
 	return c.bot.SendRichMessageDraft(ctx, &telego.SendRichMessageDraftParams{
-		ChatID:  id,
-		DraftID: draftID,
-		RichMessage: telego.InputRichMessage{
-			Markdown:            chunks[0].richMarkdown,
-			SkipEntityDetection: true,
-		},
-		CanStop:    canStop,
-		KeepOnStop: false,
+		ChatID:      id,
+		DraftID:     draftID,
+		RichMessage: rich,
+		CanStop:     canStop,
+		KeepOnStop:  false,
 	})
+}
+
+func renderDraftPreview(preview draftPreview) (telego.InputRichMessage, error) {
+	rich := telego.InputRichMessage{SkipEntityDetection: true}
+	if strings.TrimSpace(preview.text) == "" && preview.thinking != "" {
+		if utf8.RuneCountInString(preview.thinking) > telegramRichTextRunes {
+			return rich, errDraftUnavailable
+		}
+		text := telego.RichTextPlain(preview.thinking)
+		rich.Blocks = []telego.InputRichBlock{&telego.InputRichBlockThinking{
+			Type: telego.BlockTypeThinking,
+			Text: &text,
+		}}
+		return rich, nil
+	}
+	chunks := planRichText(preview.text)
+	if len(chunks) != 1 || !chunks[0].rich {
+		return rich, errDraftUnavailable
+	}
+	rich.Markdown = chunks[0].richMarkdown
+	if preview.thinking != "" {
+		// Only transport-owned markup may create a thinking block. Prepending it
+		// keeps an unfinished model code fence from swallowing the placeholder.
+		rich.Markdown = "<tg-thinking>" + html.EscapeString(preview.thinking) +
+			"</tg-thinking>\n\n" + rich.Markdown
+		if utf8.RuneCountInString(rich.Markdown) > telegramRichTextRunes {
+			return rich, errDraftUnavailable
+		}
+	}
+	return rich, nil
 }
 
 func (c *Channel) registerDraftStop(chatID string, draftID int, cancel context.CancelFunc) func() {
@@ -110,6 +146,7 @@ type runDraft struct {
 	id             int
 	channel        draftChannel
 	text           strings.Builder
+	reasoning      string
 	status         string
 	sent           bool
 	inFlight       bool
@@ -166,10 +203,56 @@ func (s *agentRunSession) resetDraft(ctx context.Context) {
 		return
 	}
 	s.draft.text.Reset()
+	s.draft.reasoning = ""
 	s.draft.status = thinkingStatus
 	if s.draft.sent || s.draft.inFlight {
 		s.scheduleDraftLocked(ctx, telegramDraftUpdateInterval)
 	}
+}
+
+func (s *agentRunSession) appendReasoningDraft(ctx context.Context, delta string) {
+	if delta == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.finished || s.draft == nil || s.draft.disabled || ctx.Err() != nil {
+		return
+	}
+	limit := 640
+	if s.mode == progressModeVerbose {
+		limit = 1600
+	}
+	s.draft.reasoning = thinkingPreviewTail(s.draft.reasoning, delta, limit)
+	s.draft.status = thinkingStatus
+	s.scheduleDraftLocked(ctx, telegramDraftUpdateInterval)
+}
+
+// Keep only a short, recent excerpt. Provider replay and the complete canonical
+// reasoning stay upstream; Telegram never retains an unbounded thinking log.
+func thinkingPreviewTail(previous, delta string, limit int) string {
+	if len(delta) > limit*utf8.UTFMax {
+		delta = delta[len(delta)-limit*utf8.UTFMax:]
+		for len(delta) > 0 && !utf8.RuneStart(delta[0]) {
+			delta = delta[1:]
+		}
+		previous = "…"
+	}
+	text := strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\t' || (!unicode.IsControl(r) && !unicode.Is(unicode.Cf, r)) {
+			return r
+		}
+		return -1
+	}, previous+delta)
+	runes := []rune(text)
+	if len(runes) > limit {
+		text = "…" + string(runes[len(runes)-limit+1:])
+	}
+	lines := strings.Split(text, "\n")
+	if len(lines) > 8 {
+		text = "…" + strings.Join(lines[len(lines)-8:], "\n")
+	}
+	return text
 }
 
 func (s *agentRunSession) appendDraft(ctx context.Context, delta string) {
@@ -195,7 +278,8 @@ func (s *agentRunSession) appendDraft(ctx context.Context, delta string) {
 
 func (s *agentRunSession) draftVisibleLocked() bool {
 	return s.draft != nil && !s.draft.disabled &&
-		(s.draft.sent || strings.TrimSpace(s.draft.text.String()) != "")
+		(s.draft.sent || s.draft.inFlight || s.draft.reasoning != "" ||
+			strings.TrimSpace(s.draft.text.String()) != "")
 }
 
 func (s *agentRunSession) scheduleDraftLocked(ctx context.Context, delay time.Duration) {
@@ -227,11 +311,16 @@ func (s *agentRunSession) flushDraft(ctx context.Context, generation uint64) {
 		return
 	}
 	d.timer = nil
-	text := d.text.String()
-	if d.status != "" {
-		text = strings.TrimSpace(text + "\n\n" + d.status)
+	preview := draftPreview{text: d.text.String()}
+	if d.status == thinkingStatus || d.status == stillThinkingStatus {
+		preview.thinking = strings.TrimSpace(d.reasoning)
+		if preview.thinking == "" {
+			preview.thinking = "Thinking…"
+		}
+	} else if d.status != "" {
+		preview.text = strings.TrimSpace(preview.text + "\n\n" + d.status)
 	}
-	if strings.TrimSpace(text) == "" {
+	if strings.TrimSpace(preview.text) == "" && preview.thinking == "" {
 		s.mu.Unlock()
 		return
 	}
@@ -241,7 +330,7 @@ func (s *agentRunSession) flushDraft(ctx context.Context, generation uint64) {
 	s.mu.Unlock()
 
 	requestCtx, cancel := context.WithTimeout(ctx, telegramDraftRequestTimeout)
-	err := d.channel.SendTextDraft(requestCtx, s.chatID, d.id, text, canStop)
+	err := d.channel.sendDraft(requestCtx, s.chatID, d.id, preview, canStop)
 	cancel()
 	s.mu.Lock()
 	d.inFlight = false
@@ -291,4 +380,5 @@ func (s *agentRunSession) disableDraftLocked() {
 	s.stopDraftLocked()
 	s.draft.disabled = true
 	s.draft.text.Reset()
+	s.draft.reasoning = ""
 }

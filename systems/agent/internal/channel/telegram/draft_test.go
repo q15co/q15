@@ -14,8 +14,8 @@ import (
 )
 
 type sentDraft struct {
+	draftPreview
 	id      int
-	text    string
 	canStop bool
 	at      time.Time
 }
@@ -30,15 +30,18 @@ type fakeDraftChannel struct {
 	release  chan struct{}
 }
 
-func (f *fakeDraftChannel) SendTextDraft(
+func (f *fakeDraftChannel) sendDraft(
 	ctx context.Context,
 	_ string,
 	id int,
-	text string,
+	preview draftPreview,
 	canStop bool,
 ) error {
 	f.draftMu.Lock()
-	f.drafts = append(f.drafts, sentDraft{id: id, text: text, canStop: canStop, at: time.Now()})
+	f.drafts = append(
+		f.drafts,
+		sentDraft{id: id, draftPreview: preview, canStop: canStop, at: time.Now()},
+	)
 	err := f.draftErr
 	f.draftMu.Unlock()
 	if f.entered != nil {
@@ -93,7 +96,6 @@ func TestDraftCoalescesKeepsAliveAndFinalizesOnce(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	s.SetCancel(cancel)
-	s.showStatus(ctx, thinkingStatus)
 	draftDelta(ctx, s, "Hello")
 	waitForCondition(t, time.Second, func() bool { return len(f.snapshotDrafts()) == 1 })
 	for range 100 {
@@ -125,7 +127,7 @@ func TestDraftCoalescesKeepsAliveAndFinalizesOnce(t *testing.T) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if len(f.sendTexts) != 1 || f.sendTexts[0] != "Complete answer" || len(f.editTexts) != 0 ||
-		len(f.deletedMessages) != 1 {
+		len(f.deletedMessages) != 0 {
 		t.Fatalf(
 			"final sends=%#v edits=%#v deleted=%#v",
 			f.sendTexts,
@@ -135,7 +137,7 @@ func TestDraftCoalescesKeepsAliveAndFinalizesOnce(t *testing.T) {
 	}
 }
 
-func TestDraftModesAndNonstreamingFallback(t *testing.T) {
+func TestDraftModesAndNonstreamingThinking(t *testing.T) {
 	for _, mode := range []progressMode{progressModeQuiet, progressModeProgress, progressModeVerbose} {
 		t.Run(string(mode), func(t *testing.T) {
 			f := &fakeDraftChannel{}
@@ -144,11 +146,16 @@ func TestDraftModesAndNonstreamingFallback(t *testing.T) {
 			ctx := context.Background()
 			if mode != progressModeQuiet {
 				s.showStatus(ctx, thinkingStatus)
+				waitForCondition(
+					t,
+					time.Second,
+					func() bool { return len(f.snapshotDrafts()) == 1 },
+				)
+				if got := f.snapshotDrafts()[0]; got.text != "" || got.thinking != "Thinking…" {
+					t.Fatalf("nonstreaming progress = %#v, want native thinking", got)
+				}
 			}
 			s.Finish(ctx, agent.ReplyResult{Text: "Nonstreaming answer"})
-			if len(f.snapshotDrafts()) != 0 {
-				t.Fatal("nonstreaming run emitted drafts")
-			}
 			if mode == progressModeQuiet {
 				s = newAgentRunSession(f, "123", "", mode)
 				draftDelta(ctx, s, "Hidden partial")
@@ -310,11 +317,11 @@ func TestFinalWaitsForInFlightDraft(t *testing.T) {
 	}
 }
 
-func TestSendTextDraftUsesSafeRichMarkdown(t *testing.T) {
+func TestSendDraftUsesSafeRichMarkdown(t *testing.T) {
 	caller := &mockAPICaller{}
 	c := newTestChannelWithCaller(t, caller)
 	text := "**Safe**\n\n<tg-button type=\"callback\" data=\"steal\">Click</tg-button>\n\n![image](https://example.com/a.png)\n\n| Key | Value |\n| --- | --- |\n| A | B |"
-	if err := c.SendTextDraft(context.Background(), "123", 42, text, true); err != nil {
+	if err := c.sendDraft(context.Background(), "123", 42, draftPreview{text: text}, true); err != nil {
 		t.Fatal(err)
 	}
 	if len(caller.calls) != 1 || !strings.HasSuffix(caller.calls[0].url, "/sendRichMessageDraft") {
@@ -334,15 +341,15 @@ func TestSendTextDraftUsesSafeRichMarkdown(t *testing.T) {
 	}
 }
 
-func TestSendTextDraftFallsBackWithoutSendingPermanentChunks(t *testing.T) {
+func TestSendDraftFallsBackWithoutSendingPermanentChunks(t *testing.T) {
 	for _, text := range []string{"", strings.Repeat("x", telegramDraftMaxBytes+1), strings.Repeat("x", telegramRichTextRunes+1)} {
 		caller := &mockAPICaller{}
 		c := newTestChannelWithCaller(t, caller)
-		if err := c.SendTextDraft(context.Background(), "123", 1, text, false); !errors.Is(
+		if err := c.sendDraft(context.Background(), "123", 1, draftPreview{text: text}, false); !errors.Is(
 			err,
 			errDraftUnavailable,
 		) {
-			t.Fatalf("SendTextDraft error = %v, want unavailable", err)
+			t.Fatalf("sendDraft error = %v, want unavailable", err)
 		}
 		if len(caller.calls) != 0 {
 			t.Fatalf("unavailable draft emitted requests: %#v", caller.calls)
@@ -354,7 +361,7 @@ func TestSendTextDraftFallsBackWithoutSendingPermanentChunks(t *testing.T) {
 		},
 	}
 	c := newTestChannelWithCaller(t, caller)
-	if err := c.SendTextDraft(context.Background(), "123", 1, "Partial", false); err == nil ||
+	if err := c.sendDraft(context.Background(), "123", 1, draftPreview{text: "Partial"}, false); err == nil ||
 		len(caller.calls) != 1 {
 		t.Fatalf("failed draft error=%v calls=%d", err, len(caller.calls))
 	}
