@@ -119,7 +119,9 @@ type SyncOptions struct {
 
 // Sync scans enabled sources, embeds changed documents, and prunes stale
 // points. Dirty documents are checkpointed in chunks of the resolved batch
-// size; opts.Progress, when set, observes each source start and checkpoint.
+// size; opts.Progress, when set, observes each source start, each
+// checkpoint, and the successful end of the run (final snapshot with an
+// empty SourceID and the aggregate counters).
 func (s *Service) Sync(ctx context.Context, opts SyncOptions) (SyncResult, error) {
 	if s.state == nil {
 		return SyncResult{}, fmt.Errorf("embed state store is not configured")
@@ -192,6 +194,7 @@ func (s *Service) Sync(ctx context.Context, opts SyncOptions) (SyncResult, error
 	if !sourceIDFound {
 		return SyncResult{}, fmt.Errorf("source id %q not found", opts.SourceID)
 	}
+	reportSyncProgress(opts.Progress, "", sourcesCompleted, sourcesTotal, result)
 	return result, nil
 }
 

@@ -270,6 +270,7 @@ func (s *Sync) Definition() agent.ToolDefinition {
 				},
 				"wait": map[string]any{
 					"type":        "boolean",
+					"default":     true,
 					"description": "Wait for the sync to finish before returning. false returns a job snapshot immediately; use embed_job to poll or cancel.",
 				},
 			},

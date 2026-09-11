@@ -55,9 +55,22 @@ type SyncJobManager struct {
 // handed to callers are always copies of job.
 type managedSyncJob struct {
 	job             SyncJob
-	done            chan struct{}
 	cancel          context.CancelFunc
 	cancelRequested bool
+}
+
+// snapshotJob returns a copy of one job snapshot with pointer fields
+// deep-copied so callers can never mutate manager state.
+func snapshotJob(job SyncJob) SyncJob {
+	if job.Result != nil {
+		result := *job.Result
+		job.Result = &result
+	}
+	if job.FinishedAt != nil {
+		finished := *job.FinishedAt
+		job.FinishedAt = &finished
+	}
+	return job
 }
 
 // NewSyncJobManager constructs a sync job manager around one embedding
@@ -93,7 +106,6 @@ func (m *SyncJobManager) Start(ctx context.Context, opts SyncOptions) (SyncJob, 
 			Status:    SyncJobStatusRunning,
 			StartedAt: time.Now(),
 		},
-		done:   make(chan struct{}),
 		cancel: cancel,
 	}
 	m.jobs[rec.job.ID] = rec
@@ -123,7 +135,7 @@ func (m *SyncJobManager) Get(id string) (SyncJob, bool) {
 	if !ok {
 		return SyncJob{}, false
 	}
-	return rec.job, true
+	return snapshotJob(rec.job), true
 }
 
 // Active returns a snapshot of the running job, if any.
@@ -140,7 +152,7 @@ func (m *SyncJobManager) Active() (SyncJob, bool) {
 	if !ok {
 		return SyncJob{}, false
 	}
-	return rec.job, true
+	return snapshotJob(rec.job), true
 }
 
 // Cancel requests cancellation of one running job and returns the snapshot as
@@ -165,7 +177,7 @@ func (m *SyncJobManager) Cancel(id string) (SyncJob, error) {
 	}
 	rec.cancelRequested = true
 	rec.cancel()
-	return rec.job, nil
+	return snapshotJob(rec.job), nil
 }
 
 // run executes one sync to completion on runCtx and records the terminal
@@ -198,7 +210,6 @@ func (m *SyncJobManager) run(
 		m.active = ""
 	}
 	m.pruneHistoryLocked()
-	close(rec.done)
 }
 
 // pruneHistoryLocked drops the oldest terminal jobs beyond the most recent
@@ -206,7 +217,7 @@ func (m *SyncJobManager) run(
 func (m *SyncJobManager) pruneHistoryLocked() {
 	terminal := 0
 	for _, id := range m.order {
-		if m.jobs[id].job.Status != SyncJobStatusRunning {
+		if rec, ok := m.jobs[id]; ok && rec.job.Status != SyncJobStatusRunning {
 			terminal++
 		}
 	}

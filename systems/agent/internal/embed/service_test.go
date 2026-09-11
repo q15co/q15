@@ -494,6 +494,13 @@ func TestServiceSyncReportsProgressPerSourceAndChunk(t *testing.T) {
 			Embedded:         5,
 			Upserted:         5,
 		},
+		{
+			SourcesCompleted: 2,
+			SourcesTotal:     2,
+			Scanned:          5,
+			Embedded:         5,
+			Upserted:         5,
+		},
 	}
 	if !reflect.DeepEqual(calls, want) {
 		t.Fatalf("Sync() progress calls = %#v, want %#v", calls, want)

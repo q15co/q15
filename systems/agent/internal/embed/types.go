@@ -156,7 +156,8 @@ type CollectionEnsureResult struct {
 
 // SyncProgress is a cumulative snapshot of work completed so far in one sync
 // run. Counters are monotonic totals across all sources processed so far;
-// SourceID identifies the source currently in flight ("" once the run ends).
+// SourceID identifies the source currently in flight ("" on the final
+// snapshot emitted when the run completes successfully).
 type SyncProgress struct {
 	SourceID         string `json:"source_id"`
 	SourcesCompleted int    `json:"sources_completed"`

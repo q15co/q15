@@ -373,8 +373,8 @@ func TestSyncJobManagerRecordsProgressSnapshots(t *testing.T) {
 		t.Fatalf("job status = %q, want completed", job.Status)
 	}
 	want := SyncProgress{
-		SourceID:         "docs",
-		SourcesCompleted: 0,
+		SourceID:         "",
+		SourcesCompleted: 1,
 		SourcesTotal:     1,
 		Scanned:          1,
 		Embedded:         1,
