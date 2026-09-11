@@ -2,11 +2,15 @@ package embed
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestServiceSyncTracksChangedUnchangedAndDeletedDocuments(t *testing.T) {
@@ -397,6 +401,348 @@ func TestServiceSearchReturnsExplicitMissingCollectionError(t *testing.T) {
 	}
 }
 
+func TestServiceSyncReportsProgressPerSourceAndChunk(t *testing.T) {
+	ctx := context.Background()
+	settings := testSettings(t)
+	settings.SyncBatchSize = 2
+	writeMarkdownDocs(
+		t,
+		filepath.Join(settings.WorkspaceLocalDir, "docs-alpha"),
+		"a.md",
+		"b.md",
+		"c.md",
+	)
+	writeMarkdownDocs(
+		t,
+		filepath.Join(settings.WorkspaceLocalDir, "docs-beta"),
+		"d.md",
+		"e.md",
+	)
+	state, err := OpenState(ctx, settings)
+	if err != nil {
+		t.Fatalf("OpenState() error = %v", err)
+	}
+	defer state.Close()
+	service := NewService(settings, state, newFakeVectorStore(), fakeEmbedder{})
+	for _, source := range []Source{
+		{
+			ID:         "alpha",
+			Collection: CollectionSemantic,
+			SourceType: SourceTypeMarkdownTree,
+			Path:       "/workspace/docs-alpha",
+			Enabled:    true,
+		},
+		{
+			ID:         "beta",
+			Collection: CollectionCore,
+			SourceType: SourceTypeMarkdownTree,
+			Path:       "/workspace/docs-beta",
+			Enabled:    true,
+		},
+	} {
+		if _, err := service.AddSource(ctx, source); err != nil {
+			t.Fatalf("AddSource(%q) error = %v", source.ID, err)
+		}
+	}
+	for _, id := range []string{"core-memory", "semantic-memory", "zettelkasten-notes"} {
+		if _, err := service.SetSourceEnabled(ctx, id, false); err != nil {
+			t.Fatalf("SetSourceEnabled(%q, false) error = %v", id, err)
+		}
+	}
+
+	var calls []SyncProgress
+	result, err := service.Sync(ctx, SyncOptions{
+		Progress: func(progress SyncProgress) {
+			calls = append(calls, progress)
+		},
+	})
+	if err != nil {
+		t.Fatalf("Sync() error = %v", err)
+	}
+
+	want := []SyncProgress{
+		{SourceID: "alpha", SourcesCompleted: 0, SourcesTotal: 2},
+		{
+			SourceID:         "alpha",
+			SourcesCompleted: 0,
+			SourcesTotal:     2,
+			Scanned:          3,
+			Embedded:         2,
+			Upserted:         2,
+		},
+		{
+			SourceID:         "alpha",
+			SourcesCompleted: 0,
+			SourcesTotal:     2,
+			Scanned:          3,
+			Embedded:         3,
+			Upserted:         3,
+		},
+		{
+			SourceID:         "beta",
+			SourcesCompleted: 1,
+			SourcesTotal:     2,
+			Scanned:          3,
+			Embedded:         3,
+			Upserted:         3,
+		},
+		{
+			SourceID:         "beta",
+			SourcesCompleted: 1,
+			SourcesTotal:     2,
+			Scanned:          5,
+			Embedded:         5,
+			Upserted:         5,
+		},
+	}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("Sync() progress calls = %#v, want %#v", calls, want)
+	}
+	for i := 1; i < len(calls); i++ {
+		prev, current := calls[i-1], calls[i]
+		regressed := current.Scanned < prev.Scanned ||
+			current.Embedded < prev.Embedded ||
+			current.Upserted < prev.Upserted ||
+			current.Pruned < prev.Pruned
+		if regressed {
+			t.Fatalf("progress counters regressed: %#v -> %#v", prev, current)
+		}
+	}
+	wantResult := SyncResult{Scanned: 5, Embedded: 5, Upserted: 5}
+	if !reflect.DeepEqual(result, wantResult) {
+		t.Fatalf("Sync() = %#v, want %#v", result, wantResult)
+	}
+	last := calls[len(calls)-1]
+	if last.Scanned != result.Scanned ||
+		last.Embedded != result.Embedded ||
+		last.Upserted != result.Upserted {
+		t.Fatalf("final progress = %#v, want counters matching Sync() result %#v", last, result)
+	}
+}
+
+func TestServiceSyncKeepsCheckpointedBatchesOnEmbedderFailure(t *testing.T) {
+	ctx := context.Background()
+	settings := testSettings(t)
+	settings.SyncBatchSize = 2
+	writeMarkdownDocs(
+		t,
+		filepath.Join(settings.WorkspaceLocalDir, "docs"),
+		"a.md",
+		"b.md",
+		"c.md",
+		"d.md",
+		"e.md",
+	)
+	state, err := OpenState(ctx, settings)
+	if err != nil {
+		t.Fatalf("OpenState() error = %v", err)
+	}
+	vectors := newFakeVectorStore()
+	errBoom := errors.New("embed boom")
+	service := NewService(
+		settings,
+		state,
+		vectors,
+		&failOnCallEmbedder{failOnCall: 3, err: errBoom},
+	)
+	addDocsSource(ctx, t, service)
+
+	if _, err := service.Sync(ctx, SyncOptions{SourceID: "docs"}); !errors.Is(err, errBoom) {
+		t.Fatalf("Sync() error = %v, want %v", err, errBoom)
+	}
+	if err := state.Close(); err != nil {
+		t.Fatalf("close state: %v", err)
+	}
+	if got := countStateLines(t, defaultStatePath(settings), stateLinePoint); got != 4 {
+		t.Fatalf("state file point records after failure = %d, want 4", got)
+	}
+
+	state, err = OpenState(ctx, settings)
+	if err != nil {
+		t.Fatalf("reopen OpenState() error = %v", err)
+	}
+	defer state.Close()
+	service = NewService(settings, state, vectors, fakeEmbedder{})
+	result, err := service.Sync(ctx, SyncOptions{SourceID: "docs"})
+	if err != nil {
+		t.Fatalf("follow-up Sync() error = %v", err)
+	}
+	if want := (SyncResult{Scanned: 5, Embedded: 1, Upserted: 1, Unchanged: 4}); !reflect.DeepEqual(
+		result,
+		want,
+	) {
+		t.Fatalf(
+			"follow-up Sync() = %#v, want %#v (only the remaining docs embedded)",
+			result,
+			want,
+		)
+	}
+	if got := countStateLines(t, defaultStatePath(settings), stateLinePoint); got != 5 {
+		t.Fatalf("state file point records after follow-up sync = %d, want 5", got)
+	}
+}
+
+func TestServiceSyncKeepsCheckpointedBatchesOnCancellation(t *testing.T) {
+	settings := testSettings(t)
+	settings.SyncBatchSize = 2
+	writeMarkdownDocs(
+		t,
+		filepath.Join(settings.WorkspaceLocalDir, "docs"),
+		"a.md",
+		"b.md",
+		"c.md",
+		"d.md",
+		"e.md",
+	)
+	ctx := context.Background()
+	state, err := OpenState(ctx, settings)
+	if err != nil {
+		t.Fatalf("OpenState() error = %v", err)
+	}
+	vectors := newFakeVectorStore()
+	service := NewService(settings, state, vectors, &blockOnCallEmbedder{blockOnCall: 3})
+	addDocsSource(ctx, t, service)
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	watchdog := time.AfterFunc(10*time.Second, cancel)
+	defer watchdog.Stop()
+	sawCheckpoint := false
+	_, err = service.Sync(runCtx, SyncOptions{
+		SourceID: "docs",
+		Progress: func(progress SyncProgress) {
+			if progress.SourceID == "docs" && progress.Embedded >= 4 {
+				sawCheckpoint = true
+				cancel()
+			}
+		},
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Sync() error = %v, want context.Canceled", err)
+	}
+	if !sawCheckpoint {
+		t.Fatal("progress callback never observed completed checkpoint batches")
+	}
+	if err := state.Close(); err != nil {
+		t.Fatalf("close state: %v", err)
+	}
+	if got := countStateLines(t, defaultStatePath(settings), stateLinePoint); got != 4 {
+		t.Fatalf("state file point records after cancel = %d, want 4", got)
+	}
+
+	state, err = OpenState(ctx, settings)
+	if err != nil {
+		t.Fatalf("reopen OpenState() error = %v", err)
+	}
+	defer state.Close()
+	service = NewService(settings, state, vectors, fakeEmbedder{})
+	result, err := service.Sync(ctx, SyncOptions{SourceID: "docs"})
+	if err != nil {
+		t.Fatalf("follow-up Sync() error = %v", err)
+	}
+	if want := (SyncResult{Scanned: 5, Embedded: 1, Upserted: 1, Unchanged: 4}); !reflect.DeepEqual(
+		result,
+		want,
+	) {
+		t.Fatalf(
+			"follow-up Sync() = %#v, want %#v (only the remaining docs embedded)",
+			result,
+			want,
+		)
+	}
+}
+
+func addDocsSource(ctx context.Context, t *testing.T, service *Service) {
+	t.Helper()
+	if _, err := service.AddSource(ctx, Source{
+		ID:         "docs",
+		Collection: CollectionSemantic,
+		SourceType: SourceTypeMarkdownTree,
+		Path:       "/workspace/docs",
+		Enabled:    true,
+	}); err != nil {
+		t.Fatalf("AddSource() error = %v", err)
+	}
+}
+
+func countStateLines(t *testing.T, path string, lineType string) int {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read state file %s: %v", path, err)
+	}
+	trimmed := strings.TrimSpace(string(data))
+	if trimmed == "" {
+		return 0
+	}
+	count := 0
+	for _, line := range strings.Split(trimmed, "\n") {
+		var entry struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			t.Fatalf("decode state line %q: %v", line, err)
+		}
+		if entry.Type == lineType {
+			count++
+		}
+	}
+	return count
+}
+
+type failOnCallEmbedder struct {
+	failOnCall int
+	err        error
+	calls      int
+}
+
+func (f *failOnCallEmbedder) EmbedDocuments(
+	ctx context.Context,
+	reqs []EmbeddingRequest,
+) ([][]float32, error) {
+	_ = ctx
+	f.calls++
+	if f.calls == f.failOnCall {
+		return nil, f.err
+	}
+	return fakeDocVectors(reqs), nil
+}
+
+func (f *failOnCallEmbedder) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
+	_ = ctx
+	return []float32{float32(len(text)), 1}, nil
+}
+
+type blockOnCallEmbedder struct {
+	blockOnCall int
+	calls       int
+}
+
+func (f *blockOnCallEmbedder) EmbedDocuments(
+	ctx context.Context,
+	reqs []EmbeddingRequest,
+) ([][]float32, error) {
+	f.calls++
+	if f.calls < f.blockOnCall {
+		return fakeDocVectors(reqs), nil
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (f *blockOnCallEmbedder) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
+	_ = ctx
+	return []float32{float32(len(text)), 1}, nil
+}
+
+func fakeDocVectors(reqs []EmbeddingRequest) [][]float32 {
+	out := make([][]float32, 0, len(reqs))
+	for _, req := range reqs {
+		out = append(out, []float32{float32(len(req.Text)), 1})
+	}
+	return out
+}
+
 type fakeEmbedder struct{}
 
 func (fakeEmbedder) EmbedDocuments(
@@ -531,4 +877,17 @@ func (f *fakeVectorStore) Status(
 
 func (f *fakeVectorStore) Close() error {
 	return nil
+}
+
+func writeMarkdownDocs(t *testing.T, dir string, names ...string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("create %s: %v", dir, err)
+	}
+	for i, name := range names {
+		body := fmt.Sprintf("body %d for %s\n", i, name)
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
 }

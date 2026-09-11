@@ -77,6 +77,10 @@ type Settings struct {
 	// BatchSize bounds per-request document batches; 0 uses the provider
 	// default.
 	BatchSize int
+	// SyncBatchSize is the checkpoint granularity for sync: dirty documents
+	// are embedded, upserted, and recorded in state in chunks of this size;
+	// 0 uses the default (512). Not exposed via yaml in this PR.
+	SyncBatchSize int
 }
 
 // Source defines one typed ingestion input. Collection chooses where points are
@@ -148,6 +152,19 @@ type CollectionDeleteResult struct {
 type CollectionEnsureResult struct {
 	Created   bool
 	Recreated bool
+}
+
+// SyncProgress is a cumulative snapshot of work completed so far in one sync
+// run. Counters are monotonic totals across all sources processed so far;
+// SourceID identifies the source currently in flight ("" once the run ends).
+type SyncProgress struct {
+	SourceID         string `json:"source_id"`
+	SourcesCompleted int    `json:"sources_completed"`
+	SourcesTotal     int    `json:"sources_total"`
+	Scanned          int    `json:"scanned"`
+	Embedded         int    `json:"embedded"`
+	Upserted         int    `json:"upserted"`
+	Pruned           int    `json:"pruned"`
 }
 
 // SyncResult summarizes one embed_sync run.

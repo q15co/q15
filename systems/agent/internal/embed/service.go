@@ -7,6 +7,10 @@ import (
 	"strings"
 )
 
+// defaultSyncBatchSize is the checkpoint chunk size used when
+// Settings.SyncBatchSize is not set.
+const defaultSyncBatchSize = 512
+
 // Service coordinates source registry operations, scanning, embedding, vector
 // storage, and dirty-tracking state.
 type Service struct {
@@ -106,9 +110,16 @@ type SyncOptions struct {
 	Collection string
 	SourceID   string
 	Full       bool
+	// Progress, when non-nil, is called from the Sync goroutine after each
+	// source starts and after each checkpoint batch completes.
+	// Implementations must be cheap and safe for concurrent use if the
+	// caller shares them.
+	Progress func(SyncProgress)
 }
 
-// Sync scans enabled sources, embeds changed documents, and prunes stale points.
+// Sync scans enabled sources, embeds changed documents, and prunes stale
+// points. Dirty documents are checkpointed in chunks of the resolved batch
+// size; opts.Progress, when set, observes each source start and checkpoint.
 func (s *Service) Sync(ctx context.Context, opts SyncOptions) (SyncResult, error) {
 	if s.state == nil {
 		return SyncResult{}, fmt.Errorf("embed state store is not configured")
@@ -138,25 +149,45 @@ func (s *Service) Sync(ctx context.Context, opts SyncOptions) (SyncResult, error
 		return SyncResult{}, err
 	}
 
-	sourceIDFound := opts.SourceID == ""
+	batchSize := s.settings.SyncBatchSize
+	if batchSize <= 0 {
+		batchSize = defaultSyncBatchSize
+	}
+	sourcesTotal := 0
 	for _, source := range sources {
-		if opts.Collection != "" && source.Collection != opts.Collection {
+		if source.Enabled && syncScopeIncludesSource(source, opts) {
+			sourcesTotal++
+		}
+	}
+
+	sourceIDFound := opts.SourceID == ""
+	sourcesCompleted := 0
+	for _, source := range sources {
+		if !syncScopeIncludesSource(source, opts) {
 			continue
 		}
 		if opts.SourceID != "" {
-			if source.ID != opts.SourceID {
-				continue
-			}
 			sourceIDFound = true
 		}
 		if !source.Enabled {
 			continue
 		}
-		sourceResult, err := s.syncSource(ctx, source, opts.Full)
+		report := func(sourceResult SyncResult) {
+			reportSyncProgress(
+				opts.Progress,
+				source.ID,
+				sourcesCompleted,
+				sourcesTotal,
+				addSyncResults(result, sourceResult),
+			)
+		}
+		report(SyncResult{})
+		sourceResult, err := s.syncSource(ctx, source, opts.Full, batchSize, report)
 		if err != nil {
 			return SyncResult{}, err
 		}
 		result = addSyncResults(result, sourceResult)
+		sourcesCompleted++
 	}
 	if !sourceIDFound {
 		return SyncResult{}, fmt.Errorf("source id %q not found", opts.SourceID)
@@ -164,7 +195,48 @@ func (s *Service) Sync(ctx context.Context, opts SyncOptions) (SyncResult, error
 	return result, nil
 }
 
-func (s *Service) syncSource(ctx context.Context, source Source, full bool) (SyncResult, error) {
+// syncScopeIncludesSource reports whether one configured source matches the
+// collection and source_id scope of a sync run.
+func syncScopeIncludesSource(source Source, opts SyncOptions) bool {
+	if opts.Collection != "" && source.Collection != opts.Collection {
+		return false
+	}
+	if opts.SourceID != "" && source.ID != opts.SourceID {
+		return false
+	}
+	return true
+}
+
+// reportSyncProgress emits one cumulative progress snapshot when the caller
+// registered a progress callback.
+func reportSyncProgress(
+	progress func(SyncProgress),
+	sourceID string,
+	sourcesCompleted int,
+	sourcesTotal int,
+	result SyncResult,
+) {
+	if progress == nil {
+		return
+	}
+	progress(SyncProgress{
+		SourceID:         sourceID,
+		SourcesCompleted: sourcesCompleted,
+		SourcesTotal:     sourcesTotal,
+		Scanned:          result.Scanned,
+		Embedded:         result.Embedded,
+		Upserted:         result.Upserted,
+		Pruned:           result.Pruned,
+	})
+}
+
+func (s *Service) syncSource(
+	ctx context.Context,
+	source Source,
+	full bool,
+	batchSize int,
+	progress func(SyncResult),
+) (SyncResult, error) {
 	docs, err := ScanSource(ctx, s.settings, source)
 	if err != nil {
 		return SyncResult{}, err
@@ -236,21 +308,27 @@ func (s *Service) syncSource(ctx context.Context, source Source, full bool) (Syn
 		})
 	}
 
-	if len(embedReqs) > 0 {
-		vectors, err := s.embedder.EmbedDocuments(ctx, embedReqs)
+	for start := 0; start < len(embedReqs); start += batchSize {
+		end := start + batchSize
+		if end > len(embedReqs) {
+			end = len(embedReqs)
+		}
+		chunkDocs := embedDocs[start:end]
+		chunkReqs := embedReqs[start:end]
+		vectors, err := s.embedder.EmbedDocuments(ctx, chunkReqs)
 		if err != nil {
 			return SyncResult{}, err
 		}
-		if len(vectors) != len(embedDocs) {
+		if len(vectors) != len(chunkDocs) {
 			return SyncResult{}, fmt.Errorf(
 				"embedder returned %d vectors for %d documents",
 				len(vectors),
-				len(embedDocs),
+				len(chunkDocs),
 			)
 		}
-		points := make([]Point, 0, len(embedDocs))
-		records := make([]stateRecord, 0, len(embedDocs))
-		for i, doc := range embedDocs {
+		points := make([]Point, 0, len(chunkDocs))
+		records := make([]stateRecord, 0, len(chunkDocs))
+		for i, doc := range chunkDocs {
 			pointID := deterministicPointID(doc.Collection, doc.SourceID, doc.Identity)
 			points = append(points, Point{
 				ID:         pointID,
@@ -276,8 +354,11 @@ func (s *Service) syncSource(ctx context.Context, source Source, full bool) (Syn
 				return SyncResult{}, err
 			}
 		}
-		result.Embedded += len(embedDocs)
-		result.Upserted += len(embedDocs)
+		result.Embedded += len(chunkDocs)
+		result.Upserted += len(chunkDocs)
+		if progress != nil {
+			progress(result)
+		}
 	}
 
 	pruned, err := s.pruneMissingDocuments(ctx, source, seen)
