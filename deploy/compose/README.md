@@ -12,6 +12,8 @@ This directory contains the checked-in Compose-facing config, policy, and secret
 - [docker-compose.yml](/docker-compose.yml) in the repo root is the local-development stack. It
   keeps `build:` enabled and uses a named `q15_workspace` volume for `/workspace`; it is not the
   image-first deployment example for downstream consumers.
+- [docker-compose.tei.yml](/deploy/compose/docker-compose.tei.yml) is an optional local-development
+  override that swaps the Gemini embedder for a local TEI container.
 - [agent-config.yaml](/deploy/compose/agent-config.yaml),
   [agent-config.discovery.example.yaml](/deploy/compose/agent-config.discovery.example.yaml),
   [proxy-policy.yaml](/deploy/compose/proxy-policy.yaml), and
@@ -104,3 +106,41 @@ roster (deprecated) stops being selected.
 
 See [agent-config.discovery.example.yaml](/deploy/compose/agent-config.discovery.example.yaml) for a
 working example with include/exclude glob filters.
+
+## Local TEI embeddings backend (development only)
+
+[docker-compose.tei.yml](/deploy/compose/docker-compose.tei.yml) adds an opt-in `q15-tei` service
+(Hugging Face Text Embeddings Inference) and points `q15-agent` at
+[agent-config.tei.yaml](/deploy/compose/agent-config.tei.yaml), which selects the `openai` embedding
+provider with `base_url_env: Q15_EMBEDDINGS_BASE_URL`. TEI is unauthenticated by default, so the
+agent runs keyless against it.
+
+```bash
+make compose-up-tei     # = compose -f docker-compose.yml -f deploy/compose/docker-compose.tei.yml up
+make compose-down-tei   # stops the base stack and the TEI service
+make compose-logs-tei SERVICE=q15-tei
+```
+
+Notes:
+
+- The default model is `Qwen/Qwen3-Embedding-0.6B` served as `qwen3-embedding-0.6b` at 1024
+  dimensions. Override with `TEI_MODEL`, `TEI_SERVED_MODEL_NAME`, `TEI_MAX_CLIENT_BATCH_SIZE`, and
+  `TEI_IMAGE` environment variables; the served model name must match `model` in
+  agent-config.tei.yaml, and `TEI_MAX_CLIENT_BATCH_SIZE` must stay >= the config's `batch_size`.
+- The default `turing-1.9` image targets Turing GPUs (T4, RTX 2000 series, such as an RTX 2060). It
+  is an experimental image with Flash Attention off; Ampere or newer GPUs can set
+  `TEI_IMAGE=ghcr.io/huggingface/text-embeddings-inference:1.9`. The NVIDIA container toolkit must
+  be installed on the host. For CPU-only hosts, switch to the `cpu-1.9` image and remove the
+  `deploy.resources` GPU reservation.
+- Model weights are downloaded into the `q15_tei_hf_cache` volume on first start; gated or private
+  models require passing `HF_TOKEN` to the `q15-tei` container.
+- TEI enforces no request authentication by default. It is reachable only on the Compose network; if
+  you expose it, run TEI with `--api-key` and set `api_key_env: Q15_EMBEDDINGS_API_KEY` in
+  agent-config.tei.yaml (plus the corresponding environment entry) so the agent sends the Bearer
+  token.
+- `make compose-up` without the override keeps the Gemini embedder. Running `make compose-down` on
+  the base stack does not stop containers started from the TEI override; use
+  `make compose-down-tei`.
+- Switching between the Gemini and TEI configs invalidates the embedding sync state (different
+  provider stamp). Drop the Qdrant collections and run `embed_sync --full` before trusting search
+  results again.

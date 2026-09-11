@@ -518,6 +518,14 @@ make compose-up
 `make compose-up` waits for the stack's health checks. `q15-agent` starts only after the proxy,
 executor, and Qdrant readiness probes pass, so a successful command is ready for local testing.
 
+To iterate on the embeddings provider layer against a local embeddings backend, use the optional TEI
+(Hugging Face Text Embeddings Inference) override instead; see
+[deploy/compose/README.md](/deploy/compose/README.md):
+
+```bash
+make compose-up-tei
+```
+
 The local-development stack uses:
 
 - default container entrypoints with no runtime flags

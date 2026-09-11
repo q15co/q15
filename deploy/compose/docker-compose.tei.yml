@@ -1,0 +1,69 @@
+# Optional TEI (Hugging Face Text Embeddings Inference) backend for local
+# development of the embeddings provider layer. The default stack in
+# ./docker-compose.yml keeps the Gemini embedder; apply this override to run
+# q15-agent against a local TEI container instead:
+#
+#   make compose-up-tei
+#   make compose-down-tei
+#
+# which is equivalent to:
+#
+#   docker compose -f docker-compose.yml -f deploy/compose/docker-compose.tei.yml ...
+#
+# Overrides (plain environment variables, no .env file required):
+#   TEI_MODEL                  Hugging Face model id (default Qwen3-Embedding-0.6B)
+#   TEI_IMAGE                  TEI image; turing-1.9 targets T4/RTX 2000-series GPUs
+#   TEI_SERVED_MODEL_NAME      must match agent-config.tei.yaml model
+#   TEI_MAX_CLIENT_BATCH_SIZE  must be >= the agent config batch_size
+#
+# Switching the agent between providers/models invalidates the embedding sync
+# state: drop the Qdrant collections (embed_sources delete_collection) and run
+# embed_sync --full before search results are trusted again.
+services:
+  q15-tei:
+    image: ${TEI_IMAGE:-ghcr.io/huggingface/text-embeddings-inference:turing-1.9}
+    restart: unless-stopped
+    init: true
+    # Gated or private models need a Hub token: uncomment and set HF_TOKEN.
+    # environment:
+    #   HF_TOKEN: hf_...
+    command:
+      - --model-id
+      - ${TEI_MODEL:-Qwen/Qwen3-Embedding-0.6B}
+      - --served-model-name
+      - ${TEI_SERVED_MODEL_NAME:-qwen3-embedding-0.6b}
+      # Keep >= agent-config.tei.yaml batch_size (TEI default is 32).
+      - --max-client-batch-size
+      - ${TEI_MAX_CLIENT_BATCH_SIZE:-128}
+      - --port
+      - "80"
+    environment:
+      HUGGINGFACE_HUB_CACHE: /data
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    volumes:
+      - type: volume
+        source: q15_tei_hf_cache
+        target: /data
+
+  q15-agent:
+    depends_on:
+      q15-tei:
+        condition: service_started
+    environment:
+      Q15_EMBEDDINGS_BASE_URL: http://q15-tei:80
+    configs:
+      - source: q15_agent_config_tei
+        target: /etc/q15/agent/config.yaml
+
+volumes:
+  q15_tei_hf_cache:
+
+configs:
+  q15_agent_config_tei:
+    file: ./deploy/compose/agent-config.tei.yaml
