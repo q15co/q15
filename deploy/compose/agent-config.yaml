@@ -14,9 +14,15 @@ agent:
       brave_api_key_env: BRAVE_API_KEY
     embeddings:
       qdrant_url_env: Q15_QDRANT_URL
-      gemini_api_key_env: Q15_GEMINI_API_KEY
-      model: gemini-embedding-2
-      dimensions: 768
+      # Local TEI (Hugging Face Text Embeddings Inference) backend; the
+      # q15-tei service in both Compose stacks serves it keylessly.
+      # Hosted alternative: provider: gemini + gemini_api_key_env with model
+      # gemini-embedding-2 and dimensions 768.
+      provider: openai
+      base_url_env: Q15_EMBEDDINGS_BASE_URL
+      model: qwen3-embedding-0.6b
+      dimensions: 1024
+      batch_size: 128
     schedule:
       max_jobs: 64
       max_run_turns: 16

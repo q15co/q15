@@ -16,11 +16,10 @@ TOOLS_BIN_DIR := $(CURDIR)/.tools/bin
 export PATH := $(TOOLS_BIN_DIR):$(PATH)
 
 COMPOSE_ENV := COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT_NAME)
-TEI_COMPOSE_FILE := deploy/compose/docker-compose.tei.yml
 
 .DEFAULT_GOAL := build
 
-.PHONY: all build build-agent build-auth build-exec build-proxy project-setup fmt lint lint-changed test verify verify-ci hooks-install hooks-uninstall compose-secrets-init compose-up compose-down compose-logs compose-ps compose-up-tei compose-down-tei compose-logs-tei compose-ps-tei clean help
+.PHONY: all build build-agent build-auth build-exec build-proxy project-setup fmt lint lint-changed test verify verify-ci hooks-install hooks-uninstall compose-secrets-init compose-up compose-down compose-logs compose-ps clean help
 
 all: build
 
@@ -102,21 +101,6 @@ compose-logs:
 compose-ps:
 	$(COMPOSE_ENV) $(DOCKER_COMPOSE) -f $(COMPOSE_FILE) ps
 
-# Local-development variant that swaps the Gemini embedder for a local TEI
-# (Hugging Face Text Embeddings Inference) container; see
-# deploy/compose/docker-compose.tei.yml and agent-config.tei.yaml.
-compose-up-tei:
-	$(COMPOSE_ENV) $(DOCKER_COMPOSE) -f $(COMPOSE_FILE) -f $(TEI_COMPOSE_FILE) up --build -d --wait
-
-compose-down-tei:
-	$(COMPOSE_ENV) $(DOCKER_COMPOSE) -f $(COMPOSE_FILE) -f $(TEI_COMPOSE_FILE) down --remove-orphans
-
-compose-logs-tei:
-	$(COMPOSE_ENV) $(DOCKER_COMPOSE) -f $(COMPOSE_FILE) -f $(TEI_COMPOSE_FILE) logs -f $(SERVICE)
-
-compose-ps-tei:
-	$(COMPOSE_ENV) $(DOCKER_COMPOSE) -f $(COMPOSE_FILE) -f $(TEI_COMPOSE_FILE) ps
-
 clean:
 	rm -rf $(BIN_DIR)
 	$(GO) clean -cache -testcache
@@ -140,19 +124,14 @@ help:
 	@echo "  compose-secrets-init  Seed ignored local Compose secret files from tracked examples"
 	@echo "  compose-up    Build and start the local-development Docker Compose stack"
 	@echo "  compose-down  Stop and remove the local-development Docker Compose stack"
-	@echo "  compose-logs  Follow local-development Docker Compose logs (set SERVICE=q15-agent|q15-exec|q15-proxy)"
+	@echo "  compose-logs  Follow local-development Docker Compose logs (set SERVICE=q15-agent|q15-exec|q15-proxy|q15-tei|q15-qdrant)"
 	@echo "  compose-ps    Show local-development Docker Compose service status"
-	@echo "  compose-up-tei      Start the local-development stack with the TEI embeddings backend"
-	@echo "  compose-down-tei    Stop and remove the stack including the TEI service"
-	@echo "  compose-logs-tei    Follow TEI-stack logs (set SERVICE=q15-tei|q15-agent|...)"
-	@echo "  compose-ps-tei      Show TEI-stack service status"
 	@echo "  clean         Remove ./bin and Go build/test caches"
 	@echo ""
 	@echo "Notes:"
 	@echo "  - FILES accepts a space-separated file list and is shared by hooks, agents, and CI"
 	@echo "  - repo-local tools live under ./.tools and are the source of truth for linting"
 	@echo "  - compose-* targets use the root ./docker-compose.yml local-development stack"
-	@echo "  - compose-*-tei targets add the optional TEI embeddings backend via deploy/compose/docker-compose.tei.yml"
 	@echo "  - the image-first deployment example lives at ./deploy/compose/docker-compose.image-first.yml"
 	@echo "  - compose uses tracked YAML config examples plus ignored local secret files under ./deploy/compose"
 	@echo "  - q15-auth is the interactive bootstrap tool for generating auth.json outside the runtime containers"

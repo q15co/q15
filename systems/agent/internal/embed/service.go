@@ -529,23 +529,11 @@ func titleForDocument(doc Document) string {
 }
 
 func currentVectorVersion(settings Settings) string {
-	model := normalizeModel(settings.Model)
-	dimensions := normalizeDimensions(settings.Dimensions)
-	if provider := normalizeProvider(settings.Provider); provider != ProviderGemini {
-		return fmt.Sprintf(
-			"dense:%s:%s:%d;sparse:%s",
-			provider,
-			model,
-			dimensions,
-			SparseModelBM25,
-		)
-	}
-	// The Gemini stamp intentionally keeps the pre-provider legacy format so
-	// upgrading with provider=gemini does not invalidate existing sync state.
 	return fmt.Sprintf(
-		"dense:%s:%d;sparse:%s",
-		model,
-		dimensions,
+		"dense:%s:%s:%d;sparse:%s",
+		normalizeProvider(settings.Provider),
+		normalizeModel(settings.Model),
+		normalizeDimensions(settings.Dimensions),
 		SparseModelBM25,
 	)
 }

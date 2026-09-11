@@ -179,7 +179,7 @@ func (a Agent) EmbeddingsRuntime() (EmbeddingsToolRuntime, error) {
 
 // resolveEmbeddingsSecretValue looks up one embeddings env var (NAME or
 // NAME_FILE) and rejects missing or empty resolutions.
-func resolveEmbeddingsSecretValue(envName, what string) (string, error) {
+func resolveEmbeddingsSecretValue(envName, description string) (string, error) {
 	value, ok, err := lookupSecretEnvValue(envName)
 	if err != nil {
 		return "", err
@@ -188,7 +188,7 @@ func resolveEmbeddingsSecretValue(envName, what string) (string, error) {
 		return "", fmt.Errorf("env var %q or %q is required", envName, envName+"_FILE")
 	}
 	if strings.TrimSpace(value) == "" {
-		return "", fmt.Errorf("env var %q resolved to an empty %s", envName, what)
+		return "", fmt.Errorf("env var %q resolved to an empty %s", envName, description)
 	}
 	return value, nil
 }

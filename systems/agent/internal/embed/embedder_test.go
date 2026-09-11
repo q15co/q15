@@ -108,11 +108,11 @@ func TestNewEmbedderOpenAIRequiresModelAndKey(t *testing.T) {
 	}
 }
 
-// TestCurrentVectorVersionGeminiLegacyFormat pins the pre-provider stamp
-// byte-for-byte: upgrading with provider=gemini (or unset) must not force a
-// full re-embed of existing state.
-func TestCurrentVectorVersionGeminiLegacyFormat(t *testing.T) {
-	want := "dense:gemini-embedding-2:768;sparse:qdrant/bm25"
+// TestCurrentVectorVersionUniformProviderStamp asserts the stamp always
+// names its provider: any provider, model, or dimensions change invalidates
+// existing sync state and triggers a full dense re-embed on the next sync.
+func TestCurrentVectorVersionUniformProviderStamp(t *testing.T) {
+	want := "dense:gemini:gemini-embedding-2:768;sparse:qdrant/bm25"
 	for name, settings := range map[string]Settings{
 		"empty provider":    {},
 		"explicit gemini":   {Provider: ProviderGemini},
@@ -122,21 +122,13 @@ func TestCurrentVectorVersionGeminiLegacyFormat(t *testing.T) {
 			t.Fatalf("%s: currentVectorVersion = %q, want %q", name, got, want)
 		}
 	}
-	custom := Settings{Provider: ProviderGemini, Model: "gemini-embedding-1", Dimensions: 3072}
-	if got, want := currentVectorVersion(custom),
-		"dense:gemini-embedding-1:3072;sparse:qdrant/bm25"; got != want {
-		t.Fatalf("currentVectorVersion = %q, want %q", got, want)
-	}
-}
-
-func TestCurrentVectorVersionOpenAIFormat(t *testing.T) {
-	settings := Settings{
+	openai := Settings{
 		Provider:   ProviderOpenAI,
-		Model:      "text-embedding-3-small",
+		Model:      "qwen3-embedding-0.6b",
 		Dimensions: 1024,
 	}
-	want := "dense:openai:text-embedding-3-small:1024;sparse:qdrant/bm25"
-	if got := currentVectorVersion(settings); got != want {
+	if got, want := currentVectorVersion(openai),
+		"dense:openai:qwen3-embedding-0.6b:1024;sparse:qdrant/bm25"; got != want {
 		t.Fatalf("currentVectorVersion = %q, want %q", got, want)
 	}
 }

@@ -1009,7 +1009,7 @@ agent:
 	}
 }
 
-func TestComposeAgentConfigTEIResolvesEmbeddings(t *testing.T) {
+func TestComposeAgentConfigResolvesTEIEmbeddings(t *testing.T) {
 	t.Setenv("Q15_TELEGRAM_TOKEN", "tg")
 	t.Setenv("Q15_TELEGRAM_ALLOWED_USER_IDS", "123")
 	t.Setenv("Q15_QDRANT_URL", "http://qdrant:6333")
@@ -1017,13 +1017,13 @@ func TestComposeAgentConfigTEIResolvesEmbeddings(t *testing.T) {
 	t.Setenv("BRAVE_API_KEY", "brave")
 	t.Setenv("OLLAMA_API_KEY", "ollama")
 
-	path := filepath.Join("..", "..", "..", "..", "deploy", "compose", "agent-config.tei.yaml")
+	path := filepath.Join("..", "..", "..", "..", "deploy", "compose", "agent-config.yaml")
 	rt, err := LoadAgentRuntime(path)
 	if err != nil {
-		t.Fatalf("LoadAgentRuntime(deploy/compose/agent-config.tei.yaml) error = %v", err)
+		t.Fatalf("LoadAgentRuntime(deploy/compose/agent-config.yaml) error = %v", err)
 	}
 	if !rt.Tools.Embeddings.Enabled {
-		t.Fatal("Embeddings not enabled for the TEI compose config")
+		t.Fatal("Embeddings not enabled for the compose config")
 	}
 	if rt.Tools.Embeddings.Provider != "openai" {
 		t.Fatalf("Embeddings.Provider = %q, want openai", rt.Tools.Embeddings.Provider)
@@ -1045,32 +1045,5 @@ func TestComposeAgentConfigTEIResolvesEmbeddings(t *testing.T) {
 	}
 	if rt.Tools.Embeddings.BatchSize != 128 {
 		t.Fatalf("Embeddings.BatchSize = %d, want 128", rt.Tools.Embeddings.BatchSize)
-	}
-}
-
-func TestComposeAgentConfigDefaultsToGemini(t *testing.T) {
-	t.Setenv("Q15_TELEGRAM_TOKEN", "tg")
-	t.Setenv("Q15_TELEGRAM_ALLOWED_USER_IDS", "123")
-	t.Setenv("Q15_QDRANT_URL", "http://qdrant:6333")
-	t.Setenv("Q15_GEMINI_API_KEY", "gemini")
-	t.Setenv("BRAVE_API_KEY", "brave")
-	t.Setenv("OLLAMA_API_KEY", "ollama")
-
-	path := filepath.Join("..", "..", "..", "..", "deploy", "compose", "agent-config.yaml")
-	rt, err := LoadAgentRuntime(path)
-	if err != nil {
-		t.Fatalf("LoadAgentRuntime(deploy/compose/agent-config.yaml) error = %v", err)
-	}
-	if !rt.Tools.Embeddings.Enabled {
-		t.Fatal("Embeddings not enabled for the default compose config")
-	}
-	if rt.Tools.Embeddings.Provider != "gemini" {
-		t.Fatalf("Embeddings.Provider = %q, want gemini default", rt.Tools.Embeddings.Provider)
-	}
-	if rt.Tools.Embeddings.Model != "gemini-embedding-2" {
-		t.Fatalf("Embeddings.Model = %q, want gemini-embedding-2", rt.Tools.Embeddings.Model)
-	}
-	if rt.Tools.Embeddings.Dimensions != 768 {
-		t.Fatalf("Embeddings.Dimensions = %d, want 768", rt.Tools.Embeddings.Dimensions)
 	}
 }
