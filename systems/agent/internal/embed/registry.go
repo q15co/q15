@@ -71,6 +71,21 @@ func (r *Registry) Add(ctx context.Context, source Source) (Source, error) {
 		if existing.ID == source.ID {
 			return Source{}, fmt.Errorf("source id %q already exists", source.ID)
 		}
+		if existing.Collection != source.Collection {
+			continue
+		}
+		// Reject overlapping paths within the same collection. This applies
+		// even when the existing source is disabled: a disabled overlap
+		// re-arms on enable and would silently double-index the same content
+		// into the collection, so the add-time guard stays strict.
+		if pathsOverlap(existing.Path, source.Path) {
+			return Source{}, fmt.Errorf(
+				"source path %q overlaps existing source %q in collection %q",
+				source.Path,
+				existing.ID,
+				source.Collection,
+			)
+		}
 	}
 	file.Sources = append(file.Sources, source)
 	sortSources(file.Sources)
@@ -431,6 +446,19 @@ func cloneSources(in []Source) []Source {
 		out[i].ExcludeGlobs = append([]string(nil), in[i].ExcludeGlobs...)
 	}
 	return out
+}
+
+// pathsOverlap reports whether two registered source paths overlap: equal
+// paths, or one path containing the other, after filepath.Clean. Containment
+// compares with a trailing slash on the parent prefix so a sibling like
+// /workspace/library-friends does not false-match /workspace/library.
+func pathsOverlap(a, b string) bool {
+	a = filepath.Clean(a)
+	b = filepath.Clean(b)
+	if a == b {
+		return true
+	}
+	return strings.HasPrefix(a, b+"/") || strings.HasPrefix(b, a+"/")
 }
 
 func sortSources(sources []Source) {

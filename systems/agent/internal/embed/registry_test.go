@@ -114,6 +114,261 @@ func TestRegistryValidatesPathRootsAndSourceTypeCompatibility(t *testing.T) {
 	}
 }
 
+func TestRegistryAddRejectsExactDuplicatePath(t *testing.T) {
+	ctx := context.Background()
+	settings := testSettings(t)
+	mustMkdirRuntime(t, settings, "/workspace/library")
+
+	registry := NewRegistry(settings)
+	mustAddSource(ctx, t, registry, Source{
+		ID:         "library-chunks",
+		Collection: CollectionLibrary,
+		SourceType: SourceTypeChunkedMarkdownTree,
+		Path:       "/workspace/library",
+		Enabled:    true,
+	})
+
+	// Mirrors the 2026-06-04 double-indexing incident: a second catch-all
+	// source registered over the exact same path in the same collection.
+	_, err := registry.Add(ctx, Source{
+		ID:         "library-chunks-malema-batch",
+		Collection: CollectionLibrary,
+		SourceType: SourceTypeChunkedMarkdownTree,
+		Path:       "/workspace/library",
+		Enabled:    true,
+	})
+	if err == nil {
+		t.Fatal("Add() duplicate path error = nil, want overlap rejection")
+	}
+}
+
+func TestRegistryAddRejectsChildPathOfExisting(t *testing.T) {
+	ctx := context.Background()
+	settings := testSettings(t)
+	mustMkdirRuntime(t, settings, "/workspace/library/fiction")
+
+	registry := NewRegistry(settings)
+	mustAddSource(ctx, t, registry, Source{
+		ID:         "library-chunks",
+		Collection: CollectionLibrary,
+		SourceType: SourceTypeMarkdownTree,
+		Path:       "/workspace/library",
+		Enabled:    true,
+	})
+
+	_, err := registry.Add(ctx, Source{
+		ID:         "library-fiction",
+		Collection: CollectionLibrary,
+		SourceType: SourceTypeMarkdownTree,
+		Path:       "/workspace/library/fiction",
+		Enabled:    true,
+	})
+	if err == nil {
+		t.Fatal("Add() child-of-existing path error = nil, want overlap rejection")
+	}
+}
+
+func TestRegistryAddRejectsAncestorOfExisting(t *testing.T) {
+	ctx := context.Background()
+	settings := testSettings(t)
+	mustMkdirRuntime(t, settings, "/workspace/library/fiction")
+
+	registry := NewRegistry(settings)
+	mustAddSource(ctx, t, registry, Source{
+		ID:         "library-fiction",
+		Collection: CollectionLibrary,
+		SourceType: SourceTypeMarkdownTree,
+		Path:       "/workspace/library/fiction",
+		Enabled:    true,
+	})
+
+	_, err := registry.Add(ctx, Source{
+		ID:         "library-chunks",
+		Collection: CollectionLibrary,
+		SourceType: SourceTypeMarkdownTree,
+		Path:       "/workspace/library",
+		Enabled:    true,
+	})
+	if err == nil {
+		t.Fatal("Add() ancestor-of-existing path error = nil, want overlap rejection")
+	}
+}
+
+func TestRegistryAddOverlapErrorNamesExistingSource(t *testing.T) {
+	ctx := context.Background()
+	settings := testSettings(t)
+	mustMkdirRuntime(t, settings, "/workspace/library")
+
+	registry := NewRegistry(settings)
+	mustAddSource(ctx, t, registry, Source{
+		ID:         "library-chunks",
+		Collection: CollectionLibrary,
+		SourceType: SourceTypeMarkdownTree,
+		Path:       "/workspace/library",
+		Enabled:    true,
+	})
+
+	_, err := registry.Add(ctx, Source{
+		ID:         "library-again",
+		Collection: CollectionLibrary,
+		SourceType: SourceTypeMarkdownTree,
+		Path:       "/workspace/library/",
+		Enabled:    true,
+	})
+	if err == nil {
+		t.Fatal("Add() overlapping path error = nil, want overlap rejection")
+	}
+	want := `source path "/workspace/library" overlaps existing source ` +
+		`"library-chunks" in collection "library"`
+	if err.Error() != want {
+		t.Fatalf("Add() overlap error = %q, want %q", err.Error(), want)
+	}
+}
+
+func TestRegistryAddAllowsSiblingWithSharedPathPrefix(t *testing.T) {
+	ctx := context.Background()
+	settings := testSettings(t)
+	mustMkdirRuntime(t, settings, "/workspace/library")
+	mustMkdirRuntime(t, settings, "/workspace/library-friends")
+
+	registry := NewRegistry(settings)
+	mustAddSource(ctx, t, registry, Source{
+		ID:         "library-chunks",
+		Collection: CollectionLibrary,
+		SourceType: SourceTypeMarkdownTree,
+		Path:       "/workspace/library",
+		Enabled:    true,
+	})
+
+	added, err := registry.Add(ctx, Source{
+		ID:         "library-friends",
+		Collection: CollectionLibrary,
+		SourceType: SourceTypeMarkdownTree,
+		Path:       "/workspace/library-friends",
+		Enabled:    true,
+	})
+	if err != nil {
+		t.Fatalf("Add() sibling path error = %v, want success", err)
+	}
+	if added.ID != "library-friends" {
+		t.Fatalf("added ID = %q, want library-friends", added.ID)
+	}
+}
+
+func TestRegistryAddAllowsSamePathInDifferentCollection(t *testing.T) {
+	ctx := context.Background()
+	settings := testSettings(t)
+	mustMkdirRuntime(t, settings, "/workspace/shared")
+
+	registry := NewRegistry(settings)
+	mustAddSource(ctx, t, registry, Source{
+		ID:         "shared-semantic",
+		Collection: CollectionSemantic,
+		SourceType: SourceTypeMarkdownTree,
+		Path:       "/workspace/shared",
+		Enabled:    true,
+	})
+
+	if _, err := registry.Add(ctx, Source{
+		ID:         "shared-library",
+		Collection: CollectionLibrary,
+		SourceType: SourceTypeMarkdownTree,
+		Path:       "/workspace/shared",
+		Enabled:    true,
+	}); err != nil {
+		t.Fatalf("Add() same path in different collection error = %v, want success", err)
+	}
+}
+
+func TestRegistryAddRejectsOverlapWithDisabledSource(t *testing.T) {
+	ctx := context.Background()
+	settings := testSettings(t)
+	mustMkdirRuntime(t, settings, "/workspace/library")
+
+	registry := NewRegistry(settings)
+	mustAddSource(ctx, t, registry, Source{
+		ID:         "library-chunks",
+		Collection: CollectionLibrary,
+		SourceType: SourceTypeMarkdownTree,
+		Path:       "/workspace/library",
+		Enabled:    true,
+	})
+	if _, err := registry.SetEnabled(ctx, "library-chunks", false); err != nil {
+		t.Fatalf("SetEnabled(false) error = %v", err)
+	}
+
+	_, err := registry.Add(ctx, Source{
+		ID:         "library-replacement",
+		Collection: CollectionLibrary,
+		SourceType: SourceTypeMarkdownTree,
+		Path:       "/workspace/library",
+		Enabled:    true,
+	})
+	if err == nil || !strings.Contains(err.Error(), `"library-chunks"`) {
+		t.Fatalf(
+			"Add() over disabled existing error = %v, want overlap naming library-chunks",
+			err,
+		)
+	}
+}
+
+func TestRegistryAddUnrelatedPathSucceeds(t *testing.T) {
+	ctx := context.Background()
+	settings := testSettings(t)
+	mustMkdirRuntime(t, settings, "/workspace/library")
+	mustMkdirRuntime(t, settings, "/workspace/inbox")
+
+	registry := NewRegistry(settings)
+	mustAddSource(ctx, t, registry, Source{
+		ID:         "library-chunks",
+		Collection: CollectionLibrary,
+		SourceType: SourceTypeMarkdownTree,
+		Path:       "/workspace/library",
+		Enabled:    true,
+	})
+
+	added, err := registry.Add(ctx, Source{
+		ID:         "inbox",
+		Collection: CollectionSemantic,
+		SourceType: SourceTypeMarkdownTree,
+		Path:       "/workspace/inbox",
+		Enabled:    true,
+	})
+	if err != nil {
+		t.Fatalf("Add() unrelated path error = %v, want success", err)
+	}
+	if added.ID != "inbox" {
+		t.Fatalf("added ID = %q, want inbox", added.ID)
+	}
+}
+
+func TestRegistryAddRejectsDuplicateID(t *testing.T) {
+	ctx := context.Background()
+	settings := testSettings(t)
+	mustMkdirRuntime(t, settings, "/workspace/library")
+	mustMkdirRuntime(t, settings, "/workspace/inbox")
+
+	registry := NewRegistry(settings)
+	mustAddSource(ctx, t, registry, Source{
+		ID:         "docs",
+		Collection: CollectionLibrary,
+		SourceType: SourceTypeMarkdownTree,
+		Path:       "/workspace/library",
+		Enabled:    true,
+	})
+
+	_, err := registry.Add(ctx, Source{
+		ID:         "docs",
+		Collection: CollectionLibrary,
+		SourceType: SourceTypeMarkdownTree,
+		Path:       "/workspace/inbox",
+		Enabled:    true,
+	})
+	if err == nil || err.Error() != `source id "docs" already exists` {
+		t.Fatalf("Add() duplicate id error = %v, want duplicate id rejection", err)
+	}
+}
+
 func TestRegistryDefaultsMissingEnabledToTrue(t *testing.T) {
 	settings := testSettings(t)
 	if err := os.MkdirAll(filepath.Dir(settings.RegistryPath), 0o755); err != nil {
@@ -143,6 +398,32 @@ func TestRegistryDefaultsMissingEnabledToTrue(t *testing.T) {
 	}
 	if !sources[0].Enabled {
 		t.Fatal("missing enabled field loaded as false, want true")
+	}
+}
+
+func mustAddSource(
+	ctx context.Context,
+	t *testing.T,
+	registry *Registry,
+	source Source,
+) Source {
+	t.Helper()
+	added, err := registry.Add(ctx, source)
+	if err != nil {
+		t.Fatalf("Add(%q) error = %v", source.ID, err)
+	}
+	return added
+}
+
+func mustMkdirRuntime(t *testing.T, settings Settings, runtimePath string) {
+	t.Helper()
+	rel, ok := strings.CutPrefix(runtimePath, "/workspace/")
+	if !ok {
+		t.Fatalf("mustMkdirRuntime only supports /workspace/ paths, got %q", runtimePath)
+	}
+	local := filepath.Join(settings.WorkspaceLocalDir, filepath.FromSlash(rel))
+	if err := os.MkdirAll(local, 0o755); err != nil {
+		t.Fatalf("create %s: %v", runtimePath, err)
 	}
 }
 
