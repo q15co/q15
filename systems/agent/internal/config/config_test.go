@@ -344,6 +344,157 @@ func TestValidateScheduleTool(t *testing.T) {
 	}
 }
 
+func TestValidateEmbeddingsTool(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		embeddings EmbeddingsTool
+		wantErr    bool
+	}{
+		{
+			name: "legacy gemini config without provider",
+			embeddings: EmbeddingsTool{
+				QdrantURLEnv:    "Q15_QDRANT_URL",
+				GeminiAPIKeyEnv: "Q15_GEMINI_API_KEY",
+				Model:           "gemini-embedding-2",
+				Dimensions:      768,
+			},
+		},
+		{
+			name: "explicit gemini provider",
+			embeddings: EmbeddingsTool{
+				Provider:        "gemini",
+				QdrantURLEnv:    "Q15_QDRANT_URL",
+				GeminiAPIKeyEnv: "Q15_GEMINI_API_KEY",
+			},
+		},
+		{
+			name: "openai provider with api key",
+			embeddings: EmbeddingsTool{
+				Provider:     "openai",
+				QdrantURLEnv: "Q15_QDRANT_URL",
+				APIKeyEnv:    "Q15_EMBED_API_KEY",
+				Model:        "text-embedding-3-small",
+				Dimensions:   1024,
+			},
+		},
+		{
+			name: "openai provider keyless base url",
+			embeddings: EmbeddingsTool{
+				Provider:     "openai",
+				QdrantURLEnv: "Q15_QDRANT_URL",
+				BaseURLEnv:   "Q15_EMBED_BASE_URL",
+				Model:        "text-embedding-3-small",
+				Dimensions:   1024,
+			},
+		},
+		{
+			name: "openai provider with api key and base url",
+			embeddings: EmbeddingsTool{
+				Provider:     "openai",
+				QdrantURLEnv: "Q15_QDRANT_URL",
+				APIKeyEnv:    "Q15_EMBED_API_KEY",
+				BaseURLEnv:   "Q15_EMBED_BASE_URL",
+				Model:        "text-embedding-3-small",
+				Dimensions:   1024,
+			},
+		},
+		{
+			name:       "unconfigured stays disabled",
+			embeddings: EmbeddingsTool{},
+		},
+		{
+			name:       "provider alone counts as configured",
+			embeddings: EmbeddingsTool{Provider: "openai"},
+			wantErr:    true,
+		},
+		{
+			name:       "api key env alone counts as configured",
+			embeddings: EmbeddingsTool{APIKeyEnv: "Q15_EMBED_API_KEY"},
+			wantErr:    true,
+		},
+		{
+			name:       "missing qdrant url env",
+			embeddings: EmbeddingsTool{GeminiAPIKeyEnv: "Q15_GEMINI_API_KEY"},
+			wantErr:    true,
+		},
+		{
+			name: "gemini provider missing gemini key",
+			embeddings: EmbeddingsTool{
+				Provider:     "gemini",
+				QdrantURLEnv: "Q15_QDRANT_URL",
+			},
+			wantErr: true,
+		},
+		{
+			name: "openai provider missing api key and base url",
+			embeddings: EmbeddingsTool{
+				Provider:     "openai",
+				QdrantURLEnv: "Q15_QDRANT_URL",
+			},
+			wantErr: true,
+		},
+		{
+			name: "unknown provider",
+			embeddings: EmbeddingsTool{
+				Provider:        "anthropic",
+				QdrantURLEnv:    "Q15_QDRANT_URL",
+				GeminiAPIKeyEnv: "Q15_GEMINI_API_KEY",
+			},
+			wantErr: true,
+		},
+		{
+			name: "negative dimensions",
+			embeddings: EmbeddingsTool{
+				QdrantURLEnv:    "Q15_QDRANT_URL",
+				GeminiAPIKeyEnv: "Q15_GEMINI_API_KEY",
+				Dimensions:      -1,
+			},
+			wantErr: true,
+		},
+		{
+			name: "negative batch size",
+			embeddings: EmbeddingsTool{
+				QdrantURLEnv:    "Q15_QDRANT_URL",
+				GeminiAPIKeyEnv: "Q15_GEMINI_API_KEY",
+				BatchSize:       -1,
+			},
+			wantErr: true,
+		},
+		{
+			name: "zero batch size uses provider default",
+			embeddings: EmbeddingsTool{
+				Provider:     "openai",
+				QdrantURLEnv: "Q15_QDRANT_URL",
+				APIKeyEnv:    "Q15_EMBED_API_KEY",
+				Model:        "text-embedding-3-small",
+				Dimensions:   1024,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := Config{
+				Providers: []Provider{testProvider("p", "ollama", "", "")},
+				Agent:     testAgent("a"),
+			}
+			cfg.Agent.Tools.Embeddings = tt.embeddings
+
+			err := cfg.Validate()
+			if tt.wantErr && err == nil {
+				t.Fatal("Validate() error = nil, want non-nil")
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("Validate() error = %v", err)
+			}
+		})
+	}
+}
+
 func TestResolveAgentRuntimeUsesScheduleDefaults(t *testing.T) {
 	t.Setenv("Q15_TELEGRAM_TOKEN", "t")
 
@@ -563,5 +714,297 @@ agent:
 	}
 	if _, err := LoadAgentRuntime(path); err == nil {
 		t.Fatal("expected error for missing QDRANT URL")
+	}
+}
+
+func TestLoadAgentRuntimeYAMLDefaultsEmbeddingsProviderToGemini(t *testing.T) {
+	t.Setenv("Q15_TELEGRAM_TOKEN", "tg")
+	t.Setenv("Q15_QDRANT_URL", "http://qdrant:6333")
+	t.Setenv("Q15_GEMINI_API_KEY", "gemini-key")
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+providers:
+  - name: p
+    type: ollama
+agent:
+  name: a
+  tools:
+    embeddings:
+      qdrant_url_env: Q15_QDRANT_URL
+      gemini_api_key_env: Q15_GEMINI_API_KEY
+      model: gemini-embedding-2
+      dimensions: 768
+  telegram:
+    token_env: Q15_TELEGRAM_TOKEN
+    allowed_user_ids: [1]
+`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	rt, err := LoadAgentRuntime(path)
+	if err != nil {
+		t.Fatalf("LoadAgentRuntime() error = %v", err)
+	}
+	if !rt.Tools.Embeddings.Enabled {
+		t.Fatal("Embeddings not enabled")
+	}
+	if rt.Tools.Embeddings.Provider != "gemini" {
+		t.Fatalf("Embeddings.Provider = %q, want gemini", rt.Tools.Embeddings.Provider)
+	}
+	if rt.Tools.Embeddings.GeminiAPIKey != "gemini-key" {
+		t.Fatalf("Embeddings.GeminiAPIKey = %q, want gemini-key", rt.Tools.Embeddings.GeminiAPIKey)
+	}
+	if rt.Tools.Embeddings.APIKey != "" {
+		t.Fatalf("Embeddings.APIKey = %q, want empty", rt.Tools.Embeddings.APIKey)
+	}
+}
+
+func TestLoadAgentRuntimeYAMLResolvesOpenAIEmbeddingsFromEnv(t *testing.T) {
+	t.Setenv("Q15_TELEGRAM_TOKEN", "tg")
+	t.Setenv("Q15_QDRANT_URL", "http://qdrant:6333")
+	t.Setenv("Q15_EMBED_API_KEY", "openai-key")
+	t.Setenv("Q15_EMBED_BASE_URL", "http://tei:8080/v1")
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+providers:
+  - name: p
+    type: ollama
+agent:
+  name: a
+  tools:
+    embeddings:
+      qdrant_url_env: Q15_QDRANT_URL
+      provider: openai
+      api_key_env: Q15_EMBED_API_KEY
+      base_url_env: Q15_EMBED_BASE_URL
+      model: text-embedding-3-small
+      dimensions: 1024
+      batch_size: 64
+  telegram:
+    token_env: Q15_TELEGRAM_TOKEN
+    allowed_user_ids: [1]
+`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	rt, err := LoadAgentRuntime(path)
+	if err != nil {
+		t.Fatalf("LoadAgentRuntime() error = %v", err)
+	}
+	if !rt.Tools.Embeddings.Enabled {
+		t.Fatal("Embeddings not enabled")
+	}
+	if rt.Tools.Embeddings.Provider != "openai" {
+		t.Fatalf("Embeddings.Provider = %q, want openai", rt.Tools.Embeddings.Provider)
+	}
+	if rt.Tools.Embeddings.APIKey != "openai-key" {
+		t.Fatalf("Embeddings.APIKey = %q, want openai-key", rt.Tools.Embeddings.APIKey)
+	}
+	if rt.Tools.Embeddings.BaseURL != "http://tei:8080/v1" {
+		t.Fatalf("Embeddings.BaseURL = %q, want http://tei:8080/v1", rt.Tools.Embeddings.BaseURL)
+	}
+	if rt.Tools.Embeddings.Model != "text-embedding-3-small" {
+		t.Fatalf(
+			"Embeddings.Model = %q, want text-embedding-3-small",
+			rt.Tools.Embeddings.Model,
+		)
+	}
+	if rt.Tools.Embeddings.Dimensions != 1024 {
+		t.Fatalf("Embeddings.Dimensions = %d, want 1024", rt.Tools.Embeddings.Dimensions)
+	}
+	if rt.Tools.Embeddings.BatchSize != 64 {
+		t.Fatalf("Embeddings.BatchSize = %d, want 64", rt.Tools.Embeddings.BatchSize)
+	}
+	if rt.Tools.Embeddings.GeminiAPIKey != "" {
+		t.Fatalf("Embeddings.GeminiAPIKey = %q, want empty", rt.Tools.Embeddings.GeminiAPIKey)
+	}
+}
+
+func TestLoadAgentRuntimeYAMLResolvesOpenAIEmbeddingsKeylessBaseURL(t *testing.T) {
+	t.Setenv("Q15_TELEGRAM_TOKEN", "tg")
+	t.Setenv("Q15_QDRANT_URL", "http://qdrant:6333")
+	t.Setenv("Q15_EMBED_BASE_URL", "http://tei:8080")
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+providers:
+  - name: p
+    type: ollama
+agent:
+  name: a
+  tools:
+    embeddings:
+      qdrant_url_env: Q15_QDRANT_URL
+      provider: openai
+      base_url_env: Q15_EMBED_BASE_URL
+      model: text-embedding-3-small
+      dimensions: 1024
+  telegram:
+    token_env: Q15_TELEGRAM_TOKEN
+    allowed_user_ids: [1]
+`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	rt, err := LoadAgentRuntime(path)
+	if err != nil {
+		t.Fatalf("LoadAgentRuntime() error = %v", err)
+	}
+	if !rt.Tools.Embeddings.Enabled {
+		t.Fatal("Embeddings not enabled")
+	}
+	if rt.Tools.Embeddings.Provider != "openai" {
+		t.Fatalf("Embeddings.Provider = %q, want openai", rt.Tools.Embeddings.Provider)
+	}
+	if rt.Tools.Embeddings.BaseURL != "http://tei:8080" {
+		t.Fatalf("Embeddings.BaseURL = %q, want http://tei:8080", rt.Tools.Embeddings.BaseURL)
+	}
+	if rt.Tools.Embeddings.APIKey != "" {
+		t.Fatalf("Embeddings.APIKey = %q, want empty", rt.Tools.Embeddings.APIKey)
+	}
+}
+
+func TestLoadAgentRuntimeYAMLRequiresEmbeddingsAPIKeyWithoutBaseURL(t *testing.T) {
+	t.Setenv("Q15_TELEGRAM_TOKEN", "tg")
+	t.Setenv("Q15_QDRANT_URL", "http://qdrant:6333")
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+providers:
+  - name: p
+    type: ollama
+agent:
+  name: a
+  tools:
+    embeddings:
+      qdrant_url_env: Q15_QDRANT_URL
+      provider: openai
+      model: text-embedding-3-small
+      dimensions: 1024
+  telegram:
+    token_env: Q15_TELEGRAM_TOKEN
+    allowed_user_ids: [1]
+`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if _, err := LoadAgentRuntime(path); err == nil {
+		t.Fatal("expected error for openai embeddings without api_key_env or base_url_env")
+	}
+}
+
+func TestLoadAgentRuntimeYAMLRejectsUnknownEmbeddingsProvider(t *testing.T) {
+	t.Setenv("Q15_TELEGRAM_TOKEN", "tg")
+	t.Setenv("Q15_QDRANT_URL", "http://qdrant:6333")
+	t.Setenv("Q15_GEMINI_API_KEY", "gemini-key")
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+providers:
+  - name: p
+    type: ollama
+agent:
+  name: a
+  tools:
+    embeddings:
+      qdrant_url_env: Q15_QDRANT_URL
+      provider: anthropic
+      gemini_api_key_env: Q15_GEMINI_API_KEY
+      model: gemini-embedding-2
+      dimensions: 768
+  telegram:
+    token_env: Q15_TELEGRAM_TOKEN
+    allowed_user_ids: [1]
+`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if _, err := LoadAgentRuntime(path); err == nil {
+		t.Fatal("expected error for unknown embeddings provider")
+	}
+}
+
+func TestLoadAgentRuntimeYAMLRejectsNegativeEmbeddingsBatchSize(t *testing.T) {
+	t.Setenv("Q15_TELEGRAM_TOKEN", "tg")
+	t.Setenv("Q15_QDRANT_URL", "http://qdrant:6333")
+	t.Setenv("Q15_GEMINI_API_KEY", "gemini-key")
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+providers:
+  - name: p
+    type: ollama
+agent:
+  name: a
+  tools:
+    embeddings:
+      qdrant_url_env: Q15_QDRANT_URL
+      gemini_api_key_env: Q15_GEMINI_API_KEY
+      model: gemini-embedding-2
+      dimensions: 768
+      batch_size: -1
+  telegram:
+    token_env: Q15_TELEGRAM_TOKEN
+    allowed_user_ids: [1]
+`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if _, err := LoadAgentRuntime(path); err == nil {
+		t.Fatal("expected error for negative batch_size")
+	}
+}
+
+func TestLoadAgentRuntimeYAMLRequiresModelForOpenAIEmbeddings(t *testing.T) {
+	t.Setenv("Q15_TELEGRAM_TOKEN", "tg")
+	t.Setenv("Q15_QDRANT_URL", "http://qdrant:6333")
+	t.Setenv("Q15_EMBED_API_KEY", "embed-key")
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+providers:
+  - name: p
+    type: ollama
+agent:
+  name: a
+  tools:
+    embeddings:
+      qdrant_url_env: Q15_QDRANT_URL
+      provider: openai
+      api_key_env: Q15_EMBED_API_KEY
+      dimensions: 1024
+  telegram:
+    token_env: Q15_TELEGRAM_TOKEN
+    allowed_user_ids: [1]
+`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if _, err := LoadAgentRuntime(path); err == nil {
+		t.Fatal("expected error for openai embeddings without model")
+	}
+}
+
+func TestLoadAgentRuntimeYAMLRequiresDimensionsForOpenAIEmbeddings(t *testing.T) {
+	t.Setenv("Q15_TELEGRAM_TOKEN", "tg")
+	t.Setenv("Q15_QDRANT_URL", "http://qdrant:6333")
+	t.Setenv("Q15_EMBED_API_KEY", "embed-key")
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+providers:
+  - name: p
+    type: ollama
+agent:
+  name: a
+  tools:
+    embeddings:
+      qdrant_url_env: Q15_QDRANT_URL
+      provider: openai
+      api_key_env: Q15_EMBED_API_KEY
+      model: text-embedding-3-small
+  telegram:
+    token_env: Q15_TELEGRAM_TOKEN
+    allowed_user_ids: [1]
+`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if _, err := LoadAgentRuntime(path); err == nil {
+		t.Fatal("expected error for openai embeddings without dimensions")
 	}
 }

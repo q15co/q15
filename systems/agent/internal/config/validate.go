@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/q15co/q15/systems/agent/internal/embed"
 	"github.com/q15co/q15/systems/agent/internal/providertypes"
 )
 
@@ -101,9 +102,13 @@ func (c Config) validate() error {
 
 func (e EmbeddingsTool) configured() bool {
 	return strings.TrimSpace(e.QdrantURLEnv) != "" ||
+		strings.TrimSpace(e.Provider) != "" ||
 		strings.TrimSpace(e.GeminiAPIKeyEnv) != "" ||
+		strings.TrimSpace(e.APIKeyEnv) != "" ||
+		strings.TrimSpace(e.BaseURLEnv) != "" ||
 		strings.TrimSpace(e.Model) != "" ||
-		e.Dimensions != 0
+		e.Dimensions != 0 ||
+		e.BatchSize != 0
 }
 
 func (e EmbeddingsTool) validate() error {
@@ -113,13 +118,52 @@ func (e EmbeddingsTool) validate() error {
 	if strings.TrimSpace(e.QdrantURLEnv) == "" {
 		return errors.New("qdrant_url_env is required when embeddings are configured")
 	}
-	if strings.TrimSpace(e.GeminiAPIKeyEnv) == "" {
-		return errors.New("gemini_api_key_env is required when embeddings are configured")
+	provider, err := normalizeEmbeddingsProvider(e.Provider)
+	if err != nil {
+		return err
+	}
+	switch provider {
+	case embed.ProviderOpenAI:
+		if strings.TrimSpace(e.APIKeyEnv) == "" && strings.TrimSpace(e.BaseURLEnv) == "" {
+			return errors.New(
+				"api_key_env is required when embeddings provider is openai unless base_url_env is set",
+			)
+		}
+		if strings.TrimSpace(e.Model) == "" {
+			return errors.New("model is required when embeddings provider is openai")
+		}
+		if e.Dimensions <= 0 {
+			return errors.New(
+				"dimensions must be greater than 0 when embeddings provider is openai",
+			)
+		}
+	default:
+		if strings.TrimSpace(e.GeminiAPIKeyEnv) == "" {
+			return errors.New("gemini_api_key_env is required when embeddings are configured")
+		}
 	}
 	if e.Dimensions < 0 {
 		return errors.New("dimensions must be greater than or equal to 0")
 	}
+	if e.BatchSize < 0 {
+		return errors.New("batch_size must be greater than or equal to 0")
+	}
 	return nil
+}
+
+// normalizeEmbeddingsProvider resolves the configured embeddings provider,
+// defaulting to the Gemini default when unset. It rejects unknown providers.
+func normalizeEmbeddingsProvider(provider string) (string, error) {
+	provider = strings.TrimSpace(provider)
+	if provider == "" {
+		return embed.DefaultProvider, nil
+	}
+	switch provider {
+	case embed.ProviderGemini, embed.ProviderOpenAI:
+		return provider, nil
+	default:
+		return "", fmt.Errorf("embedding provider %q is not supported", provider)
+	}
 }
 
 func (s ScheduleTool) validate() error {

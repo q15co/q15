@@ -301,9 +301,13 @@ agent:
       brave_api_key_env: BRAVE_API_KEY
     embeddings:
       qdrant_url_env: Q15_QDRANT_URL
+      # provider: gemini            # gemini (default) | openai
       gemini_api_key_env: Q15_GEMINI_API_KEY
+      # api_key_env: Q15_EMBED_API_KEY     # openai provider
+      # base_url_env: Q15_EMBED_BASE_URL   # openai provider; optional local keyless endpoint
       model: gemini-embedding-2
       dimensions: 768
+      # batch_size: 128              # optional; 0 = provider default
     schedule:
       max_jobs: 64
       max_run_turns: 16
@@ -327,6 +331,17 @@ Notes:
   is set, q15 resolves that env var through `NAME` or `NAME_FILE`
 - `agent.tools.embeddings` is optional; omit it to disable `embed_sources`, `embed_sync`,
   `embed_search`, and `embed_status`
+- `agent.tools.embeddings.provider` selects the embedding backend: `gemini` (the default, so
+  existing configs keep working unchanged) or `openai` for any OpenAI-compatible `/embeddings`
+  endpoint such as OpenAI, Jina, Ollama `/v1/embeddings`, or TEI
+- `provider: openai` resolves `api_key_env` through `NAME` or `NAME_FILE`; setting only
+  `base_url_env` targets that base URL without an API key (local unauthenticated endpoints such as
+  TEI). `model` and `dimensions` are required for the openai provider
+- `batch_size` bounds per-request embedding batches; omit it or set `0` to use the provider default
+  (gemini 32, openai 128)
+- changing the embeddings provider, model, or dimensions invalidates existing sync state: drop the
+  Qdrant collections (for example via `embed_sources` action `delete_collection`) and rerun
+  `embed_sync` with `full: true`
 - `agent.tools.schedule` controls agent-created scheduled jobs. When omitted it allows up to 64 jobs
   and caps each run at 16 model/tool turns
 - each job declares its own `allowed_tools` when it is created or updated. The main agent selects
@@ -345,8 +360,8 @@ Notes:
   their normal cadence, while one-shot jobs remain active and retry. Unavailable notifications are
   suppressed only after the transport acknowledges delivery; a failed delivery leaves the transition
   open for the next occurrence
-- embedding search stores Gemini dense vectors and Qdrant-generated BM25 sparse vectors, then uses
-  hybrid dense+sparse search by default
+- embedding search stores provider dense vectors (Gemini by default) and Qdrant-generated BM25
+  sparse vectors, then uses hybrid dense+sparse search by default
 - `embed_sources` action `delete_collection` deliberately drops one Qdrant collection and clears
   matching sync state; the next `embed_sync` recreates it from configured sources
 - embedding sources are typed records under `/workspace/.q15/embed/sources.json`; use

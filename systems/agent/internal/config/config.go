@@ -68,11 +68,20 @@ type WebSearchTool struct {
 }
 
 // EmbeddingsTool defines optional embedding source/search tool settings.
+//
+// Provider selects the embedding backend: "gemini" (the default, so existing
+// configurations keep working unchanged) or "openai" for any OpenAI-compatible
+// /embeddings endpoint. The api_key_env/base_url_env fields belong to the
+// openai provider; base_url_env alone selects a local unauthenticated endpoint.
 type EmbeddingsTool struct {
 	QdrantURLEnv    string `yaml:"qdrant_url_env"`
+	Provider        string `yaml:"provider"`
 	GeminiAPIKeyEnv string `yaml:"gemini_api_key_env"`
+	APIKeyEnv       string `yaml:"api_key_env"`
+	BaseURLEnv      string `yaml:"base_url_env"`
 	Model           string `yaml:"model"`
 	Dimensions      int    `yaml:"dimensions"`
+	BatchSize       int    `yaml:"batch_size"`
 }
 
 // ScheduleTool defines execution limits for agent-created scheduled jobs.
@@ -110,9 +119,13 @@ type WebSearchToolRuntime struct {
 type EmbeddingsToolRuntime struct {
 	Enabled      bool
 	QdrantURL    string
+	Provider     string
 	GeminiAPIKey string
+	APIKey       string
+	BaseURL      string
 	Model        string
 	Dimensions   int
+	BatchSize    int
 }
 
 // ScheduleToolRuntime is the resolved scheduled-job policy.

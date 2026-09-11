@@ -113,7 +113,9 @@ func buildToolList(
 }
 
 // newEmbeddingService constructs the typed embedding service when configured.
-// It returns nil (no service, no tools) when embeddings are disabled.
+// The embedding backend is selected by the configured provider via
+// embed.NewEmbedder (gemini by default). It returns nil (no service, no tools)
+// when embeddings are disabled.
 func newEmbeddingService(
 	ctx context.Context,
 	rt config.AgentRuntime,
@@ -128,9 +130,13 @@ func newEmbeddingService(
 		MemoryLocalDir:    fileSettings.MemoryLocalDir,
 		SkillsLocalDir:    fileSettings.SkillsLocalDir,
 		QdrantURL:         tool.QdrantURL,
+		Provider:          tool.Provider,
 		GeminiAPIKey:      tool.GeminiAPIKey,
+		APIKey:            tool.APIKey,
+		BaseURL:           tool.BaseURL,
 		Model:             tool.Model,
 		Dimensions:        tool.Dimensions,
+		BatchSize:         tool.BatchSize,
 	}
 	state, err := embed.OpenState(ctx, settings)
 	if err != nil {
@@ -141,7 +147,7 @@ func newEmbeddingService(
 		_ = state.Close()
 		return nil, err
 	}
-	embedder, err := embed.NewGeminiEmbedder(ctx, tool.GeminiAPIKey, tool.Model, tool.Dimensions)
+	embedder, err := embed.NewEmbedder(ctx, settings)
 	if err != nil {
 		_ = state.Close()
 		_ = vectors.Close()

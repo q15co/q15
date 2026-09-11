@@ -42,6 +42,14 @@ const (
 	SourceTypeChunkedMarkdownTree = "chunked_markdown_tree"
 )
 
+// Supported embedding providers and the default used when Settings.Provider
+// is empty.
+const (
+	ProviderGemini  = "gemini"
+	ProviderOpenAI  = "openai"
+	DefaultProvider = ProviderGemini
+)
+
 // Settings describes the runtime-local paths and external embedding/vector
 // dependencies used by the embedding service.
 type Settings struct {
@@ -56,6 +64,19 @@ type Settings struct {
 	GeminiAPIKey string
 	Model        string
 	Dimensions   int
+
+	// Provider selects the embedding backend (ProviderGemini or
+	// ProviderOpenAI); empty uses DefaultProvider.
+	Provider string
+	// APIKey authenticates the OpenAI-compatible provider. It may be empty
+	// only when BaseURL points at a local unauthenticated endpoint.
+	APIKey string
+	// BaseURL overrides the OpenAI-compatible endpoint root (for example
+	// OpenAI, Jina, Ollama /v1, or TEI).
+	BaseURL string
+	// BatchSize bounds per-request document batches; 0 uses the provider
+	// default.
+	BatchSize int
 }
 
 // Source defines one typed ingestion input. Collection chooses where points are
