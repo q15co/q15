@@ -31,9 +31,16 @@ type syncJobs interface {
 	Cancel(id string) (embed.SyncJob, error)
 }
 
-// syncPollInterval is how often embed_sync polls the manager while waiting
-// for a sync job to reach a terminal state.
-const syncPollInterval = 250 * time.Millisecond
+const (
+	// syncPollInterval is how often embed_sync polls the manager while
+	// waiting for a sync job to reach a terminal state.
+	syncPollInterval = 250 * time.Millisecond
+	// defaultSyncWaitSeconds bounds how long embed_sync blocks by default
+	// before returning the still-running job snapshot.
+	defaultSyncWaitSeconds = 30
+	// maxSyncWaitSeconds bounds the embed_sync wait window.
+	maxSyncWaitSeconds = 300
+)
 
 // Sources manages the typed embedding source registry.
 type Sources struct {
@@ -250,7 +257,7 @@ func (s *Sync) Definition() agent.ToolDefinition {
 		PromptGuidance: []string{
 			"Run after adding, removing, enabling, or disabling embedding sources.",
 			"Use source_id or collection only to narrow a sync; parser behavior still comes from each source_type.",
-			"Large or full syncs: set wait=false and poll embed_job; a waiting sync that is interrupted (for example by Stop) keeps running in the background.",
+			"The call returns a job snapshot after wait_seconds (default 30) even when the sync is still running; poll embed_job to completion before reporting results. wait_seconds 0 returns immediately.",
 		},
 		Parameters: map[string]any{
 			"type": "object",
@@ -268,10 +275,12 @@ func (s *Sync) Definition() agent.ToolDefinition {
 					"type":        "boolean",
 					"description": "When true, re-embed changed and unchanged documents",
 				},
-				"wait": map[string]any{
-					"type":        "boolean",
-					"default":     true,
-					"description": "Wait for the sync to finish before returning. false returns a job snapshot immediately; use embed_job to poll or cancel.",
+				"wait_seconds": map[string]any{
+					"type":        "integer",
+					"default":     30,
+					"minimum":     0,
+					"maximum":     300,
+					"description": "How long to block waiting for the sync to finish. 0 returns the job snapshot immediately; if the window elapses first, the still-running job is returned and embed_job polls or cancels it.",
 				},
 			},
 		},
@@ -279,25 +288,31 @@ func (s *Sync) Definition() agent.ToolDefinition {
 }
 
 // Run executes an embed_sync request. The sync always runs as a managed
-// background job on a context detached from this run; wait=true (the
-// default) blocks until the job is terminal, wait=false returns the job
-// snapshot immediately.
+// background job on a context detached from this run; wait_seconds (default
+// 30) bounds how long the call blocks before returning the still-running
+// job snapshot, and 0 returns the snapshot immediately.
 func (s *Sync) Run(ctx context.Context, arguments string) (string, error) {
 	if s == nil || s.jobs == nil {
 		return "", fmt.Errorf("embedding sync tool is not configured")
 	}
 	var args struct {
-		Collection string `json:"collection"`
-		SourceID   string `json:"source_id"`
-		Full       bool   `json:"full"`
-		Wait       *bool  `json:"wait"`
+		Collection  string `json:"collection"`
+		SourceID    string `json:"source_id"`
+		Full        bool   `json:"full"`
+		WaitSeconds *int   `json:"wait_seconds"`
 	}
 	if err := json.Unmarshal([]byte(arguments), &args); err != nil {
 		return "", fmt.Errorf("invalid arguments JSON: %w", err)
 	}
-	wait := true
-	if args.Wait != nil {
-		wait = *args.Wait
+	waitSeconds := defaultSyncWaitSeconds
+	if args.WaitSeconds != nil {
+		waitSeconds = *args.WaitSeconds
+	}
+	if waitSeconds < 0 || waitSeconds > maxSyncWaitSeconds {
+		return "", fmt.Errorf(
+			"wait_seconds must be between 0 and %d",
+			maxSyncWaitSeconds,
+		)
 	}
 	job, err := s.jobs.Start(ctx, embed.SyncOptions{
 		Collection: args.Collection,
@@ -307,43 +322,55 @@ func (s *Sync) Run(ctx context.Context, arguments string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if !wait {
+	if waitSeconds == 0 {
 		return jsonOutput(map[string]any{"job": job})
 	}
-	return s.awaitSyncJob(ctx, job.ID)
+	return s.awaitSyncJob(ctx, job.ID, waitSeconds)
 }
 
 // awaitSyncJob polls the manager every syncPollInterval until the job
-// reaches a terminal state. When the run context is cancelled while the
-// sync is still running, the sync keeps running in the background and the
-// tool reports the running snapshot with a note instead of an error.
-func (s *Sync) awaitSyncJob(ctx context.Context, id string) (string, error) {
+// reaches a terminal state or the wait window elapses. When the run context
+// is cancelled or the window elapses while the sync is still running, the
+// sync keeps running in the background and the tool reports the running
+// snapshot with a note instead of an error.
+func (s *Sync) awaitSyncJob(
+	ctx context.Context,
+	id string,
+	waitSeconds int,
+) (string, error) {
 	ticker := time.NewTicker(syncPollInterval)
 	defer ticker.Stop()
+	window := time.NewTimer(time.Duration(waitSeconds) * time.Second)
+	defer window.Stop()
 	for {
-		job, ok := s.jobs.Get(id)
-		if !ok {
-			return "", fmt.Errorf("sync job %q not found", id)
-		}
-		if syncJobTerminal(job.Status) {
-			return syncJobOutput(job)
-		}
 		select {
 		case <-ctx.Done():
-			job, ok = s.jobs.Get(id)
+			return s.runningSnapshot(id)
+		case <-window.C:
+			return s.runningSnapshot(id)
+		case <-ticker.C:
+			job, ok := s.jobs.Get(id)
 			if !ok {
 				return "", fmt.Errorf("sync job %q not found", id)
 			}
 			if syncJobTerminal(job.Status) {
 				return syncJobOutput(job)
 			}
-			return jsonOutput(map[string]any{
-				"job":  job,
-				"note": "sync continues in background",
-			})
-		case <-ticker.C:
 		}
 	}
+}
+
+// runningSnapshot renders the latest snapshot of a still-running job so the
+// caller can re-attach with embed_job instead of blocking this run.
+func (s *Sync) runningSnapshot(id string) (string, error) {
+	job, ok := s.jobs.Get(id)
+	if !ok {
+		return "", fmt.Errorf("sync job %q not found", id)
+	}
+	return jsonOutput(map[string]any{
+		"job":  job,
+		"note": "sync continues in background",
+	})
 }
 
 // syncJobTerminal reports whether one sync job status is final.
@@ -380,7 +407,7 @@ func (j *Job) Definition() agent.ToolDefinition {
 		Name:        "embed_job",
 		Description: "Inspect or cancel asynchronous embedding sync jobs started with embed_sync.",
 		PromptGuidance: []string{
-			"Poll status of async embed syncs started with embed_sync wait=false; use cancel to stop a running sync. Progress counters are cumulative across the whole sync run.",
+			"Poll status of async embed syncs started with embed_sync (see its wait_seconds); use cancel to stop a running sync. Progress counters are cumulative across the whole sync run.",
 		},
 		Parameters: map[string]any{
 			"type": "object",

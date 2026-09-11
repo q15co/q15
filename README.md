@@ -390,11 +390,13 @@ Notes:
 
 #### Asynchronous sync
 
-`embed_sync` runs as a managed background job and takes `wait` (default `true`). `wait: true` blocks
-the tool call until the sync finishes and returns the job plus the final result; `wait: false`
-returns a job snapshot immediately. Jobs run on a context detached from the conversation, so
+`embed_sync` runs as a managed background job and takes `wait_seconds` (default 30, capped at 300).
+The call blocks until the sync finishes or the window elapses, and returns the job plus the final
+result when completed; otherwise it returns the still-running job snapshot with a note.
+`wait_seconds: 0` returns immediately. Jobs run on a context detached from the conversation, so
 interrupting a waiting turn (for example with Telegram Stop) never kills the in-flight sync: the
-tool call reports the still-running job with a note and the sync continues in the background.
+tool call reports the still-running job with a note and the sync continues in the background. Poll
+`embed_job` to completion before reporting a sync as done.
 
 `embed_job` inspects or cancels those jobs: `action: status` (optional `job_id`; omit it for the
 active job) and `action: cancel` (required `job_id`). It registers alongside the other embedding

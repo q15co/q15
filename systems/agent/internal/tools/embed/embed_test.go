@@ -103,7 +103,7 @@ func TestSearchReturnsServiceResultsAsJSON(t *testing.T) {
 	}
 }
 
-func TestSyncWaitFalseReturnsImmediateJobSnapshot(t *testing.T) {
+func TestSyncWaitZeroSecondsReturnsImmediateJobSnapshot(t *testing.T) {
 	jobs := &fakeJobs{
 		startJob: embed.SyncJob{
 			ID:     "embed-sync-1",
@@ -118,13 +118,16 @@ func TestSyncWaitFalseReturnsImmediateJobSnapshot(t *testing.T) {
 
 	got, err := tool.Run(
 		context.Background(),
-		`{"wait":false,"collection":"semantic","source_id":"docs"}`,
+		`{"wait_seconds":0,"collection":"semantic","source_id":"docs"}`,
 	)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 	if jobs.getCalls != 0 {
-		t.Fatalf("Get() calls = %d, want 0 for an immediate wait=false return", jobs.getCalls)
+		t.Fatalf(
+			"Get() calls = %d, want 0 for an immediate wait_seconds=0 return",
+			jobs.getCalls,
+		)
 	}
 	if len(jobs.startOpts) != 1 {
 		t.Fatalf("Start() calls = %d, want 1", len(jobs.startOpts))
@@ -143,11 +146,11 @@ func TestSyncWaitFalseReturnsImmediateJobSnapshot(t *testing.T) {
 		}
 	}
 	if strings.Contains(got, `"result"`) {
-		t.Fatalf("wait=false output must not include a result:\n%s", got)
+		t.Fatalf("immediate output must not include a result:\n%s", got)
 	}
 }
 
-func TestSyncWaitTrueReturnsCompletedJobWithResult(t *testing.T) {
+func TestSyncDefaultWaitReturnsCompletedJobWithResult(t *testing.T) {
 	started := time.Now()
 	jobs := &fakeJobs{
 		startJob: embed.SyncJob{
@@ -195,7 +198,7 @@ func TestSyncWaitTrueReturnsCompletedJobWithResult(t *testing.T) {
 	}
 }
 
-func TestSyncWaitTruePollsUntilTerminal(t *testing.T) {
+func TestSyncWaitWindowPollsUntilTerminal(t *testing.T) {
 	jobs := &fakeJobs{
 		runningPolls: 1,
 		runningJob: embed.SyncJob{
@@ -223,7 +226,7 @@ func TestSyncWaitTruePollsUntilTerminal(t *testing.T) {
 	}
 }
 
-func TestSyncWaitTrueInterruptedReturnsRunningJobWithNote(t *testing.T) {
+func TestSyncCancelledWaitReturnsRunningJobWithNote(t *testing.T) {
 	jobs := &fakeJobs{
 		startJob: embed.SyncJob{
 			ID:     "embed-sync-1",
@@ -259,7 +262,7 @@ func TestSyncWaitTrueInterruptedReturnsRunningJobWithNote(t *testing.T) {
 	}
 }
 
-func TestSyncWaitTrueFailedJobReturnsErrorNamingJob(t *testing.T) {
+func TestSyncFailedJobReturnsErrorNamingJob(t *testing.T) {
 	jobs := &fakeJobs{
 		startJob: embed.SyncJob{
 			ID:     "embed-sync-7",
@@ -284,7 +287,7 @@ func TestSyncWaitTrueFailedJobReturnsErrorNamingJob(t *testing.T) {
 	}
 }
 
-func TestSyncWaitTrueCancelledJobReturnsSnapshotWithoutError(t *testing.T) {
+func TestSyncCancelledJobReturnsSnapshotWithoutError(t *testing.T) {
 	finished := time.Now()
 	jobs := &fakeJobs{
 		startJob: embed.SyncJob{
@@ -318,7 +321,7 @@ func TestSyncRejectsStartWhileAnotherSyncRuns(t *testing.T) {
 	}
 	tool := NewSync(jobs)
 
-	_, err := tool.Run(context.Background(), `{"wait":false}`)
+	_, err := tool.Run(context.Background(), `{"wait_seconds":0}`)
 	if err == nil ||
 		!strings.Contains(err.Error(), "sync already running (job embed-sync-1)") {
 		t.Fatalf("Run() error = %v, want single-flight manager error", err)
@@ -327,9 +330,64 @@ func TestSyncRejectsStartWhileAnotherSyncRuns(t *testing.T) {
 
 func TestSyncUnconfiguredToolFails(t *testing.T) {
 	tool := NewSync(nil)
-	_, err := tool.Run(context.Background(), `{"wait":false}`)
+	_, err := tool.Run(context.Background(), `{"wait_seconds":0}`)
 	if err == nil || !strings.Contains(err.Error(), "not configured") {
 		t.Fatalf("Run() error = %v, want not-configured error", err)
+	}
+}
+
+func TestSyncWaitWindowElapsesReturnsRunningJobWithNote(t *testing.T) {
+	jobs := &fakeJobs{
+		startJob: embed.SyncJob{
+			ID:     "embed-sync-1",
+			Status: embed.SyncJobStatusRunning,
+		},
+		getJob: embed.SyncJob{
+			ID:        "embed-sync-1",
+			Status:    embed.SyncJobStatusRunning,
+			StartedAt: time.Now(),
+			Progress:  embed.SyncProgress{SourceID: "docs", SourcesTotal: 1},
+		},
+		getOK: true,
+	}
+	tool := NewSync(jobs)
+
+	got, err := tool.Run(context.Background(), `{"wait_seconds":1}`)
+	if err != nil {
+		t.Fatalf("Run() error = %v, want success output with a note", err)
+	}
+	for _, want := range []string{
+		`"status": "running"`,
+		`"note": "sync continues in background"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("output missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, `"result"`) {
+		t.Fatalf("elapsed-window output must not include a result:\n%s", got)
+	}
+}
+
+func TestSyncWaitSecondsOutOfRangeFails(t *testing.T) {
+	jobs := &fakeJobs{}
+	tool := NewSync(jobs)
+
+	for _, waitSeconds := range []int{-1, maxSyncWaitSeconds + 1} {
+		_, err := tool.Run(
+			context.Background(),
+			fmt.Sprintf(`{"wait_seconds":%d}`, waitSeconds),
+		)
+		if err == nil || !strings.Contains(err.Error(), "wait_seconds must be between 0 and 300") {
+			t.Fatalf(
+				"Run() with wait_seconds %d error = %v, want range error",
+				waitSeconds,
+				err,
+			)
+		}
+	}
+	if len(jobs.startOpts) != 0 {
+		t.Fatalf("Start() calls = %d, want 0 for invalid wait windows", len(jobs.startOpts))
 	}
 }
 
