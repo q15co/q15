@@ -388,6 +388,25 @@ Notes:
 - `Q15_GEMINI_API_KEY` / `Q15_GEMINI_API_KEY_FILE` is the default Gemini embedding secret name used
   by the checked-in Compose examples
 
+#### Asynchronous sync
+
+`embed_sync` runs as a managed background job and takes `wait` (default `true`). `wait: true` blocks
+the tool call until the sync finishes and returns the job plus the final result; `wait: false`
+returns a job snapshot immediately. Jobs run on a context detached from the conversation, so
+interrupting a waiting turn (for example with Telegram Stop) never kills the in-flight sync: the
+tool call reports the still-running job with a note and the sync continues in the background.
+
+`embed_job` inspects or cancels those jobs: `action: status` (optional `job_id`; omit it for the
+active job) and `action: cancel` (required `job_id`). It registers alongside the other embedding
+tools whenever `agent.tools.embeddings` is configured. Only one sync runs at a time; starting
+another fails with an error naming the running job. Progress counters are cumulative across the
+whole sync run.
+
+Job tracking is in-memory: only the ten most recent finished jobs are kept, and everything is
+forgotten on restart. Durable progress lives in `/workspace/.q15/embed/state.jsonl`: syncs
+checkpoint in batches (embed, upsert, record state), so a cancelled or interrupted sync keeps all
+completed batches and the next `embed_sync` re-embeds only the remainder.
+
 ### Conversation History
 
 - Completed turns are stored as JSON files under `/memory/history/turns/YYYY/MM/DD/`.

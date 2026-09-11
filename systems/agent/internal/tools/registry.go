@@ -141,8 +141,8 @@ func NewEmbedSources(service *embed.Service) *embedtools.Sources {
 }
 
 // NewEmbedSync delegates to embedtools.NewSync.
-func NewEmbedSync(service *embed.Service) *embedtools.Sync {
-	return embedtools.NewSync(service)
+func NewEmbedSync(jobs *embed.SyncJobManager) *embedtools.Sync {
+	return embedtools.NewSync(jobs)
 }
 
 // NewEmbedSearch delegates to embedtools.NewSearch.
@@ -153,6 +153,11 @@ func NewEmbedSearch(service *embed.Service) *embedtools.Search {
 // NewEmbedStatus delegates to embedtools.NewStatus.
 func NewEmbedStatus(service *embed.Service) *embedtools.Status {
 	return embedtools.NewStatus(service)
+}
+
+// NewEmbedJob delegates to embedtools.NewJob.
+func NewEmbedJob(jobs *embed.SyncJobManager) *embedtools.Job {
+	return embedtools.NewJob(jobs)
 }
 
 // NewScheduleCreate delegates to schedule.NewCreate.

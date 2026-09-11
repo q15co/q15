@@ -91,12 +91,14 @@ func buildToolList(
 	}
 
 	if embeddingService != nil {
+		embedJobs := embed.NewSyncJobManager(embeddingService)
 		toolList = append(
 			toolList,
 			tools.NewEmbedSources(embeddingService),
-			tools.NewEmbedSync(embeddingService),
+			tools.NewEmbedSync(embedJobs),
 			tools.NewEmbedSearch(embeddingService),
 			tools.NewEmbedStatus(embeddingService),
+			tools.NewEmbedJob(embedJobs),
 		)
 	}
 
