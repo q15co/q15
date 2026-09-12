@@ -78,8 +78,9 @@ type Settings struct {
 	// default.
 	BatchSize int
 	// SyncBatchSize is the checkpoint granularity for sync: dirty documents
-	// are embedded, upserted, and recorded in state in chunks of this size;
-	// 0 uses the default (512). Not exposed via yaml in this PR.
+	// are embedded, upserted, and durably recorded in the state file in
+	// chunks of this size; 0 uses the default (512). Not exposed via yaml in
+	// this PR.
 	SyncBatchSize int
 }
 

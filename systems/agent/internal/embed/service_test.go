@@ -557,9 +557,8 @@ func TestServiceSyncKeepsCheckpointedBatchesOnEmbedderFailure(t *testing.T) {
 	if _, err := service.Sync(ctx, SyncOptions{SourceID: "docs"}); !errors.Is(err, errBoom) {
 		t.Fatalf("Sync() error = %v, want %v", err, errBoom)
 	}
-	if err := state.Close(); err != nil {
-		t.Fatalf("close state: %v", err)
-	}
+	// No state.Close() here on purpose: a crash never closes the store, so
+	// completed batches must already be durable in the state file.
 	if got := countStateLines(t, defaultStatePath(settings), stateLinePoint); got != 4 {
 		t.Fatalf("state file point records after failure = %d, want 4", got)
 	}
@@ -630,9 +629,8 @@ func TestServiceSyncKeepsCheckpointedBatchesOnCancellation(t *testing.T) {
 	if !sawCheckpoint {
 		t.Fatal("progress callback never observed completed checkpoint batches")
 	}
-	if err := state.Close(); err != nil {
-		t.Fatalf("close state: %v", err)
-	}
+	// No state.Close() here on purpose: a crash never closes the store, so
+	// checkpointed batches must already be durable in the state file.
 	if got := countStateLines(t, defaultStatePath(settings), stateLinePoint); got != 4 {
 		t.Fatalf("state file point records after cancel = %d, want 4", got)
 	}
@@ -655,6 +653,111 @@ func TestServiceSyncKeepsCheckpointedBatchesOnCancellation(t *testing.T) {
 			"follow-up Sync() = %#v, want %#v (only the remaining docs embedded)",
 			result,
 			want,
+		)
+	}
+}
+
+func TestServiceSyncCheckpointsCompletedBatchWhileCancelling(t *testing.T) {
+	settings := testSettings(t)
+	settings.SyncBatchSize = 10
+	writeMarkdownDocs(
+		t,
+		filepath.Join(settings.WorkspaceLocalDir, "docs"),
+		"a.md",
+		"b.md",
+		"c.md",
+	)
+	ctx := context.Background()
+	state, err := OpenState(ctx, settings)
+	if err != nil {
+		t.Fatalf("OpenState() error = %v", err)
+	}
+	defer state.Close()
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	service := NewService(
+		settings,
+		state,
+		newFakeVectorStore(),
+		cancelOnEmbedEmbedder{cancel: cancel},
+	)
+	addDocsSource(ctx, t, service)
+
+	// The run context is cancelled while the only batch is embedding, so
+	// ctx.Err() != nil by the time the batch's vectors are in the vector
+	// store and its checkpoint commits. The checkpoint must still land.
+	if _, err := service.Sync(runCtx, SyncOptions{SourceID: "docs"}); !errors.Is(
+		err,
+		context.Canceled,
+	) {
+		t.Fatalf("Sync() error = %v, want context.Canceled", err)
+	}
+	// No state.Close(): the completed batch must already be durable.
+	if got := countStateLines(t, defaultStatePath(settings), stateLinePoint); got != 3 {
+		t.Fatalf("state file point records after cancel = %d, want 3", got)
+	}
+}
+
+func TestServiceSyncSurfacesCheckpointPersistError(t *testing.T) {
+	ctx := context.Background()
+	settings := testSettings(t)
+	settings.SyncBatchSize = 2
+	docsDir := filepath.Join(settings.WorkspaceLocalDir, "docs")
+	writeMarkdownDocs(
+		t,
+		docsDir,
+		"a.md",
+		"b.md",
+		"c.md",
+		"d.md",
+	)
+	// First sync creates the collection and records four documents, so the
+	// failing run below reaches the batch checkpoint instead of the state
+	// cleanup that a brand-new collection triggers.
+	state, err := OpenState(ctx, settings)
+	if err != nil {
+		t.Fatalf("OpenState() error = %v", err)
+	}
+	vectors := newFakeVectorStore()
+	service := NewService(settings, state, vectors, fakeEmbedder{})
+	addDocsSource(ctx, t, service)
+	if _, err := service.Sync(ctx, SyncOptions{SourceID: "docs"}); err != nil {
+		t.Fatalf("initial Sync() error = %v", err)
+	}
+	if err := state.Close(); err != nil {
+		t.Fatalf("close state: %v", err)
+	}
+	writeMarkdownDocs(t, docsDir, "e.md", "f.md", "g.md", "h.md")
+
+	// Occupy the state store's temp path with a directory so the batch
+	// checkpoint's persist fails after the first batch's vectors are already
+	// in the vector store.
+	if err := os.MkdirAll(defaultStatePath(settings)+".tmp", 0o755); err != nil {
+		t.Fatalf("block state temp path: %v", err)
+	}
+	restarted, err := OpenState(ctx, settings)
+	if err != nil {
+		t.Fatalf("reopen OpenState() error = %v", err)
+	}
+	defer restarted.Close()
+	service = NewService(settings, restarted, vectors, fakeEmbedder{})
+
+	_, err = service.Sync(ctx, SyncOptions{SourceID: "docs"})
+	if err == nil || !strings.Contains(err.Error(), "embed state temp file") {
+		t.Fatalf("Sync() error = %v, want checkpoint persist error", err)
+	}
+	// Four documents are dirty and the batch size is two, so only the first
+	// batch's two points may land: swallowing the checkpoint error and
+	// carrying on would embed the second batch and push eight points.
+	points := 0
+	for _, byID := range vectors.points {
+		points += len(byID)
+	}
+	if points != 6 {
+		t.Fatalf(
+			"vector store points = %d, want 6 (run must abort on the persist error); Sync() error = %v",
+			points,
+			err,
 		)
 	}
 }
@@ -738,6 +841,24 @@ func (f *blockOnCallEmbedder) EmbedDocuments(
 }
 
 func (f *blockOnCallEmbedder) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
+	_ = ctx
+	return []float32{float32(len(text)), 1}, nil
+}
+
+type cancelOnEmbedEmbedder struct {
+	cancel context.CancelFunc
+}
+
+func (f cancelOnEmbedEmbedder) EmbedDocuments(
+	ctx context.Context,
+	reqs []EmbeddingRequest,
+) ([][]float32, error) {
+	_ = ctx
+	f.cancel()
+	return fakeDocVectors(reqs), nil
+}
+
+func (f cancelOnEmbedEmbedder) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
 	_ = ctx
 	return []float32{float32(len(text)), 1}, nil
 }

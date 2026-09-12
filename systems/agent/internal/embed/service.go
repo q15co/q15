@@ -118,10 +118,11 @@ type SyncOptions struct {
 }
 
 // Sync scans enabled sources, embeds changed documents, and prunes stale
-// points. Dirty documents are checkpointed in chunks of the resolved batch
-// size; opts.Progress, when set, observes each source start, each
-// checkpoint, and the successful end of the run (final snapshot with an
-// empty SourceID and the aggregate counters).
+// points. Dirty documents are durably checkpointed to the state file in
+// chunks of the resolved batch size, so a cancelled or crashed run keeps
+// every completed batch; opts.Progress, when set, observes each source
+// start, each checkpoint, and the successful end of the run (final snapshot
+// with an empty SourceID and the aggregate counters).
 func (s *Service) Sync(ctx context.Context, opts SyncOptions) (SyncResult, error) {
 	if s.state == nil {
 		return SyncResult{}, fmt.Errorf("embed state store is not configured")
@@ -289,6 +290,11 @@ func (s *Service) syncSource(
 				if err := s.vectors.UpdatePayload(ctx, doc.Collection, moved.PointID, doc.Payload); err != nil {
 					return SyncResult{}, err
 				}
+				// Deliberately memory-only upsertPoint here, unlike the
+				// batch checkpoint below: moved documents are persisted by
+				// storeSyncResult at the end of the source, and a
+				// per-document state-file rewrite would be quadratic on
+				// large re-organisations.
 				if err := s.state.upsertPoint(ctx, stateRecord{
 					PointID:       moved.PointID,
 					SourceID:      doc.SourceID,
@@ -352,10 +358,10 @@ func (s *Service) syncSource(
 		if err := s.vectors.Upsert(ctx, source.Collection, points); err != nil {
 			return SyncResult{}, err
 		}
-		for _, record := range records {
-			if err := s.state.upsertPoint(ctx, record); err != nil {
-				return SyncResult{}, err
-			}
+		// One durable state-file write per completed batch, so a crash or
+		// cancellation after this point never loses committed vectors.
+		if err := s.state.checkpointBatch(records); err != nil {
+			return SyncResult{}, err
 		}
 		result.Embedded += len(chunkDocs)
 		result.Upserted += len(chunkDocs)

@@ -5,6 +5,80 @@ import (
 	"testing"
 )
 
+func TestStateStoreCheckpointBatchPersistsWithoutClose(t *testing.T) {
+	ctx := context.Background()
+	settings := testSettings(t)
+	state, err := OpenState(ctx, settings)
+	if err != nil {
+		t.Fatalf("OpenState() error = %v", err)
+	}
+
+	records := []stateRecord{
+		{
+			PointID:       "point-1",
+			SourceID:      "source-1",
+			Collection:    CollectionCore,
+			Path:          "/memory/core/a.md",
+			Identity:      "/memory/core/a.md",
+			ContentHash:   "hash-a",
+			VectorVersion: "dense:test;sparse:test",
+		},
+		{
+			PointID:       "point-2",
+			SourceID:      "source-1",
+			Collection:    CollectionCore,
+			Path:          "/memory/core/b.md",
+			Identity:      "/memory/core/b.md",
+			ContentHash:   "hash-b",
+			VectorVersion: "dense:test;sparse:test",
+		},
+	}
+	if err := state.checkpointBatch(records); err != nil {
+		t.Fatalf("checkpointBatch() error = %v", err)
+	}
+
+	// Deliberately no state.Close(): a crash never calls it, and the batch
+	// must already be durable on disk.
+	if got := countStateLines(t, defaultStatePath(settings), stateLinePoint); got != 2 {
+		t.Fatalf("state file point records after checkpoint = %d, want 2", got)
+	}
+
+	reopened, err := OpenState(ctx, settings)
+	if err != nil {
+		t.Fatalf("reopen OpenState() error = %v", err)
+	}
+	defer reopened.Close()
+	got, ok, err := reopened.findByIdentity(ctx, CollectionCore, "source-1", "/memory/core/b.md")
+	if err != nil {
+		t.Fatalf("findByIdentity() error = %v", err)
+	}
+	if !ok || got.PointID != "point-2" {
+		t.Fatalf("findByIdentity() = %#v, %v; want point-2", got, ok)
+	}
+}
+
+func TestStateStoreCheckpointBatchErrorsAfterClose(t *testing.T) {
+	ctx := context.Background()
+	settings := testSettings(t)
+	state, err := OpenState(ctx, settings)
+	if err != nil {
+		t.Fatalf("OpenState() error = %v", err)
+	}
+	if err := state.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	err = state.checkpointBatch([]stateRecord{{
+		PointID:    "point-1",
+		SourceID:   "source-1",
+		Collection: CollectionCore,
+		Path:       "/memory/core/a.md",
+		Identity:   "/memory/core/a.md",
+	}})
+	if err == nil || err.Error() != "embed state store is closed" {
+		t.Fatalf("checkpointBatch() after Close error = %v, want closed error", err)
+	}
+}
+
 func TestStateStorePersistsPointAndSyncState(t *testing.T) {
 	ctx := context.Background()
 	settings := testSettings(t)
