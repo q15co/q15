@@ -154,6 +154,7 @@ func TestBuildToolListAppendsEmbeddingToolsWhenConfigured(t *testing.T) {
 		"embed_sync",
 		"embed_search",
 		"embed_status",
+		"embed_job",
 	}; !equalStrings(got, want) {
 		t.Fatalf("tool names = %v, want %v", got, want)
 	}

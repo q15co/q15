@@ -124,7 +124,7 @@ help:
 	@echo "  compose-secrets-init  Seed ignored local Compose secret files from tracked examples"
 	@echo "  compose-up    Build and start the local-development Docker Compose stack"
 	@echo "  compose-down  Stop and remove the local-development Docker Compose stack"
-	@echo "  compose-logs  Follow local-development Docker Compose logs (set SERVICE=q15-agent|q15-exec|q15-proxy)"
+	@echo "  compose-logs  Follow local-development Docker Compose logs (set SERVICE=q15-agent|q15-exec|q15-proxy|q15-tei|q15-qdrant)"
 	@echo "  compose-ps    Show local-development Docker Compose service status"
 	@echo "  clean         Remove ./bin and Go build/test caches"
 	@echo ""

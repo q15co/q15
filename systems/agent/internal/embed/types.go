@@ -42,6 +42,14 @@ const (
 	SourceTypeChunkedMarkdownTree = "chunked_markdown_tree"
 )
 
+// Supported embedding providers and the default used when Settings.Provider
+// is empty.
+const (
+	ProviderGemini  = "gemini"
+	ProviderOpenAI  = "openai"
+	DefaultProvider = ProviderGemini
+)
+
 // Settings describes the runtime-local paths and external embedding/vector
 // dependencies used by the embedding service.
 type Settings struct {
@@ -56,6 +64,24 @@ type Settings struct {
 	GeminiAPIKey string
 	Model        string
 	Dimensions   int
+
+	// Provider selects the embedding backend (ProviderGemini or
+	// ProviderOpenAI); empty uses DefaultProvider.
+	Provider string
+	// APIKey authenticates the OpenAI-compatible provider. It may be empty
+	// only when BaseURL points at a local unauthenticated endpoint.
+	APIKey string
+	// BaseURL overrides the OpenAI-compatible endpoint root (for example
+	// OpenAI, Jina, Ollama /v1, or TEI).
+	BaseURL string
+	// BatchSize bounds per-request document batches; 0 uses the provider
+	// default.
+	BatchSize int
+	// SyncBatchSize is the checkpoint granularity for sync: dirty documents
+	// are embedded, upserted, and durably recorded in the state file in
+	// chunks of this size; 0 uses the default (512). Not exposed via yaml in
+	// this PR.
+	SyncBatchSize int
 }
 
 // Source defines one typed ingestion input. Collection chooses where points are
@@ -127,6 +153,20 @@ type CollectionDeleteResult struct {
 type CollectionEnsureResult struct {
 	Created   bool
 	Recreated bool
+}
+
+// SyncProgress is a cumulative snapshot of work completed so far in one sync
+// run. Counters are monotonic totals across all sources processed so far;
+// SourceID identifies the source currently in flight ("" on the final
+// snapshot emitted when the run completes successfully).
+type SyncProgress struct {
+	SourceID         string `json:"source_id"`
+	SourcesCompleted int    `json:"sources_completed"`
+	SourcesTotal     int    `json:"sources_total"`
+	Scanned          int    `json:"scanned"`
+	Embedded         int    `json:"embedded"`
+	Upserted         int    `json:"upserted"`
+	Pruned           int    `json:"pruned"`
 }
 
 // SyncResult summarizes one embed_sync run.

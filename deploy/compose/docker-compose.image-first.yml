@@ -79,6 +79,41 @@ services:
         source: q15_qdrant_storage
         target: /qdrant/storage
 
+  q15-tei:
+    # Local embeddings backend (Hugging Face Text Embeddings Inference),
+    # served keylessly to q15-agent via the openai embeddings provider.
+    # Default model: Qwen/Qwen3-Embedding-0.6B at 1024 dimensions; weights
+    # download into the q15_tei_hf_cache volume on first start. The
+    # turing-1.9 image targets Turing GPUs (T4, RTX 2000 series); set
+    # TEI_IMAGE for other hardware and remove the GPU reservation on
+    # CPU-only hosts. Gated or private models need HF_TOKEN on the container.
+    image: ${TEI_IMAGE:-ghcr.io/huggingface/text-embeddings-inference:turing-1.9}
+    restart: unless-stopped
+    init: true
+    command:
+      - --model-id
+      - ${TEI_MODEL:-Qwen/Qwen3-Embedding-0.6B}
+      - --served-model-name
+      - ${TEI_SERVED_MODEL_NAME:-qwen3-embedding-0.6b}
+      # Keep >= the agent config's batch_size (TEI's own default is 32).
+      - --max-client-batch-size
+      - ${TEI_MAX_CLIENT_BATCH_SIZE:-128}
+      - --port
+      - "80"
+    environment:
+      HUGGINGFACE_HUB_CACHE: /data
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    volumes:
+      - type: volume
+        source: q15_tei_hf_cache
+        target: /data
+
   q15-agent:
     image: ghcr.io/q15co/q15-agent:${Q15_IMAGE_TAG:-stable}
     restart: unless-stopped
@@ -88,6 +123,8 @@ services:
         condition: service_healthy
       q15-qdrant:
         condition: service_healthy
+      q15-tei:
+        condition: service_started
     healthcheck:
       test:
         - CMD-SHELL
@@ -110,7 +147,7 @@ services:
       Q15_TELEGRAM_ALLOWED_USER_IDS_FILE: /run/q15-secrets/q15_telegram_allowed_user_ids
       BRAVE_API_KEY_FILE: /run/q15-secrets/brave_api_key
       Q15_QDRANT_URL: http://q15-qdrant:6334
-      Q15_GEMINI_API_KEY_FILE: /run/q15-secrets/gemini_api_key
+      Q15_EMBEDDINGS_BASE_URL: http://q15-tei:80
     volumes:
       - type: bind
         source: ./agent-config.yaml
@@ -134,10 +171,6 @@ services:
       - type: bind
         source: ./secrets/brave_api_key
         target: /run/q15-secrets/brave_api_key
-        read_only: true
-      - type: bind
-        source: ./secrets/gemini_api_key
-        target: /run/q15-secrets/gemini_api_key
         read_only: true
       - type: bind
         source: ./secrets/q15_telegram_token
@@ -172,3 +205,4 @@ volumes:
   q15_qdrant_storage:
   q15_skills:
   q15_workspace:
+  q15_tei_hf_cache:

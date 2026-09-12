@@ -19,6 +19,7 @@ type GeminiEmbedder struct {
 	client     *genai.Client
 	model      string
 	dimensions int
+	batchSize  int
 }
 
 // NewGeminiEmbedder constructs a Gemini-backed embedder.
@@ -27,6 +28,7 @@ func NewGeminiEmbedder(
 	apiKey string,
 	model string,
 	dimensions int,
+	batchSize int,
 ) (*GeminiEmbedder, error) {
 	apiKey = strings.TrimSpace(apiKey)
 	if apiKey == "" {
@@ -36,6 +38,12 @@ func NewGeminiEmbedder(
 	dimensions = normalizeDimensions(dimensions)
 	if dimensions <= 0 {
 		return nil, fmt.Errorf("embedding dimensions must be greater than 0")
+	}
+	if batchSize < 0 {
+		return nil, fmt.Errorf("embedding batch size must not be negative")
+	}
+	if batchSize == 0 {
+		batchSize = geminiEmbedBatchSize
 	}
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
 		APIKey:  apiKey,
@@ -48,6 +56,7 @@ func NewGeminiEmbedder(
 		client:     client,
 		model:      model,
 		dimensions: dimensions,
+		batchSize:  batchSize,
 	}, nil
 }
 
@@ -60,8 +69,8 @@ func (g *GeminiEmbedder) EmbedDocuments(
 		return nil, fmt.Errorf("gemini embedder is not configured")
 	}
 	out := make([][]float32, 0, len(reqs))
-	for start := 0; start < len(reqs); start += geminiEmbedBatchSize {
-		end := min(start+geminiEmbedBatchSize, len(reqs))
+	for start := 0; start < len(reqs); start += g.batchSize {
+		end := min(start+g.batchSize, len(reqs))
 		batch, err := g.embedBatch(ctx, reqs[start:end], "RETRIEVAL_DOCUMENT")
 		if err != nil {
 			return nil, err

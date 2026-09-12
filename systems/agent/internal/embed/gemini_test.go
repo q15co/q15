@@ -1,10 +1,30 @@
 package embed
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
 )
+
+func TestGeminiEmbedderBatchSize(t *testing.T) {
+	if _, err := NewGeminiEmbedder(
+		context.Background(),
+		"key",
+		"model",
+		3,
+		-1,
+	); err == nil {
+		t.Fatal("expected error for negative batch size")
+	}
+	embedder, err := NewGeminiEmbedder(context.Background(), "key", "model", 3, 0)
+	if err != nil {
+		t.Fatalf("NewGeminiEmbedder: %v", err)
+	}
+	if embedder.batchSize != geminiEmbedBatchSize {
+		t.Fatalf("default batch size = %d, want %d", embedder.batchSize, geminiEmbedBatchSize)
+	}
+}
 
 func TestGeminiEmbedRetryDetection(t *testing.T) {
 	retriable := []error{

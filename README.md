@@ -301,9 +301,13 @@ agent:
       brave_api_key_env: BRAVE_API_KEY
     embeddings:
       qdrant_url_env: Q15_QDRANT_URL
-      gemini_api_key_env: Q15_GEMINI_API_KEY
-      model: gemini-embedding-2
-      dimensions: 768
+      provider: openai
+      base_url_env: Q15_EMBEDDINGS_BASE_URL
+      model: qwen3-embedding-0.6b
+      dimensions: 1024
+      batch_size: 128
+      # hosted alternative: provider: gemini + gemini_api_key_env,
+      # model gemini-embedding-2, dimensions 768
     schedule:
       max_jobs: 64
       max_run_turns: 16
@@ -327,6 +331,19 @@ Notes:
   is set, q15 resolves that env var through `NAME` or `NAME_FILE`
 - `agent.tools.embeddings` is optional; omit it to disable `embed_sources`, `embed_sync`,
   `embed_search`, and `embed_status`
+- `agent.tools.embeddings.provider` selects the embedding backend: `openai` for any
+  OpenAI-compatible `/embeddings` endpoint such as TEI, OpenAI, Jina, or Ollama `/v1/embeddings`, or
+  `gemini` for hosted Gemini. Omitting `provider` defaults to `gemini`; the checked-in Compose
+  stacks set `openai` against the local TEI service
+- `provider: openai` resolves `api_key_env` through `NAME` or `NAME_FILE`; setting only
+  `base_url_env` targets that base URL without an API key (local unauthenticated endpoints such as
+  TEI). `model` and `dimensions` are required for the openai provider
+- `batch_size` bounds per-request embedding batches; omit it or set `0` to use the provider default
+  (gemini 32, openai 128)
+- changing the embeddings provider, model, or dimensions invalidates existing sync state and
+  triggers a full dense re-embed; collections recreate automatically at the configured dimensions on
+  the next sync. Run `embed_sync` with `full: true` after switching, and see the Gemini-to-TEI
+  migration runbook in [deploy/compose/README.md](/deploy/compose/README.md)
 - `agent.tools.schedule` controls agent-created scheduled jobs. When omitted it allows up to 64 jobs
   and caps each run at 16 model/tool turns
 - each job declares its own `allowed_tools` when it is created or updated. The main agent selects
@@ -345,8 +362,8 @@ Notes:
   their normal cadence, while one-shot jobs remain active and retry. Unavailable notifications are
   suppressed only after the transport acknowledges delivery; a failed delivery leaves the transition
   open for the next occurrence
-- embedding search stores Gemini dense vectors and Qdrant-generated BM25 sparse vectors, then uses
-  hybrid dense+sparse search by default
+- embedding search stores provider dense vectors (Gemini by default) and Qdrant-generated BM25
+  sparse vectors, then uses hybrid dense+sparse search by default
 - `embed_sources` action `delete_collection` deliberately drops one Qdrant collection and clears
   matching sync state; the next `embed_sync` recreates it from configured sources
 - embedding sources are typed records under `/workspace/.q15/embed/sources.json`; use
@@ -370,6 +387,27 @@ Notes:
   checked-in deployment examples
 - `Q15_GEMINI_API_KEY` / `Q15_GEMINI_API_KEY_FILE` is the default Gemini embedding secret name used
   by the checked-in Compose examples
+
+#### Asynchronous sync
+
+`embed_sync` runs as a managed background job and takes `wait_seconds` (default 30, capped at 300).
+The call blocks until the sync finishes or the window elapses, and returns the job plus the final
+result when completed; otherwise it returns the still-running job snapshot with a note.
+`wait_seconds: 0` returns immediately. Jobs run on a context detached from the conversation, so
+interrupting a waiting turn (for example with Telegram Stop) never kills the in-flight sync: the
+tool call reports the still-running job with a note and the sync continues in the background. Poll
+`embed_job` to completion before reporting a sync as done.
+
+`embed_job` inspects or cancels those jobs: `action: status` (optional `job_id`; omit it for the
+active job) and `action: cancel` (required `job_id`). It registers alongside the other embedding
+tools whenever `agent.tools.embeddings` is configured. Only one sync runs at a time; starting
+another fails with an error naming the running job. Progress counters are cumulative across the
+whole sync run.
+
+Job tracking is in-memory: only the ten most recent finished jobs are kept, and everything is
+forgotten on restart. Durable progress lives in `/workspace/.q15/embed/state.jsonl`: syncs
+checkpoint in batches (embed, upsert, record state), so a cancelled or interrupted sync keeps all
+completed batches and the next `embed_sync` re-embeds only the remainder.
 
 ### Conversation History
 
@@ -500,8 +538,12 @@ make compose-secrets-init
 make compose-up
 ```
 
-`make compose-up` waits for the stack's health checks. `q15-agent` starts only after the proxy,
-executor, and Qdrant readiness probes pass, so a successful command is ready for local testing.
+`make compose-up` waits for the stack's health checks. `q15-agent` starts once the proxy, executor,
+and Qdrant probes pass and TEI has started; TEI then loads the model (the first start downloads ~1.2
+GB of weights), so the first embedding calls may wait on the embedder's retries. The stack runs a
+local TEI (Hugging Face Text Embeddings Inference) embeddings backend by default; see
+[deploy/compose/README.md](/deploy/compose/README.md) for hardware overrides and the Gemini-to-TEI
+migration runbook.
 
 The local-development stack uses:
 

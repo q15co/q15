@@ -232,6 +232,31 @@ func (s *StateStore) upsertPoint(ctx context.Context, record stateRecord) error 
 	return nil
 }
 
+// checkpointBatch durably records one completed batch of embedded documents:
+// it applies every record, then rewrites the state file once for the whole
+// batch. It deliberately takes no context.Context and never checks
+// cancellation: the vectors for these records are already in the vector
+// store, so the commit must land even while the surrounding sync run is
+// being cancelled. (An unused ctx parameter would also trip revive's
+// unused-parameter rule in CI.) Unlike upsertPoint it persists immediately:
+// one state-file write per batch, not one per record.
+func (s *StateStore) checkpointBatch(records []stateRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closeCalled {
+		return fmt.Errorf("embed state store is closed")
+	}
+	now := time.Now().UTC()
+	for _, record := range records {
+		if record.UpdatedAt.IsZero() {
+			record.UpdatedAt = now
+		}
+		s.putPointLocked(record)
+	}
+	s.needsFlush = true
+	return s.persistLocked()
+}
+
 func (s *StateStore) recordsForSource(ctx context.Context, sourceID string) ([]stateRecord, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
