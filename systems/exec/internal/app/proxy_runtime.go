@@ -176,6 +176,9 @@ func buildProxyEnv(info *proxypb.GetRuntimeInfoResponse, caPath string) []string
 	appendKV("HTTPS_PROXY", proxyURL)
 	appendKV("ALL_PROXY", proxyURL)
 	appendKV("NO_PROXY", noProxy)
+	if proxyURL != "" {
+		appendKV("NODE_USE_ENV_PROXY", "1")
+	}
 	if info.GetSetLowercaseProxyEnv() {
 		appendKV("http_proxy", proxyURL)
 		appendKV("https_proxy", proxyURL)

@@ -73,6 +73,7 @@ func TestBootstrapProxyRuntimeSucceeds(t *testing.T) {
 	assertContainsEnv(t, profile.Env, "HTTP_PROXY", "http://proxy:8080")
 	assertContainsEnv(t, profile.Env, "http_proxy", "http://proxy:8080")
 	assertContainsEnv(t, profile.Env, "NO_PROXY", "localhost,127.0.0.1")
+	assertContainsEnv(t, profile.Env, "NODE_USE_ENV_PROXY", "1")
 
 	caPath := envValue(profile.Env, "SSL_CERT_FILE")
 	if caPath == "" {
@@ -145,6 +146,22 @@ func TestBootstrapProxyRuntimeFailsWhenUnavailable(t *testing.T) {
 	cleanup()
 	if err == nil {
 		t.Fatalf("expected bootstrapProxyRuntime() error")
+	}
+}
+
+func TestBuildProxyEnvSetsNodeUseEnvProxy(t *testing.T) {
+	env := buildProxyEnv(&proxypb.GetRuntimeInfoResponse{
+		AdvertiseProxyUrl: "http://proxy:8080",
+	}, "")
+	assertContainsEnv(t, env, "NODE_USE_ENV_PROXY", "1")
+}
+
+func TestBuildProxyEnvOmitsNodeUseEnvProxyWithoutProxyURL(t *testing.T) {
+	env := buildProxyEnv(&proxypb.GetRuntimeInfoResponse{}, "")
+	for _, entry := range env {
+		if strings.HasPrefix(entry, "NODE_USE_ENV_PROXY=") {
+			t.Fatalf("expected NODE_USE_ENV_PROXY to be absent, got %q", entry)
+		}
 	}
 }
 
