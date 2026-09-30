@@ -329,14 +329,6 @@ func TestServiceStaysUnimplementedBeyondServedRPCs(t *testing.T) {
 		name string
 		call func(context.Context) error
 	}{
-		{"WatchEvents", func(ctx context.Context) error {
-			stream, err := client.WatchEvents(ctx, &chatpb.WatchEventsRequest{})
-			if err != nil {
-				return err
-			}
-			_, err = stream.Recv()
-			return err
-		}},
 		{"Deliver", func(ctx context.Context) error {
 			stream, err := client.Deliver(ctx, &chatpb.DeliverRequest{})
 			if err != nil {

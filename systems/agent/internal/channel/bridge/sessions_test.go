@@ -285,8 +285,8 @@ func TestBridgeRunSessionLifecycleThroughSeam(t *testing.T) {
 		t.Fatalf("state after OpenSession = %v, want SESSION_STATE_RUNNING", got)
 	}
 
-	// The event stream is the next layer: the no-op must at least leave the
-	// session untouched.
+	// The event stream lives on this layer now: OnRunEvent coalesces and
+	// appends, and must not disturb the session's run state.
 	run.OnRunEvent(context.Background(), agent.RunEvent{Type: agent.RunEventRunStarted})
 	if got := endpoint.SessionSnapshot(logical.id).GetState(); got != chatpb.SessionState_SESSION_STATE_RUNNING {
 		t.Fatalf("state after OnRunEvent = %v, want SESSION_STATE_RUNNING", got)
@@ -299,7 +299,8 @@ func TestBridgeRunSessionLifecycleThroughSeam(t *testing.T) {
 	if got := endpoint.SessionSnapshot(logical.id).GetState(); got != chatpb.SessionState_SESSION_STATE_IDLE {
 		t.Fatalf("state after Finish = %v, want SESSION_STATE_IDLE", got)
 	}
-	// reply recording is this layer's test seam; the next layer publishes it.
+	// reply recording is this layer's test seam; Deliver publishes nothing
+	// yet, while the stream ends in the run's terminal event.
 	if logical.reply.Text != "done" {
 		t.Fatalf("recorded reply = %q, want done", logical.reply.Text)
 	}
