@@ -81,6 +81,9 @@ func (c Config) validate() error {
 	if err := c.Agent.Tools.Schedule.validate(); err != nil {
 		return fmt.Errorf("agent.tools.schedule: %w", err)
 	}
+	if err := validateBridgeListenTarget(c.Agent.Bridge.ListenTarget); err != nil {
+		return fmt.Errorf("agent.bridge.listen_target: %w", err)
+	}
 
 	return nil
 }
@@ -115,6 +118,26 @@ func validateTelegram(tg Telegram) error {
 		if _, err := normalizeAllowedUserIDs(tg.AllowedUserIDs); err != nil {
 			return fmt.Errorf("agent.telegram.allowed_user_ids: %w", err)
 		}
+	}
+	return nil
+}
+
+// validateBridgeListenTarget mirrors the bridge resolver's unix-only rule, so
+// a bad value fails at config load instead of at the listener's bind: the
+// bridge serves the identity surface and accepts only a unix:// socket, and
+// config must not promise the host:port form that resolver refuses at
+// startup. An empty value stays legal: it disables the listener.
+func validateBridgeListenTarget(value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	if !strings.HasPrefix(value, "unix://") {
+		return fmt.Errorf(
+			"%q must use the unix:// scheme; the chat bridge is the identity "+
+				"surface and is never served over tcp",
+			value,
+		)
 	}
 	return nil
 }

@@ -351,12 +351,12 @@ func (s *runSession) SetCancel(cancel context.CancelFunc) {
 // never did, carrying the final text the reply received. The coalesced
 // deltas flush first, so the stream ends in run order.
 //
-// The synthesised terminal frame is COMPLETED because ReplyResult carries no
-// error: the worker folds a Reply error into result.Text before calling
-// Finish, so a run that failed before the engine emitted its own terminal
-// event is closed as completed with the error text in place of an answer.
-// Telling the two apart needs an error on the port itself, which is a
-// separate change to the shared channel seam.
+// The synthesised terminal frame's status follows result.Err: a run the
+// worker saw finish without an error keeps the completion, a controlled
+// *StopError carries the contract's aborted status — a deliberate stop is
+// not a failure, and the loop persists its progress — and any other error
+// closes the run as failed rather than reporting the folded error text as an
+// answer that arrived.
 func (s *runSession) Finish(_ context.Context, result agent.ReplyResult) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -368,7 +368,14 @@ func (s *runSession) Finish(_ context.Context, result agent.ReplyResult) {
 	s.finished = true
 	s.flushDeltaBuffersLocked()
 	if !s.terminalEmitted {
-		s.appendTerminalRunFinishedLocked(result.Text, chatpb.RunStatus_RUN_STATUS_COMPLETED)
+		// A failure gets the contract's own failure frame, which carries the
+		// error; a completion or a deliberate stop gets the finished frame,
+		// which the contract says carries full text even for a cancelled run.
+		if status := finishTerminalStatus(result.Err); status == chatpb.RunStatus_RUN_STATUS_FAILED {
+			s.appendTerminalRunFailedLocked(result.Text, result.Err)
+		} else {
+			s.appendTerminalRunFinishedLocked(result.Text, status)
+		}
 	}
 	s.session.finish(result)
 }

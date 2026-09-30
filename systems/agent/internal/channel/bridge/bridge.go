@@ -21,6 +21,13 @@ import (
 // than a build-injected value; it stays "dev" until one exists.
 const serviceVersion = "dev"
 
+// maxSendTextLen bounds one client message's text. 48 KiB is generous for a
+// human message including a pasted block, and far below the transport's 4 MiB
+// default receive limit, so an oversized send is rejected here as a clear
+// contract error instead of being parsed, accepted, and then repeated into
+// the transcript, the provider's context and the git history on every run.
+const maxSendTextLen = 48 * 1024
+
 // TurnLister is the transcript read surface the bridge serves. It is an
 // interface rather than *memory.Store so tests can fake the page and the head
 // and so the bridge carries no other store dependency.
@@ -77,6 +84,18 @@ func (s *Service) SendMessage(
 		return nil, status.Error(
 			codes.InvalidArgument,
 			"send message text is required",
+		)
+	}
+	text := req.GetText()
+	if len(text) > maxSendTextLen {
+		// The bound is at the rpc edge, before the send reaches the bus: one
+		// message's text repeats into the transcript, the provider's context
+		// and the git history, so the cap applies to every run it feeds.
+		return nil, status.Errorf(
+			codes.InvalidArgument,
+			"send message text is %d bytes, over the %d byte limit",
+			len(text),
+			maxSendTextLen,
 		)
 	}
 	session := s.sessions.lookupSession(strings.TrimSpace(req.GetSessionId()))

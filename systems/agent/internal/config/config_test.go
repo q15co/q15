@@ -26,6 +26,48 @@ func testAgent(name string) *Agent {
 	}
 }
 
+// TestValidateBridgeListenTarget keeps config load one step ahead of the
+// bridge's bind: a host:port value is refused here, where a compose file
+// fails to load, rather than at startup, where a unix-only resolver would
+// name the same value too late in the day. The empty value stays legal
+// because it disables the listener rather than falling back to a default.
+func TestValidateBridgeListenTarget(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		target  string
+		wantErr bool
+	}{
+		{name: "empty disables the listener", target: ""},
+		{name: "unix socket", target: "unix:///run/q15/bridge.sock"},
+		{name: "padded unix socket", target: "  unix:///run/q15/bridge.sock  "},
+		{name: "tcp all-interfaces", target: ":50053", wantErr: true},
+		{name: "tcp loopback", target: "127.0.0.1:50053", wantErr: true},
+		{name: "bare socket path", target: "/run/q15/bridge.sock", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := Config{
+				Providers: []Provider{testProvider("p", "ollama", "", "")},
+				Agent:     testAgent("a"),
+			}
+			cfg.Agent.Bridge.ListenTarget = tt.target
+
+			err := cfg.Validate()
+			if tt.wantErr && err == nil {
+				t.Fatal("Validate() error = nil, want non-nil")
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("Validate() error = %v", err)
+			}
+		})
+	}
+}
+
 func TestLoadAgentRuntimeYAML(t *testing.T) {
 	t.Setenv("MOONSHOT_API_KEY", "api-123")
 	t.Setenv("Q15_TELEGRAM_TOKEN", "tg-123")

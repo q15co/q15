@@ -304,16 +304,35 @@ func runEventToSessionEvent(event agent.RunEvent) *chatpb.SessionEvent {
 	return out
 }
 
-// runFailedStatus classifies an engine failure event. A cancelled run is not
-// a failure: the loop reports every engine error through run_failed,
-// including the context cancellation a client's Abort produces, and the
-// contract has a status for exactly that. Abort's own terminal frame stays as
-// the fallback for a cancellation the engine never reported.
+// runFailedStatus classifies an engine failure event. Neither a cancelled run
+// nor a deliberate stop is a failure: the loop reports every engine error
+// through run_failed — including the context cancellation a client's Abort
+// produces and the controlled *StopError a turn limit or loop guard returns,
+// whose progress the loop persists — and the contract's aborted status is the
+// one that means the run ended without completing.
 func runFailedStatus(err error) chatpb.RunStatus {
 	if errors.Is(err, context.Canceled) {
 		return chatpb.RunStatus_RUN_STATUS_ABORTED
 	}
+	var stopErr *agent.StopError
+	if errors.As(err, &stopErr) {
+		return chatpb.RunStatus_RUN_STATUS_ABORTED
+	}
 	return chatpb.RunStatus_RUN_STATUS_FAILED
+}
+
+// finishTerminalStatus classifies the terminal frame the bridge synthesises
+// when the engine emitted no terminal frame of its own. Only the nil case is
+// its own: a run the worker closed without an error completed. Everything else
+// defers to runFailedStatus, which is the same rule the engine's own run_failed
+// frames go through, and sharing it matters more than it looks: two copies
+// could drift, and the same run would then be classified one way on the
+// engine's frame and another way on the bridge's.
+func finishTerminalStatus(err error) chatpb.RunStatus {
+	if err == nil {
+		return chatpb.RunStatus_RUN_STATUS_COMPLETED
+	}
+	return runFailedStatus(err)
 }
 
 // toolCallToProto translates one canonical tool call. The arguments stay the
@@ -497,6 +516,28 @@ func (s *runSession) appendTerminalRunFinishedLocked(
 			ModelRef: protobufSafeString(s.modelRef),
 			Status:   terminalStatus,
 		}},
+	})
+}
+
+// appendTerminalRunFailedLocked appends the terminal RunFailed for a run the
+// worker closed with an error. The contract gives a failure its own frame with
+// its own error field, so reporting a failed run as RunFinished{FAILED} would
+// leave that field unused and a client that switches on run_failed would not
+// see the failure at all. The status enum allows FAILED on either frame; the
+// frame choice is what decides whether a client can read the error.
+func (s *runSession) appendTerminalRunFailedLocked(fullText string, err error) {
+	s.terminalEmitted = true
+	failed := &chatpb.RunFailed{
+		FullText: fullText,
+		Status:   chatpb.RunStatus_RUN_STATUS_FAILED,
+	}
+	if err != nil {
+		failed.Error = err.Error()
+	}
+	s.session.appendEvent(&chatpb.SessionEvent{
+		OccurredAt: timestamppb.Now(),
+		TurnSeq:    s.seq,
+		Event:      &chatpb.SessionEvent_RunFailed{RunFailed: failed},
 	})
 }
 

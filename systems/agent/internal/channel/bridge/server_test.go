@@ -16,26 +16,64 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 )
 
-func TestResolveListenTargetKeepsExecConvention(t *testing.T) {
+// TestResolveListenTargetOnlyAcceptsUnix pins the bridge's own rule: a
+// unix:// target resolves to its socket path and nothing else is accepted,
+// because the bridge is the identity surface and grpc.NewServer sets no
+// credentials and no interceptor.
+func TestResolveListenTargetOnlyAcceptsUnix(t *testing.T) {
 	for _, tc := range []struct {
 		target  string
-		network string
 		address string
 	}{
-		{"unix:///run/q15/bridge.sock", "unix", "/run/q15/bridge.sock"},
-		{"127.0.0.1:50051", "tcp", "127.0.0.1:50051"},
-		{":50051", "tcp", ":50051"},
+		{"unix:///run/q15/bridge.sock", "/run/q15/bridge.sock"},
+		{"unix://bridge.sock", "bridge.sock"},
 	} {
-		network, address := resolveListenTarget(tc.target)
-		if network != tc.network || address != tc.address {
+		network, address, err := resolveListenTarget(tc.target)
+		if err != nil {
+			t.Fatalf("resolveListenTarget(%q) error = %v, want a unix socket", tc.target, err)
+		}
+		if network != "unix" || address != tc.address {
 			t.Fatalf(
-				"resolveListenTarget(%q) = (%q %q), want (%q %q)",
+				"resolveListenTarget(%q) = (%q %q), want (unix %q)",
 				tc.target,
 				network,
 				address,
-				tc.network,
 				tc.address,
 			)
+		}
+	}
+
+	// The exec resolver's tcp fallthrough is refused here: every rejected
+	// form returns an error carrying the offending value, so a bad config
+	// names its own blame.
+	for _, target := range []string{"127.0.0.1:50051", ":50053", "/run/q15/bridge.sock"} {
+		network, address, err := resolveListenTarget(target)
+		if err == nil {
+			t.Fatalf(
+				"resolveListenTarget(%q) = (%q %q), want the target refused",
+				target,
+				network,
+				address,
+			)
+		}
+		if !strings.Contains(err.Error(), target) {
+			t.Fatalf("resolveListenTarget(%q) error = %v, want the target named", target, err)
+		}
+	}
+}
+
+// TestNewServerRejectsNonUnixTargets pins the refusal at the bind: a
+// host:port target fails startup with the value named, rather than serving
+// seven rpcs in the clear with no credentials and no interceptor.
+func TestNewServerRejectsNonUnixTargets(t *testing.T) {
+	for _, target := range []string{"127.0.0.1:50051", ":50053"} {
+		server, err := NewServer(target, NewService(&fakeTurnLister{}, &AgentEndpoint{}))
+		if err == nil {
+			server.Close()
+			t.Fatalf("NewServer(%q) error = nil, want the tcp target refused", target)
+		}
+		if !strings.Contains(err.Error(), target) {
+			t.Fatalf("NewServer(%q) error = %v, want the offending target named", target, err)
 		}
 	}
 }
@@ -176,8 +214,18 @@ func TestNewServerSurfacesBindFailure(t *testing.T) {
 }
 
 func TestServerServeStopsOnContextCancellation(t *testing.T) {
-	// TCP keeps this test away from socket permissions entirely.
-	server, err := NewServer("127.0.0.1:0", NewService(&fakeTurnLister{}, &AgentEndpoint{}))
+	// The socket lives only in this test's temp dir, so the test needs the
+	// same chgrp permission the mode/group test does; unix-only is the
+	// server's rule, so this test no longer leans on a tcp listener to keep
+	// away from socket permissions.
+	if runtime.GOOS == "windows" {
+		t.Skip("the bridge socket is a unix-domain path")
+	}
+	if !canChgrpSocket() {
+		t.Skipf("chgrp to group %d requires root or group membership", socketGroupID)
+	}
+	address := filepath.Join(t.TempDir(), "bridge.sock")
+	server, err := NewServer("unix://"+address, NewService(&fakeTurnLister{}, &AgentEndpoint{}))
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
 	}

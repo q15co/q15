@@ -3,7 +3,9 @@ package bridge
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -319,5 +321,62 @@ func TestServiceGetRuntimeInfoSurfacesHeadFailure(t *testing.T) {
 	)
 	if status.Code(err) != codes.Internal {
 		t.Fatalf("GetRuntimeInfo() code = %v, want Internal (err=%v)", status.Code(err), err)
+	}
+}
+
+// TestServiceSendMessageBoundsClientText pins the rpc edge's text cap: a
+// send exactly at the bound reaches the bus, one byte over it is rejected as
+// a clear contract error, and the rejection names the limit rather than
+// leaving an oversized send to the transport's parse.
+func TestServiceSendMessageBoundsClientText(t *testing.T) {
+	publisher := &fakePublisher{}
+	service, _ := newTestEndpoint(publisher)
+	ctx := context.Background()
+
+	opened, err := service.OpenSession(
+		ctx, &chatpb.OpenSessionRequest{ChatId: "conv-7"},
+	)
+	if err != nil {
+		t.Fatalf("OpenSession() error = %v", err)
+	}
+	sessionID := opened.GetSession().GetSessionId()
+
+	atBound := strings.Repeat("a", maxSendTextLen)
+	sent, err := service.SendMessage(ctx, &chatpb.SendMessageRequest{
+		SessionId: sessionID,
+		Text:      atBound,
+	})
+	if err != nil {
+		t.Fatalf("SendMessage() at the limit error = %v, want the send accepted", err)
+	}
+	if len(publisher.published()) != 1 {
+		t.Fatalf(
+			"published messages = %d, want the at-limit send on the bus",
+			len(publisher.published()),
+		)
+	}
+	if sent.GetQueued() {
+		t.Fatal("SendMessage() queued = true, want false with nothing in flight")
+	}
+
+	_, err = service.SendMessage(ctx, &chatpb.SendMessageRequest{
+		SessionId: sessionID,
+		Text:      strings.Repeat("a", maxSendTextLen+1),
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf(
+			"SendMessage() over the limit code = %v (err=%v), want InvalidArgument",
+			status.Code(err),
+			err,
+		)
+	}
+	if !strings.Contains(err.Error(), fmt.Sprintf("%d", maxSendTextLen)) {
+		t.Fatalf("SendMessage() error = %v, want the limit named", err)
+	}
+	if got := len(publisher.published()); got != 1 {
+		t.Fatalf(
+			"published after the rejected send = %d, want 1: the send stops at the cap",
+			got,
+		)
 	}
 }
