@@ -31,6 +31,11 @@ type RunEvent struct {
 	ToolCall   ToolCall
 	ToolOutput string
 	FinalText  string
+	// Seq is the durable transcript turn sequence this run owns, reserved when the
+	// run starts and written to the transcript when it finishes. It is zero when no
+	// transcript store is attached. It is not Turn, which is the engine's per-run
+	// loop counter.
+	Seq int64
 	// Delta is incremental assistant content for ModelTurnDelta or provider
 	// reasoning text for ModelReasoningDelta. ModelTurnStarted begins a new attempt;
 	// subscribers should replace previous answer and reasoning drafts there.
@@ -54,6 +59,27 @@ func (f RunObserverFunc) OnRunEvent(ctx context.Context, event RunEvent) {
 		return
 	}
 	f(ctx, event)
+}
+
+// seqStampingObserver stamps one run's reserved transcript sequence onto every
+// event, so that no emitter has to remember to set RunEvent.Seq.
+type seqStampingObserver struct {
+	inner RunObserver
+	seq   int64
+}
+
+func (o seqStampingObserver) OnRunEvent(ctx context.Context, event RunEvent) {
+	event.Seq = o.seq
+	o.inner.OnRunEvent(ctx, event)
+}
+
+// stampRunSeq returns observer with every event's Seq set to seq. A nil
+// observer is returned unchanged, because there is nothing to forward to.
+func stampRunSeq(observer RunObserver, seq int64) RunObserver {
+	if observer == nil {
+		return observer
+	}
+	return seqStampingObserver{inner: observer, seq: seq}
 }
 
 func emitRunEvent(ctx context.Context, observer RunObserver, event RunEvent) {

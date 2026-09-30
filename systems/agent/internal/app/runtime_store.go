@@ -55,8 +55,16 @@ func (s *runtimeStore) LoadLastUserTimestamp(
 	return s.memory.LoadLastUserTimestamp(ctx)
 }
 
-func (s *runtimeStore) AppendTurn(ctx context.Context, messages []conversation.Message) error {
-	if err := s.memory.AppendTurn(ctx, messages); err != nil {
+func (s *runtimeStore) ReserveTurnSeq(ctx context.Context) (int64, error) {
+	return s.memory.ReserveTurnSeq(ctx)
+}
+
+func (s *runtimeStore) AppendTurnAtSeq(
+	ctx context.Context,
+	seq int64,
+	messages []conversation.Message,
+) error {
+	if err := s.memory.AppendTurnAtSeq(ctx, seq, messages); err != nil {
 		return err
 	}
 	s.notifyAppendObservers()

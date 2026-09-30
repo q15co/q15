@@ -146,6 +146,18 @@ func (l *Loop) Reply(
 	if err != nil {
 		return ReplyResult{}, err
 	}
+	var turnSeq int64
+	if l.store != nil {
+		turnSeq, err = l.store.ReserveTurnSeq(ctx)
+		if err != nil {
+			emitRunEvent(ctx, observer, RunEvent{
+				Type: RunEventRunFailed,
+				Err:  err,
+			})
+			return ReplyResult{}, fmt.Errorf("reserve transcript turn sequence: %w", err)
+		}
+		observer = stampRunSeq(observer, turnSeq)
+	}
 	lastUserTimestamp := time.Time{}
 	hasLastUserTimestamp := false
 	if l.store != nil {
@@ -192,7 +204,7 @@ func (l *Loop) Reply(
 				copyMessages([]conversation.Message{userMessage}),
 				copyMessages(result.Messages)...,
 			)
-			if persistErr := l.persistTurn(ctx, turnMessages); persistErr != nil {
+			if persistErr := l.persistTurn(ctx, turnSeq, turnMessages); persistErr != nil {
 				emitRunEvent(ctx, observer, RunEvent{
 					Type:      RunEventRunFailed,
 					Turn:      result.Turn,
@@ -217,7 +229,7 @@ func (l *Loop) Reply(
 		copyMessages([]conversation.Message{userMessage}),
 		copyMessages(result.Messages)...,
 	)
-	if err := l.persistTurn(ctx, turnMessages); err != nil {
+	if err := l.persistTurn(ctx, turnSeq, turnMessages); err != nil {
 		emitRunEvent(ctx, observer, RunEvent{
 			Type:      RunEventRunFailed,
 			Turn:      result.Turn,
@@ -243,10 +255,11 @@ func (l *Loop) Reply(
 
 func (l *Loop) persistTurn(
 	ctx context.Context,
+	seq int64,
 	messages []conversation.Message,
 ) error {
 	if l.store == nil {
 		return nil
 	}
-	return l.store.AppendTurn(ctx, copyMessages(messages))
+	return l.store.AppendTurnAtSeq(ctx, seq, copyMessages(messages))
 }

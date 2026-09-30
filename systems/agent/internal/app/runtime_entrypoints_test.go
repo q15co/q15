@@ -45,8 +45,13 @@ func (s *spyRuntimeStore) LoadLastUserTimestamp(
 	return time.Time{}, false, nil
 }
 
-func (s *spyRuntimeStore) AppendTurn(
+func (s *spyRuntimeStore) ReserveTurnSeq(context.Context) (int64, error) {
+	return int64(s.appendCalls) + 1, nil
+}
+
+func (s *spyRuntimeStore) AppendTurnAtSeq(
 	context.Context,
+	int64,
 	[]conversation.Message,
 ) error {
 	s.appendCalls++
