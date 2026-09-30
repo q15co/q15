@@ -209,7 +209,12 @@ func TestRunEventMappingCoversEveryRunEventType(t *testing.T) {
 		},
 		agent.RunEventModelTurnDelta: {
 			source: "run_events.go:17",
-			event:  agent.RunEvent{Type: agent.RunEventModelTurnDelta, At: eventAt, Seq: 7, Delta: "hello"},
+			event: agent.RunEvent{
+				Type:  agent.RunEventModelTurnDelta,
+				At:    eventAt,
+				Seq:   7,
+				Delta: "hello",
+			},
 			assert: func(t *testing.T, got *chatpb.SessionEvent) {
 				if got.GetModelTurnDelta() == nil {
 					t.Fatalf(
@@ -989,7 +994,9 @@ func TestRunSessionFlushesAndResetsDraftsAtAttemptBoundaries(t *testing.T) {
 	// The two answer tokens arrived as one coalesced frame ahead of the tool
 	// activity that ended the draft, followed by the keyframe carrying the
 	// draft as full text.
-	if coalesced := frameAt(t, frames, 3, "model_turn_delta"); coalesced.GetModelTurnDelta().GetDelta() != "hello" {
+	if coalesced := frameAt(t, frames, 3, "model_turn_delta"); coalesced.GetModelTurnDelta().
+		GetDelta() !=
+		"hello" {
 		t.Fatalf(
 			"coalesced delta = %q, want hello: two tokens, one frame",
 			coalesced.GetModelTurnDelta().GetDelta(),
@@ -1011,7 +1018,9 @@ func TestRunSessionFlushesAndResetsDraftsAtAttemptBoundaries(t *testing.T) {
 	// The reasoning delta flushed ahead of the next attempt's boundary, the
 	// attempt start followed, and the draft the next Snapshot will carry
 	// restarts there.
-	if flushed := frameAt(t, frames, 7, "model_reasoning_delta"); flushed.GetModelReasoningDelta().GetDelta() != "because" {
+	if flushed := frameAt(t, frames, 7, "model_reasoning_delta"); flushed.GetModelReasoningDelta().
+		GetDelta() !=
+		"because" {
 		t.Fatalf(
 			"flushed reasoning = %q, want because before the attempt restart",
 			flushed.GetModelReasoningDelta().GetDelta(),
@@ -1023,10 +1032,17 @@ func TestRunSessionFlushesAndResetsDraftsAtAttemptBoundaries(t *testing.T) {
 			keyframe.GetSnapshot().GetText(),
 		)
 	}
-	if restart := frameAt(t, frames, 9, "model_turn_started"); restart.GetModelTurnStarted().GetLoopTurn() != 2 {
-		t.Fatalf("second attempt loop_turn = %d, want 2", restart.GetModelTurnStarted().GetLoopTurn())
+	if restart := frameAt(t, frames, 9, "model_turn_started"); restart.GetModelTurnStarted().
+		GetLoopTurn() !=
+		2 {
+		t.Fatalf(
+			"second attempt loop_turn = %d, want 2",
+			restart.GetModelTurnStarted().GetLoopTurn(),
+		)
 	}
-	if there := frameAt(t, frames, 10, "model_turn_delta"); there.GetModelTurnDelta().GetDelta() != "there" {
+	if there := frameAt(t, frames, 10, "model_turn_delta"); there.GetModelTurnDelta().
+		GetDelta() !=
+		"there" {
 		t.Fatalf(
 			"next attempt delta = %q, want there on the fresh draft",
 			there.GetModelTurnDelta().GetDelta(),
@@ -1078,7 +1094,9 @@ func TestRunSessionAbortedRunEmitsExactlyOneAbortedTerminal(t *testing.T) {
 
 	frames := logical.events.retained()
 	frameAt(t, frames, 2, "model_turn_started")
-	if flushed := frameAt(t, frames, 3, "model_turn_delta"); flushed.GetModelTurnDelta().GetDelta() != "streaming…" {
+	if flushed := frameAt(t, frames, 3, "model_turn_delta"); flushed.GetModelTurnDelta().
+		GetDelta() !=
+		"streaming…" {
 		t.Fatalf(
 			"abort flush delta = %q, want the whole draft, not a dropped tail",
 			flushed.GetModelTurnDelta().GetDelta(),
@@ -1123,7 +1141,8 @@ func TestRunSessionAbortsAnUnstreamedRunWithOneTerminal(t *testing.T) {
 		t.Fatalf("frames = %d, want the opening and one terminal", got)
 	}
 	terminal := terminalFrames(frames)
-	if len(terminal) != 1 || terminal[0].GetRunFinished().GetStatus() != chatpb.RunStatus_RUN_STATUS_ABORTED {
+	if len(terminal) != 1 ||
+		terminal[0].GetRunFinished().GetStatus() != chatpb.RunStatus_RUN_STATUS_ABORTED {
 		t.Fatalf("terminal = %v, want one RunFinished RUN_STATUS_ABORTED", terminal)
 	}
 }
@@ -1178,7 +1197,10 @@ func TestRunSessionEngineTerminalIsNotDoubled(t *testing.T) {
 		t.Fatalf("failed run terminal frames = %d, want one", len(failedTerminal))
 	}
 	if got := failedTerminal[0].GetRunFailed(); got == nil || got.GetError() != "upstream broke" {
-		t.Fatalf("failed terminal = %v, want the engine's RunFailed with its error", failedTerminal[0])
+		t.Fatalf(
+			"failed terminal = %v, want the engine's RunFailed with its error",
+			failedTerminal[0],
+		)
 	}
 }
 
@@ -1285,7 +1307,8 @@ func TestServiceWatchEventsCoalescesADeltaFloodIntoKeyedFrames(t *testing.T) {
 		if since := time.Since(lastPushedAt); since < bridgeDeltaFlushInterval-20*time.Millisecond {
 			t.Fatalf(
 				"coalesced delta arrived %v after the last delta, want at least the flush interval %v",
-				since, bridgeDeltaFlushInterval,
+				since,
+				bridgeDeltaFlushInterval,
 			)
 		}
 		deltaFrames++
