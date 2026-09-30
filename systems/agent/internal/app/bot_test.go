@@ -61,7 +61,10 @@ func TestNewBridgeServerDisabledWithoutTarget(t *testing.T) {
 // socket path in the error.
 func TestNewBridgeServerSurfacesConfiguredBindFailure(t *testing.T) {
 	rt := config.AgentRuntime{
-		BridgeListenTarget: filepath.Join("unix://", t.TempDir(), "missing-dir", "bridge.sock"),
+		// Built by concatenation on purpose: filepath.Join would clean the
+		// double slash away, the target would stop looking like unix://, and
+		// the test would exercise the TCP branch instead of the unix one.
+		BridgeListenTarget: "unix://" + filepath.Join(t.TempDir(), "missing-dir", "bridge.sock"),
 	}
 
 	_, err := newBridgeServer(rt, nil)
@@ -70,6 +73,13 @@ func TestNewBridgeServerSurfacesConfiguredBindFailure(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), filepath.Join("missing-dir", "bridge.sock")) {
 		t.Fatalf("newBridgeServer() error = %v, want the socket path named", err)
+	}
+	// The whole point of building the target by concatenation above: this must
+	// fail on the unix branch. If the target lost its unix:// prefix the error
+	// would come from the TCP branch and the unix bind path would never be
+	// exercised.
+	if !strings.Contains(err.Error(), "listen unix ") {
+		t.Fatalf("newBridgeServer() error = %v, want a unix listen failure", err)
 	}
 }
 

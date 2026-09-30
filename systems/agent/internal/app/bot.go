@@ -155,6 +155,13 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 	if err != nil {
 		return err
 	}
+	if bridgeServer != nil {
+		// runBot owns the bound listener from here on. Any startup step below
+		// can fail and return before the worker loop ever runs, and without
+		// this the socket and its file descriptor would stay bound until the
+		// process exits.
+		defer bridgeServer.Close()
+	}
 	scheduleStore := schedulestore.New(filepath.Join(rt.StateLocalDir, "schedule"))
 	if err := scheduleStore.Init(ctx); err != nil {
 		return fmt.Errorf("initialize schedule store for agent %q: %w", rt.Name, err)
@@ -320,9 +327,6 @@ func runTelegramLoop(
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	if bridgeServer != nil {
-		defer bridgeServer.Close()
-	}
 	channel, err := telegram.NewChannel(token, func(msg telegram.IncomingMessage) {
 		err := messageBus.PublishInbound(runCtx, telegramInboundMessage(msg))
 		if err != nil && !errors.Is(err, context.Canceled) {
