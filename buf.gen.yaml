@@ -6,25 +6,39 @@ plugins:
       - module=github.com/q15co/q15/libs/exec-contract
     include_imports: false
     types:
-      - q15.exec.v1.*
+      - q15.exec.v1.**
   - local: protoc-gen-go-grpc
     out: libs/exec-contract
     opt:
       - module=github.com/q15co/q15/libs/exec-contract
     include_imports: false
     types:
-      - q15.exec.v1.*
+      - q15.exec.v1.**
   - local: protoc-gen-go
     out: libs/proxy-contract
     opt:
       - module=github.com/q15co/q15/libs/proxy-contract
     include_imports: false
     types:
-      - q15.proxy.v1.*
+      - q15.proxy.v1.**
   - local: protoc-gen-go-grpc
     out: libs/proxy-contract
     opt:
       - module=github.com/q15co/q15/libs/proxy-contract
     include_imports: false
     types:
-      - q15.proxy.v1.*
+      - q15.proxy.v1.**
+  - local: protoc-gen-go
+    out: libs/chat-contract
+    opt:
+      - module=github.com/q15co/q15/libs/chat-contract
+    include_imports: false
+    types:
+      - q15.chat.v1.**
+  - local: protoc-gen-go-grpc
+    out: libs/chat-contract
+    opt:
+      - module=github.com/q15co/q15/libs/chat-contract
+    include_imports: false
+    types:
+      - q15.chat.v1.**

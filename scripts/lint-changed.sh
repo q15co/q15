@@ -74,7 +74,7 @@ fi
 
 if [[ ${#shell_files[@]} -gt 0 ]]; then
 	shfmt -d -ln auto -s "${shell_files[@]}"
-	shellcheck "${shell_files[@]}"
+	shellcheck -x "${shell_files[@]}"
 fi
 
 if [[ ${#workflow_files[@]} -gt 0 ]]; then
