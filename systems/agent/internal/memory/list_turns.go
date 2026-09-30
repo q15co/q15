@@ -48,6 +48,11 @@ type TurnPage struct {
 // same reason: a reader only ever sees history the writer has already claimed.
 // A missing turns directory, or a transcript with no turns, is an empty page
 // and a nil error.
+//
+// Messages come back exactly as they were persisted, without re-running the
+// write-time sanitizing pass. The record on disk already holds sanitized
+// content, so a reader should see what the writer committed rather than a
+// second, read-time interpretation of it.
 func (s *Store) ListTurns(ctx context.Context, afterSeq int64, limit int) (TurnPage, error) {
 	_ = ctx
 

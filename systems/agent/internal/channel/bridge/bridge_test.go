@@ -150,6 +150,16 @@ func TestServiceListTurnsTranscribesTurnsForClients(t *testing.T) {
 	if got := len(assistant.GetParts()); got != 4 {
 		t.Fatalf("assistant parts = %d, want 4", got)
 	}
+	for i, part := range assistant.GetParts() {
+		if part.GetOrdinal() != int32(i) {
+			t.Fatalf(
+				"assistant part %d ordinal = %d, want %d",
+				i,
+				part.GetOrdinal(),
+				i,
+			)
+		}
+	}
 	text := assistant.GetParts()[0]
 	if text.GetPartType() != "text" || text.GetText() != "fixture answer" {
 		t.Fatalf("text part = (type %q text %q), want text/fixture answer",
