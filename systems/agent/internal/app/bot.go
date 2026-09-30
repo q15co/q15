@@ -155,21 +155,21 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 		return fmt.Errorf("initialize memory store for agent %q: %w", rt.Name, err)
 	}
 	messageBus := bus.New(bus.DefaultBufferSize)
-	bridgeServer, bridgeEndpoint, err := bridgeSettings{
+	bridge, err := bridgeSettings{
 		listenTarget: rt.BridgeListenTarget,
-	}.newServer(memoryStore, messageBus)
+	}.newChatBridge(memoryStore, messageBus)
 	if err != nil {
 		return err
 	}
 	var transportWorkers []runtimeWorker
-	if bridgeServer != nil {
+	if bridge != nil {
 		// runBot owns the bound listener from here on. Any startup step below
 		// can fail and return before the worker loop ever runs, and without
 		// this the socket and its file descriptor would stay bound until the
 		// process exits. It also runs on the normal shutdown path, where the
 		// listener is already closed; closing it again is safe.
-		defer bridgeServer.Close()
-		transportWorkers = append(transportWorkers, bridgeServer.Serve)
+		defer bridge.server.Close()
+		transportWorkers = append(transportWorkers, bridge.server.Serve)
 	}
 	scheduleStore := schedulestore.New(filepath.Join(rt.StateLocalDir, "schedule"))
 	if err := scheduleStore.Init(ctx); err != nil {
@@ -316,10 +316,10 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 		agentEndpoints = append(agentEndpoints, telegramEndpoint)
 		outboundEndpoints = append(outboundEndpoints, telegramEndpoint)
 	}
-	// The bridge endpoint joins the worker's registries only when its listener
-	// is running: without a listener there is nothing to answer its rpcs.
-	if bridgeEndpoint != nil {
-		agentEndpoints = append(agentEndpoints, bridgeEndpoint)
+	// The bridge's endpoint joins the worker's registries only when the bridge is
+	// present: with no listener there is nothing to answer its rpcs.
+	if bridge != nil {
+		agentEndpoints = append(agentEndpoints, bridge.endpoint)
 	}
 
 	return runRuntime(runCtx, cancel, runtimeInputs{
@@ -478,36 +478,51 @@ func runRuntime(ctx context.Context, cancel context.CancelFunc, in runtimeInputs
 	return runRuntimeWorkers(ctx, cancel, runtimeWorkerShutdownTimeout, workers...)
 }
 
+// chatBridge is the chat bridge's two halves, kept in one value because they are
+// built together and belong together: the listener that serves the frozen chat
+// contract, and the endpoint the agent worker answers a client's rpcs through.
+// A nil *chatBridge is a runtime with no listen target, and a non-nil one always
+// carries both halves.
+type chatBridge struct {
+	server   *bridge.Server
+	endpoint *bridge.AgentEndpoint
+}
+
 // bridgeSettings is the chat bridge listener's own configuration, kept as one
 // value so that a transport's details travel together instead of sitting loose
 // beside the runtime's services, the way telegramSettings keeps Telegram's. The
 // transcript lister and the publisher the listener also needs are built from the
-// store and the bus rather than from config, so they stay newServer parameters.
+// store and the bus rather than from config, so they stay newChatBridge
+// parameters.
 type bridgeSettings struct {
 	listenTarget string
 }
 
-// newServer binds the chat-contract bridge listener and builds its agent
+// newChatBridge binds the chat-contract bridge listener and builds its agent
 // endpoint when the runtime configures a target. An empty target disables the
-// listener: the shared socket volume that backs it is provisioned by the later
+// bridge: the shared socket volume that backs it is provisioned by the later
 // compose slice, so a deployment can run without the bridge until that volume
 // exists. A configured target that fails to bind is fatal and names the path,
 // never silent.
-func (s bridgeSettings) newServer(
+//
+// The invariant belongs to the constructor: an empty target returns no bridge at
+// all, a failed bind returns an error and no half-built value, and a bridge that
+// comes back always carries both halves, so a caller checks one thing.
+func (s bridgeSettings) newChatBridge(
 	lister bridge.TurnLister,
 	publisher bridge.InboundPublisher,
-) (*bridge.Server, *bridge.AgentEndpoint, error) {
+) (*chatBridge, error) {
 	target := strings.TrimSpace(s.listenTarget)
 	if target == "" {
 		log.Printf("q15: runtime event=bridge_disabled reason=listen_target_unset")
-		return nil, nil, nil
+		return nil, nil
 	}
 	endpoint := bridge.NewAgentEndpoint(publisher)
 	server, err := bridge.NewServer(target, bridge.NewService(lister, endpoint))
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	return server, endpoint, nil
+	return &chatBridge{server: server, endpoint: endpoint}, nil
 }
 
 // cognitionJobs registers the built-in background cognition jobs.

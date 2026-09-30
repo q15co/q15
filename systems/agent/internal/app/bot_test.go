@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"errors"
+	"io/fs"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -76,23 +78,70 @@ func TestRunRuntimeRequiresItsParts(t *testing.T) {
 	}
 }
 
-// TestBridgeDisabledWithoutTarget pins the bind-failure decision: an unset
-// listen target disables the listener instead of refusing to boot, so
+// TestNewChatBridgeDisabledWithoutTarget pins the bind-failure decision: an
+// unset listen target disables the bridge instead of refusing to boot, so
 // deployments run unchanged until the socket volume exists.
-func TestBridgeDisabledWithoutTarget(t *testing.T) {
-	bridgeServer, bridgeEndpoint, err := bridgeSettings{}.newServer(nil, nil)
+func TestNewChatBridgeDisabledWithoutTarget(t *testing.T) {
+	bridge, err := bridgeSettings{}.newChatBridge(nil, nil)
 	if err != nil {
-		t.Fatalf("newServer() error = %v", err)
+		t.Fatalf("newChatBridge() error = %v", err)
 	}
-	if bridgeServer != nil || bridgeEndpoint != nil {
-		t.Fatal("newServer() = server and endpoint, want both nil while disabled")
+	if bridge != nil {
+		t.Fatal("newChatBridge() = a bridge, want nil while disabled")
 	}
 }
 
-// TestBridgeSurfacesConfiguredBindFailure pins the other half of the same
-// decision: a configured target that cannot bind fails loudly, with the socket
-// path in the error.
-func TestBridgeSurfacesConfiguredBindFailure(t *testing.T) {
+// TestNewChatBridgeBuildsBothHalves pins the invariant the group exists for: a
+// bridge with a listener always carries its endpoint too, so no caller has to
+// check one half without the other.
+func TestNewChatBridgeBuildsBothHalves(t *testing.T) {
+	settings := bridgeSettings{
+		listenTarget: "unix://" + filepath.Join(t.TempDir(), "bridge.sock"),
+	}
+
+	bridge, err := settings.newChatBridge(nil, nil)
+	if err != nil {
+		// Binding chgrps the socket to the bridge's group, which a test process
+		// that is neither root nor a member of that group cannot do. The bridge
+		// package's own bind tests guard on the same thing; without this, a CI
+		// runner fails here for a reason that has nothing to do with the
+		// invariant under test.
+		if errors.Is(err, fs.ErrPermission) {
+			t.Skipf("binding the bridge socket needs the socket group's permission: %v", err)
+		}
+		t.Fatalf("newChatBridge() error = %v", err)
+	}
+	if bridge == nil {
+		t.Fatal("newChatBridge() = nil, want a bridge for a configured target")
+	}
+	t.Cleanup(func() { bridge.server.Close() })
+	if bridge.server == nil || bridge.endpoint == nil {
+		t.Fatalf("newChatBridge() = %+v, want both halves", bridge)
+	}
+}
+
+// TestNewChatBridgeLeavesNoHalfBuiltBridge pins the other half of the same
+// invariant, where it can be pinned anywhere: when the listener cannot bind, no
+// bridge comes back alongside the error, so a caller never holds one half of a
+// bridge that never listened.
+func TestNewChatBridgeLeavesNoHalfBuiltBridge(t *testing.T) {
+	settings := bridgeSettings{
+		listenTarget: "unix://" + filepath.Join(t.TempDir(), "missing-dir", "bridge.sock"),
+	}
+
+	bridge, err := settings.newChatBridge(nil, nil)
+	if err == nil {
+		t.Fatal("newChatBridge() error = nil, want a bind failure")
+	}
+	if bridge != nil {
+		t.Fatalf("newChatBridge() = %+v, want nil alongside the error", bridge)
+	}
+}
+
+// TestNewChatBridgeSurfacesConfiguredBindFailure pins the other half of the
+// same decision: a configured target that cannot bind fails loudly, with the
+// socket path in the error.
+func TestNewChatBridgeSurfacesConfiguredBindFailure(t *testing.T) {
 	settings := bridgeSettings{
 		// Built by concatenation on purpose: filepath.Join would clean the
 		// double slash away, the target would stop looking like unix://, and
@@ -100,19 +149,19 @@ func TestBridgeSurfacesConfiguredBindFailure(t *testing.T) {
 		listenTarget: "unix://" + filepath.Join(t.TempDir(), "missing-dir", "bridge.sock"),
 	}
 
-	_, _, err := settings.newServer(nil, nil)
+	_, err := settings.newChatBridge(nil, nil)
 	if err == nil {
-		t.Fatal("newServer() error = nil, want bind failure")
+		t.Fatal("newChatBridge() error = nil, want bind failure")
 	}
 	if !strings.Contains(err.Error(), filepath.Join("missing-dir", "bridge.sock")) {
-		t.Fatalf("newServer() error = %v, want the socket path named", err)
+		t.Fatalf("newChatBridge() error = %v, want the socket path named", err)
 	}
 	// The whole point of building the target by concatenation above: this must
 	// fail on the unix branch. If the target lost its unix:// prefix the error
 	// would come from the TCP branch and the unix bind path would never be
 	// exercised.
 	if !strings.Contains(err.Error(), "listen unix ") {
-		t.Fatalf("newServer() error = %v, want a unix listen failure", err)
+		t.Fatalf("newChatBridge() error = %v, want a unix listen failure", err)
 	}
 }
 
