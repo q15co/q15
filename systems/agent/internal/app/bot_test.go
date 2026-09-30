@@ -2,12 +2,14 @@ package app
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/bus"
 	"github.com/q15co/q15/systems/agent/internal/channel/telegram"
+	"github.com/q15co/q15/systems/agent/internal/config"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
 	"github.com/q15co/q15/systems/agent/internal/modelcatalog"
 	"github.com/q15co/q15/systems/agent/internal/modelselection"
@@ -39,6 +41,36 @@ func TestRunAgentWorkerCancelReturnsNil(_ *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	_ = runAgentWorker(ctx, bus.New(1), nil, nil)
+}
+
+// TestNewBridgeServerDisabledWithoutTarget pins the bind-failure decision: an
+// unset listen target disables the listener instead of refusing to boot, so
+// deployments run unchanged until the socket volume exists.
+func TestNewBridgeServerDisabledWithoutTarget(t *testing.T) {
+	bridgeServer, err := newBridgeServer(config.AgentRuntime{}, nil)
+	if err != nil {
+		t.Fatalf("newBridgeServer() error = %v", err)
+	}
+	if bridgeServer != nil {
+		t.Fatal("newBridgeServer() = server, want nil while disabled")
+	}
+}
+
+// TestNewBridgeServerSurfacesConfiguredBindFailure pins the other half of the
+// same decision: a configured target that cannot bind fails loudly, with the
+// socket path in the error.
+func TestNewBridgeServerSurfacesConfiguredBindFailure(t *testing.T) {
+	rt := config.AgentRuntime{
+		BridgeListenTarget: filepath.Join("unix://", t.TempDir(), "missing-dir", "bridge.sock"),
+	}
+
+	_, err := newBridgeServer(rt, nil)
+	if err == nil {
+		t.Fatal("newBridgeServer() error = nil, want bind failure")
+	}
+	if !strings.Contains(err.Error(), filepath.Join("missing-dir", "bridge.sock")) {
+		t.Fatalf("newBridgeServer() error = %v, want the socket path named", err)
+	}
 }
 
 // TestSwitchModelUpdatesNextModelTurnPrompt exercises the full turn path: a

@@ -15,6 +15,7 @@ import (
 	"github.com/q15co/q15/libs/exec-contract/execpb"
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/bus"
+	"github.com/q15co/q15/systems/agent/internal/channel/bridge"
 	"github.com/q15co/q15/systems/agent/internal/channel/telegram"
 	"github.com/q15co/q15/systems/agent/internal/cognition"
 	"github.com/q15co/q15/systems/agent/internal/config"
@@ -150,6 +151,10 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 	if err := memoryStore.Init(ctx); err != nil {
 		return fmt.Errorf("initialize memory store for agent %q: %w", rt.Name, err)
 	}
+	bridgeServer, err := newBridgeServer(rt, memoryStore)
+	if err != nil {
+		return err
+	}
 	scheduleStore := schedulestore.New(filepath.Join(rt.StateLocalDir, "schedule"))
 	if err := scheduleStore.Init(ctx); err != nil {
 		return fmt.Errorf("initialize schedule store for agent %q: %w", rt.Name, err)
@@ -265,6 +270,7 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 		botAgent,
 		cognitionController,
 		scheduleManager,
+		bridgeServer,
 	)
 }
 
@@ -291,9 +297,9 @@ func buildSkillManager(
 	return skillManager, settings
 }
 
-// runTelegramLoop starts the channel and runs inbound replies, outbound
-// delivery, scheduled jobs, and cognition until the context is canceled or a
-// worker fails.
+// runTelegramLoop starts the channel and the chat bridge listener, then runs
+// inbound replies, outbound delivery, scheduled jobs, and cognition until the
+// context is canceled or a worker fails.
 func runTelegramLoop(
 	ctx context.Context,
 	messageBus *bus.Bus,
@@ -303,6 +309,7 @@ func runTelegramLoop(
 	botAgent agent.Agent,
 	cognitionController *cognition.Controller,
 	scheduleManager *schedule.Manager,
+	bridgeServer *bridge.Server,
 ) error {
 	if messageBus == nil {
 		return errors.New("message bus is required")
@@ -313,6 +320,9 @@ func runTelegramLoop(
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	if bridgeServer != nil {
+		defer bridgeServer.Close()
+	}
 	channel, err := telegram.NewChannel(token, func(msg telegram.IncomingMessage) {
 		err := messageBus.PublishInbound(runCtx, telegramInboundMessage(msg))
 		if err != nil && !errors.Is(err, context.Canceled) {
@@ -348,8 +358,28 @@ func runTelegramLoop(
 	if cognitionController != nil {
 		workers = append(workers, cognitionController.Run)
 	}
+	if bridgeServer != nil {
+		workers = append(workers, bridgeServer.Serve)
+	}
 
 	return runRuntimeWorkers(runCtx, cancel, runtimeWorkerShutdownTimeout, workers...)
+}
+
+// newBridgeServer binds the chat-contract bridge listener when the runtime
+// configures a target. An empty target disables the listener: the shared
+// socket volume that backs it is provisioned by the later compose slice, so a
+// deployment can run without the bridge until that volume exists. A configured
+// target that fails to bind is fatal and names the path, never silent.
+func newBridgeServer(
+	rt config.AgentRuntime,
+	lister bridge.TurnLister,
+) (*bridge.Server, error) {
+	target := strings.TrimSpace(rt.BridgeListenTarget)
+	if target == "" {
+		log.Printf("q15: runtime event=bridge_disabled reason=listen_target_unset")
+		return nil, nil
+	}
+	return bridge.NewServer(target, bridge.NewService(lister))
 }
 
 // cognitionJobs registers the built-in background cognition jobs.

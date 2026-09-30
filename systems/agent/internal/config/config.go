@@ -14,6 +14,12 @@ const (
 	runtimeExecutionServiceAddr = "q15-exec:50051"
 )
 
+// DefaultBridgeListenTarget is the conventional chat-contract bridge listen
+// target once a deployment provisions the bridge socket volume. It is
+// documented rather than applied: an empty ListenTarget keeps the listener
+// disabled, so a stack can run before that volume exists.
+const DefaultBridgeListenTarget = "unix:///run/q15/bridge.sock"
+
 // Config is the top-level structure loaded from config.yaml.
 type Config struct {
 	Providers []Provider `yaml:"providers"`
@@ -53,6 +59,7 @@ type Agent struct {
 	MemoryRecentTurns int      `yaml:"memory_recent_turns"`
 	Tools             Tools    `yaml:"tools"`
 	Telegram          Telegram `yaml:"telegram"`
+	Bridge            Bridge   `yaml:"bridge"`
 }
 
 // Tools defines optional agent tool settings.
@@ -96,6 +103,16 @@ type Telegram struct {
 	TokenEnv          string  `yaml:"token_env"`
 	AllowedUserIDs    []int64 `yaml:"allowed_user_ids"`
 	AllowedUserIDsEnv string  `yaml:"allowed_user_ids_env"`
+}
+
+// Bridge defines the chat-contract bridge listener settings for an agent.
+type Bridge struct {
+	// ListenTarget is where the agent serves the frozen chat contract: a
+	// unix:///path/to/socket target, or a host:port TCP address. Empty
+	// disables the listener: the shared socket volume that backs the
+	// conventional DefaultBridgeListenTarget is provisioned by a later slice,
+	// so a deployment opts in once that volume exists.
+	ListenTarget string `yaml:"listen_target"`
 }
 
 // ExecutionRuntime is the resolved q15-exec runtime contract.
@@ -149,4 +166,5 @@ type AgentRuntime struct {
 	Tools                  ToolsRuntime
 	TelegramToken          string
 	TelegramAllowedUserIDs []int64
+	BridgeListenTarget     string
 }

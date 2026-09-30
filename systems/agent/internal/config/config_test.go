@@ -522,6 +522,42 @@ func TestResolveAgentRuntimeUsesScheduleDefaults(t *testing.T) {
 	if rt.Tools.Schedule.MaxRunTurns != 16 {
 		t.Fatalf("Tools.Schedule.MaxRunTurns = %d, want 16", rt.Tools.Schedule.MaxRunTurns)
 	}
+	if rt.BridgeListenTarget != "" {
+		t.Fatalf(
+			"BridgeListenTarget = %q, want empty: an unset target disables the listener",
+			rt.BridgeListenTarget,
+		)
+	}
+}
+
+func TestResolveAgentRuntimeResolvesBridgeListenTarget(t *testing.T) {
+	t.Setenv("Q15_TELEGRAM_TOKEN", "t")
+
+	cfg := Config{
+		Providers: []Provider{testProvider("local", "ollama", "http://localhost:11434", "")},
+		Agent: &Agent{
+			Name: "a",
+			Telegram: Telegram{
+				TokenEnv:       "Q15_TELEGRAM_TOKEN",
+				AllowedUserIDs: []int64{1},
+			},
+			Bridge: Bridge{
+				ListenTarget: "unix:///run/q15/bridge.sock",
+			},
+		},
+	}
+
+	rt, err := cfg.ResolveAgentRuntime()
+	if err != nil {
+		t.Fatalf("ResolveAgentRuntime() error = %v", err)
+	}
+	if rt.BridgeListenTarget != DefaultBridgeListenTarget {
+		t.Fatalf(
+			"BridgeListenTarget = %q, want %q",
+			rt.BridgeListenTarget,
+			DefaultBridgeListenTarget,
+		)
+	}
 }
 
 func TestResolveAgentRuntimeResolvesLocalOllamaProviderWithoutAPIKey(t *testing.T) {
