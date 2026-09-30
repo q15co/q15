@@ -10,6 +10,7 @@ EXEC_MOD_DIR ?= systems/exec
 PROXY_MOD_DIR ?= systems/proxy
 EXEC_CONTRACT_MOD_DIR ?= libs/exec-contract
 PROXY_CONTRACT_MOD_DIR ?= libs/proxy-contract
+CHAT_CONTRACT_MOD_DIR ?= libs/chat-contract
 
 TOOLS_BIN_DIR := $(CURDIR)/.tools/bin
 
@@ -19,7 +20,7 @@ COMPOSE_ENV := COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT_NAME)
 
 .DEFAULT_GOAL := build
 
-.PHONY: all build build-agent build-auth build-exec build-proxy project-setup fmt lint lint-changed test verify verify-ci hooks-install hooks-uninstall compose-secrets-init compose-up compose-down compose-logs compose-ps clean help
+.PHONY: all build build-agent build-auth build-exec build-proxy project-setup fmt lint lint-changed test verify verify-ci hooks-install hooks-uninstall compose-secrets-init compose-up compose-down compose-logs compose-ps clean help protos protos-check
 
 all: build
 
@@ -49,11 +50,19 @@ fmt: project-setup
 
 test:
 	./scripts/image-build-impact-test.sh
-	cd $(EXEC_CONTRACT_MOD_DIR) && $(GO) test ./...
-	cd $(PROXY_CONTRACT_MOD_DIR) && $(GO) test ./...
+	cd $(EXEC_CONTRACT_MOD_DIR) && CGO_ENABLED=0 $(GO) test ./...
+	cd $(PROXY_CONTRACT_MOD_DIR) && CGO_ENABLED=0 $(GO) test ./...
+	cd $(CHAT_CONTRACT_MOD_DIR) && CGO_ENABLED=0 $(GO) test ./...
 	cd $(AGENT_MOD_DIR) && CGO_ENABLED=0 $(GO) test ./...
 	cd $(EXEC_MOD_DIR) && CGO_ENABLED=0 $(GO) test ./...
 	cd $(PROXY_MOD_DIR) && CGO_ENABLED=0 $(GO) test ./...
+
+protos:
+	buf generate
+
+protos-check:
+	buf generate
+	git diff --exit-code -- libs/
 
 lint: project-setup
 	./scripts/lint-changed.sh --tracked
@@ -63,6 +72,7 @@ lint-changed: project-setup
 	FILES="$(FILES)" ./scripts/lint-changed.sh
 
 verify: project-setup
+	$(MAKE) protos-check
 	$(MAKE) lint
 	$(MAKE) test
 
@@ -116,8 +126,10 @@ help:
 	@echo "  fmt           Format tracked files (or FILES='a b' for an explicit subset)"
 	@echo "  lint          Run full-repo file checks plus repo-wide Go static analysis"
 	@echo "  lint-changed  Run fast changed-file checks (or FILES='a b' for an explicit subset)"
-	@echo "  test          Run Go tests for exec/proxy contracts + agent + exec + proxy"
-	@echo "  verify        Run project-setup, lint, and test"
+	@echo "  test          Run Go tests for exec/proxy/chat contracts + agent + exec + proxy"
+	@echo "  protos        Regenerate protobuf stubs under libs/ from proto sources"
+	@echo "  protos-check  Regenerate protobuf stubs and fail if they differ from tracked files"
+	@echo "  verify        Run project-setup, protos-check, lint, and test"
 	@echo "  verify-ci     Run changed-file checks plus repo-wide Go static analysis"
 	@echo "  hooks-install Install the optional q15-managed pre-commit hook"
 	@echo "  hooks-uninstall  Remove q15-managed or legacy generated git hooks"

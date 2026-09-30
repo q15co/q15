@@ -25,6 +25,8 @@ assert_impact '{"agent":false,"exec":false,"proxy":true}' \
 	'systems/proxy/internal/service/grpc.go'
 assert_impact '{"agent":true,"exec":true,"proxy":false}' \
 	'libs/exec-contract/proto/q15/exec/v1/execution.proto'
+assert_impact '{"agent":true,"exec":false,"proxy":false}' \
+	'libs/chat-contract/proto/q15/chat/v1/chat.proto'
 assert_impact '{"agent":false,"exec":true,"proxy":true}' \
 	'libs/proxy-contract/proto/q15/proxy/v1/proxy.proto'
 assert_impact '{"agent":true,"exec":true,"proxy":true}' \

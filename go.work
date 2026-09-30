@@ -1,6 +1,7 @@
 go 1.26.7
 
 use (
+	./libs/chat-contract
 	./libs/exec-contract
 	./libs/proxy-contract
 	./systems/agent

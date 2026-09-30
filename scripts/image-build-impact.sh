@@ -25,6 +25,7 @@ while IFS= read -r file; do
 	if matches_any "${file}" \
 		"systems/agent/**" \
 		"libs/exec-contract/**" \
+		"libs/chat-contract/**" \
 		".dockerignore" \
 		"go.work" \
 		"go.work.sum" \

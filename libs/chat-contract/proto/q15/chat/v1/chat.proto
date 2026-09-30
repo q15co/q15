@@ -1,0 +1,336 @@
+syntax = "proto3";
+
+package q15.chat.v1;
+
+option go_package = "github.com/q15co/q15/libs/chat-contract/chatpb;chatpb";
+
+import "google/protobuf/timestamp.proto";
+
+// ChatService is the agent-side conversation surface consumed by q15-web.
+//
+// The direction is the opposite of q15.exec.v1.ExecutionService: there the
+// agent is the client and the sandbox helper is the server, here the agent is
+// the server, because the conversation lives in the agent's transcript and the
+// agent owns the run event stream. q15-web dials a Unix socket, so the socket
+// is the agent's only inbound surface and it carries no credential.
+//
+// Compatibility rule, which is the reason this is a contract rather than a
+// hand-rolled codec: the wire format is additive-only. Add fields with new
+// numbers, never renumber or reuse one, and reserve both the number and the
+// name of anything removed. ProtocolVersion is bumped only for a breaking
+// change, and q15-web treats a mismatch as a hard startup failure.
+//
+// This contract versions q15-web against the agent. It does not version the
+// browser: the browser never speaks gRPC, and its contract is the WebSocket
+// envelope plus the frozen frame fixtures, not this handshake.
+service ChatService {
+  // GetRuntimeInfo is the startup handshake: protocol version, transcript head
+  // sequence and enabled capabilities.
+  rpc GetRuntimeInfo(GetRuntimeInfoRequest) returns (GetRuntimeInfoResponse);
+
+  // OpenSession allocates a conversation session. One session owns at most one
+  // in-flight run; extra sends queue rather than starting a second run.
+  rpc OpenSession(OpenSessionRequest) returns (OpenSessionResponse);
+
+  // SendMessage delivers one user message and starts a run when the session is
+  // idle.
+  rpc SendMessage(SendMessageRequest) returns (SendMessageResponse);
+
+  // Abort cancels the in-flight run of a session.
+  rpc Abort(AbortRequest) returns (AbortResponse);
+
+  // WatchEvents streams run progress. after_event_index resumes a dropped
+  // stream, mirroring WatchSessionRequest in the exec contract.
+  rpc WatchEvents(WatchEventsRequest) returns (stream WatchEventsResponse);
+
+  // ListTurns pages the durable transcript. Read-only.
+  rpc ListTurns(ListTurnsRequest) returns (ListTurnsResponse);
+
+  // Deliver opens the outbound subscription. Because the agent is the server,
+  // a subscription the client holds open is the only way it can push
+  // unsolicited messages out, so this method maps the agent's outbound endpoint
+  // direction onto a stream: every bus.OutboundMessage bound for this channel is
+  // fanned out to every open stream. Slice 1 carries text only, because
+  // bus.OutboundMessage carries no parts.
+  rpc Deliver(DeliverRequest) returns (stream DeliverResponse);
+}
+
+message GetRuntimeInfoRequest {}
+
+// RuntimeCapability mirrors the exec contract's capability entry.
+message RuntimeCapability {
+  string name = 1;
+  bool enabled = 2;
+}
+
+message GetRuntimeInfoResponse {
+  string service_version = 1;
+  // protocol_version is this contract's own version. Bump it only for a
+  // breaking change.
+  int32 protocol_version = 2;
+  // head_seq is the newest allocated transcript turn sequence, the value the
+  // memory head state keeps as last_seq. The 22-digit form is a zero-padded
+  // filename, not a wider number. The sequence is allocated when a run starts
+  // and the turn record is written when it finishes, so while a run is in
+  // flight head_seq can name a turn whose file does not exist yet. A client
+  // must therefore treat head_seq as a cursor bound rather than as a promise
+  // that the turn is readable.
+  int64 head_seq = 3;
+  // Deliberately no directory fields. The web tier keeps no second copy of
+  // anything and does not touch the transcript or media roots, so advertising
+  // those paths would invite exactly the coupling this split exists to prevent.
+  repeated RuntimeCapability capabilities = 4;
+}
+
+enum SessionState {
+  SESSION_STATE_UNSPECIFIED = 0;
+  // SESSION_STATE_IDLE is open with no run in flight.
+  SESSION_STATE_IDLE = 1;
+  // SESSION_STATE_RUNNING has a run in flight.
+  SESSION_STATE_RUNNING = 2;
+  // SESSION_STATE_CLOSED accepts no further sends.
+  SESSION_STATE_CLOSED = 3;
+}
+
+message Session {
+  string session_id = 1;
+  // chat_id is the conversation the session is bound to.
+  string chat_id = 2;
+  SessionState state = 3;
+  google.protobuf.Timestamp opened_at = 4;
+}
+
+message OpenSessionRequest {
+  // chat_id selects the conversation. Empty selects the agent's default
+  // conversation for this channel.
+  string chat_id = 1;
+}
+
+message OpenSessionResponse {
+  Session session = 1;
+}
+
+message SendMessageRequest {
+  string session_id = 1;
+  // client_msg_id is the client's own identifier for this send. It is echoed
+  // back so a client can match the accepted run to its optimistic message. The
+  // transcript has no per-message identifier, so this is not persisted.
+  string client_msg_id = 2;
+  string text = 3;
+}
+
+message SendMessageResponse {
+  string client_msg_id = 1;
+  // queued is true when the session was already running, so this message waits
+  // its turn instead of starting a run now.
+  bool queued = 2;
+  Session session = 3;
+}
+
+message AbortRequest {
+  string session_id = 1;
+  // turn_seq names the run to abort. Zero aborts whichever run is in flight.
+  int64 turn_seq = 2;
+  string reason = 3;
+}
+
+message AbortResponse {
+  Session session = 1;
+}
+
+message WatchEventsRequest {
+  string session_id = 1;
+  // after_event_index resumes from a cursor.
+  int64 after_event_index = 2;
+}
+
+message WatchEventsResponse {
+  SessionEvent event = 1;
+}
+
+// SessionEvent is one item on a session's stream.
+//
+// event_index is the per-session monotonic counter, the same counter
+// WatchSessionRequest{after_event_index} already models, and it is what a client
+// acknowledges. It is not the transcript sequence: turn_seq carries that. The
+// two are different numbers and conflating them is the mistake this comment
+// exists to prevent.
+message SessionEvent {
+  int64 event_index = 1;
+  google.protobuf.Timestamp occurred_at = 2;
+  // turn_seq is the durable transcript turn this event belongs to. It is zero
+  // until the agent has allocated the sequence for the run.
+  int64 turn_seq = 3;
+
+  oneof event {
+    SessionOpened session_opened = 4;
+    RunStarted run_started = 5;
+    ModelTurnStarted model_turn_started = 6;
+    ModelTurnDelta model_turn_delta = 7;
+    ModelReasoningDelta model_reasoning_delta = 8;
+    ToolStarted tool_started = 9;
+    ToolFinished tool_finished = 10;
+    RunFinished run_finished = 11;
+    RunFailed run_failed = 12;
+    // Snapshot is the bridge's coalesced keyframe rather than a run event: it
+    // carries the full answer text accumulated so far so that a client which
+    // missed deltas can recover without replaying the stream.
+    Snapshot snapshot = 13;
+    // Notice carries anything that is not run progress, such as a resync hint.
+    Notice notice = 14;
+  }
+}
+
+message SessionOpened {
+  string session_id = 1;
+}
+
+message RunStarted {}
+
+// ModelTurnStarted begins a new model attempt for the run. Subscribers should
+// replace any answer and reasoning draft accumulated so far.
+message ModelTurnStarted {
+  // loop_turn is the engine's per-run loop counter, not the transcript
+  // sequence.
+  int32 loop_turn = 1;
+  string model_ref = 2;
+}
+
+message ModelTurnDelta {
+  string delta = 1;
+}
+
+message ModelReasoningDelta {
+  string delta = 1;
+}
+
+message ToolCall {
+  string id = 1;
+  string name = 2;
+  // arguments is the raw JSON argument object, deliberately unparsed.
+  string arguments = 3;
+}
+
+message ToolStarted {
+  ToolCall call = 1;
+}
+
+message ToolFinished {
+  ToolCall call = 1;
+  string output = 2;
+  bool is_error = 3;
+}
+
+enum RunStatus {
+  RUN_STATUS_UNSPECIFIED = 0;
+  RUN_STATUS_COMPLETED = 1;
+  RUN_STATUS_ABORTED = 2;
+  RUN_STATUS_FAILED = 3;
+}
+
+message RunFinished {
+  // full_text is the complete final answer text. A terminal event always
+  // carries it, including when the run was cancelled, so that one message is
+  // enough for a client to recover from any missed frames.
+  string full_text = 1;
+  string model_ref = 2;
+  RunStatus status = 3;
+}
+
+message RunFailed {
+  // full_text is whatever text the run produced before it failed. It may be
+  // empty.
+  string full_text = 1;
+  string error = 2;
+  RunStatus status = 3;
+}
+
+message Snapshot {
+  // text is the full answer text accumulated so far for the in-flight run.
+  string text = 1;
+}
+
+message Notice {
+  string code = 1;
+  string text = 2;
+}
+
+message ListTurnsRequest {
+  // after_seq returns turns strictly older than this sequence, so a client
+  // pages backwards by passing the oldest seq it already holds. Zero starts at
+  // the newest turn.
+  int64 after_seq = 1;
+  // limit caps the page. Zero selects the server default; the server caps the
+  // value at 500.
+  int32 limit = 2;
+}
+
+message ListTurnsResponse {
+  // turns is newest first.
+  repeated Turn turns = 1;
+  // head_seq is the newest allocated transcript turn sequence.
+  int64 head_seq = 2;
+  // has_more reports whether turns older than this page still exist.
+  bool has_more = 3;
+}
+
+// Turn is one durable transcript turn.
+//
+// A turn record is written exactly once, when its run has finished, so every
+// turn a caller can read is complete and immutable. There is deliberately no
+// in-progress flag: the in-flight run owns a sequence that has no record yet,
+// which is why head_seq and the newest readable turn can differ by one.
+message Turn {
+  int64 seq = 1;
+  google.protobuf.Timestamp created_at = 2;
+  repeated Message messages = 3;
+}
+
+// Message is one canonical transcript message.
+//
+// Message identity is (turn seq, message ordinal, part ordinal). The transcript
+// has no per-message identifier, so the ordinals are the identity.
+message Message {
+  int32 ordinal = 1;
+  // role mirrors conversation.Role verbatim: "system", "user", "assistant" or
+  // "tool". It is a string rather than an enum on purpose. The canonical
+  // vocabulary is owned by the conversation package, and a proto enum would
+  // need a translation table and would reject a kind added there.
+  string role = 2;
+  repeated MessagePart parts = 3;
+}
+
+// MessagePart mirrors conversation.Part, which is one deliberately flat type
+// discriminated by part_type: fields that do not apply to the current part are
+// empty, exactly as in the canonical model. The same string-versus-enum rule
+// applies to part_type, media_kind and disposition.
+message MessagePart {
+  int32 ordinal = 1;
+  // part_type mirrors conversation.PartType: "text", "media", "reasoning",
+  // "tool_call" or "tool_result".
+  string part_type = 2;
+  // text carries both text and reasoning parts.
+  string text = 3;
+  // disposition mirrors conversation.TextDisposition: "commentary" or "final".
+  string disposition = 4;
+  // media_kind and media_ref carry media parts. media_kind mirrors
+  // conversation.MediaKind.
+  string media_kind = 5;
+  string media_ref = 6;
+  // tool_call carries tool_call parts.
+  ToolCall tool_call = 7;
+  // tool_call_id, content and is_error carry tool_result parts.
+  string tool_call_id = 8;
+  string content = 9;
+  bool is_error = 10;
+}
+
+message DeliverRequest {}
+
+message DeliverResponse {
+  string chat_id = 1;
+  string text = 2;
+  // queued_at is when the agent produced the message, not when the bridge
+  // forwarded it.
+  google.protobuf.Timestamp queued_at = 3;
+}

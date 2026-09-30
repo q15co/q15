@@ -21,6 +21,9 @@ required_tools=(
 	revive
 	golines
 	actionlint
+	buf
+	protoc-gen-go
+	protoc-gen-go-grpc
 	shfmt
 	shellcheck
 	jq
@@ -306,6 +309,9 @@ install_go_tool "honnef.co/go/tools/cmd/staticcheck@${STATICCHECK_VERSION}"
 install_go_tool "github.com/mgechev/revive@${REVIVE_VERSION}"
 install_go_tool "github.com/segmentio/golines@${GOLINES_VERSION}"
 install_go_tool "github.com/rhysd/actionlint/cmd/actionlint@${ACTIONLINT_VERSION}"
+install_go_tool "github.com/bufbuild/buf/cmd/buf@${BUF_VERSION}"
+install_go_tool "google.golang.org/protobuf/cmd/protoc-gen-go@${PROTOC_GEN_GO_VERSION}"
+install_go_tool "google.golang.org/grpc/cmd/protoc-gen-go-grpc@${PROTOC_GEN_GO_GRPC_VERSION}"
 install_go_tool "mvdan.cc/sh/v3/cmd/shfmt@${SHFMT_VERSION}"
 
 install_shellcheck
