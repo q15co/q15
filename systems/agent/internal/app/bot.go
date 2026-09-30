@@ -154,9 +154,10 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 	if err := memoryStore.Init(ctx); err != nil {
 		return fmt.Errorf("initialize memory store for agent %q: %w", rt.Name, err)
 	}
-	bridgeServer, err := bridgeSettings{
+	messageBus := bus.New(bus.DefaultBufferSize)
+	bridgeServer, bridgeEndpoint, err := bridgeSettings{
 		listenTarget: rt.BridgeListenTarget,
-	}.newServer(memoryStore)
+	}.newServer(memoryStore, messageBus)
 	if err != nil {
 		return err
 	}
@@ -178,7 +179,6 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 		memory: memoryStore,
 		skills: skillManager,
 	}
-	messageBus := bus.New(bus.DefaultBufferSize)
 	scheduledExecutor, err := newScheduledJobExecutor(
 		modelAdapter,
 		baseToolRegistry,
@@ -285,17 +285,15 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 	}
 	// The transports are assembled here, at the composition root, because that
 	// is where a transport's startup can fail and where the listener it bound
-	// has to be closed on the later failure paths. The Telegram channel's
-	// inbound publishing is bound to runCtx, which is the same context
-	// runRuntime cancels when its workers are shutting down, so a canceled
-	// runtime stops publishing instead of queueing work for an agent that is
-	// going away.
+	// has to be closed on the later failure paths. Inbound publishing is bound
+	// to runCtx, which is the same context runRuntime cancels when its workers
+	// are shutting down, so a canceled runtime stops publishing instead of
+	// queueing work for an agent that is going away. Both transports publish
+	// onto the runtime's bus, which is how anything reaches the agent.
 	//
 	// Both transports are optional, and the endpoint guard in runRuntime is what
 	// refuses a runtime that ends up with no channel endpoint to be reached
-	// through. Note what that means at this layer: the bridge contributes a
-	// listener and a worker but no endpoint, so a Telegram-less runtime is
-	// refused there until the layer that gives the bridge its endpoint.
+	// through.
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -317,6 +315,11 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 		telegramEndpoint := telegram.NewAgentEndpoint(telegramChannel)
 		agentEndpoints = append(agentEndpoints, telegramEndpoint)
 		outboundEndpoints = append(outboundEndpoints, telegramEndpoint)
+	}
+	// The bridge endpoint joins the worker's registries only when its listener
+	// is running: without a listener there is nothing to answer its rpcs.
+	if bridgeEndpoint != nil {
+		agentEndpoints = append(agentEndpoints, bridgeEndpoint)
 	}
 
 	return runRuntime(runCtx, cancel, runtimeInputs{
@@ -478,24 +481,33 @@ func runRuntime(ctx context.Context, cancel context.CancelFunc, in runtimeInputs
 // bridgeSettings is the chat bridge listener's own configuration, kept as one
 // value so that a transport's details travel together instead of sitting loose
 // beside the runtime's services, the way telegramSettings keeps Telegram's. The
-// transcript lister the listener also needs is built from the store rather than
-// from config, so it stays a newServer parameter.
+// transcript lister and the publisher the listener also needs are built from the
+// store and the bus rather than from config, so they stay newServer parameters.
 type bridgeSettings struct {
 	listenTarget string
 }
 
-// newServer binds the chat-contract bridge listener when the runtime configures
-// a target. An empty target disables the listener: the shared socket volume
-// that backs it is provisioned by the later compose slice, so a deployment can
-// run without the bridge until that volume exists. A configured target that
-// fails to bind is fatal and names the path, never silent.
-func (s bridgeSettings) newServer(lister bridge.TurnLister) (*bridge.Server, error) {
+// newServer binds the chat-contract bridge listener and builds its agent
+// endpoint when the runtime configures a target. An empty target disables the
+// listener: the shared socket volume that backs it is provisioned by the later
+// compose slice, so a deployment can run without the bridge until that volume
+// exists. A configured target that fails to bind is fatal and names the path,
+// never silent.
+func (s bridgeSettings) newServer(
+	lister bridge.TurnLister,
+	publisher bridge.InboundPublisher,
+) (*bridge.Server, *bridge.AgentEndpoint, error) {
 	target := strings.TrimSpace(s.listenTarget)
 	if target == "" {
 		log.Printf("q15: runtime event=bridge_disabled reason=listen_target_unset")
-		return nil, nil
+		return nil, nil, nil
 	}
-	return bridge.NewServer(target, bridge.NewService(lister))
+	endpoint := bridge.NewAgentEndpoint(publisher)
+	server, err := bridge.NewServer(target, bridge.NewService(lister, endpoint))
+	if err != nil {
+		return nil, nil, err
+	}
+	return server, endpoint, nil
 }
 
 // cognitionJobs registers the built-in background cognition jobs.

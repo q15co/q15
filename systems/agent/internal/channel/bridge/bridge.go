@@ -6,6 +6,8 @@ package bridge
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"time"
 
 	"github.com/q15co/q15/libs/chat-contract/chatpb"
@@ -31,18 +33,113 @@ type TurnLister interface {
 
 var _ TurnLister = (*memory.Store)(nil)
 
-// Service is the chat-contract server adapter. ListTurns and GetRuntimeInfo
-// are implemented; the remaining rpcs stay unimplemented until their layer
-// arrives.
+// Service is the chat-contract server adapter. ListTurns, GetRuntimeInfo,
+// OpenSession, SendMessage and Abort are implemented; WatchEvents and Deliver
+// stay unimplemented until their layer arrives.
 type Service struct {
 	chatpb.UnimplementedChatServiceServer
 
-	lister TurnLister
+	lister   TurnLister
+	sessions *AgentEndpoint
 }
 
-// NewService constructs a bridge service over one transcript lister.
-func NewService(lister TurnLister) *Service {
-	return &Service{lister: lister}
+// NewService constructs a bridge service over one transcript lister and the
+// session endpoint the run rpcs share with the app worker.
+func NewService(lister TurnLister, sessions *AgentEndpoint) *Service {
+	return &Service{lister: lister, sessions: sessions}
+}
+
+// OpenSession allocates a logical bridge session. Empty chat_id selects
+// defaultBridgeChatID, this agent's single durable transcript.
+func (s *Service) OpenSession(
+	_ context.Context,
+	req *chatpb.OpenSessionRequest,
+) (*chatpb.OpenSessionResponse, error) {
+	return &chatpb.OpenSessionResponse{
+		Session: s.sessions.NewSession(req.GetChatId()),
+	}, nil
+}
+
+// SendMessage publishes one user message to the runtime bus and returns as
+// soon as it is queued. The run is driven by the app worker, not by this rpc,
+// so nothing here waits for a run. Because the worker is sequential, a send
+// published while a run is in flight waits on the bus, and queued reports
+// that to the client.
+func (s *Service) SendMessage(
+	ctx context.Context,
+	req *chatpb.SendMessageRequest,
+) (*chatpb.SendMessageResponse, error) {
+	if strings.TrimSpace(req.GetText()) == "" {
+		// A message with no text produces no parts, and the worker skips a
+		// message with no parts. Rejecting it here keeps the rpc from
+		// reporting success for a send that would never run. Attachments are
+		// what will make an empty text meaningful, and they are a later layer.
+		return nil, status.Error(
+			codes.InvalidArgument,
+			"send message text is required",
+		)
+	}
+	session := s.sessions.lookupSession(strings.TrimSpace(req.GetSessionId()))
+	if session == nil {
+		return nil, status.Errorf(
+			codes.NotFound,
+			"bridge session %q not found",
+			req.GetSessionId(),
+		)
+	}
+
+	// Read before publishing: the run this send may join is already in flight
+	// exactly when the session is running now.
+	queued := session.isRunning()
+	if err := s.sessions.publishSend(
+		ctx,
+		session,
+		req.GetClientMsgId(),
+		req.GetText(),
+	); err != nil {
+		return nil, publishSendError(err)
+	}
+	return &chatpb.SendMessageResponse{
+		ClientMsgId: req.GetClientMsgId(),
+		Queued:      queued,
+		Session:     session.snapshot(),
+	}, nil
+}
+
+// publishSendError maps a failed bus publish to its contract status: a dead
+// publisher context surfaces as itself and anything else is Internal.
+func publishSendError(err error) error {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return status.Error(codes.Canceled, "publish send: canceled")
+	case errors.Is(err, context.DeadlineExceeded):
+		return status.Error(codes.DeadlineExceeded, "publish send: timed out")
+	default:
+		return status.Errorf(codes.Internal, "publish send: %v", err)
+	}
+}
+
+// Abort cancels the in-flight run of a session and returns it.
+//
+// Nothing in flight is deliberately not an error: a client racing a finished
+// run still gets the session, not a failure. req.TurnSeq stays advisory in
+// this layer because a session owns at most one run at a time (the worker is
+// sequential), so whatever run is in flight is the one aborted, whatever seq
+// the request names.
+func (s *Service) Abort(
+	_ context.Context,
+	req *chatpb.AbortRequest,
+) (*chatpb.AbortResponse, error) {
+	session := s.sessions.lookupSession(strings.TrimSpace(req.GetSessionId()))
+	if session == nil {
+		return nil, status.Errorf(
+			codes.NotFound,
+			"bridge session %q not found",
+			req.GetSessionId(),
+		)
+	}
+	session.cancelRun()
+	return &chatpb.AbortResponse{Session: session.snapshot()}, nil
 }
 
 // ListTurns pages the durable transcript, newest first. It is read-only on

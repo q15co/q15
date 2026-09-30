@@ -80,12 +80,12 @@ func TestRunRuntimeRequiresItsParts(t *testing.T) {
 // listen target disables the listener instead of refusing to boot, so
 // deployments run unchanged until the socket volume exists.
 func TestBridgeDisabledWithoutTarget(t *testing.T) {
-	bridgeServer, err := bridgeSettings{}.newServer(nil)
+	bridgeServer, bridgeEndpoint, err := bridgeSettings{}.newServer(nil, nil)
 	if err != nil {
 		t.Fatalf("newServer() error = %v", err)
 	}
-	if bridgeServer != nil {
-		t.Fatal("newServer() = server, want nil while disabled")
+	if bridgeServer != nil || bridgeEndpoint != nil {
+		t.Fatal("newServer() = server and endpoint, want both nil while disabled")
 	}
 }
 
@@ -100,7 +100,7 @@ func TestBridgeSurfacesConfiguredBindFailure(t *testing.T) {
 		listenTarget: "unix://" + filepath.Join(t.TempDir(), "missing-dir", "bridge.sock"),
 	}
 
-	_, err := settings.newServer(nil)
+	_, _, err := settings.newServer(nil, nil)
 	if err == nil {
 		t.Fatal("newServer() error = nil, want bind failure")
 	}
