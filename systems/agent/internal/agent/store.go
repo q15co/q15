@@ -8,11 +8,13 @@ import (
 )
 
 // ConversationStore persists the canonical conversation.Message transcript
-// between replies.
+// between replies. A run reserves its durable turn sequence when it starts
+// and appends its turn at that sequence when it finishes.
 type ConversationStore interface {
 	ContextStore
 	LoadLastUserTimestamp(ctx context.Context) (time.Time, bool, error)
-	AppendTurn(ctx context.Context, messages []conversation.Message) error
+	ReserveTurnSeq(ctx context.Context) (int64, error)
+	AppendTurnAtSeq(ctx context.Context, seq int64, messages []conversation.Message) error
 }
 
 // CoreMemory holds the agent's always-injected identity, personality, and

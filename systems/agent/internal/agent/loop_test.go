@@ -84,7 +84,10 @@ type fakeConversationStore struct {
 	skillCatalog         SkillCatalog
 	lastUserTimestamp    time.Time
 	hasLastUserTimestamp bool
+	reservedSeq          int64
+	reserveErr           error
 	appendCalls          int
+	lastAppendSeq        int64
 	lastAppend           []conversation.Message
 }
 
@@ -97,12 +100,26 @@ func (f *fakeConversationStore) LoadRecentMessages(
 	return copyMessages(f.loadMessages), nil
 }
 
-func (f *fakeConversationStore) AppendTurn(
+func (f *fakeConversationStore) ReserveTurnSeq(ctx context.Context) (int64, error) {
+	_ = ctx
+	if f.reserveErr != nil {
+		return 0, f.reserveErr
+	}
+	seq := f.reservedSeq
+	if seq == 0 {
+		seq = 1
+	}
+	return seq, nil
+}
+
+func (f *fakeConversationStore) AppendTurnAtSeq(
 	ctx context.Context,
+	seq int64,
 	messages []conversation.Message,
 ) error {
 	_ = ctx
 	f.appendCalls++
+	f.lastAppendSeq = seq
 	f.lastAppend = copyMessages(messages)
 	for _, msg := range messages {
 		if timestamp, ok := conversation.UserMessageTimeLocal(msg); ok {
@@ -606,6 +623,86 @@ func TestLoopReply_EmitsRunFailedOnModelError(t *testing.T) {
 	}
 	if got[2].Err == nil {
 		t.Fatal("run failed error should not be nil")
+	}
+}
+
+func TestLoopReply_StampsReservedTranscriptSeqOnEveryEvent(t *testing.T) {
+	store := &fakeConversationStore{reservedSeq: 41}
+	model := &fakeModelClient{
+		results: []ModelClientResult{assistantResult("done")},
+	}
+
+	loop := NewLoop(model, nil, []string{"m1"}, DefaultSystemPrompt, store, 3)
+
+	var got []RunEvent
+	out, err := loop.Reply(
+		context.Background(),
+		userTextMessage("hello"),
+		RunObserverFunc(func(_ context.Context, event RunEvent) {
+			got = append(got, event)
+		}),
+	)
+	if err != nil {
+		t.Fatalf("Reply() error = %v", err)
+	}
+	if out.Text != "done" {
+		t.Fatalf("Reply().Text = %q, want done", out.Text)
+	}
+	if len(got) == 0 {
+		t.Fatal("observed no run events")
+	}
+	for i, event := range got {
+		if event.Seq != 41 {
+			t.Fatalf("event[%d].Seq = %d, want 41 (type %q)", i, event.Seq, event.Type)
+		}
+	}
+	if store.lastAppendSeq != 41 {
+		t.Fatalf("persisted turn seq = %d, want 41", store.lastAppendSeq)
+	}
+}
+
+func TestLoopReply_FailsRunWhenTranscriptSeqReserveFails(t *testing.T) {
+	store := &fakeConversationStore{reserveErr: errors.New("reserve boom")}
+	model := &fakeModelClient{
+		results: []ModelClientResult{assistantResult("done")},
+	}
+
+	loop := NewLoop(model, nil, []string{"m1"}, DefaultSystemPrompt, store, 3)
+
+	var got []RunEvent
+	_, err := loop.Reply(
+		context.Background(),
+		userTextMessage("hello"),
+		RunObserverFunc(func(_ context.Context, event RunEvent) {
+			got = append(got, event)
+		}),
+	)
+	if err == nil {
+		t.Fatal("Reply() error = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "reserve transcript turn sequence") {
+		t.Fatalf("Reply() error = %v, want reserve transcript turn sequence", err)
+	}
+
+	wantTypes := []RunEventType{
+		RunEventRunFailed,
+	}
+	if len(got) != len(wantTypes) {
+		t.Fatalf("event len = %d, want %d", len(got), len(wantTypes))
+	}
+	for i, want := range wantTypes {
+		if got[i].Type != want {
+			t.Fatalf("event[%d].Type = %q, want %q", i, got[i].Type, want)
+		}
+	}
+	if got[0].Err == nil {
+		t.Fatal("run failed error should not be nil")
+	}
+	if store.appendCalls != 0 {
+		t.Fatalf("AppendTurnAtSeq calls = %d, want 0", store.appendCalls)
+	}
+	if len(model.callMsgs) != 0 {
+		t.Fatalf("model calls = %d, want 0", len(model.callMsgs))
 	}
 }
 

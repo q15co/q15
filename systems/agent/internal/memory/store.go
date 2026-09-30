@@ -379,6 +379,54 @@ func (s *Store) AppendTurn(ctx context.Context, messages []conversation.Message)
 	return s.appendTurnLocked(ctx, withoutExternalEventMetadata(messages))
 }
 
+// ReserveTurnSeq reserves the next durable transcript turn sequence by
+// advancing head and returns the reserved number. It writes no turn file and
+// runs no git commit; the commit happens when the reserved turn is persisted
+// through AppendTurnAtSeq. A run that dies between reserve and persist leaves
+// head one ahead of the newest turn file, which is harmless because the
+// sequence is ordered rather than contiguous and syncHeadStateWithHistory
+// only ever repairs the other direction.
+func (s *Store) ReserveTurnSeq(ctx context.Context) (int64, error) {
+	_ = ctx
+
+	release := s.repository.Acquire()
+	defer release()
+
+	head, err := s.readHeadState()
+	if err != nil {
+		return 0, err
+	}
+	seq := head.LastSeq + 1
+	head.LastSeq = seq
+	head.UpdatedAt = time.Now().UTC()
+	if err := writeJSONFileAtomic(s.headStatePath(), head); err != nil {
+		return 0, fmt.Errorf("write memory head state: %w", err)
+	}
+	return seq, nil
+}
+
+// AppendTurnAtSeq persists one completed conversation turn at the reserved
+// transcript sequence and commits it to git. Head advances to seq only when
+// it is behind, so the method is safe to call standalone without
+// ReserveTurnSeq.
+func (s *Store) AppendTurnAtSeq(
+	ctx context.Context,
+	seq int64,
+	messages []conversation.Message,
+) error {
+	if seq <= 0 {
+		return fmt.Errorf("transcript turn sequence must be positive, got %d", seq)
+	}
+	if len(messages) == 0 {
+		return nil
+	}
+
+	release := s.repository.Acquire()
+	defer release()
+
+	return s.writeTurnLocked(ctx, seq, withoutExternalEventMetadata(messages))
+}
+
 // RecordDeliveredAssistantEvent idempotently appends an externally delivered
 // assistant event to the canonical transcript. Callers must invoke this only
 // after the delivery transport acknowledges the exact event text.
@@ -416,17 +464,34 @@ func (s *Store) appendTurnLocked(
 	ctx context.Context,
 	messages []conversation.Message,
 ) error {
+	head, err := s.readHeadState()
+	if err != nil {
+		return err
+	}
+	return s.writeTurnLocked(ctx, head.LastSeq+1, messages)
+}
+
+// writeTurnLocked is the single writer behind appendTurnLocked and
+// AppendTurnAtSeq: it records one completed turn at seq and commits it to
+// git. Head advances to seq only when it is behind, so a reserved head stays
+// put.
+func (s *Store) writeTurnLocked(
+	ctx context.Context,
+	seq int64,
+	messages []conversation.Message,
+) error {
 	messages = sanitizeStoredMessages(copyMessages(messages))
 	if len(messages) == 0 {
 		return nil
 	}
 
+	// Read head before writing the record, not after: a head read that failed
+	// once the record was on disk would leave an orphan turn file behind.
 	head, err := s.readHeadState()
 	if err != nil {
 		return err
 	}
 
-	seq := head.LastSeq + 1
 	now := time.Now().UTC()
 	record := turnRecord{
 		SchemaVersion: conversation.SchemaVersion,
@@ -441,7 +506,9 @@ func (s *Store) appendTurnLocked(
 		return fmt.Errorf("write turn record %q: %w", turnPath, err)
 	}
 
-	head.LastSeq = seq
+	if head.LastSeq < seq {
+		head.LastSeq = seq
+	}
 	head.UpdatedAt = now
 	if err := writeJSONFileAtomic(s.headStatePath(), head); err != nil {
 		return fmt.Errorf("write memory head state: %w", err)

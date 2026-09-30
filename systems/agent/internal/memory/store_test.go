@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -144,6 +145,169 @@ func TestStoreAppendTurnCommitsMemoryDomains(t *testing.T) {
 	}
 	if !reflect.DeepEqual(committer.lastPaths, memoryCommitPaths) {
 		t.Fatalf("AppendTurn() commit paths = %q, want %q", committer.lastPaths, memoryCommitPaths)
+	}
+}
+
+func TestStoreReserveTurnSeqAdvancesHeadWithoutTurnFile(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "memory")
+	committer := &fakeCommitter{}
+	store := newTestStore(root, committer)
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	commitsBefore := committer.commitCalls
+	seq, err := store.ReserveTurnSeq(context.Background())
+	if err != nil {
+		t.Fatalf("ReserveTurnSeq() error = %v", err)
+	}
+	if seq != 1 {
+		t.Fatalf("ReserveTurnSeq() = %d, want 1", seq)
+	}
+
+	head, err := store.readHeadState()
+	if err != nil {
+		t.Fatalf("readHeadState() error = %v", err)
+	}
+	if head.LastSeq != 1 {
+		t.Fatalf("head.LastSeq = %d, want 1", head.LastSeq)
+	}
+
+	entries, err := store.listTurnEntries()
+	if err != nil {
+		t.Fatalf("listTurnEntries() error = %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("turn entries len = %d, want 0 (reserve writes no turn file)", len(entries))
+	}
+	if committer.commitCalls != commitsBefore {
+		t.Fatalf(
+			"commit calls = %d, want %d (reserve runs no git commit)",
+			committer.commitCalls,
+			commitsBefore,
+		)
+	}
+}
+
+func TestStoreAppendTurnAtSeqWritesTheReservedSequence(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "memory")
+	store := newTestStore(root, &fakeCommitter{})
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	seq, err := store.ReserveTurnSeq(context.Background())
+	if err != nil {
+		t.Fatalf("ReserveTurnSeq() error = %v", err)
+	}
+	if err := store.AppendTurnAtSeq(context.Background(), seq, []conversation.Message{
+		conversation.UserMessage("reserved"),
+		conversation.AssistantMessage(conversation.Text("answer", "")),
+	}); err != nil {
+		t.Fatalf("AppendTurnAtSeq() error = %v", err)
+	}
+
+	entries, err := store.listTurnEntries()
+	if err != nil {
+		t.Fatalf("listTurnEntries() error = %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("turn entries len = %d, want 1", len(entries))
+	}
+	if got, want := filepath.Base(entries[0].Path), fmt.Sprintf("%020d.json", seq); got != want {
+		t.Fatalf("turn file name = %q, want %q", got, want)
+	}
+	turn, err := store.readTurn(entries[0].Path)
+	if err != nil {
+		t.Fatalf("readTurn() error = %v", err)
+	}
+	if turn.Seq != seq {
+		t.Fatalf("turn.Seq = %d, want %d", turn.Seq, seq)
+	}
+
+	head, err := store.readHeadState()
+	if err != nil {
+		t.Fatalf("readHeadState() error = %v", err)
+	}
+	if head.LastSeq != seq {
+		t.Fatalf("head.LastSeq = %d, want %d (persist leaves the reserved head)", head.LastSeq, seq)
+	}
+
+	if err := store.AppendTurn(context.Background(), []conversation.Message{
+		conversation.UserMessage("next"),
+	}); err != nil {
+		t.Fatalf("AppendTurn() error = %v", err)
+	}
+	head, err = store.readHeadState()
+	if err != nil {
+		t.Fatalf("readHeadState() error = %v", err)
+	}
+	if head.LastSeq != seq+1 {
+		t.Fatalf("head.LastSeq after AppendTurn = %d, want %d", head.LastSeq, seq+1)
+	}
+	entries, err = store.listTurnEntries()
+	if err != nil {
+		t.Fatalf("listTurnEntries() error = %v", err)
+	}
+	if len(entries) != 2 || entries[1].Seq != seq+1 {
+		t.Fatalf("turn entries = %#v, want seqs [%d %d]", entries, seq, seq+1)
+	}
+}
+
+func TestStoreAppendTurnAtSeqStandaloneAdvancesHead(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "memory")
+	store := newTestStore(root, &fakeCommitter{})
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	if err := store.AppendTurnAtSeq(context.Background(), 0, []conversation.Message{
+		conversation.UserMessage("bad"),
+	}); err == nil {
+		t.Fatal("AppendTurnAtSeq(seq=0) error = nil, want non-nil")
+	}
+	if err := store.AppendTurnAtSeq(context.Background(), -2, []conversation.Message{
+		conversation.UserMessage("bad"),
+	}); err == nil {
+		t.Fatal("AppendTurnAtSeq(seq=-2) error = nil, want non-nil")
+	}
+
+	if err := store.AppendTurnAtSeq(context.Background(), 5, []conversation.Message{
+		conversation.UserMessage("jump"),
+	}); err != nil {
+		t.Fatalf("AppendTurnAtSeq(5) error = %v", err)
+	}
+
+	head, err := store.readHeadState()
+	if err != nil {
+		t.Fatalf("readHeadState() error = %v", err)
+	}
+	if head.LastSeq != 5 {
+		t.Fatalf("head.LastSeq = %d, want 5", head.LastSeq)
+	}
+
+	entries, err := store.listTurnEntries()
+	if err != nil {
+		t.Fatalf("listTurnEntries() error = %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("turn entries len = %d, want 1", len(entries))
+	}
+	if got, want := filepath.Base(entries[0].Path), "00000000000000000005.json"; got != want {
+		t.Fatalf("turn file name = %q, want %q", got, want)
+	}
+
+	if err := store.AppendTurn(context.Background(), []conversation.Message{
+		conversation.UserMessage("next"),
+	}); err != nil {
+		t.Fatalf("AppendTurn() error = %v", err)
+	}
+	head, err = store.readHeadState()
+	if err != nil {
+		t.Fatalf("readHeadState() error = %v", err)
+	}
+	if head.LastSeq != 6 {
+		t.Fatalf("head.LastSeq after AppendTurn = %d, want 6", head.LastSeq)
 	}
 }
 
