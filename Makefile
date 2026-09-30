@@ -57,10 +57,10 @@ test:
 	cd $(EXEC_MOD_DIR) && CGO_ENABLED=0 $(GO) test ./...
 	cd $(PROXY_MOD_DIR) && CGO_ENABLED=0 $(GO) test ./...
 
-protos:
+protos: project-setup
 	buf generate
 
-protos-check:
+protos-check: project-setup
 	buf generate
 	git diff --exit-code -- libs/
 
