@@ -159,7 +159,8 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 		// runBot owns the bound listener from here on. Any startup step below
 		// can fail and return before the worker loop ever runs, and without
 		// this the socket and its file descriptor would stay bound until the
-		// process exits.
+		// process exits. It also runs on the normal shutdown path, where the
+		// listener is already closed; closing it again is safe.
 		defer bridgeServer.Close()
 	}
 	scheduleStore := schedulestore.New(filepath.Join(rt.StateLocalDir, "schedule"))
@@ -269,14 +270,16 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 		store.AddAppendObserver(cognitionController.NotifyStateChange)
 	}
 	return runRuntime(ctx, runtimeInputs{
-		messageBus:             messageBus,
-		telegramToken:          token,
-		mediaStore:             mediaStore,
-		telegramAllowedUserIDs: rt.TelegramAllowedUserIDs,
-		botAgent:               botAgent,
-		scheduleManager:        scheduleManager,
-		cognition:              cognitionController,
-		bridgeServer:           bridgeServer,
+		messageBus: messageBus,
+		telegram: telegramSettings{
+			token:          token,
+			mediaStore:     mediaStore,
+			allowedUserIDs: rt.TelegramAllowedUserIDs,
+		},
+		bridge:          bridgeServer,
+		botAgent:        botAgent,
+		scheduleManager: scheduleManager,
+		cognition:       cognitionController,
 	})
 }
 
@@ -303,32 +306,63 @@ func buildSkillManager(
 	return skillManager, settings
 }
 
-// runtimeInputs is everything runRuntime needs to bring one runtime up.
+// telegramSettings is everything the Telegram transport is built from, kept as
+// one value so that a transport's details travel together instead of sitting
+// loose beside the runtime's services.
+type telegramSettings struct {
+	token          string
+	mediaStore     q15media.Store
+	allowedUserIDs []int64
+}
+
+// newChannel builds the transport, binding its inbound publisher to ctx so a
+// canceled runtime stops publishing instead of queueing work for an agent that
+// is shutting down. An allow-list is always supplied: the adapter's
+// WithAllowedUserIDs option rejects an empty one rather than reading it as
+// "everyone".
+func (s telegramSettings) newChannel(
+	ctx context.Context,
+	messageBus *bus.Bus,
+) (*telegram.Channel, error) {
+	return telegram.NewChannel(s.token, func(msg telegram.IncomingMessage) {
+		err := messageBus.PublishInbound(ctx, telegramInboundMessage(msg))
+		if err != nil && !errors.Is(err, context.Canceled) {
+			fmt.Fprintf(os.Stderr, "publish inbound error: %v\n", err)
+		}
+	},
+		telegram.WithMediaStore(s.mediaStore),
+		telegram.WithAllowedUserIDs(s.allowedUserIDs),
+	)
+}
+
+// runtimeInputs is the runtime's parts: where its transports meet, what runs,
+// and what the transports are built from.
 //
 // It is a struct rather than a parameter list because that list grows with the
 // runtime: a field named at the call site cannot be passed in the wrong order,
 // and a field added for one transport does not renumber another's arguments.
 type runtimeInputs struct {
-	// messageBus carries inbound messages from every channel to the agent
+	// messageBus carries inbound messages from a transport to the agent
 	// worker, and outbound messages back out to the channel that produced
 	// them.
 	messageBus *bus.Bus
-	// telegramToken and mediaStore build the Telegram transport.
-	telegramToken string
-	mediaStore    q15media.Store
-	// telegramAllowedUserIDs is the senders the Telegram transport accepts.
-	// The transport rejects an empty list rather than accepting everyone.
-	telegramAllowedUserIDs []int64
-	// botAgent answers inbound messages, one run at a time.
-	botAgent agent.Agent
-	// scheduleManager runs scheduled jobs.
+
+	// The transports, which are not alternatives to each other and neither of
+	// which names the runtime.
+	//
+	// telegram is settings rather than a built channel because the adapter
+	// binds its inbound publisher to the runtime's context, which exists only
+	// inside runRuntime. bridge is built by runBot instead, because binding its
+	// listener can fail on startup and runBot owns closing it on the failure
+	// paths before the worker loop runs.
+	telegram telegramSettings
+	bridge   *bridge.Server
+
+	// The workers. The agent and the scheduler are required; cognition and the
+	// bridge listener join them when they are configured.
+	botAgent        agent.Agent
 	scheduleManager *schedule.Manager
-	// cognition is the background cognition controller, and is absent when a
-	// runtime registers no cognition jobs.
-	cognition *cognition.Controller
-	// bridgeServer serves the chat contract when a listen target is
-	// configured, and is nil when the bridge is disabled.
-	bridgeServer *bridge.Server
+	cognition       *cognition.Controller
 }
 
 // runRuntime starts the runtime's channels, marks it ready, and then runs its
@@ -356,15 +390,7 @@ func runRuntime(ctx context.Context, in runtimeInputs) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	channel, err := telegram.NewChannel(in.telegramToken, func(msg telegram.IncomingMessage) {
-		err := in.messageBus.PublishInbound(runCtx, telegramInboundMessage(msg))
-		if err != nil && !errors.Is(err, context.Canceled) {
-			fmt.Fprintf(os.Stderr, "publish inbound error: %v\n", err)
-		}
-	},
-		telegram.WithMediaStore(in.mediaStore),
-		telegram.WithAllowedUserIDs(in.telegramAllowedUserIDs),
-	)
+	channel, err := in.telegram.newChannel(runCtx, in.messageBus)
 	if err != nil {
 		return err
 	}
@@ -395,8 +421,8 @@ func runRuntime(ctx context.Context, in runtimeInputs) error {
 	if in.cognition != nil {
 		workers = append(workers, in.cognition.Run)
 	}
-	if in.bridgeServer != nil {
-		workers = append(workers, in.bridgeServer.Serve)
+	if in.bridge != nil {
+		workers = append(workers, in.bridge.Serve)
 	}
 
 	return runRuntimeWorkers(runCtx, cancel, runtimeWorkerShutdownTimeout, workers...)
