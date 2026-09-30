@@ -64,7 +64,7 @@ func (s *Service) ListTurns(
 // is in flight head_seq names a turn whose file does not exist yet.
 func (s *Service) GetRuntimeInfo(
 	ctx context.Context,
-	req *chatpb.GetRuntimeInfoRequest,
+	_ *chatpb.GetRuntimeInfoRequest,
 ) (*chatpb.GetRuntimeInfoResponse, error) {
 	headSeq, _, err := s.lister.LoadHead(ctx)
 	if err != nil {
