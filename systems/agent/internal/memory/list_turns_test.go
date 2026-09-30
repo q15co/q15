@@ -373,7 +373,7 @@ func TestStoreListTurnsIsReadOnly(t *testing.T) {
 func snapshotFixturePaths(t *testing.T, root string) []string {
 	t.Helper()
 	var paths []string
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(root, func(path string, _ fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
