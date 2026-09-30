@@ -45,9 +45,9 @@ type runtimeEnvironmentInfo struct {
 }
 
 // runBot is the composition root: it builds the selection store, model adapter,
-// tools, system prompt, memory store, cognition controller, and the Telegram
-// channel, then runs the interactive agent and cognition loop until the context
-// is canceled or a worker fails.
+// tools, system prompt, memory store, cognition controller and the chat bridge
+// listener, then hands the assembled runtime to runRuntime, which starts the
+// channels and runs the workers until the context is canceled or one fails.
 func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.Registry) error {
 	if err := clearRuntimeReady(runtimeReadyPath); err != nil {
 		return fmt.Errorf("clear stale runtime readiness: %w", err)
@@ -268,17 +268,16 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 	if cognitionController != nil {
 		store.AddAppendObserver(cognitionController.NotifyStateChange)
 	}
-	return runTelegramLoop(
-		ctx,
-		messageBus,
-		token,
-		mediaStore,
-		rt,
-		botAgent,
-		cognitionController,
-		scheduleManager,
-		bridgeServer,
-	)
+	return runRuntime(ctx, runtimeInputs{
+		messageBus:             messageBus,
+		telegramToken:          token,
+		mediaStore:             mediaStore,
+		telegramAllowedUserIDs: rt.TelegramAllowedUserIDs,
+		botAgent:               botAgent,
+		scheduleManager:        scheduleManager,
+		cognition:              cognitionController,
+		bridgeServer:           bridgeServer,
+	})
 }
 
 // buildSkillManager constructs the skill manager and the shared file-operation
@@ -304,37 +303,67 @@ func buildSkillManager(
 	return skillManager, settings
 }
 
-// runTelegramLoop starts the channel and the chat bridge listener, then runs
-// inbound replies, outbound delivery, scheduled jobs, and cognition until the
-// context is canceled or a worker fails.
-func runTelegramLoop(
-	ctx context.Context,
-	messageBus *bus.Bus,
-	token string,
-	mediaStore q15media.Store,
-	rt config.AgentRuntime,
-	botAgent agent.Agent,
-	cognitionController *cognition.Controller,
-	scheduleManager *schedule.Manager,
-	bridgeServer *bridge.Server,
-) error {
-	if messageBus == nil {
+// runtimeInputs is everything runRuntime needs to bring one runtime up.
+//
+// It is a struct rather than a parameter list because that list grows with the
+// runtime: a field named at the call site cannot be passed in the wrong order,
+// and a field added for one transport does not renumber another's arguments.
+type runtimeInputs struct {
+	// messageBus carries inbound messages from every channel to the agent
+	// worker, and outbound messages back out to the channel that produced
+	// them.
+	messageBus *bus.Bus
+	// telegramToken and mediaStore build the Telegram transport.
+	telegramToken string
+	mediaStore    q15media.Store
+	// telegramAllowedUserIDs is the senders the Telegram transport accepts.
+	// The transport rejects an empty list rather than accepting everyone.
+	telegramAllowedUserIDs []int64
+	// botAgent answers inbound messages, one run at a time.
+	botAgent agent.Agent
+	// scheduleManager runs scheduled jobs.
+	scheduleManager *schedule.Manager
+	// cognition is the background cognition controller, and is absent when a
+	// runtime registers no cognition jobs.
+	cognition *cognition.Controller
+	// bridgeServer serves the chat contract when a listen target is
+	// configured, and is nil when the bridge is disabled.
+	bridgeServer *bridge.Server
+}
+
+// runRuntime starts the runtime's channels, marks it ready, and then runs its
+// workers until the context is canceled or a worker fails.
+//
+// The transports are not alternatives to each other. The Telegram adapter
+// long-polls and publishes what it receives onto the runtime's bus, which is
+// how anything reaches the agent; the chat bridge is a server, serving the
+// frozen chat contract on its own listener and answering its clients directly,
+// with nothing Telegram-shaped about it. This function owns both, so it is
+// named for the runtime it runs rather than for either transport, and the
+// bridge listener is one of the workers below rather than a sibling of this
+// call. With no listen target configured the bridge is nil, and the runtime
+// starts the Telegram channel alone.
+func runRuntime(ctx context.Context, in runtimeInputs) error {
+	if in.messageBus == nil {
 		return errors.New("message bus is required")
 	}
-	if scheduleManager == nil {
+	if in.botAgent == nil {
+		return errors.New("bot agent is required")
+	}
+	if in.scheduleManager == nil {
 		return errors.New("schedule manager is required")
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	channel, err := telegram.NewChannel(token, func(msg telegram.IncomingMessage) {
-		err := messageBus.PublishInbound(runCtx, telegramInboundMessage(msg))
+	channel, err := telegram.NewChannel(in.telegramToken, func(msg telegram.IncomingMessage) {
+		err := in.messageBus.PublishInbound(runCtx, telegramInboundMessage(msg))
 		if err != nil && !errors.Is(err, context.Canceled) {
 			fmt.Fprintf(os.Stderr, "publish inbound error: %v\n", err)
 		}
 	},
-		telegram.WithMediaStore(mediaStore),
-		telegram.WithAllowedUserIDs(rt.TelegramAllowedUserIDs),
+		telegram.WithMediaStore(in.mediaStore),
+		telegram.WithAllowedUserIDs(in.telegramAllowedUserIDs),
 	)
 	if err != nil {
 		return err
@@ -347,23 +376,27 @@ func runTelegramLoop(
 	}
 	log.Printf("q15: runtime event=ready")
 
+	// The worker set: one loops over inbound messages and runs the agent, one
+	// delivers outbound messages, one runs scheduled jobs. Cognition and the
+	// bridge listener join them when they are configured. runRuntimeWorkers
+	// returns on the first failure or on cancellation, then joins the rest.
 	telegramEndpoint := telegram.NewAgentEndpoint(channel)
 	workers := []runtimeWorker{
 		func(workerCtx context.Context) error {
-			return runAgentWorker(workerCtx, messageBus, botAgent, telegramEndpoint)
+			return runAgentWorker(workerCtx, in.messageBus, in.botAgent, telegramEndpoint)
 		},
 		func(workerCtx context.Context) error {
-			return runOutboundWorker(workerCtx, messageBus, telegramEndpoint)
+			return runOutboundWorker(workerCtx, in.messageBus, telegramEndpoint)
 		},
 		func(workerCtx context.Context) error {
-			return scheduleManager.Run(workerCtx)
+			return in.scheduleManager.Run(workerCtx)
 		},
 	}
-	if cognitionController != nil {
-		workers = append(workers, cognitionController.Run)
+	if in.cognition != nil {
+		workers = append(workers, in.cognition.Run)
 	}
-	if bridgeServer != nil {
-		workers = append(workers, bridgeServer.Serve)
+	if in.bridgeServer != nil {
+		workers = append(workers, in.bridgeServer.Serve)
 	}
 
 	return runRuntimeWorkers(runCtx, cancel, runtimeWorkerShutdownTimeout, workers...)

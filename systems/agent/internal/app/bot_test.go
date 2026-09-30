@@ -43,6 +43,30 @@ func TestRunAgentWorkerCancelReturnsNil(_ *testing.T) {
 	_ = runAgentWorker(ctx, bus.New(1), nil, nil)
 }
 
+// TestRunRuntimeRequiresItsParts pins the guards runRuntime applies before it
+// starts anything: a runtime with no bus to report into, no agent to run, or
+// no scheduler to run refuses to come up rather than starting half of itself.
+// The runtime's parts are keyed at the call site, so omitting one is otherwise
+// silent until it fails in a goroutine.
+func TestRunRuntimeRequiresItsParts(t *testing.T) {
+	err := runRuntime(context.Background(), runtimeInputs{})
+	if err == nil || !strings.Contains(err.Error(), "message bus") {
+		t.Fatalf("runRuntime() error = %v, want a missing message bus", err)
+	}
+
+	parts := runtimeInputs{messageBus: bus.New(1)}
+	err = runRuntime(context.Background(), parts)
+	if err == nil || !strings.Contains(err.Error(), "bot agent") {
+		t.Fatalf("runRuntime() error = %v, want a missing bot agent", err)
+	}
+
+	parts.botAgent = &fakeObservedAgent{}
+	err = runRuntime(context.Background(), parts)
+	if err == nil || !strings.Contains(err.Error(), "schedule manager") {
+		t.Fatalf("runRuntime() error = %v, want a missing schedule manager", err)
+	}
+}
+
 // TestNewBridgeServerDisabledWithoutTarget pins the bind-failure decision: an
 // unset listen target disables the listener instead of refusing to boot, so
 // deployments run unchanged until the socket volume exists.
