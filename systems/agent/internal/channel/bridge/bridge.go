@@ -34,8 +34,8 @@ type TurnLister interface {
 var _ TurnLister = (*memory.Store)(nil)
 
 // Service is the chat-contract server adapter. ListTurns, GetRuntimeInfo,
-// OpenSession, SendMessage, Abort and WatchEvents are implemented; Deliver
-// stays unimplemented until its layer arrives.
+// OpenSession, SendMessage, Abort, WatchEvents and Deliver are implemented,
+// which is every rpc the frozen contract declares.
 type Service struct {
 	chatpb.UnimplementedChatServiceServer
 
