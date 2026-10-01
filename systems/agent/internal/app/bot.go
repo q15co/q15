@@ -209,16 +209,9 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 		DeliveryRecorder: &scheduledDeliveryRecorder{
 			store: store,
 		},
-		MaxJobs:  rt.Tools.Schedule.MaxJobs,
-		MaxTurns: rt.Tools.Schedule.MaxRunTurns,
-		// The owner allow-list is the Telegram one because Telegram is the
-		// only transport here that carries user identities to check. With
-		// Telegram unconfigured it is empty, which the manager reads as no
-		// restriction; that is not an escalation, because whoever reaches the
-		// bridge can already run the agent and every tool it holds. A
-		// per-channel owner policy is the change to make if a second transport
-		// ever brings identities of its own.
-		AllowedUserIDs: rt.TelegramAllowedUserIDs,
+		MaxJobs:        rt.Tools.Schedule.MaxJobs,
+		MaxTurns:       rt.Tools.Schedule.MaxRunTurns,
+		AuthorizeOwner: scheduleOwnerAuthorizer(rt.TelegramAllowedUserIDs),
 		DefaultModel: func() schedule.ModelTarget {
 			provider, ref := selection.Current()
 			return schedule.ModelTarget{Provider: provider, Ref: ref}

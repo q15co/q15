@@ -150,7 +150,12 @@ func newToolTestManagerWithStore(
 		MaxJobs:          16,
 		MaxTurns:         maxTurns,
 		RunTimeout:       time.Minute,
-		AllowedUserIDs:   []int64{42},
+		AuthorizeOwner: func(owner scheduled.Owner) error {
+			if owner.UserID != "42" {
+				return fmt.Errorf("user %q is not allowed to manage scheduled jobs", owner.UserID)
+			}
+			return nil
+		},
 		DefaultModel: func() scheduled.ModelTarget {
 			return scheduled.ModelTarget{Provider: "default", Ref: "model"}
 		},

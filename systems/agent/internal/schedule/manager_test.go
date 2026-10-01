@@ -3,6 +3,7 @@ package schedule
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"slices"
 	"strings"
@@ -183,7 +184,12 @@ func managerConfigForTest(
 		MaxJobs:          64,
 		MaxTurns:         16,
 		RunTimeout:       time.Second,
-		AllowedUserIDs:   []int64{42},
+		AuthorizeOwner: func(owner Owner) error {
+			if owner.UserID != "42" {
+				return fmt.Errorf("user %q is not allowed to manage scheduled jobs", owner.UserID)
+			}
+			return nil
+		},
 		DefaultModel: func() ModelTarget {
 			return testDefaultModel
 		},
@@ -277,6 +283,41 @@ func TestManagerCreateValidatesOwnerLimitsAndModel(t *testing.T) {
 		Model:  ModelTarget{Ref: testDefaultModel.Ref},
 	}); err == nil || !strings.Contains(err.Error(), "model provider is required") {
 		t.Fatalf("Create() bare-model-ref error = %v", err)
+	}
+}
+
+func TestManagerAuthorizesCanonicalOwner(t *testing.T) {
+	denied := errors.New("owner denied by transport policy")
+	var got Owner
+	manager := newManagerForTest(
+		t,
+		newManagerTestStore(),
+		managerTestExecutor{},
+		&managerTestPublisher{},
+		func(cfg *Config) {
+			cfg.AuthorizeOwner = func(owner Owner) error {
+				got = owner
+				return denied
+			}
+		},
+	)
+	_, err := manager.List(
+		context.Background(),
+		Owner{Channel: " bridge ", ChatID: " default ", UserID: " owner "},
+	)
+	if !errors.Is(err, denied) {
+		t.Fatalf("List error = %v, want the policy's denial", err)
+	}
+	want := Owner{Channel: "bridge", ChatID: "default", UserID: "owner"}
+	if got != want {
+		t.Fatalf("policy owner = %+v, want %+v", got, want)
+	}
+	got = Owner{}
+	if _, err := manager.List(context.Background(), Owner{Channel: "bridge", ChatID: "default"}); err == nil {
+		t.Fatal("owner without identity was accepted")
+	}
+	if got != (Owner{}) {
+		t.Fatal("malformed owner reached the authorization policy")
 	}
 }
 

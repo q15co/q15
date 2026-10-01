@@ -20,6 +20,11 @@ import (
 // so the bridge has exactly one default conversation.
 const defaultBridgeChatID = "default"
 
+// bridgeOwnerID names this single-operator transport's stable owner. Socket
+// access supplies authority; this identifier keeps job ownership stable across
+// reconnects and process restarts without impersonating a Telegram user.
+const bridgeOwnerID = "owner"
+
 // InboundPublisher is the send side of the runtime message bus. *bus.Bus
 // implements it; the interface keeps the bridge to that one method instead of
 // the whole bus.
@@ -61,13 +66,14 @@ func (e *AgentEndpoint) Channel() string {
 
 // OpenSession resolves the logical session for one inbound bus message and
 // marks it running for the run the worker starts next. SendMessage publishes
-// with the session id as the chat id, so msg.ChatID is the join key. A message
+// with a transient session id separate from the conversation, so msg.SessionID
+// is the join key. A message
 // for an unknown session resolves to a nil session, which the worker skips.
 func (e *AgentEndpoint) OpenSession(
 	_ context.Context,
 	msg bus.InboundMessage,
 ) (channelport.AgentSession, error) {
-	session := e.lookupSession(strings.TrimSpace(msg.ChatID))
+	session := e.lookupSession(strings.TrimSpace(msg.SessionID))
 	if session == nil {
 		return nil, nil
 	}
@@ -123,8 +129,8 @@ func (e *AgentEndpoint) SessionSnapshot(sessionID string) *chatpb.Session {
 	return session.snapshot()
 }
 
-// publishSend publishes one user message for the logical session. The session
-// id travels as the chat id, the key OpenSession resolves runs by.
+// publishSend keeps the stable owner and conversation separate from the
+// transient session used to route the worker's reply stream.
 func (e *AgentEndpoint) publishSend(
 	ctx context.Context,
 	session *logicalSession,
@@ -133,7 +139,9 @@ func (e *AgentEndpoint) publishSend(
 ) error {
 	return e.publisher.PublishInbound(ctx, bus.InboundMessage{
 		Channel:   bus.ChannelBridge,
-		ChatID:    session.id,
+		ChatID:    session.chatID,
+		SessionID: session.id,
+		UserID:    bridgeOwnerID,
 		MessageID: clientMsgID,
 		SentAt:    time.Now(),
 		Text:      text,
@@ -155,9 +163,8 @@ type logicalSession struct {
 	// session's Finish or Abort.
 	running bool
 	// cancel is the in-flight run's cancel func, recorded by the run session's
-	// SetCancel. The Service's Abort rpc invokes it. It stays recorded after
-	// the run ends because cancel funcs are idempotent, and the next run
-	// overwrites it before its turn can be aborted.
+	// SetCancel. The Service's Abort rpc invokes it. Finished runs clear it,
+	// so a Stop during the next run's startup is remembered for SetCancel.
 	cancel context.CancelFunc
 	// abortRequested records an Abort that arrived between the worker marking
 	// the session running and handing over the run's cancel func. setCancel
@@ -193,6 +200,7 @@ func (s *logicalSession) startRun() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.running = true
+	s.cancel = nil
 	s.abortRequested = false
 }
 
@@ -241,6 +249,8 @@ func (s *logicalSession) finish(result agent.ReplyResult) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.running = false
+	s.cancel = nil
+	s.abortRequested = false
 	s.reply = result
 }
 
@@ -249,6 +259,8 @@ func (s *logicalSession) abortRun() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.running = false
+	s.cancel = nil
+	s.abortRequested = false
 }
 
 // runSession is the channel-port session for one run of a logical bridge

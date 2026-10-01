@@ -141,9 +141,9 @@ func TestServiceSendMessagePublishesInboundOnTheBus(t *testing.T) {
 		t.Fatalf("published messages = %d, want 1", len(messages))
 	}
 	published := messages[0]
-	// The session id must be the chat id: it is the key the endpoint's
-	// OpenSession resolves runs by.
-	if published.Channel != bus.ChannelBridge || published.ChatID != sessionID {
+	// Session routing is separate from the stable conversation and owner.
+	if published.Channel != bus.ChannelBridge || published.ChatID != "conv-7" ||
+		published.SessionID != sessionID {
 		t.Fatalf(
 			"published = (channel %q chat %q), want bridge/%s",
 			published.Channel,
@@ -158,8 +158,8 @@ func TestServiceSendMessagePublishesInboundOnTheBus(t *testing.T) {
 			published.Text,
 		)
 	}
-	if published.UserID != "" {
-		t.Fatalf("published user id = %q, want empty", published.UserID)
+	if published.UserID != bridgeOwnerID {
+		t.Fatalf("published user id = %q, want the stable bridge owner", published.UserID)
 	}
 	if published.SentAt.IsZero() {
 		t.Fatal("published SentAt = zero, want the send's timestamp")
@@ -267,9 +267,9 @@ func TestBridgeRunSessionLifecycleThroughSeam(t *testing.T) {
 	run, err := endpoint.OpenSession(
 		context.Background(),
 		bus.InboundMessage{
-			Channel: bus.ChannelBridge,
-			ChatID:  logical.id,
-			Text:    "hello",
+			Channel:   bus.ChannelBridge,
+			SessionID: logical.id,
+			Text:      "hello",
 		},
 	)
 	if err != nil {
@@ -307,7 +307,7 @@ func TestBridgeRunSessionLifecycleThroughSeam(t *testing.T) {
 	// The next run goes through the same lifecycle and may abort instead.
 	aborted, err := endpoint.OpenSession(
 		context.Background(),
-		bus.InboundMessage{Channel: bus.ChannelBridge, ChatID: logical.id, Text: "again"},
+		bus.InboundMessage{Channel: bus.ChannelBridge, SessionID: logical.id, Text: "again"},
 	)
 	if err != nil {
 		t.Fatalf("OpenSession() second error = %v", err)
@@ -328,7 +328,7 @@ func TestAgentEndpointSkipsUnknownSessionMessage(t *testing.T) {
 
 	run, err := endpoint.OpenSession(
 		context.Background(),
-		bus.InboundMessage{Channel: bus.ChannelBridge, ChatID: "sess-404", Text: "hello"},
+		bus.InboundMessage{Channel: bus.ChannelBridge, SessionID: "sess-404", Text: "hello"},
 	)
 	if err != nil {
 		t.Fatalf("OpenSession() error = %v", err)
@@ -495,9 +495,9 @@ func TestServiceAbortBeforeSetCancelIsNotLost(t *testing.T) {
 	sessionID := opened.GetSession().GetSessionId()
 
 	run, err := endpoint.OpenSession(ctx, bus.InboundMessage{
-		Channel: bus.ChannelBridge,
-		ChatID:  sessionID,
-		Text:    "hello",
+		Channel:   bus.ChannelBridge,
+		SessionID: sessionID,
+		Text:      "hello",
 	})
 	if err != nil {
 		t.Fatalf("endpoint OpenSession() error = %v", err)
@@ -516,5 +516,60 @@ func TestServiceAbortBeforeSetCancelIsNotLost(t *testing.T) {
 	cancellable.SetCancel(func() { canceled = true })
 	if !canceled {
 		t.Fatal("SetCancel did not honour the Abort that arrived before it")
+	}
+}
+
+func TestServiceAbortBeforeSecondRunSetCancelIsNotLost(t *testing.T) {
+	ctx := context.Background()
+	service, endpoint := newTestEndpoint(&fakePublisher{})
+	logical := endpoint.newSession("conv-7")
+	first, err := endpoint.OpenSession(ctx, bus.InboundMessage{SessionID: logical.id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, firstCancel := context.WithCancel(ctx)
+	first.(channelport.CancellableAgentSession).SetCancel(firstCancel)
+	first.Finish(ctx, agent.ReplyResult{Text: "first done"})
+	firstCancel()
+	second, err := endpoint.OpenSession(ctx, bus.InboundMessage{SessionID: logical.id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Abort(ctx, &chatpb.AbortRequest{SessionId: logical.id}); err != nil {
+		t.Fatal(err)
+	}
+	secondCtx, secondCancel := context.WithCancel(ctx)
+	defer secondCancel()
+	second.(channelport.CancellableAgentSession).SetCancel(secondCancel)
+	if secondCtx.Err() != context.Canceled {
+		t.Fatal("the acknowledged Stop did not cancel the second run")
+	}
+}
+
+func TestBridgeOwnerAndConversationSurviveNewSessions(t *testing.T) {
+	ctx := context.Background()
+	publisher := &fakePublisher{}
+	service, _ := newTestEndpoint(publisher)
+	for range 2 {
+		opened, err := service.OpenSession(ctx, &chatpb.OpenSessionRequest{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := service.SendMessage(ctx, &chatpb.SendMessageRequest{SessionId: opened.GetSession().GetSessionId(), Text: "hello"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	messages := publisher.published()
+	if messages[0].SessionID == messages[1].SessionID {
+		t.Fatal("new sessions reused a routing identity")
+	}
+	for _, msg := range messages {
+		if msg.ChatID != defaultBridgeChatID || msg.UserID != bridgeOwnerID {
+			t.Fatalf(
+				"conversation/owner = %q/%q, want stable default/owner",
+				msg.ChatID,
+				msg.UserID,
+			)
+		}
 	}
 }
