@@ -1,3 +1,5 @@
+import { clsx } from "clsx";
+import styles from "./app.module.css";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import {
   Sparkles,
@@ -50,29 +52,32 @@ export function App({ store, preview = false }: { store: ChatStore; preview?: bo
     .reverse();
   const connected = state.connection === "connected";
   return (
-    <div className="app-shell">
-      <a className="skip-link" href="#message-input">
+    <div className={styles.appShell}>
+      <a className={styles.skipLink} href="#message-input">
         Skip to message input
       </a>
       {menu && (
         <button
-          className="sidebar-backdrop"
+          className={styles.sidebarBackdrop}
           aria-label="Close navigation"
           onClick={() => setMenu(false)}
         />
       )}
-      <aside className={`sidebar ${menu ? "sidebar-open" : ""}`} aria-label="Chat navigation">
-        <a className="brand" href="/">
-          <span className="brand-icon">
+      <aside
+        className={clsx(styles.sidebar, menu && styles.sidebarOpen)}
+        aria-label="Chat navigation"
+      >
+        <a className={styles.brand} href="/">
+          <span className={styles.brandIcon}>
             <Sparkles size={19} />
           </span>
           <span>
-            q15<span className="brand-dot">.</span>
+            q15<span className={styles.brandDot}>.</span>
           </span>
-          <span className="brand-caption">YOUR OWN SPACE</span>
+          <span className={styles.brandCaption}>YOUR OWN SPACE</span>
         </a>
         <Button
-          className="mobile-close"
+          className={styles.mobileClose}
           variant="ghost"
           size="icon"
           aria-label="Close navigation"
@@ -80,20 +85,24 @@ export function App({ store, preview = false }: { store: ChatStore; preview?: bo
         >
           <X />
         </Button>
-        <div className="sidebar-section">
-          <span className="sidebar-label">WORKSPACE</span>
-          <a className="nav-item nav-active" href="#message-input" onClick={() => setMenu(false)}>
+        <div className={styles.sidebarSection}>
+          <span className={styles.sidebarLabel}>WORKSPACE</span>
+          <a
+            className={styles.navItem + " " + styles.navActive}
+            href="#message-input"
+            onClick={() => setMenu(false)}
+          >
             <MessageSquare size={17} />
             <span>Your conversation</span>
-            <span className="nav-dot" />
+            <span className={styles.navDot} />
           </a>
         </div>
         {recent.length > 0 && (
-          <div className="sidebar-section recent-section">
-            <span className="sidebar-label">RECENT THOUGHTS</span>
+          <div className={styles.sidebarSection + " " + styles.recentSection}>
+            <span className={styles.sidebarLabel}>RECENT THOUGHTS</span>
             {recent.map((m) => (
               <a
-                className="recent-link"
+                className={styles.recentLink}
                 key={m.key}
                 href={`#message-${m.key}`}
                 onClick={() => setMenu(false)}
@@ -107,20 +116,20 @@ export function App({ store, preview = false }: { store: ChatStore; preview?: bo
             ))}
           </div>
         )}
-        <div className="sidebar-note">
-          <span className="note-stars">✦</span>
+        <div className={styles.sidebarNote}>
+          <span className={styles.noteStars}>✦</span>
           <p>
             Room to think.
             <br />
             Space to make things happen.
           </p>
         </div>
-        <div className="sidebar-footer">
-          <div className="owner-avatar">Y</div>
+        <div className={styles.sidebarFooter}>
+          <div className={styles.ownerAvatar}>Y</div>
           <div>
             <strong>Your personal agent</strong>
             <span>
-              <i className={`status-dot ${connected ? "" : "disconnected"}`} />
+              <i className={clsx(styles.statusDot, !connected && styles.disconnected)} />
               {preview ? "Offline preview" : connected ? "Connected" : "Reconnecting…"}
             </span>
           </div>
@@ -134,11 +143,11 @@ export function App({ store, preview = false }: { store: ChatStore; preview?: bo
           </Button>
         </div>
       </aside>
-      <main className="main-panel">
-        <header className="topbar">
-          <div className="topbar-title">
+      <main className={styles.mainPanel}>
+        <header className={styles.topbar}>
+          <div className={styles.topbarTitle}>
             <Button
-              className="mobile-menu"
+              className={styles.mobileMenu}
               variant="ghost"
               size="icon"
               aria-label="Open navigation"
@@ -146,15 +155,15 @@ export function App({ store, preview = false }: { store: ChatStore; preview?: bo
             >
               <Menu />
             </Button>
-            <span className="topbar-icon">
+            <span className={styles.topbarIcon}>
               <MessageSquare size={17} />
             </span>
             <span>Chat</span>
-            <span className="topbar-divider">/</span>
-            <span className="topbar-subtitle">Your conversation</span>
+            <span className={styles.topbarDivider}>/</span>
+            <span className={styles.topbarSubtitle}>Your conversation</span>
           </div>
-          <div className="topbar-right">
-            {preview && <span className="preview-badge">Preview</span>}
+          <div className={styles.topbarRight}>
+            {preview && <span className={styles.previewBadge}>Preview</span>}
             {install && (
               <Button
                 variant="ghost"
@@ -167,19 +176,19 @@ export function App({ store, preview = false }: { store: ChatStore; preview?: bo
                 Install
               </Button>
             )}
-            <span className="private-badge">
+            <span className={styles.privateBadge}>
               <span />
               Just for you
             </span>
           </div>
         </header>
-        <div className="conversation-title">
+        <div className={styles.conversationTitle}>
           <div>
-            <span className="eyebrow">THINK OUT LOUD</span>
+            <span className={styles.eyebrow}>THINK OUT LOUD</span>
             <h2>A conversation with q15</h2>
           </div>
-          <span className="conversation-status">
-            <span className={`status-dot ${connected ? "" : "disconnected"}`} />
+          <span className={styles.conversationStatus}>
+            <span className={clsx(styles.statusDot, !connected && styles.disconnected)} />
             {state.active !== null
               ? "Working on it"
               : connected
@@ -188,7 +197,7 @@ export function App({ store, preview = false }: { store: ChatStore; preview?: bo
           </span>
         </div>
         {!connected && (
-          <output className="connection-banner">
+          <output className={styles.connectionBanner}>
             <WifiOff size={15} />
             {state.connection === "offline"
               ? "Disconnected. Refresh to reconnect."
@@ -197,7 +206,7 @@ export function App({ store, preview = false }: { store: ChatStore; preview?: bo
         )}
         {(state.notice || state.error) && (
           <div
-            className={`notice-banner ${state.error ? "error-banner" : ""}`}
+            className={clsx(styles.noticeBanner, state.error && styles.errorBanner)}
             role={state.error ? "alert" : "status"}
           >
             <CircleAlert size={15} />

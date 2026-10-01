@@ -1,10 +1,9 @@
 import react from "@vitejs/plugin-react";
-import tailwindcss from "@tailwindcss/vite";
 import { defineConfig } from "vite-plus";
 import { shell } from "./build/shell";
 
 export default defineConfig({
-  plugins: [react(), tailwindcss(), shell()],
+  plugins: [react(), shell()],
   build: { outDir: "../internal/assets/dist", emptyOutDir: true },
   server: {
     port: 5173,

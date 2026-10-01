@@ -92,6 +92,40 @@ describe("chat state", () => {
     expect(store.send("draft")).toBe(false);
     expect(store.getSnapshot().error).toBe("offline");
   });
+  it("retains completed tool activity across model loops while replacing retries of the current loop", () => {
+    const { store } = setup();
+    feed(store, streamed.slice(0, 8));
+    const completed = store
+      .getSnapshot()
+      .messages[0]!.parts.map((p) =>
+        p.part_type === "text" ? { ...p, disposition: "commentary" } : p,
+      );
+    const msg = { turn: "42", ordinal: -1 };
+    event(store, "snapshot", { msg, seq: "10", kind: "model_start", text: "", loop_turn: 2 });
+    expect(store.getSnapshot().messages[0]?.parts).toEqual(completed);
+    event(store, "delta", { msg, seq: "11", kind: "text", text: "partial attempt" });
+    event(store, "snapshot", { msg, seq: "12", kind: "model_start", text: "", loop_turn: 2 });
+    expect(store.getSnapshot().messages[0]?.parts).toEqual(completed);
+    event(store, "snapshot", {
+      msg,
+      seq: "13",
+      kind: "text",
+      text: "final answer",
+      reasoning: "new reasoning",
+    });
+    expect(store.getSnapshot().messages[0]?.parts.slice(0, completed.length)).toEqual(completed);
+    event(store, "msg.final", { msg, status: "completed", full_text: "final answer" });
+    expect(
+      store.getSnapshot().messages[0]?.parts.filter((p) => p.part_type === "tool_call"),
+    ).toHaveLength(1);
+    expect(
+      store.getSnapshot().messages[0]?.parts.filter((p) => p.part_type === "tool_result"),
+    ).toHaveLength(1);
+    expect(store.getSnapshot().messages[0]?.parts.at(-1)).toMatchObject({
+      text: "final answer",
+      disposition: "final",
+    });
+  });
   it("marks unacknowledged sends uncertain when disconnected", () => {
     const { store, transport } = setup();
     store.start();

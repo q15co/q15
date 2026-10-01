@@ -31,6 +31,7 @@ function turn(seq: number) {
 async function backend(
   page: BrowserPage,
   history: Page = { turns: [], head_seq: "0", has_more: false },
+  onSend?: (send: (value: Frame) => void) => void,
 ) {
   const requests: Frame[] = [];
   await page.route("**/api/turns?**", (route) => {
@@ -76,6 +77,7 @@ async function backend(
           socket.send(
             JSON.stringify(frame("turn.start", { turn: "31", msg: { turn: "31", ordinal: -1 } })),
           );
+        if (!queued) onSend?.((value) => socket.send(JSON.stringify(value)));
       }
       if (request.type === "msg.abort")
         socket.send(
@@ -176,4 +178,208 @@ test("a message link in the initial page waits for history to load", async ({ pa
   });
   await page.goto("/#message-30:1");
   await expect(page.locator('[data-message-key="30:1"]')).toBeInViewport();
+});
+
+function toolHistory(): Page {
+  return {
+    head_seq: "71",
+    has_more: false,
+    turns: [
+      {
+        seq: "70",
+        created_at: "2026-10-01T12:00:00Z",
+        messages: [
+          {
+            ordinal: 0,
+            role: "user",
+            parts: [
+              { ordinal: 0, part_type: "text", text: "Check the workspace and search the web." },
+            ],
+          },
+          {
+            ordinal: 1,
+            role: "assistant",
+            parts: [
+              {
+                ordinal: 0,
+                part_type: "text",
+                disposition: "commentary",
+                text: "I’ll check both.",
+              },
+              {
+                ordinal: 1,
+                part_type: "tool_call",
+                tool_call: { id: "command", name: "exec", arguments: '{"command":"pwd"}' },
+              },
+            ],
+          },
+          {
+            ordinal: 2,
+            role: "tool",
+            parts: [
+              {
+                ordinal: 0,
+                part_type: "tool_result",
+                tool_call_id: "command",
+                content: "/workspace",
+              },
+            ],
+          },
+          {
+            ordinal: 3,
+            role: "assistant",
+            parts: [
+              {
+                ordinal: 0,
+                part_type: "tool_call",
+                tool_call: {
+                  id: "search",
+                  name: "web_search",
+                  arguments:
+                    '{"query":"a long search query that should truncate gracefully on small screens without overflowing the conversation"}',
+                },
+              },
+            ],
+          },
+          {
+            ordinal: 4,
+            role: "tool",
+            parts: [
+              {
+                ordinal: 0,
+                part_type: "tool_result",
+                tool_call_id: "search",
+                content: "Search unavailable",
+                is_error: true,
+              },
+            ],
+          },
+          {
+            ordinal: 5,
+            role: "assistant",
+            parts: [
+              {
+                ordinal: 0,
+                part_type: "text",
+                disposition: "final",
+                text: "The workspace is **ready**. The search failed.",
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+}
+
+test("tool work is compact, paired, expandable, and separate from the final answer", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await backend(page, toolHistory());
+  await page.goto("/");
+  const activity = page.locator("[data-agent-activity]");
+  await expect(page.getByText("Used 2 tools")).toBeVisible();
+  await expect(page.getByText("ready", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("Copy response")).toHaveCount(1);
+  await expect(page.getByText("/workspace", { exact: true })).toBeHidden();
+  await page.screenshot({ path: "test-results/activity-collapsed.png" });
+  await page.getByText("Used 2 tools").click();
+  await expect(page.getByText("I’ll check both.")).toBeVisible();
+  await expect(activity.locator("[data-tool-call-id]")).toHaveCount(2);
+  await page.getByText("Ran command", { exact: true }).click();
+  await expect(page.getByText("/workspace", { exact: true })).toBeVisible();
+  await page.getByText("Searched the web", { exact: true }).click();
+  await expect(page.getByText("Search unavailable", { exact: true })).toBeVisible();
+  await expect(page.getByText("1 error", { exact: true })).toBeVisible();
+  for (let ordinal = 0; ordinal < 6; ordinal++)
+    await expect(page.locator(`[id="message-70:${ordinal}"]`)).toHaveCount(1);
+  await page.screenshot({ path: "test-results/activity-desktop.png" });
+  await page.getByRole("button", { name: /Switch to .* theme/ }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "latte");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.getByRole("complementary", { name: "Chat navigation" })).not.toBeInViewport();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: "test-results/activity-mobile.png" });
+});
+
+test("deep links reveal completed tool outputs inside both disclosures", async ({ page }) => {
+  await backend(page, toolHistory());
+  await page.goto("/#message-70:2");
+  await expect(page.locator('[id="message-70:2"]')).toBeInViewport();
+  await expect(page.getByText("/workspace", { exact: true })).toBeVisible();
+  await expect(page.locator("[data-agent-activity]")).toHaveAttribute("open", "");
+  await expect(page.locator('[data-tool-call-id="command"]')).toHaveAttribute("open", "");
+});
+
+test("live tool rows update from running to completed and collapse after the answer", async ({
+  page,
+}) => {
+  let deliver: ((value: Frame) => void) | undefined;
+  await backend(page, undefined, (send) => {
+    deliver = send;
+  });
+  await page.goto("/");
+  await page.getByLabel("Message q15").fill("Check the workspace");
+  await page.getByLabel("Send message", { exact: true }).click();
+  await expect(page.getByLabel("Stop response")).toBeVisible();
+  const call = { id: "live-command", name: "exec", arguments: '{"command":"pwd"}' };
+  deliver!(
+    frame("snapshot", {
+      msg: { turn: "31", ordinal: -1 },
+      kind: "model_start",
+      text: "",
+      loop_turn: 1,
+      seq: "0",
+    }),
+  );
+  deliver!(
+    frame("delta", {
+      msg: { turn: "31", ordinal: -1 },
+      kind: "tool_call",
+      text: "",
+      call,
+      seq: "1",
+    }),
+  );
+  await expect(page.getByText("Running command", { exact: true })).toBeVisible();
+  const promptTop = await page
+    .getByText("Check the workspace", { exact: true })
+    .evaluate((node) => node.getBoundingClientRect().top);
+  const workTop = await page
+    .locator("[data-agent-activity]")
+    .evaluate((node) => node.getBoundingClientRect().top);
+  expect(promptTop).toBeLessThan(workTop);
+  await expect(page.locator("[data-agent-activity]")).toHaveAttribute("open", "");
+  deliver!(
+    frame("delta", {
+      msg: { turn: "31", ordinal: -1 },
+      kind: "tool_result",
+      text: "/workspace",
+      call,
+      seq: "2",
+      is_error: false,
+    }),
+  );
+  await expect(page.getByText("Completed", { exact: true })).toBeVisible();
+  deliver!(
+    frame("snapshot", {
+      msg: { turn: "31", ordinal: -1 },
+      kind: "model_start",
+      text: "",
+      loop_turn: 2,
+      seq: "3",
+    }),
+  );
+  await expect(page.getByText("Completed", { exact: true })).toBeVisible();
+  deliver!(
+    frame("msg.final", {
+      msg: { turn: "31", ordinal: -1 },
+      status: "completed",
+      full_text: "The workspace is ready.",
+    }),
+  );
+  await expect(page.getByText("The workspace is ready.", { exact: true })).toBeVisible();
+  await expect(page.locator("[data-agent-activity]")).not.toHaveAttribute("open");
+  await expect(page.getByLabel("Copy response")).toHaveCount(1);
 });

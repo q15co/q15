@@ -1,3 +1,4 @@
+import styles from "./composer.module.css";
 import { ArrowUp, Square, CornerDownLeft } from "lucide-react";
 import { useRef, useState } from "react";
 import type { ChatStore, ChatState } from "../chat-store";
@@ -16,9 +17,9 @@ export function Composer({ store, state }: { store: ChatStore; state: ChatState 
     state.active !== null ||
     state.pending.some((p) => p.state === "sending" || p.state === "accepted");
   return (
-    <div className="composer-area">
+    <div className={styles.composerArea}>
       <form
-        className="composer"
+        className={styles.composer}
         onSubmit={(event) => {
           event.preventDefault();
           submit();
@@ -46,11 +47,11 @@ export function Composer({ store, state }: { store: ChatStore; state: ChatState 
             }
           }}
         />
-        <div className="composer-toolbar">
-          <span className="composer-hint">
+        <div className={styles.composerToolbar}>
+          <span className={styles.composerHint}>
             {busy ? "Your next message joins the queue" : "A little curiosity goes a long way"}
           </span>
-          <div className="composer-buttons">
+          <div className={styles.composerButtons}>
             {busy && (
               <Button
                 variant="outline"
@@ -74,9 +75,9 @@ export function Composer({ store, state }: { store: ChatStore; state: ChatState 
           </div>
         </div>
       </form>
-      <div className="composer-footer">
+      <div className={styles.composerFooter}>
         <span>q15 · your personal agent</span>
-        <span className="keyboard-hint">
+        <span className={styles.keyboardHint}>
           <CornerDownLeft size={12} /> send<span>Shift + Enter for a new line</span>
         </span>
       </div>

@@ -1,10 +1,18 @@
+import styles from "./transcript.module.css";
 import { ArrowDown, History, Sparkles, ArrowUpRight } from "lucide-react";
-import { useLayoutEffect, useRef, useState } from "react";
+import { Fragment, useLayoutEffect, useRef, useState } from "react";
 import type { ChatState, ChatStore } from "../chat-store";
-import { MessageView } from "./message";
+import { PendingMessage } from "./message";
+import { TurnView } from "./activity";
 import { Button } from "./ui/button";
 
 export function Transcript({ state, store }: { state: ChatState; store: ChatStore }) {
+  const turns = new Map<string, typeof state.messages>();
+  for (const message of state.messages) {
+    const messages = turns.get(message.turn) ?? [];
+    messages.push(message);
+    turns.set(message.turn, messages);
+  }
   const scroller = useRef<HTMLDivElement>(null);
   const anchor = useRef<{
     key: string;
@@ -18,7 +26,9 @@ export function Transcript({ state, store }: { state: ChatState; store: ChatStor
     const node = scroller.current;
     if (!node || !state.hasMore || state.loadingHistory || jumping) return;
     const first = [...node.querySelectorAll<HTMLElement>("[data-message-key]")].find(
-      (item) => item.getBoundingClientRect().bottom >= node.getBoundingClientRect().top,
+      (item) =>
+        item.getClientRects().length > 0 &&
+        item.getBoundingClientRect().bottom >= node.getBoundingClientRect().top,
     );
     if (first)
       anchor.current = {
@@ -54,9 +64,12 @@ export function Transcript({ state, store }: { state: ChatState; store: ChatStor
       const key = await store.findMessage(match[1]!, Number(match[2]));
       setJumping(false);
       if (key)
-        requestAnimationFrame(() =>
-          document.getElementById(`message-${key}`)?.scrollIntoView({ block: "center" }),
-        );
+        requestAnimationFrame(() => {
+          const target = document.getElementById(`message-${key}`);
+          for (let parent = target; parent; parent = parent.parentElement)
+            if (parent instanceof HTMLDetailsElement) parent.open = true;
+          target?.scrollIntoView({ block: "center" });
+        });
     };
     void jump();
     window.addEventListener("hashchange", jump);
@@ -64,9 +77,9 @@ export function Transcript({ state, store }: { state: ChatState; store: ChatStor
   }, [store, state.hasMore, state.loadingHistory]);
 
   return (
-    <div className="transcript-container">
+    <div className={styles.transcriptContainer}>
       <div
-        className="transcript"
+        className={styles.transcript}
         ref={scroller}
         aria-label="Conversation"
         onScroll={() => {
@@ -76,9 +89,9 @@ export function Transcript({ state, store }: { state: ChatState; store: ChatStor
           if (node.scrollTop < 80 && !following.current) loadOlder();
         }}
       >
-        <div className="transcript-inner">
+        <div className={styles.transcriptInner}>
           {state.hasMore && (
-            <div className="history-control">
+            <div className={styles.historyControl}>
               <Button variant="ghost" size="sm" disabled={state.loadingHistory} onClick={loadOlder}>
                 <History />
                 {state.loadingHistory ? "Loading earlier messages…" : "Earlier messages"}
@@ -86,11 +99,11 @@ export function Transcript({ state, store }: { state: ChatState; store: ChatStor
             </div>
           )}
           {state.messages.length === 0 && state.pending.length === 0 && (
-            <div className="welcome">
-              <div className="welcome-mark">
+            <div className={styles.welcome}>
+              <div className={styles.welcomeMark}>
                 <Sparkles />
               </div>
-              <span className="eyebrow">A SPACE FOR YOUR IDEAS</span>
+              <span className={styles.eyebrow}>A SPACE FOR YOUR IDEAS</span>
               <h1>
                 Where shall we
                 <br />
@@ -101,7 +114,7 @@ export function Transcript({ state, store }: { state: ChatState; store: ChatStor
                 <br />
                 Bring it here. We'll work it out together.
               </p>
-              <div className="suggestions">
+              <div className={styles.suggestions}>
                 {[
                   "Help me think through an idea",
                   "Explore something new",
@@ -119,39 +132,30 @@ export function Transcript({ state, store }: { state: ChatState; store: ChatStor
               </div>
             </div>
           )}
-          {state.messages.map((message) => (
-            <MessageView key={message.key} message={message} />
+          {[...turns].map(([turn, messages]) => (
+            <Fragment key={turn}>
+              {state.pending
+                .filter((p) => p.turn === turn)
+                .map((p) => (
+                  <PendingMessage key={p.id} pending={p} />
+                ))}
+              <TurnView
+                messages={messages}
+                working={state.active === turn || messages.some((m) => m.status === "streaming")}
+              />
+            </Fragment>
           ))}
-          {state.pending.map((p) => (
-            <article className="message user-message pending-message" key={p.id}>
-              <div className="message-heading">
-                <span className="avatar user-avatar">You</span>
-                <span className="message-author">You</span>
-                <span className={`pending-label ${p.state === "failed" ? "text-destructive" : ""}`}>
-                  {p.state === "uncertain"
-                    ? "Delivery uncertain · check history before sending again"
-                    : p.state === "accepted" || p.state === "running" || p.state === "finished"
-                      ? "Sent"
-                      : p.state === "queued"
-                        ? "Queued"
-                        : p.state === "stopped"
-                          ? "Stopped"
-                          : p.state === "failed"
-                            ? p.turn
-                              ? "Response failed"
-                              : "Not accepted"
-                            : "Sending…"}
-                </span>
-              </div>
-              <p className="message-body whitespace-pre-wrap">{p.text}</p>
-            </article>
-          ))}
+          {state.pending
+            .filter((p) => !p.turn || !turns.has(p.turn))
+            .map((p) => (
+              <PendingMessage key={p.id} pending={p} />
+            ))}
           {jumping && <output>Finding your message…</output>}
         </div>
       </div>
       {showLatest && (
         <Button
-          className="latest-button"
+          className={styles.latestButton}
           variant="outline"
           size="sm"
           onClick={() => {

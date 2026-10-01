@@ -1,0 +1,65 @@
+.partCard {
+  margin: 8px 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--sidebar) 45%, transparent);
+  overflow: hidden;
+}
+.partCard summary {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 12px;
+  color: var(--muted-foreground);
+  font-size: 10px;
+  list-style: none;
+}
+.partCard summary::-webkit-details-marker {
+  display: none;
+}
+.partCard summary > svg:last-child {
+  margin-left: auto;
+}
+.partCard[open] summary > svg:last-child {
+  transform: rotate(180deg);
+}
+.partLabel {
+  margin-left: auto;
+  font-size: 8px;
+}
+.partCard .partContent {
+  border-top: 1px solid var(--border);
+  padding: 12px 14px;
+  margin: 0;
+  white-space: pre-wrap;
+  max-height: 300px;
+  overflow: auto;
+  font-size: 11px;
+  line-height: 1.8;
+}
+.reasoning summary {
+  color: var(--primary);
+}
+.reasoning .partContent {
+  color: var(--muted-foreground);
+}
+.partError summary {
+  color: var(--destructive);
+}
+.mediaReference {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  border: 1px solid var(--border);
+  padding: 12px;
+  border-radius: 8px;
+}
+.mediaReference strong {
+  display: block;
+  font-size: 11px;
+}
+.mediaReference small {
+  display: block;
+  font-size: 10px;
+  color: var(--muted-foreground);
+}

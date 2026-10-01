@@ -1,0 +1,346 @@
+.appShell {
+  display: flex;
+  height: 100dvh;
+  min-height: 420px;
+  overflow: hidden;
+}
+.sidebar {
+  width: 248px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  background: var(--sidebar);
+  border-right: 1px solid var(--border);
+  padding: 33px 20px 18px;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 28px;
+  font-weight: 700;
+  font-variation-settings: "CASL" 0.7;
+  flex-wrap: wrap;
+  margin: 0 12px 46px;
+}
+.brandIcon {
+  width: 33px;
+  height: 33px;
+  color: var(--primary);
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--primary) 20%, transparent);
+  border-radius: 11px;
+}
+.brandDot {
+  color: var(--primary);
+}
+.brandCaption {
+  flex-basis: 100%;
+  font-size: 8px;
+  letter-spacing: 0.2em;
+  color: var(--muted-foreground);
+  font-weight: 500;
+  margin-left: 43px;
+  margin-top: -5px;
+}
+.sidebarLabel,
+.eyebrow {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.13em;
+  color: var(--muted-foreground);
+}
+.sidebarLabel {
+  display: block;
+  padding: 0 12px;
+  margin-bottom: 14px;
+}
+.sidebarSection {
+  margin-bottom: 34px;
+}
+.navItem {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  border-radius: 10px;
+  padding: 13px 12px;
+  font-size: 11px;
+  font-weight: 500;
+}
+.navActive {
+  background: color-mix(in srgb, var(--primary) 9%, transparent);
+  color: var(--primary);
+  border: 1px solid color-mix(in srgb, var(--primary) 13%, transparent);
+}
+.navDot {
+  margin-left: auto;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--primary);
+}
+.recentLink {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  font-size: 10px;
+  color: var(--muted-foreground);
+  overflow: hidden;
+  white-space: nowrap;
+}
+.recentLink:hover {
+  color: var(--foreground);
+  background: var(--surface);
+  border-radius: 8px;
+}
+.recentLink svg {
+  flex: none;
+}
+.sidebarNote {
+  margin: auto 12px 32px;
+  color: var(--muted-foreground);
+  font-size: 10px;
+  line-height: 1.9;
+}
+.noteStars {
+  color: var(--primary);
+  font-size: 21px;
+  display: block;
+  margin-bottom: 9px;
+}
+.sidebarFooter {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-top: 17px;
+  border-top: 1px solid var(--border);
+}
+.ownerAvatar {
+  background: var(--surface);
+  color: var(--primary);
+  border-radius: 10px;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+}
+.sidebarFooter strong {
+  display: block;
+  font-size: 9px;
+  font-weight: 500;
+  margin-bottom: 5px;
+}
+.sidebarFooter span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 8px;
+  color: var(--muted-foreground);
+}
+.sidebarFooter button {
+  margin-left: auto;
+  width: 28px;
+}
+.statusDot {
+  background: var(--green);
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  display: inline-block;
+  flex: none;
+}
+.statusDot.disconnected {
+  background: var(--peach);
+}
+.mainPanel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+.topbar {
+  height: 73px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 38px;
+  flex: none;
+}
+.topbarTitle,
+.topbarRight {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 11px;
+}
+.topbarIcon {
+  color: var(--muted-foreground);
+}
+.topbarDivider {
+  color: var(--muted);
+}
+.topbarSubtitle {
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+.privateBadge {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted-foreground);
+  font-size: 9px;
+}
+.privateBadge span {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--primary);
+}
+.previewBadge {
+  color: var(--peach);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 3px 7px;
+  font-size: 9px;
+}
+.conversationTitle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 26px 38px 22px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+}
+.conversationTitle h2 {
+  font-size: 15px;
+  font-weight: 500;
+  margin: 7px 0 0;
+}
+.conversationStatus {
+  font-size: 9px;
+  color: var(--muted-foreground);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.connectionBanner,
+.noticeBanner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 38px;
+  background: color-mix(in srgb, var(--peach) 7%, transparent);
+  color: var(--peach);
+  font-size: 11px;
+}
+.noticeBanner {
+  color: var(--muted-foreground);
+  background: var(--sidebar);
+}
+.noticeBanner button {
+  margin-left: auto;
+}
+.errorBanner {
+  color: var(--destructive);
+}
+.skipLink {
+  position: fixed;
+  left: 20px;
+  top: -60px;
+  z-index: 100;
+  padding: 10px 15px;
+  background: var(--primary);
+  color: var(--primary-foreground);
+  border-radius: 8px;
+}
+.skipLink:focus {
+  top: 20px;
+}
+.mobileMenu,
+.mobileClose,
+.sidebarBackdrop {
+  display: none;
+}
+@media (max-width: 900px) {
+  .sidebar {
+    width: 205px;
+    padding-inline: 14px;
+  }
+  .brandCaption {
+    font-size: 7px;
+  }
+  .sidebarFooter strong {
+    font-size: 8px;
+  }
+  .topbar,
+  .conversationTitle {
+    padding-inline: 24px;
+  }
+  .conversationStatus {
+    display: none;
+  }
+}
+@media (max-width: 640px) {
+  .sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 30;
+    width: 260px;
+    transform: translateX(-100%);
+    transition: transform 180ms;
+  }
+  .sidebarOpen {
+    transform: translateX(0);
+  }
+  .sidebarBackdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 20;
+    border: 0;
+    background: #11111ba0;
+  }
+  .mobileClose {
+    display: inline-flex;
+    position: absolute;
+    top: 31px;
+    right: 12px;
+  }
+  .mobileMenu {
+    display: inline-flex;
+  }
+  .topbar {
+    height: 62px;
+    padding-inline: 12px;
+  }
+  .topbarTitle {
+    gap: 10px;
+  }
+  .topbarIcon,
+  .topbarSubtitle,
+  .topbarDivider {
+    display: none;
+  }
+  .privateBadge {
+    font-size: 8px;
+  }
+  .conversationTitle {
+    padding: 18px 22px;
+  }
+  .conversationTitle h2 {
+    font-size: 13px;
+  }
+  .connectionBanner,
+  .noticeBanner {
+    padding-inline: 22px;
+  }
+  .recentSection {
+    overflow-y: auto;
+    max-height: 35vh;
+  }
+}

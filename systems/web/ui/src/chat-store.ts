@@ -9,6 +9,8 @@ export interface ChatMessage extends Message {
   ts: string;
   status?: string;
   model?: string;
+  loopTurn?: number;
+  loopStart?: number;
 }
 export interface Pending {
   id: string;
@@ -223,8 +225,15 @@ export class ChatStore {
         const previous = this.state.messages.find((m) => m.key === key);
         const canonical = p.message;
         const parts = canonical?.parts ?? [
-          ...(previous?.parts ?? []).filter((part) => part.part_type !== "text"),
-          { ordinal: previous?.parts.length ?? 0, part_type: "text", text: p.full_text },
+          ...(previous?.parts ?? []).filter(
+            (part) => part.part_type !== "text" || part.disposition === "commentary",
+          ),
+          {
+            ordinal: previous?.parts.length ?? 0,
+            part_type: "text",
+            disposition: "final",
+            text: p.full_text,
+          },
         ];
         const message: ChatMessage = {
           ...(canonical ?? { ordinal: -1, role: "assistant", parts }),
@@ -306,9 +315,20 @@ export class ChatStore {
     const key = `${p.msg.turn}:-1`;
     const previous = this.state.messages.find((m) => m.key === key);
     let parts: Part[] = [...(previous?.parts ?? [])];
-    if (value.type === "snapshot" && p.kind === "model_start") parts = [];
-    else if (p.kind === "text" || p.kind === "reasoning") {
-      const index = parts.findLastIndex((part) => part.part_type === p.kind);
+    let loopStart = previous?.loopStart ?? 0;
+    let loopTurn = previous?.loopTurn;
+    if (value.type === "snapshot" && p.kind === "model_start") {
+      if (p.loop_turn !== undefined && loopTurn !== undefined && p.loop_turn > loopTurn) {
+        // A new model loop follows completed tool work. Keep that activity;
+        // only a retry of the same loop replaces the current model attempt.
+        parts = parts.map((part) =>
+          part.part_type === "text" ? { ...part, disposition: "commentary" } : part,
+        );
+        loopStart = parts.length;
+      } else parts = parts.slice(0, loopStart);
+      loopTurn = p.loop_turn;
+    } else if (p.kind === "text" || p.kind === "reasoning") {
+      const index = parts.findLastIndex((part, i) => i >= loopStart && part.part_type === p.kind);
       const entry = {
         ordinal: index < 0 ? parts.length : parts[index]!.ordinal,
         part_type: p.kind,
@@ -320,8 +340,13 @@ export class ChatStore {
       if (index < 0) parts.push(entry);
       else parts[index] = entry;
       if (p.reasoning !== undefined) {
-        parts = parts.filter((part) => part.part_type !== "reasoning");
-        if (p.reasoning) parts.unshift({ ordinal: -1, part_type: "reasoning", text: p.reasoning });
+        const completed = parts.slice(0, loopStart);
+        const current = parts.slice(loopStart).filter((part) => part.part_type !== "reasoning");
+        parts = [
+          ...completed,
+          ...(p.reasoning ? [{ ordinal: -1, part_type: "reasoning", text: p.reasoning }] : []),
+          ...current,
+        ];
       }
     } else if (p.kind === "tool_call")
       parts.push({ ordinal: parts.length, part_type: "tool_call", tool_call: p.call });
@@ -345,6 +370,8 @@ export class ChatStore {
         ts: value.ts,
         status: "streaming",
         model: p.model_ref ?? previous?.model,
+        loopStart,
+        loopTurn,
       },
     ]);
     this.update({ active: p.msg.turn });

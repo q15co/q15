@@ -60,11 +60,14 @@ uses `ready.cursor` after replay has been consumed, independently of live event 
 the allocated `head_seq`. An uncertain send is shown explicitly and never resubmitted automatically.
 Retention gaps refresh completed history and send `sync` from a readable turn.
 
-Text uses safe Markdown; reasoning and tool calls/results have disclosures. Media parts show their
-references until attachment transfer lands. Unknown parts show their type and raw data. Sending
-during an active run uses the server queue; Stop targets the active run, including its startup.
-History pages backwards automatically near the top, preserves the visible message, and supports
-`#message-<turn>:<ordinal>` links. Recent user messages in the sidebar use those links.
+Text uses safe Markdown. Each turn groups commentary, reasoning and paired tool calls/results in an
+activity disclosure above the final answer. Active work expands automatically; completed work
+collapses. Tool rows summarize the action and status, with full inputs and outputs one click away.
+Missing results and unmatched errors remain visible. Message links open containing disclosures.
+Media parts show their references until attachment transfer lands. Unknown parts show their type and
+raw data. Sending during an active run uses the server queue; Stop targets the active run, including
+its startup. History pages backwards automatically near the top, preserves the visible message, and
+supports `#message-<turn>:<ordinal>` links. Recent user messages in the sidebar use those links.
 
 The manifest is `/manifest.webmanifest` and the service worker is `/sw.js`. The build emits an
 explicit shell precache manifest and a content-derived cache name. The worker only handles exact
@@ -72,6 +75,12 @@ shell paths, ignores queries, and never handles API, socket or media requests. E
 their active worker until they close, avoiding a forced reload during a response.
 
 ## Appearance
+
+Component styles live in colocated `*.module.css` files and use Vite's native CSS Modules support.
+`src/styles.css` contains only shared theme tokens, base typography, browser resets and
+accessibility rules. Buttons use the same module approach; there is no separate utility styling
+framework. Keep responsive rules beside the component they affect and use the shared tokens for both
+themes.
 
 The official [Catppuccin palette](https://github.com/catppuccin/palette) supplies Mocha and Latte
 theme tokens. The app follows the system's initial preference and remembers the user's choice.
