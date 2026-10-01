@@ -236,12 +236,22 @@ export class ChatStore {
         };
         this.mergeMessages([message]);
         if (!canonical) {
+          const starting =
+            this.state.active === "0"
+              ? this.state.pending.find(
+                  (item) => !item.turn && (item.state === "sending" || item.state === "accepted"),
+                )
+              : undefined;
           this.update({
-            active: this.state.active === p.msg.turn ? null : this.state.active,
+            active:
+              this.state.active === p.msg.turn || this.state.active === "0"
+                ? null
+                : this.state.active,
             pending: this.state.pending.map((item) =>
-              item.turn === p.msg.turn
+              item.turn === p.msg.turn || item === starting
                 ? {
                     ...item,
+                    turn: p.msg.turn,
                     state:
                       p.status === "aborted"
                         ? "stopped"

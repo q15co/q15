@@ -101,6 +101,21 @@ describe("chat state", () => {
     expect(store.getSnapshot().pending[0]?.state).toBe("uncertain");
     store.stop();
   });
+  it("settles a Stop during startup even when there is no turn.start event", () => {
+    const { store, transport } = setup();
+    store.send("cancel startup");
+    event(store, "msg.status", {
+      turn: "0",
+      state: "accepted",
+      queued: false,
+      client_msg_id: store.getSnapshot().pending[0]!.id,
+    });
+    store.abort();
+    expect(transport.abort).toHaveBeenCalledWith("0");
+    feed(store, [aborted]);
+    expect(store.getSnapshot().active).toBeNull();
+    expect(store.getSnapshot().pending[0]?.state).toBe("stopped");
+  });
   it("settles an aborted local send even when the backend never persists its turn", async () => {
     const { store } = setup();
     store.send("cancel me");
