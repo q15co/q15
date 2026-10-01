@@ -285,8 +285,8 @@ func TestBridgeRunSessionLifecycleThroughSeam(t *testing.T) {
 		t.Fatalf("state after OpenSession = %v, want SESSION_STATE_RUNNING", got)
 	}
 
-	// The event stream is the next layer: the no-op must at least leave the
-	// session untouched.
+	// The event stream lives on this layer now: OnRunEvent coalesces and
+	// appends, and must not disturb the session's run state.
 	run.OnRunEvent(context.Background(), agent.RunEvent{Type: agent.RunEventRunStarted})
 	if got := endpoint.SessionSnapshot(logical.id).GetState(); got != chatpb.SessionState_SESSION_STATE_RUNNING {
 		t.Fatalf("state after OnRunEvent = %v, want SESSION_STATE_RUNNING", got)
@@ -299,7 +299,8 @@ func TestBridgeRunSessionLifecycleThroughSeam(t *testing.T) {
 	if got := endpoint.SessionSnapshot(logical.id).GetState(); got != chatpb.SessionState_SESSION_STATE_IDLE {
 		t.Fatalf("state after Finish = %v, want SESSION_STATE_IDLE", got)
 	}
-	// reply recording is this layer's test seam; the next layer publishes it.
+	// reply recording is this layer's test seam; Deliver publishes nothing
+	// yet, while the stream ends in the run's terminal event.
 	if logical.reply.Text != "done" {
 		t.Fatalf("recorded reply = %q, want done", logical.reply.Text)
 	}
@@ -372,8 +373,7 @@ func TestServiceAbortCancelsRecordedRun(t *testing.T) {
 	canceled := 0
 	cancelable.SetCancel(func() { canceled++ })
 
-	// The request names an unrelated turn_seq; in this layer a session has at
-	// most one run, so it must not matter.
+	run.OnRunEvent(ctx, agent.RunEvent{Type: agent.RunEventRunStarted, Seq: 9})
 	aborted, err := service.Abort(ctx, &chatpb.AbortRequest{SessionId: sessionID, TurnSeq: 9})
 	if err != nil {
 		t.Fatalf("Abort() error = %v", err)
@@ -572,4 +572,70 @@ func TestBridgeOwnerAndConversationSurviveNewSessions(t *testing.T) {
 			)
 		}
 	}
+}
+
+func TestServiceAbortTargetsOnlyTheNamedActiveRun(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		requested int64
+		wantAbort bool
+	}{
+		{name: "stale", requested: 41},
+		{name: "future", requested: 43},
+		{name: "active", requested: 42, wantAbort: true},
+		{name: "current", wantAbort: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			service, endpoint := newTestEndpoint(&fakePublisher{})
+			logical := endpoint.newSession("")
+			first := startTestRun(t, endpoint, logical.id)
+			first.OnRunEvent(
+				context.Background(),
+				agent.RunEvent{Type: agent.RunEventRunStarted, Seq: 41},
+			)
+			first.Finish(context.Background(), agent.ReplyResult{})
+
+			second := startTestRun(t, endpoint, logical.id)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			second.SetCancel(cancel)
+			second.OnRunEvent(ctx, agent.RunEvent{Type: agent.RunEventRunStarted, Seq: 42})
+			if _, err := service.Abort(ctx, &chatpb.AbortRequest{
+				SessionId: logical.id, TurnSeq: tc.requested,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if got := ctx.Err() != nil; got != tc.wantAbort {
+				t.Fatalf(
+					"Abort(%d) canceled active turn 42 = %v, want %v",
+					tc.requested,
+					got,
+					tc.wantAbort,
+				)
+			}
+			second.Abort(context.Background(), "test cleanup")
+		})
+	}
+}
+
+func TestServiceStaleAbortDoesNotLatchDuringNextRunStartup(t *testing.T) {
+	service, endpoint := newTestEndpoint(&fakePublisher{})
+	logical := endpoint.newSession("")
+	first := startTestRun(t, endpoint, logical.id)
+	first.OnRunEvent(context.Background(), agent.RunEvent{Type: agent.RunEventRunStarted, Seq: 41})
+	first.Abort(context.Background(), "first stopped")
+
+	second := startTestRun(t, endpoint, logical.id)
+	if _, err := service.Abort(context.Background(), &chatpb.AbortRequest{
+		SessionId: logical.id, TurnSeq: 41,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	second.SetCancel(cancel)
+	if ctx.Err() != nil {
+		t.Fatal("stale Stop was remembered for the next run's cancel function")
+	}
+	second.Abort(context.Background(), "test cleanup")
 }

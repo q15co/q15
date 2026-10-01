@@ -67,8 +67,8 @@ func (e *AgentEndpoint) Channel() string {
 // OpenSession resolves the logical session for one inbound bus message and
 // marks it running for the run the worker starts next. SendMessage publishes
 // with a transient session id separate from the conversation, so msg.SessionID
-// is the join key. A message
-// for an unknown session resolves to a nil session, which the worker skips.
+// is the join key. A message for an unknown session resolves to a nil session,
+// which the worker skips.
 func (e *AgentEndpoint) OpenSession(
 	_ context.Context,
 	msg bus.InboundMessage,
@@ -102,7 +102,17 @@ func (e *AgentEndpoint) newSession(chatID string) *logicalSession {
 		id:       fmt.Sprintf("sess-%d", e.nextID.Add(1)),
 		chatID:   chatID,
 		openedAt: time.Now().UTC(),
+		events:   newSessionEventLog(),
 	}
+	// The log opens on the session opening, so the first entry a WatchEvents
+	// client replays is the session it subscribed to and the event indexes
+	// start at 1 there.
+	session.appendEvent(&chatpb.SessionEvent{
+		OccurredAt: timestamppb.New(session.openedAt),
+		Event: &chatpb.SessionEvent_SessionOpened{SessionOpened: &chatpb.SessionOpened{
+			SessionId: session.id,
+		}},
+	})
 	e.sessionsMu.Lock()
 	defer e.sessionsMu.Unlock()
 	e.sessions[session.id] = session
@@ -157,11 +167,18 @@ type logicalSession struct {
 	id       string
 	chatID   string
 	openedAt time.Time
+	// events is the session's run event stream, the log WatchEvents serves
+	// and every run session appends to. It is allocated with the session and
+	// its first entry is the session opening below.
+	events *sessionEventLog
 
 	mu sync.Mutex
 	// running is true between the worker's OpenSession call and the run
 	// session's Finish or Abort.
 	running bool
+	// turnSeq is the active run's durable sequence, learned from its observer.
+	// It shares the cancellation lock so a stale Stop cannot reach a later run.
+	turnSeq int64
 	// cancel is the in-flight run's cancel func, recorded by the run session's
 	// SetCancel. The Service's Abort rpc invokes it. Finished runs clear it,
 	// so a Stop during the next run's startup is remembered for SetCancel.
@@ -170,8 +187,9 @@ type logicalSession struct {
 	// the session running and handing over the run's cancel func. setCancel
 	// honours it, so a client's stop is not dropped in that window.
 	abortRequested bool
-	// reply records the finished run's reply. Nothing publishes it in this
-	// layer; the event stream is the next layer's job.
+	// reply records the finished run's reply. Nothing publishes it beyond
+	// the terminal event the stream carries; Deliver is a later layer, and
+	// recording is this layer's test seam.
 	reply agent.ReplyResult
 }
 
@@ -200,6 +218,7 @@ func (s *logicalSession) startRun() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.running = true
+	s.turnSeq = 0
 	s.cancel = nil
 	s.abortRequested = false
 }
@@ -225,12 +244,22 @@ func (s *logicalSession) setCancel(cancel context.CancelFunc) {
 	}
 }
 
-// cancelRun cancels the in-flight run, if any. With nothing in flight it is a
-// no-op.
-func (s *logicalSession) cancelRun() {
+// setTurnSeq records the active run's sequence once its observer receives it.
+func (s *logicalSession) setTurnSeq(seq int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.running {
+	if s.running {
+		s.turnSeq = seq
+	}
+}
+
+// cancelRun cancels the named run, or the current run when turnSeq is zero.
+// An idle session or a mismatched sequence is a no-op, including a stale Stop
+// arriving before the next run has received its sequence.
+func (s *logicalSession) cancelRun(turnSeq int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.running || (turnSeq != 0 && turnSeq != s.turnSeq) {
 		return
 	}
 	if s.cancel == nil {
@@ -249,6 +278,7 @@ func (s *logicalSession) finish(result agent.ReplyResult) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.running = false
+	s.turnSeq = 0
 	s.cancel = nil
 	s.abortRequested = false
 	s.reply = result
@@ -259,22 +289,49 @@ func (s *logicalSession) abortRun() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.running = false
+	s.turnSeq = 0
 	s.cancel = nil
 	s.abortRequested = false
 }
 
 // runSession is the channel-port session for one run of a logical bridge
 // session. The worker owns its lifetime: the endpoint's OpenSession returns
-// it, and the worker finishes or aborts it when the run ends.
+// it, and the worker finishes or aborts it when the run ends. The run
+// session is also where the stream's pacing lives: it coalesces the engine's
+// raw deltas into the event log the web tier watches, and it owns the run's
+// one terminal event.
 type runSession struct {
 	session *logicalSession
-}
 
-// OnRunEvent is a no-op. Translating agent.RunEvent values into the
-// chatpb.SessionEvent stream is the next layer; this method exists only
-// because the RunObserver seam requires it, and this layer invents no
-// buffering for it.
-func (s *runSession) OnRunEvent(_ context.Context, _ agent.RunEvent) {}
+	// mu is the only lock the run's stream state needs; the event log keeps
+	// its own.
+	mu sync.Mutex
+	// finished is set once the run has ended, by Finish or Abort. A timer
+	// that fires after it, or an event the engine sends in behind them, is
+	// harmless by construction: the coalescer and the appends check it.
+	finished bool
+	// terminalEmitted records whether this run already produced its terminal
+	// event. The engine emits run_finished or run_failed on the normal
+	// paths, and the worker calls Finish, or Abort after a cancelled run,
+	// right after; exactly one of the three ends up emitting it, whichever
+	// is first, and the others stand down.
+	terminalEmitted bool
+	// deltaTimer is the pending flush of coalesced deltas.
+	deltaTimer *time.Timer
+	// answerPending and reasoningPending are the coalescer's drafts: the text
+	// received but not yet flushed. answerSoFar is what the current model
+	// attempt has produced, and it is what a Snapshot keyframe carries;
+	// reasoning has no keyframe because the contract's Snapshot holds the
+	// answer text alone.
+	answerPending    string
+	reasoningPending string
+	answerSoFar      string
+	// seq and modelRef are the run's transcript sequence and the most recent
+	// model, as the run's events carried them. They are the fields Finish
+	// and Abort need to close a missing terminal event with.
+	seq      int64
+	modelRef string
+}
 
 // SetCancel records the run's cancel func on the logical session so the
 // Service's Abort rpc can reach it.
@@ -282,16 +339,49 @@ func (s *runSession) SetCancel(cancel context.CancelFunc) {
 	s.session.setCancel(cancel)
 }
 
-// Finish returns the logical session to idle and records the reply. Recording
-// the reply is this layer's test seam; the next layer, which owns the event
-// stream, is what publishes the finished run.
+// Finish returns the logical session to idle and records the reply, and —
+// the gap Finish owns — emits the run's terminal event when the engine
+// never did, carrying the final text the reply received. The coalesced
+// deltas flush first, so the stream ends in run order.
+//
+// The synthesised terminal frame is COMPLETED because ReplyResult carries no
+// error: the worker folds a Reply error into result.Text before calling
+// Finish, so a run that failed before the engine emitted its own terminal
+// event is closed as completed with the error text in place of an answer.
+// Telling the two apart needs an error on the port itself, which is a
+// separate change to the shared channel seam.
 func (s *runSession) Finish(_ context.Context, result agent.ReplyResult) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.finished {
+		// The run already ended once; a second call must not append a
+		// second terminal event.
+		return
+	}
+	s.finished = true
+	s.flushDeltaBuffersLocked()
+	if !s.terminalEmitted {
+		s.appendTerminalRunFinishedLocked(result.Text, chatpb.RunStatus_RUN_STATUS_COMPLETED)
+	}
 	s.session.finish(result)
 }
 
-// Abort returns the logical session to idle. The worker calls it after the run
-// context is already canceled, so there is nothing left to stop here.
+// Abort returns the logical session to idle after its run context was
+// canceled, and ends the stream the contract wants every run to end with:
+// exactly one terminal event, RUN_STATUS_ABORTED, and whatever full text the
+// model had produced when the cancel landed, so a client recovers from one
+// message even though nothing ran to completion.
 func (s *runSession) Abort(_ context.Context, _ string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.finished {
+		return
+	}
+	s.finished = true
+	s.flushDeltaBuffersLocked()
+	if !s.terminalEmitted {
+		s.appendTerminalRunFinishedLocked(s.answerSoFar, chatpb.RunStatus_RUN_STATUS_ABORTED)
+	}
 	s.session.abortRun()
 }
 
