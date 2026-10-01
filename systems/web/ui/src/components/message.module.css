@@ -27,7 +27,7 @@
 }
 .userAvatar {
   background: var(--surface);
-  color: var(--muted-foreground);
+  color: var(--foreground);
   font-size: var(--font-xs);
 }
 .messageAuthor {
@@ -41,7 +41,11 @@
 }
 .modelTag {
   font-size: var(--font-xs);
-  color: var(--muted-foreground);
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--blue) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--blue) 35%, var(--border));
+  border-radius: var(--space-2);
+  padding: 1px var(--space-2);
   max-width: 45%;
   overflow: hidden;
   white-space: nowrap;
@@ -54,7 +58,8 @@
   overflow-wrap: anywhere;
 }
 .userMessage .messageBody {
-  background: color-mix(in srgb, var(--surface) 40%, transparent);
+  --subtext: var(--foreground);
+  background: var(--surface);
   border: 1px solid var(--border);
   padding: var(--space-3) var(--space-4);
   margin-left: var(--message-inset);
@@ -84,6 +89,22 @@
 }
 .pendingText {
   white-space: pre-wrap;
+}
+.messageActions button[data-copied] {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--green) 12%, transparent);
+}
+.messageActions button[data-copied] svg {
+  color: var(--green);
+  animation: confirm var(--motion-normal) var(--ease-out);
+}
+@keyframes confirm {
+  from {
+    transform: scale(0.6);
+  }
+  to {
+    transform: scale(1);
+  }
 }
 @container app (max-width: 48rem) {
   .messageBody {

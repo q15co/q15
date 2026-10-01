@@ -29,6 +29,7 @@
 .markdown h5,
 .markdown h6 {
   font-size: 1em;
+  color: var(--subtext);
 }
 .markdown a {
   color: var(--blue);
@@ -55,7 +56,7 @@
 .markdown blockquote {
   border-left: 2px solid var(--primary);
   padding-left: var(--space-4);
-  color: var(--muted-foreground);
+  color: var(--foreground);
   margin: var(--space-5) 0;
 }
 .markdown code {
@@ -63,7 +64,7 @@
   background: var(--surface);
   padding: 0.125em 0.35em;
   border-radius: var(--space-1);
-  color: var(--peach);
+  color: var(--foreground);
 }
 .markdown pre {
   background: var(--sidebar);

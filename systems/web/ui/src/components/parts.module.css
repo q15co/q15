@@ -1,8 +1,9 @@
 .partCard {
+  --subtext: var(--foreground);
   margin: var(--space-2) 0 var(--space-3);
   border: 1px solid var(--border);
   border-radius: 9px;
-  background: color-mix(in srgb, var(--sidebar) 45%, transparent);
+  background: var(--surface);
   overflow: hidden;
 }
 .partCard summary {
@@ -10,7 +11,7 @@
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-3) var(--space-4);
-  color: var(--muted-foreground);
+  color: var(--foreground);
   font-size: var(--font-sm);
   list-style: none;
 }
@@ -19,6 +20,7 @@
 }
 .partCard summary > svg:last-child {
   margin-left: auto;
+  transition: transform var(--motion-normal) var(--ease-out);
 }
 .partCard[open] summary > svg:last-child {
   transform: rotate(180deg);
@@ -38,13 +40,40 @@
   line-height: var(--leading-body);
 }
 .reasoning summary {
+  color: var(--foreground);
+}
+.reasoning summary > svg:first-child {
   color: var(--primary);
 }
 .reasoning .partContent {
-  color: var(--muted-foreground);
+  color: var(--foreground);
 }
 .partError summary {
+  color: var(--foreground);
+}
+.partError summary > svg:first-child {
   color: var(--destructive);
+}
+@supports (interpolate-size: allow-keywords) {
+  .partCard {
+    interpolate-size: allow-keywords;
+  }
+  .partCard::details-content {
+    block-size: 0;
+    opacity: 0;
+    overflow: clip;
+    transition:
+      block-size var(--motion-normal) var(--ease-out),
+      opacity var(--motion-fast),
+      content-visibility var(--motion-normal) allow-discrete;
+  }
+  .partCard[open]::details-content {
+    block-size: auto;
+    opacity: 1;
+  }
+  .partCard[data-instant]::details-content {
+    transition: none;
+  }
 }
 .mediaReference {
   display: flex;

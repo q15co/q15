@@ -104,6 +104,9 @@
   color: var(--muted-foreground);
   overflow: hidden;
   white-space: nowrap;
+  transition:
+    background-color var(--motion-fast),
+    color var(--motion-fast);
 }
 .recentLink:hover {
   color: var(--foreground);
@@ -112,10 +115,14 @@
 }
 .recentLink svg {
   flex: none;
+  transition: transform var(--motion-normal) var(--ease-out);
+}
+.recentLink:hover svg {
+  transform: translate(2px, -2px);
 }
 .sidebarNote {
   margin: auto var(--space-3) var(--space-6);
-  color: var(--muted-foreground);
+  color: var(--foreground);
   font-size: var(--font-sm);
   line-height: var(--leading-body);
 }
@@ -172,7 +179,7 @@
   flex: none;
 }
 .statusDot.disconnected {
-  background: var(--peach);
+  background: var(--warning);
 }
 .mainPanel {
   display: flex;
@@ -221,8 +228,9 @@
   background: var(--primary);
 }
 .previewBadge {
-  color: var(--peach);
-  border: 1px solid var(--border);
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--blue) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--blue) 35%, var(--border));
   border-radius: 5px;
   padding: 3px 7px;
   font-size: var(--font-xs);
@@ -255,13 +263,17 @@
   align-items: center;
   gap: var(--space-3);
   padding: var(--space-3) var(--space-8);
-  background: color-mix(in srgb, var(--peach) 7%, transparent);
-  color: var(--peach);
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+  color: var(--foreground);
   font-size: var(--font-sm);
 }
 .noticeBanner {
   color: var(--muted-foreground);
   background: var(--sidebar);
+}
+.connectionBanner > svg {
+  color: var(--warning);
+  flex: none;
 }
 .noticeBanner button {
   margin-left: auto;
@@ -311,11 +323,16 @@
     width: min(20rem, calc(100vw - var(--space-4)));
     visibility: hidden;
     transform: translateX(-100%);
-    transition: transform 180ms;
+    pointer-events: none;
+    transition:
+      transform var(--motion-slow) var(--ease-out),
+      visibility var(--motion-slow);
   }
   .sidebarOpen {
     visibility: visible;
     transform: translateX(0);
+    pointer-events: auto;
+    transition-delay: 0s;
   }
   .sidebarBackdrop {
     display: block;
@@ -323,7 +340,7 @@
     inset: 0;
     z-index: 20;
     border: 0;
-    background: #11111ba0;
+    background: color-mix(in srgb, var(--crust) 65%, transparent);
   }
   .mobileClose {
     display: inline-flex;

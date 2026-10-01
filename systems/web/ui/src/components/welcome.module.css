@@ -1,0 +1,121 @@
+.welcome {
+  max-width: 32rem;
+  margin: clamp(var(--space-6), 6vh, var(--space-12)) auto 0;
+  padding-bottom: var(--space-6);
+}
+.welcomeMark {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: var(--space-12);
+  height: var(--space-12);
+  margin-bottom: var(--space-6);
+  border: 1px solid color-mix(in srgb, var(--primary) 30%, var(--border));
+  border-radius: var(--space-4);
+  color: var(--primary);
+  background: var(--surface);
+}
+.welcomeMark > svg {
+  width: var(--space-6);
+  height: var(--space-6);
+  animation: sparkle 5s ease-in-out infinite;
+}
+.orbit,
+.satellite {
+  position: absolute;
+  pointer-events: none;
+  border-radius: 50%;
+}
+.orbit {
+  inset: -8px;
+  border: 1px dashed color-mix(in srgb, var(--primary) 25%, transparent);
+  animation: orbit 30s linear infinite;
+}
+.satellite {
+  width: 5px;
+  height: 5px;
+  top: 2px;
+  right: 9px;
+  background: var(--blue);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--blue) 40%, transparent);
+}
+.eyebrow {
+  display: block;
+  color: var(--muted-foreground);
+  font-size: var(--font-xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+.welcome h1 {
+  color: var(--foreground);
+  font-size: var(--font-3xl);
+  font-weight: 500;
+  line-height: var(--leading-heading);
+  letter-spacing: -0.035em;
+  margin: var(--space-3) 0 var(--space-5);
+  font-variation-settings: "CASL" 0.5;
+}
+.welcome p {
+  color: var(--foreground);
+  font-size: var(--font-md);
+  line-height: var(--leading-body);
+  margin-bottom: var(--space-6);
+}
+.suggestions {
+  display: grid;
+  gap: var(--space-3);
+}
+.suggestions button {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: var(--space-12);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: 0.625rem;
+  background: var(--surface);
+  text-align: left;
+  font-size: var(--font-sm);
+  color: var(--foreground);
+  transition:
+    border-color var(--motion-fast),
+    color var(--motion-fast);
+}
+.suggestions button svg {
+  flex-shrink: 0;
+}
+.suggestions button:not(:disabled):hover {
+  color: var(--foreground);
+  border-color: var(--primary);
+}
+@keyframes sparkle {
+  0%,
+  100% {
+    transform: translateY(0) rotate(-4deg);
+  }
+  50% {
+    transform: translateY(-3px) rotate(4deg);
+  }
+}
+@keyframes orbit {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@container app (max-width: 48rem) {
+  .welcome {
+    margin-top: var(--space-6);
+  }
+  .welcome h1 {
+    font-size: var(--font-2xl);
+  }
+  .welcomeMark {
+    margin-bottom: var(--space-5);
+  }
+}
+@container app (max-height: 37.5rem) {
+  .welcome {
+    margin-top: var(--space-4);
+  }
+}

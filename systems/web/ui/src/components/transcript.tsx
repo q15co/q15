@@ -1,12 +1,17 @@
 import styles from "./transcript.module.css";
-import { ArrowDown, History, Sparkles, ArrowUpRight } from "lucide-react";
+import { ArrowDown, History } from "lucide-react";
+import { AnimatePresence } from "motion/react";
+import * as m from "motion/react-m";
 import { Fragment, useLayoutEffect, useRef, useState } from "react";
 import type { ChatState, ChatStore } from "../chat-store";
 import { PendingMessage } from "./message";
 import { TurnView } from "./activity";
 import { Button } from "./ui/button";
+import { useMotionPreference } from "./ui/motion";
+import { Welcome } from "./welcome";
 
 export function Transcript({ state, store }: { state: ChatState; store: ChatStore }) {
+  const reduced = useMotionPreference();
   const turns = new Map<string, typeof state.messages>();
   for (const message of state.messages) {
     const messages = turns.get(message.turn) ?? [];
@@ -14,6 +19,7 @@ export function Transcript({ state, store }: { state: ChatState; store: ChatStor
     turns.set(message.turn, messages);
   }
   const scroller = useRef<HTMLDivElement>(null);
+  const content = useRef<HTMLDivElement>(null);
   const anchor = useRef<{
     key: string;
     top: number;
@@ -55,6 +61,18 @@ export function Transcript({ state, store }: { state: ChatState; store: ChatStor
     } else if (following.current && !anchor.current) node.scrollTop = node.scrollHeight;
   }, [state.messages, state.pending, state.loadingHistory]);
 
+  // Follow expanding disclosures as well as text deltas, without moving a reader
+  // who has scrolled back or is paging history.
+  useLayoutEffect(() => {
+    if (!content.current || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      const node = scroller.current;
+      if (node && following.current && !anchor.current) node.scrollTop = node.scrollHeight;
+    });
+    observer.observe(content.current);
+    return () => observer.disconnect();
+  }, []);
+
   useLayoutEffect(() => {
     const jump = async () => {
       const match = /^#message-(\d+):(-?\d+)$/.exec(location.hash);
@@ -66,9 +84,19 @@ export function Transcript({ state, store }: { state: ChatState; store: ChatStor
       if (key)
         requestAnimationFrame(() => {
           const target = document.getElementById(`message-${key}`);
+          const disclosures: HTMLDetailsElement[] = [];
           for (let parent = target; parent; parent = parent.parentElement)
-            if (parent instanceof HTMLDetailsElement) parent.open = true;
+            if (parent instanceof HTMLDetailsElement) {
+              parent.dataset.instant = "";
+              parent.open = true;
+              disclosures.push(parent);
+            }
           target?.scrollIntoView({ block: "center" });
+          requestAnimationFrame(() =>
+            requestAnimationFrame(() => {
+              disclosures.forEach((details) => delete details.dataset.instant);
+            }),
+          );
         });
     };
     void jump();
@@ -89,7 +117,7 @@ export function Transcript({ state, store }: { state: ChatState; store: ChatStor
           if (node.scrollTop < 80 && !following.current) loadOlder();
         }}
       >
-        <div className={styles.transcriptInner}>
+        <div className={styles.transcriptInner} ref={content}>
           {state.hasMore && (
             <div className={styles.historyControl}>
               <Button variant="ghost" size="sm" disabled={state.loadingHistory} onClick={loadOlder}>
@@ -99,38 +127,7 @@ export function Transcript({ state, store }: { state: ChatState; store: ChatStor
             </div>
           )}
           {state.messages.length === 0 && state.pending.length === 0 && (
-            <div className={styles.welcome}>
-              <div className={styles.welcomeMark}>
-                <Sparkles />
-              </div>
-              <span className={styles.eyebrow}>A SPACE FOR YOUR IDEAS</span>
-              <h1>
-                Where shall we
-                <br />
-                <span>begin?</span>
-              </h1>
-              <p>
-                A question, a plan, a half-formed thought.
-                <br />
-                Bring it here. We'll work it out together.
-              </p>
-              <div className={styles.suggestions}>
-                {[
-                  "Help me think through an idea",
-                  "Explore something new",
-                  "Let's get something done",
-                ].map((text) => (
-                  <button
-                    key={text}
-                    onClick={() => store.send(text)}
-                    disabled={state.connection !== "connected"}
-                  >
-                    <span>{text}</span>
-                    <ArrowUpRight size={16} />
-                  </button>
-                ))}
-              </div>
-            </div>
+            <Welcome store={store} connected={state.connection === "connected"} />
           )}
           {[...turns].map(([turn, messages]) => (
             <Fragment key={turn}>
@@ -153,20 +150,34 @@ export function Transcript({ state, store }: { state: ChatState; store: ChatStor
           {jumping && <output>Finding your message…</output>}
         </div>
       </div>
-      {showLatest && (
-        <Button
-          className={styles.latestButton}
-          variant="outline"
-          size="sm"
-          onClick={() => {
-            following.current = true;
-            scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: "smooth" });
-          }}
-        >
-          <ArrowDown />
-          Back to latest
-        </Button>
-      )}
+      <div className={styles.latestWrapper}>
+        <AnimatePresence initial={false}>
+          {showLatest && (
+            <m.div
+              initial={reduced ? false : { opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: reduced ? 0 : 8 }}
+              transition={{ duration: reduced ? 0 : 0.2 }}
+            >
+              <Button
+                className={styles.latestButton}
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  following.current = true;
+                  scroller.current?.scrollTo({
+                    top: scroller.current.scrollHeight,
+                    behavior: reduced ? "auto" : "smooth",
+                  });
+                }}
+              >
+                <ArrowDown />
+                Back to latest
+              </Button>
+            </m.div>
+          )}
+        </AnimatePresence>
+      </div>
     </div>
   );
 }

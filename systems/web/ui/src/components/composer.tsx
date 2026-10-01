@@ -1,10 +1,14 @@
 import styles from "./composer.module.css";
-import { ArrowUp, Square, CornerDownLeft } from "lucide-react";
+import { ArrowUp, ListPlus, Square, CornerDownLeft } from "lucide-react";
+import { AnimatePresence } from "motion/react";
+import * as m from "motion/react-m";
 import { useRef, useState } from "react";
 import type { ChatStore, ChatState } from "../chat-store";
 import { Button } from "./ui/button";
+import { useMotionPreference } from "./ui/motion";
 
 export function Composer({ store, state }: { store: ChatStore; state: ChatState }) {
+  const reduced = useMotionPreference();
   const [text, setText] = useState("");
   const input = useRef<HTMLTextAreaElement>(null);
   const submit = () => {
@@ -53,16 +57,23 @@ export function Composer({ store, state }: { store: ChatStore; state: ChatState 
           </span>
           <div className={styles.composerButtons}>
             {busy && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => store.abort()}
-                disabled={state.connection !== "connected"}
-                aria-label="Stop response"
+              <m.span
+                className={styles.stopControl}
+                initial={reduced ? false : { opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ duration: reduced ? 0 : 0.15 }}
               >
-                <Square />
-                Stop
-              </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => store.abort()}
+                  disabled={state.connection !== "connected"}
+                  aria-label="Stop response"
+                >
+                  <Square />
+                  Stop
+                </Button>
+              </m.span>
             )}
             <Button
               type="submit"
@@ -70,7 +81,18 @@ export function Composer({ store, state }: { store: ChatStore; state: ChatState 
               disabled={!text.trim() || state.connection !== "connected"}
               aria-label={busy ? "Queue message" : "Send message"}
             >
-              <ArrowUp />
+              <AnimatePresence initial={false} mode="wait">
+                <m.span
+                  key={busy ? "queue" : "send"}
+                  aria-hidden="true"
+                  initial={reduced ? false : { opacity: 0, y: 4 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: reduced ? 0 : -4 }}
+                  transition={{ duration: reduced ? 0 : 0.12 }}
+                >
+                  {busy ? <ListPlus /> : <ArrowUp />}
+                </m.span>
+              </AnimatePresence>
             </Button>
           </div>
         </div>

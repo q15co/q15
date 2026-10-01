@@ -9,8 +9,8 @@
   font-weight: 500;
   white-space: nowrap;
   transition:
-    background-color 150ms,
-    color 150ms;
+    background-color var(--motion-fast),
+    color var(--motion-fast);
 }
 :where(.button:disabled) {
   pointer-events: none;

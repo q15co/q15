@@ -8,10 +8,12 @@ import {
   Wrench,
 } from "lucide-react";
 import { clsx } from "clsx";
+import * as m from "motion/react-m";
 import type { ChatMessage } from "../chat-store";
 import type { Part } from "../generated/protocol";
 import { MessageView } from "./message";
 import { PartView, pretty } from "./parts";
+import { useMotionPreference } from "./ui/motion";
 import styles from "./activity.module.css";
 
 interface Source {
@@ -147,6 +149,7 @@ function ToolActivity({
   working: boolean;
   anchors: Set<string>;
 }) {
+  const reduced = useMotionPreference();
   const { name, title, status, error, running, Icon } = toolPresentation(item, working);
   const part = item.source.part;
   const results = part.part_type === "tool_result" ? [item.source] : item.results;
@@ -160,7 +163,16 @@ function ToolActivity({
         <Icon size={16} className={running ? styles.spinning : undefined} aria-hidden="true" />
         <span className={styles.toolTitle}>{title}</span>
         {context(part) && <span className={styles.context}>{context(part)}</span>}
-        <span className={styles.status}>{status}</span>
+        <m.span
+          key={status}
+          className={styles.status}
+          data-status={status}
+          initial={reduced ? false : { opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: reduced ? 0 : 0.18 }}
+        >
+          {status}
+        </m.span>
         <ChevronDown size={13} className={styles.chevron} aria-hidden="true" />
       </summary>
       <div className={styles.toolBody}>
@@ -233,12 +245,15 @@ export function TurnView({ messages, working }: { messages: ChatMessage[]; worki
                 data-message-key={m.key}
               />
             ))}
-            {working ? (
-              <LoaderCircle size={15} className={styles.spinning} aria-hidden="true" />
-            ) : (
-              <Brain size={15} aria-hidden="true" />
-            )}
+            <Brain size={15} className={working ? styles.thinking : undefined} aria-hidden="true" />
             <span>{label}</span>
+            {working && (
+              <span className={styles.workingDots} aria-hidden="true">
+                <i />
+                <i />
+                <i />
+              </span>
+            )}
             {working && toolCount > 0 && (
               <span className={styles.status}>
                 {toolCount} {toolCount === 1 ? "tool" : "tools"}

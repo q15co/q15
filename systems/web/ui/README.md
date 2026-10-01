@@ -103,7 +103,26 @@ viewports hide decorative copy and the composer footer to preserve room for mess
 cover doubled text, keyboard access, narrow screens and long drafts alongside chat behavior.
 
 The official [Catppuccin palette](https://github.com/catppuccin/palette) supplies Mocha and Latte
-theme tokens. The app follows the system's initial preference and remembers the user's choice.
+theme tokens. The app follows the system's initial preference and remembers the user's choice. The
+[Catppuccin style guide](https://github.com/catppuccin/catppuccin/blob/main/docs/style-guide.md)
+defines their roles: Base for the canvas, Mantle for secondary panes, Surface 0 for controls, Text
+for body copy, Subtext for labels, Blue for links and pills, and Green/Yellow/Red for status.
+Selections use Overlay 2 at 25% opacity and the text cursor uses Rosewater. Pill and warning text
+keeps the Text color over an accent tint so the Latte palette remains legible. Small Latte labels
+use Subtext 1, and copy on Surface 0 uses Text to preserve contrast.
 [Recursive](https://www.recursive.design/) is bundled locally with its full variation axes:
 proportional body text and monospace code/tool output. No font or theme asset needs a third-party
 request at runtime.
+
+Motion uses lazily loaded Motion animation/gesture features and colocated CSS. The welcome reveals
+in stages with a slow decorative orbit; controls have spring feedback, live messages enter gently,
+and tool statuses and send/queue icons ease between states. Native disclosures animate their height
+where `interpolate-size` and `::details-content` are supported and open instantly elsewhere. History
+does not animate on entry, and message links open disclosures instantly before scrolling. A content
+resize observer keeps readers at the bottom only while they are following the latest message.
+
+Theme changes use a circular native View Transition from the theme button, with an immediate
+fallback. `prefers-reduced-motion` disables entrance, gesture, disclosure, decoration, theme and
+smooth-scroll effects; changing that preference while the app is open also takes effect. Browser
+regressions cover that behavior, theme fallback, keyboard disclosures and scroll stability during
+live updates.

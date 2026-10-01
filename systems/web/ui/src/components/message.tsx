@@ -1,12 +1,15 @@
 import { Sparkles, Check, Copy } from "lucide-react";
 import { useState } from "react";
 import { clsx } from "clsx";
+import * as m from "motion/react-m";
 import type { ChatMessage, Pending } from "../chat-store";
 import { Button } from "./ui/button";
+import { useMotionPreference } from "./ui/motion";
 import { PartView } from "./parts";
 import styles from "./message.module.css";
 
 export function MessageView({ message }: { message: ChatMessage }) {
+  const reduced = useMotionPreference();
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState(false);
   const user = message.role === "user";
@@ -15,7 +18,10 @@ export function MessageView({ message }: { message: ChatMessage }) {
     .map((p) => p.text ?? "")
     .join("");
   return (
-    <article
+    <m.article
+      initial={!reduced && message.status === "streaming" ? { opacity: 0, y: 6 } : false}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: reduced ? 0 : 0.24 }}
       id={`message-${message.key}`}
       className={clsx(styles.message, user && styles.userMessage)}
       data-message-key={message.key}
@@ -50,6 +56,7 @@ export function MessageView({ message }: { message: ChatMessage }) {
                 variant="ghost"
                 size="sm"
                 aria-label="Copy response"
+                data-copied={copied || undefined}
                 onClick={() => {
                   void navigator.clipboard.writeText(text).then(
                     () => {
@@ -69,13 +76,19 @@ export function MessageView({ message }: { message: ChatMessage }) {
             {message.status === "failed" && <small className={styles.failed}>Failed</small>}
           </div>
         )}
-    </article>
+    </m.article>
   );
 }
 
 export function PendingMessage({ pending: p }: { pending: Pending }) {
+  const reduced = useMotionPreference();
   return (
-    <article className={clsx(styles.message, styles.userMessage)}>
+    <m.article
+      className={clsx(styles.message, styles.userMessage)}
+      initial={reduced ? false : { opacity: 0, y: 6 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: reduced ? 0 : 0.24 }}
+    >
       <div className={styles.messageHeading}>
         <span className={clsx(styles.avatar, styles.userAvatar)} aria-hidden="true">
           Y
@@ -98,6 +111,6 @@ export function PendingMessage({ pending: p }: { pending: Pending }) {
         </span>
       </div>
       <p className={clsx(styles.messageBody, styles.pendingText)}>{p.text}</p>
-    </article>
+    </m.article>
   );
 }

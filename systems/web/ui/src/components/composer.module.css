@@ -7,13 +7,17 @@
 }
 .composer {
   border: 1px solid color-mix(in srgb, var(--muted) 80%, transparent);
-  background: color-mix(in srgb, var(--sidebar) 50%, var(--background));
+  background: var(--surface);
   border-radius: var(--space-4);
   overflow: hidden;
-  box-shadow: 0 6px 25px color-mix(in srgb, #11111b 7%, transparent);
+  box-shadow: 0 6px 25px color-mix(in srgb, var(--crust) 7%, transparent);
+  transition:
+    border-color var(--motion-normal),
+    box-shadow var(--motion-normal);
 }
 .composer:focus-within {
   border-color: color-mix(in srgb, var(--primary) 55%, var(--border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 10%, transparent);
 }
 .composer textarea {
   display: block;
@@ -31,7 +35,7 @@
   field-sizing: content;
 }
 .composer textarea::placeholder {
-  color: var(--muted-foreground);
+  color: var(--foreground);
 }
 .composerToolbar {
   display: flex;
@@ -41,13 +45,16 @@
   gap: var(--space-3);
 }
 .composerHint {
-  color: var(--muted-foreground);
+  color: var(--foreground);
   font-size: var(--font-xs);
 }
 .composerButtons {
   display: flex;
   align-items: center;
   gap: var(--space-2);
+}
+.stopControl {
+  display: inline-flex;
 }
 .composerButtons button[type="submit"] {
   border-radius: 0.625rem;

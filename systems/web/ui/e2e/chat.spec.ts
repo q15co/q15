@@ -459,3 +459,149 @@ test("short and narrow screens keep long drafts and send controls usable", async
   await expect(page.getByText("Stopped safely.")).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
+
+test("motion follows a changed accessibility preference and themes have a native fallback", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await backend(page);
+  await page.goto("/");
+  const heading = page.getByRole("heading", { name: /Where shall we/ });
+  await expect(heading).toBeVisible();
+  const afterRapidToggle = await page.getByRole("button", { name: /Switch to .* theme/ }).evaluate(
+    (button: HTMLButtonElement) =>
+      new Promise<string | undefined>((resolve) => {
+        let changes = 0;
+        const observer = new MutationObserver((records) => {
+          changes += records.length;
+          if (changes >= 2) {
+            observer.disconnect();
+            resolve(document.documentElement.dataset.theme);
+          }
+        });
+        observer.observe(document.documentElement, {
+          attributes: true,
+          attributeFilter: ["data-theme"],
+        });
+        button.click();
+        button.click();
+      }),
+  );
+  expect(afterRapidToggle).toBe("mocha");
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          document.getAnimations().filter((a) => a.effect?.getTiming().iterations === Infinity)
+            .length,
+      ),
+    )
+    .toBeGreaterThan(0);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await expect.poll(() => page.evaluate(() => document.getAnimations().length)).toBe(0);
+  // Reduced motion must bypass the snapshot effect, including on theme changes.
+  await page.evaluate(() =>
+    Object.defineProperty(document, "startViewTransition", {
+      configurable: true,
+      value: () => {
+        throw new Error("Reduced motion must not create a view transition");
+      },
+    }),
+  );
+  await page.getByRole("button", { name: /Switch to .* theme/ }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "latte");
+  await expect.poll(() => page.evaluate(() => document.getAnimations().length)).toBe(0);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByLabel("Open navigation").click();
+  await expect(page.getByRole("complementary")).toBeInViewport();
+  await page
+    .getByRole("complementary")
+    .getByRole("button", { name: "Close navigation", exact: true })
+    .click();
+  await expect(page.getByRole("complementary")).toBeHidden();
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          document.getAnimations().filter((a) => a.effect?.getTiming().iterations === Infinity)
+            .length,
+      ),
+    )
+    .toBeGreaterThan(0);
+  await page.evaluate(() =>
+    Object.defineProperty(document, "startViewTransition", { value: undefined }),
+  );
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.getByRole("button", { name: /Switch to .* theme/ }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "mocha");
+  await expect(heading).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test("animated tool disclosures follow the latest message without moving a reader in history", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  let deliver: ((value: Frame) => void) | undefined;
+  await backend(
+    page,
+    {
+      turns: Array.from({ length: 20 }, (_, i) => turn(30 - i)),
+      head_seq: "31",
+      has_more: false,
+    },
+    (send) => {
+      deliver = send;
+    },
+  );
+  await page.goto("/");
+  const scroller = page.getByLabel("Conversation", { exact: true });
+  const gap = () =>
+    scroller.evaluate((node) => node.scrollHeight - node.scrollTop - node.clientHeight);
+  await page.getByLabel("Message q15").fill("Read the workspace");
+  await page.getByLabel("Send message", { exact: true }).click();
+  const msg = { turn: "31", ordinal: -1 };
+  const call = { id: "motion-command", name: "exec", arguments: '{"command":"ls"}' };
+  deliver!(frame("snapshot", { msg, kind: "model_start", text: "", seq: "0" }));
+  deliver!(frame("delta", { msg, kind: "tool_call", text: "", call, seq: "1" }));
+  const summary = page.locator('[data-tool-call-id="motion-command"] > summary');
+  await expect(summary).toBeVisible();
+  await summary.focus();
+  await summary.press("Enter");
+  await expect(page.getByText("Waiting for the tool result…")).toBeVisible();
+  deliver!(
+    frame("delta", {
+      msg,
+      kind: "tool_result",
+      text: Array.from({ length: 60 }, (_, i) => `File ${i}`).join("\n"),
+      call,
+      seq: "2",
+    }),
+  );
+  await expect(page.getByText("Completed", { exact: true })).toBeVisible();
+  await expect.poll(gap).toBeLessThan(2);
+  await scroller.evaluate((node) => {
+    node.scrollTop -= 400;
+  });
+  await expect(page.getByRole("button", { name: "Back to latest" })).toBeVisible();
+  const position = await scroller.evaluate((node) => node.scrollTop);
+  deliver!(frame("snapshot", { msg, kind: "model_start", text: "", seq: "3", loop_turn: 1 }));
+  deliver!(
+    frame("delta", {
+      msg,
+      kind: "text",
+      text: "More detail about the workspace.\n\n".repeat(20),
+      seq: "4",
+    }),
+  );
+  await expect(page.getByText(/More detail about the workspace/).first()).toBeAttached();
+  expect(await scroller.evaluate((node) => node.scrollTop)).toBeCloseTo(position, 0);
+  await page.getByRole("button", { name: "Back to latest" }).click();
+  await expect.poll(gap).toBeLessThan(2);
+  await summary.evaluate((node: HTMLElement) => node.click());
+  await expect(page.locator('[data-tool-call-id="motion-command"] pre').last()).toBeHidden();
+  await expect.poll(gap).toBeLessThan(2);
+});

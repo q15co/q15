@@ -1,6 +1,9 @@
 import { clsx } from "clsx";
 import styles from "./app.module.css";
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useLayoutEffect, useState, useSyncExternalStore } from "react";
+import { flushSync } from "react-dom";
+import { AnimatePresence } from "motion/react";
+import * as m from "motion/react-m";
 import {
   Sparkles,
   MessageSquare,
@@ -17,18 +20,20 @@ import type { ChatStore } from "./chat-store";
 import { Composer } from "./components/composer";
 import { Transcript } from "./components/transcript";
 import { Button } from "./components/ui/button";
-import { applyTheme, initialTheme } from "./theme";
+import { useMotionPreference } from "./components/ui/motion";
+import { applyTheme, initialTheme, revealTheme } from "./theme";
 
 interface InstallEvent extends Event {
   prompt(): Promise<void>;
 }
 
 export function App({ store, preview = false }: { store: ChatStore; preview?: boolean }) {
+  const reduced = useMotionPreference();
   const state = useSyncExternalStore(store.subscribe, store.getSnapshot);
   const [theme, setTheme] = useState(initialTheme);
   const [menu, setMenu] = useState(false);
   const [install, setInstall] = useState<InstallEvent | null>(null);
-  useEffect(() => {
+  useLayoutEffect(() => {
     applyTheme(theme);
   }, [theme]);
   useEffect(() => {
@@ -56,13 +61,19 @@ export function App({ store, preview = false }: { store: ChatStore; preview?: bo
       <a className={styles.skipLink} href="#message-input">
         Skip to message input
       </a>
-      {menu && (
-        <button
-          className={styles.sidebarBackdrop}
-          aria-label="Close navigation"
-          onClick={() => setMenu(false)}
-        />
-      )}
+      <AnimatePresence initial={false}>
+        {menu && (
+          <m.button
+            initial={reduced ? false : { opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: reduced ? 0 : 0.24 }}
+            className={styles.sidebarBackdrop}
+            aria-label="Close navigation"
+            onClick={() => setMenu(false)}
+          />
+        )}
+      </AnimatePresence>
       <aside
         className={clsx(styles.sidebar, menu && styles.sidebarOpen)}
         aria-label="Chat navigation"
@@ -139,9 +150,21 @@ export function App({ store, preview = false }: { store: ChatStore; preview?: bo
             variant="ghost"
             size="icon"
             aria-label={theme === "mocha" ? "Switch to Latte theme" : "Switch to Mocha theme"}
-            onClick={() => setTheme(theme === "mocha" ? "latte" : "mocha")}
+            onClick={(event) => {
+              revealTheme(event.currentTarget, reduced, () => {
+                flushSync(() => setTheme((current) => (current === "mocha" ? "latte" : "mocha")));
+              });
+            }}
           >
-            {theme === "mocha" ? <Sun /> : <Moon />}
+            <m.span
+              key={theme}
+              aria-hidden="true"
+              initial={reduced ? false : { opacity: 0, rotate: -90 }}
+              animate={{ opacity: 1, rotate: 0 }}
+              transition={{ duration: reduced ? 0 : 0.24 }}
+            >
+              {theme === "mocha" ? <Sun /> : <Moon />}
+            </m.span>
           </Button>
         </div>
       </aside>

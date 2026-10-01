@@ -22,12 +22,19 @@
   --space-12: 48px;
   --conversation-width: 48rem;
   --message-inset: 44px;
+  --motion-fast: 150ms;
+  --motion-normal: 240ms;
+  --motion-slow: 420ms;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --background: #1e1e2e;
+  --crust: #11111b;
   --foreground: #cdd6f4;
   --sidebar: #181825;
   --surface: #313244;
   --muted: #45475a;
   --muted-foreground: #a6adc8;
+  --subtext: #bac2de;
+  --overlay: #9399b2;
   --primary: #cba6f7;
   --primary-foreground: #1e1e2e;
   --accent: #313244;
@@ -36,16 +43,21 @@
   --green: #a6e3a1;
   --destructive: #f38ba8;
   --blue: #89b4fa;
-  --peach: #fab387;
+  --warning: #f9e2af;
+  --rosewater: #f5e0dc;
   color-scheme: dark;
 }
 :root[data-theme="latte"] {
   --background: #eff1f5;
+  --crust: #dce0e8;
   --foreground: #4c4f69;
   --sidebar: #e6e9ef;
-  --surface: #dce0e8;
+  --surface: #ccd0da;
   --muted: #bcc0cc;
-  --muted-foreground: #6c6f85;
+  /* Subtext 1 keeps small labels legible in the light palette. */
+  --muted-foreground: #5c5f77;
+  --subtext: #5c5f77;
+  --overlay: #7c7f93;
   --primary: #8839ef;
   --primary-foreground: #eff1f5;
   --accent: #dce0e8;
@@ -54,7 +66,8 @@
   --green: #40a02b;
   --destructive: #d20f39;
   --blue: #1e66f5;
-  --peach: #fe640b;
+  --warning: #df8e1d;
+  --rosewater: #dc8a78;
   color-scheme: light;
 }
 /* Base rules yield to component modules regardless of import order. */
@@ -71,6 +84,7 @@
     font-size: var(--font-md);
     line-height: var(--leading-ui);
     color: var(--foreground);
+    caret-color: var(--rosewater);
     background: var(--background);
     -webkit-font-smoothing: antialiased;
   }
@@ -100,7 +114,7 @@
     outline-offset: 4px;
   }
   ::selection {
-    background: color-mix(in srgb, var(--primary) 30%, transparent);
+    background: color-mix(in srgb, var(--overlay) 25%, transparent);
   }
   code,
   pre {
@@ -137,10 +151,19 @@
     border: 0;
   }
 }
+/* Theme changes reveal the new palette without blending its text colors. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
-  *::after {
+  *::after,
+  *::details-content,
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
     animation: none !important;
     transition: none !important;
     scroll-behavior: auto !important;

@@ -5,6 +5,7 @@ import "./styles.css";
 import { App } from "./app";
 import { ChatStore } from "./chat-store";
 import { SocketTransport } from "./transport";
+import { MotionProvider } from "./components/ui/motion";
 
 const preview = import.meta.env.DEV && new URLSearchParams(location.search).has("preview");
 const store = preview
@@ -15,7 +16,9 @@ const store = preview
   : new ChatStore(new SocketTransport());
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <App store={store} preview={preview} />
+    <MotionProvider>
+      <App store={store} preview={preview} />
+    </MotionProvider>
   </StrictMode>,
 );
 if (import.meta.env.PROD && "serviceWorker" in navigator) {

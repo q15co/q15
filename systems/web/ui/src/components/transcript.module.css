@@ -1,9 +1,3 @@
-.eyebrow {
-  font-size: var(--font-xs);
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  color: var(--muted-foreground);
-}
 .transcriptContainer {
   flex: 1;
   min-height: 0;
@@ -22,100 +16,23 @@
   margin: 0 auto;
   padding: var(--space-2) var(--space-6) var(--space-8);
 }
-.welcome {
-  max-width: 32rem;
-  margin: clamp(var(--space-6), 6vh, var(--space-12)) auto 0;
-  padding-bottom: var(--space-6);
-}
-.welcomeMark {
-  display: grid;
-  place-items: center;
-  border: 1px solid color-mix(in srgb, var(--primary) 24%, transparent);
-  width: var(--space-12);
-  height: var(--space-12);
-  border-radius: var(--space-4);
-  color: var(--primary);
-  background: color-mix(in srgb, var(--primary) 7%, transparent);
-  margin-bottom: var(--space-6);
-}
-.welcomeMark svg {
-  width: var(--space-6);
-  height: var(--space-6);
-}
-.welcome .eyebrow {
-  color: var(--primary);
-}
-.welcome h1 {
-  font-size: var(--font-3xl);
-  font-weight: 500;
-  line-height: var(--leading-heading);
-  letter-spacing: -0.035em;
-  margin: var(--space-3) 0 var(--space-5);
-  font-variation-settings: "CASL" 0.5;
-}
-.welcome h1 span {
-  color: var(--primary);
-}
-.welcome p {
-  color: var(--muted-foreground);
-  font-size: var(--font-md);
-  line-height: var(--leading-body);
-  margin-bottom: var(--space-6);
-}
-.suggestions {
-  display: grid;
-  gap: var(--space-3);
-}
-.suggestions button {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: var(--space-3);
-  min-height: var(--space-12);
-  padding: var(--space-3) var(--space-4);
-  border: 1px solid var(--border);
-  border-radius: 0.625rem;
-  background: color-mix(in srgb, var(--sidebar) 45%, transparent);
-  text-align: left;
-  font-size: var(--font-sm);
-  color: var(--muted-foreground);
-  transition: 150ms;
-}
-.suggestions button svg {
-  flex-shrink: 0;
-}
-.suggestions button:hover {
-  color: var(--primary);
-  border-color: var(--primary);
-  background: color-mix(in srgb, var(--primary) 5%, transparent);
-}
 .historyControl {
   text-align: center;
   margin-bottom: var(--space-4);
 }
-.latestButton {
+.latestWrapper {
   position: absolute;
   bottom: var(--space-4);
   left: 50%;
   transform: translateX(-50%);
-  box-shadow: 0 3px 15px var(--sidebar);
+  pointer-events: none;
+}
+.latestButton {
+  pointer-events: auto;
+  box-shadow: 0 3px 15px var(--crust);
 }
 @container app (max-width: 48rem) {
-  .welcome h1 {
-    font-size: var(--font-2xl);
-  }
   .transcriptInner {
     padding: var(--space-1) var(--space-5) var(--space-6);
-  }
-  .welcome {
-    margin-top: var(--space-6);
-  }
-  .welcomeMark {
-    margin-bottom: var(--space-5);
-  }
-}
-@media (max-height: 600px) {
-  .welcome {
-    margin-top: var(--space-4);
   }
 }
