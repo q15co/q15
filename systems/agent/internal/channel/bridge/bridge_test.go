@@ -321,31 +321,3 @@ func TestServiceGetRuntimeInfoSurfacesHeadFailure(t *testing.T) {
 		t.Fatalf("GetRuntimeInfo() code = %v, want Internal (err=%v)", status.Code(err), err)
 	}
 }
-
-func TestServiceStaysUnimplementedBeyondServedRPCs(t *testing.T) {
-	client := startBridgeService(t, &fakeTurnLister{})
-
-	for _, rpc := range []struct {
-		name string
-		call func(context.Context) error
-	}{
-		{"Deliver", func(ctx context.Context) error {
-			stream, err := client.Deliver(ctx, &chatpb.DeliverRequest{})
-			if err != nil {
-				return err
-			}
-			_, err = stream.Recv()
-			return err
-		}},
-	} {
-		err := rpc.call(context.Background())
-		if status.Code(err) != codes.Unimplemented {
-			t.Fatalf(
-				"%s() code = %v, want Unimplemented (err=%v)",
-				rpc.name,
-				status.Code(err),
-				err,
-			)
-		}
-	}
-}

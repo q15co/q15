@@ -48,6 +48,11 @@ type AgentEndpoint struct {
 	sessionsMu sync.Mutex
 	sessions   map[string]*logicalSession
 	nextID     atomic.Uint64
+
+	// outbound is the Deliver fan-out's registry. It sits on the endpoint
+	// because the Service holds this endpoint once and both halves — the
+	// Deliver rpc and the worker's Deliver call — need the same registry.
+	outbound *outboundFanout
 }
 
 // NewAgentEndpoint constructs the bridge agent endpoint over one inbound
@@ -56,6 +61,7 @@ func NewAgentEndpoint(publisher InboundPublisher) *AgentEndpoint {
 	return &AgentEndpoint{
 		publisher: publisher,
 		sessions:  make(map[string]*logicalSession),
+		outbound:  newOutboundFanout(),
 	}
 }
 
@@ -187,9 +193,10 @@ type logicalSession struct {
 	// the session running and handing over the run's cancel func. setCancel
 	// honours it, so a client's stop is not dropped in that window.
 	abortRequested bool
-	// reply records the finished run's reply. Nothing publishes it beyond
-	// the terminal event the stream carries; Deliver is a later layer, and
-	// recording is this layer's test seam.
+	// reply records the finished run's reply. Nothing surfaces it beyond the
+	// terminal event the stream carries — Deliver fans out only messages the
+	// bus publishes, not run replies — so recording remains this layer's
+	// test seam.
 	reply agent.ReplyResult
 }
 

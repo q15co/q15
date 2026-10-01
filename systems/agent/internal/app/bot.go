@@ -309,10 +309,13 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 		agentEndpoints = append(agentEndpoints, telegramEndpoint)
 		outboundEndpoints = append(outboundEndpoints, telegramEndpoint)
 	}
-	// The bridge's endpoint joins the worker's registries only when the bridge is
-	// present: with no listener there is nothing to answer its rpcs.
+	// The bridge's endpoint joins the worker's registries only when the bridge
+	// is present: with no listener there is nothing to answer its rpcs. Each
+	// registry is keyed by Channel(), so the two endpoints coexist and each
+	// handles only its channel's messages.
 	if bridge != nil {
 		agentEndpoints = append(agentEndpoints, bridge.endpoint)
+		outboundEndpoints = append(outboundEndpoints, bridge.endpoint)
 	}
 
 	return runRuntime(runCtx, cancel, runtimeInputs{
