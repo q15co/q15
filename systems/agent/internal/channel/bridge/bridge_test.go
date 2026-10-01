@@ -50,7 +50,7 @@ func startBridgeService(t *testing.T, lister TurnLister) chatpb.ChatServiceClien
 	t.Helper()
 	listener := bufconn.Listen(1024 * 1024)
 	server := grpc.NewServer()
-	chatpb.RegisterChatServiceServer(server, NewService(lister))
+	chatpb.RegisterChatServiceServer(server, NewService(lister, NewAgentEndpoint(&fakePublisher{})))
 	go func() {
 		_ = server.Serve(listener)
 	}()
@@ -329,18 +329,6 @@ func TestServiceStaysUnimplementedBeyondServedRPCs(t *testing.T) {
 		name string
 		call func(context.Context) error
 	}{
-		{"OpenSession", func(ctx context.Context) error {
-			_, err := client.OpenSession(ctx, &chatpb.OpenSessionRequest{})
-			return err
-		}},
-		{"SendMessage", func(ctx context.Context) error {
-			_, err := client.SendMessage(ctx, &chatpb.SendMessageRequest{})
-			return err
-		}},
-		{"Abort", func(ctx context.Context) error {
-			_, err := client.Abort(ctx, &chatpb.AbortRequest{})
-			return err
-		}},
 		{"WatchEvents", func(ctx context.Context) error {
 			stream, err := client.WatchEvents(ctx, &chatpb.WatchEventsRequest{})
 			if err != nil {

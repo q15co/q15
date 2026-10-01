@@ -20,8 +20,11 @@ const (
 
 // InboundMessage is a user-originated message entering the runtime.
 type InboundMessage struct {
-	Channel     string
-	ChatID      string
+	Channel string
+	ChatID  string
+	// SessionID routes a message to a transient transport session when one
+	// exists. ChatID remains the stable conversation and notification target.
+	SessionID   string
 	UserID      string
 	MessageID   string
 	SentAt      time.Time

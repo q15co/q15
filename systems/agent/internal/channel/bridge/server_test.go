@@ -130,7 +130,7 @@ func TestNewServerUnlinksStaleSocketAndPreparesModeGroup(t *testing.T) {
 		t.Fatalf("write stale socket file: %v", err)
 	}
 
-	server, err := NewServer("unix://"+address, NewService(&fakeTurnLister{}))
+	server, err := NewServer("unix://"+address, NewService(&fakeTurnLister{}, &AgentEndpoint{}))
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
 	}
@@ -154,7 +154,7 @@ func TestNewServerUnlinksStaleSocketAndPreparesModeGroup(t *testing.T) {
 
 	// Shutdown may leave the socket file behind; the next bind must unlink it
 	// rather than fail on startup.
-	restarted, err := NewServer("unix://"+address, NewService(&fakeTurnLister{}))
+	restarted, err := NewServer("unix://"+address, NewService(&fakeTurnLister{}, &AgentEndpoint{}))
 	if err != nil {
 		t.Fatalf("NewServer() after Close() error = %v", err)
 	}
@@ -166,7 +166,7 @@ func TestNewServerSurfacesBindFailure(t *testing.T) {
 	// path named, never silently.
 	target := "unix://" + filepath.Join(t.TempDir(), "missing-dir", "bridge.sock")
 
-	_, err := NewServer(target, NewService(&fakeTurnLister{}))
+	_, err := NewServer(target, NewService(&fakeTurnLister{}, &AgentEndpoint{}))
 	if err == nil {
 		t.Fatalf("NewServer(%q) error = nil, want bind failure", target)
 	}
@@ -177,7 +177,7 @@ func TestNewServerSurfacesBindFailure(t *testing.T) {
 
 func TestServerServeStopsOnContextCancellation(t *testing.T) {
 	// TCP keeps this test away from socket permissions entirely.
-	server, err := NewServer("127.0.0.1:0", NewService(&fakeTurnLister{}))
+	server, err := NewServer("127.0.0.1:0", NewService(&fakeTurnLister{}, &AgentEndpoint{}))
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
 	}

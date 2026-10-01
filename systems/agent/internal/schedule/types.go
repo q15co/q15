@@ -320,7 +320,9 @@ type Config struct {
 	MaxTurns              int
 	RunTimeout            time.Duration
 	UnavailableRetryDelay time.Duration
-	AllowedUserIDs        []int64
+	// AuthorizeOwner applies the caller's transport policy after owner
+	// validation. Nil adds no restriction; exact job ownership still applies.
+	AuthorizeOwner func(Owner) error
 
 	DefaultModel func() ModelTarget
 	ModelExists  func(ModelTarget) bool

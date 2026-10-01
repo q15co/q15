@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -49,7 +48,7 @@ type Manager struct {
 	maxTurns              int
 	runTimeout            time.Duration
 	unavailableRetryDelay time.Duration
-	allowedUserIDs        map[string]struct{}
+	authorizeOwner        func(Owner) error
 	defaultModel          func() ModelTarget
 	modelExists           func(ModelTarget) bool
 	toolExists            func(string) bool
@@ -113,13 +112,6 @@ func NewManager(ctx context.Context, cfg Config) (*Manager, error) {
 		return nil, fmt.Errorf("schedule tool catalog is required")
 	}
 
-	allowedUserIDs := make(map[string]struct{}, len(cfg.AllowedUserIDs))
-	for _, id := range cfg.AllowedUserIDs {
-		if id > 0 {
-			allowedUserIDs[strconv.FormatInt(id, 10)] = struct{}{}
-		}
-	}
-
 	m := &Manager{
 		jobs:                  make(map[string]Job),
 		running:               make(map[string]struct{}),
@@ -132,7 +124,7 @@ func NewManager(ctx context.Context, cfg Config) (*Manager, error) {
 		maxTurns:              cfg.MaxTurns,
 		runTimeout:            cfg.RunTimeout,
 		unavailableRetryDelay: cfg.UnavailableRetryDelay,
-		allowedUserIDs:        allowedUserIDs,
+		authorizeOwner:        cfg.AuthorizeOwner,
 		defaultModel:          cfg.DefaultModel,
 		modelExists:           cfg.ModelExists,
 		toolExists:            cfg.ToolExists,
@@ -1241,10 +1233,8 @@ func (m *Manager) authorize(owner Owner) error {
 	if err := validateOwner(owner); err != nil {
 		return err
 	}
-	if len(m.allowedUserIDs) > 0 {
-		if _, ok := m.allowedUserIDs[owner.UserID]; !ok {
-			return fmt.Errorf("user %q is not allowed to manage scheduled jobs", owner.UserID)
-		}
+	if m.authorizeOwner != nil {
+		return m.authorizeOwner(owner)
 	}
 	return nil
 }
