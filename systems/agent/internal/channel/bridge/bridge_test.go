@@ -18,11 +18,14 @@ import (
 )
 
 type fakeTurnLister struct {
-	page     memory.TurnPage
-	err      error
-	calls    int
-	afterSeq int64
-	limit    int
+	page      memory.TurnPage
+	err       error
+	head      int64
+	headErr   error
+	calls     int
+	afterSeq  int64
+	limit     int
+	headCalls int
 }
 
 func (f *fakeTurnLister) ListTurns(
@@ -35,6 +38,12 @@ func (f *fakeTurnLister) ListTurns(
 	f.afterSeq = afterSeq
 	f.limit = limit
 	return f.page, f.err
+}
+
+func (f *fakeTurnLister) LoadHead(ctx context.Context) (int64, time.Time, error) {
+	_ = ctx
+	f.headCalls++
+	return f.head, time.Time{}, f.headErr
 }
 
 func startBridgeService(t *testing.T, lister TurnLister) chatpb.ChatServiceClient {
@@ -263,25 +272,100 @@ func TestServiceListTurnsSurfacesListerFailure(t *testing.T) {
 	}
 }
 
-func TestServiceStaysUnimplementedBeyondListTurns(t *testing.T) {
-	client := startBridgeService(t, &fakeTurnLister{})
+func TestServiceGetRuntimeInfoReportsHandshake(t *testing.T) {
+	lister := &fakeTurnLister{page: memory.TurnPage{HeadSeq: 12}, head: 12}
+	client := startBridgeService(t, lister)
 
-	_, err := client.GetRuntimeInfo(context.Background(), &chatpb.GetRuntimeInfoRequest{})
-	if status.Code(err) != codes.Unimplemented {
+	response, err := client.GetRuntimeInfo(
+		context.Background(), &chatpb.GetRuntimeInfoRequest{},
+	)
+	if err != nil {
+		t.Fatalf("GetRuntimeInfo() error = %v", err)
+	}
+	if response.GetProtocolVersion() != chatpb.ProtocolVersion {
 		t.Fatalf(
-			"GetRuntimeInfo() code = %v, want Unimplemented (err=%v)",
-			status.Code(err),
-			err,
+			"GetRuntimeInfo() protocol = %d, want %d",
+			response.GetProtocolVersion(),
+			chatpb.ProtocolVersion,
 		)
 	}
-	_, err = client.SendMessage(
-		context.Background(), &chatpb.SendMessageRequest{},
-	)
-	if status.Code(err) != codes.Unimplemented {
+	// head_seq is the transcript head as the store holds it. It may sit above
+	// the newest turn record while a run is in flight; the bridge returns it
+	// without reconciling.
+	if response.GetHeadSeq() != 12 {
+		t.Fatalf("GetRuntimeInfo() head = %d, want 12", response.GetHeadSeq())
+	}
+	if response.GetServiceVersion() == "" {
+		t.Fatalf("GetRuntimeInfo() service version = %q, want non-empty",
+			response.GetServiceVersion())
+	}
+	if got := len(response.GetCapabilities()); got != 0 {
 		t.Fatalf(
-			"SendMessage() code = %v, want Unimplemented (err=%v)",
-			status.Code(err),
-			err,
+			"GetRuntimeInfo() capabilities = %d entries, want none advertised",
+			got,
 		)
+	}
+	if lister.headCalls != 1 {
+		t.Fatalf("LoadHead() calls = %d, want 1", lister.headCalls)
+	}
+}
+
+func TestServiceGetRuntimeInfoSurfacesHeadFailure(t *testing.T) {
+	lister := &fakeTurnLister{headErr: errors.New("head unreadable")}
+	client := startBridgeService(t, lister)
+
+	_, err := client.GetRuntimeInfo(
+		context.Background(), &chatpb.GetRuntimeInfoRequest{},
+	)
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("GetRuntimeInfo() code = %v, want Internal (err=%v)", status.Code(err), err)
+	}
+}
+
+func TestServiceStaysUnimplementedBeyondServedRPCs(t *testing.T) {
+	client := startBridgeService(t, &fakeTurnLister{})
+
+	for _, rpc := range []struct {
+		name string
+		call func(context.Context) error
+	}{
+		{"OpenSession", func(ctx context.Context) error {
+			_, err := client.OpenSession(ctx, &chatpb.OpenSessionRequest{})
+			return err
+		}},
+		{"SendMessage", func(ctx context.Context) error {
+			_, err := client.SendMessage(ctx, &chatpb.SendMessageRequest{})
+			return err
+		}},
+		{"Abort", func(ctx context.Context) error {
+			_, err := client.Abort(ctx, &chatpb.AbortRequest{})
+			return err
+		}},
+		{"WatchEvents", func(ctx context.Context) error {
+			stream, err := client.WatchEvents(ctx, &chatpb.WatchEventsRequest{})
+			if err != nil {
+				return err
+			}
+			_, err = stream.Recv()
+			return err
+		}},
+		{"Deliver", func(ctx context.Context) error {
+			stream, err := client.Deliver(ctx, &chatpb.DeliverRequest{})
+			if err != nil {
+				return err
+			}
+			_, err = stream.Recv()
+			return err
+		}},
+	} {
+		err := rpc.call(context.Background())
+		if status.Code(err) != codes.Unimplemented {
+			t.Fatalf(
+				"%s() code = %v, want Unimplemented (err=%v)",
+				rpc.name,
+				status.Code(err),
+				err,
+			)
+		}
 	}
 }

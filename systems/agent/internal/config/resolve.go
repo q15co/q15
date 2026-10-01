@@ -65,6 +65,7 @@ func (c Config) ResolveAgentRuntime() (*AgentRuntime, error) {
 		},
 		TelegramToken:          token,
 		TelegramAllowedUserIDs: allowedUserIDs,
+		BridgeListenTarget:     strings.TrimSpace(agentCfg.Bridge.ListenTarget),
 	}, nil
 }
 

@@ -72,23 +72,8 @@ func (c Config) validate() error {
 		return errors.New("agent.name is required")
 	}
 
-	if strings.TrimSpace(c.Agent.Telegram.Token) == "" &&
-		strings.TrimSpace(c.Agent.Telegram.TokenEnv) == "" {
-		return errors.New("agent.telegram requires token or token_env")
-	}
-	allowedUserIDsEnv := strings.TrimSpace(c.Agent.Telegram.AllowedUserIDsEnv)
-	if len(c.Agent.Telegram.AllowedUserIDs) == 0 && allowedUserIDsEnv == "" {
-		return errors.New("agent.telegram requires allowed_user_ids or allowed_user_ids_env")
-	}
-	if len(c.Agent.Telegram.AllowedUserIDs) > 0 && allowedUserIDsEnv != "" {
-		return errors.New(
-			"agent.telegram.allowed_user_ids and agent.telegram.allowed_user_ids_env are mutually exclusive",
-		)
-	}
-	if len(c.Agent.Telegram.AllowedUserIDs) > 0 {
-		if _, err := normalizeAllowedUserIDs(c.Agent.Telegram.AllowedUserIDs); err != nil {
-			return fmt.Errorf("agent.telegram.allowed_user_ids: %w", err)
-		}
+	if err := validateTelegram(c.Agent.Telegram); err != nil {
+		return err
 	}
 	if err := c.Agent.Tools.Embeddings.validate(); err != nil {
 		return fmt.Errorf("agent.tools.embeddings: %w", err)
@@ -97,6 +82,40 @@ func (c Config) validate() error {
 		return fmt.Errorf("agent.tools.schedule: %w", err)
 	}
 
+	return nil
+}
+
+// validateTelegram validates the Telegram transport, which is optional: the
+// transport is configured exactly when the agent names a token source, and an
+// agent reachable only through the chat bridge names none. A half-configured
+// transport is still an error, in both directions, because a token and an
+// allow-list that disagree are otherwise silent until the transport starts.
+func validateTelegram(tg Telegram) error {
+	token := strings.TrimSpace(tg.Token)
+	tokenEnv := strings.TrimSpace(tg.TokenEnv)
+	allowedUserIDsEnv := strings.TrimSpace(tg.AllowedUserIDsEnv)
+
+	if token == "" && tokenEnv == "" {
+		if len(tg.AllowedUserIDs) > 0 || allowedUserIDsEnv != "" {
+			return errors.New(
+				"agent.telegram allow-list is set without a token: set telegram.token or telegram.token_env, or drop allowed_user_ids and allowed_user_ids_env",
+			)
+		}
+		return nil
+	}
+	if len(tg.AllowedUserIDs) == 0 && allowedUserIDsEnv == "" {
+		return errors.New("agent.telegram requires allowed_user_ids or allowed_user_ids_env")
+	}
+	if len(tg.AllowedUserIDs) > 0 && allowedUserIDsEnv != "" {
+		return errors.New(
+			"agent.telegram.allowed_user_ids and agent.telegram.allowed_user_ids_env are mutually exclusive",
+		)
+	}
+	if len(tg.AllowedUserIDs) > 0 {
+		if _, err := normalizeAllowedUserIDs(tg.AllowedUserIDs); err != nil {
+			return fmt.Errorf("agent.telegram.allowed_user_ids: %w", err)
+		}
+	}
 	return nil
 }
 

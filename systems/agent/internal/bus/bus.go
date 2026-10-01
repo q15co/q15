@@ -14,6 +14,8 @@ const (
 	DefaultBufferSize = 128
 	// ChannelTelegram identifies Telegram transport messages.
 	ChannelTelegram = "telegram"
+	// ChannelBridge identifies chat-contract bridge transport messages.
+	ChannelBridge = "bridge"
 )
 
 // InboundMessage is a user-originated message entering the runtime.
