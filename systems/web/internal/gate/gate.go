@@ -3,7 +3,6 @@ package gate
 
 import (
 	"context"
-	"crypto/sha256"
 	"crypto/subtle"
 	"fmt"
 	"net/http"
@@ -33,14 +32,14 @@ type Authorizer interface {
 }
 
 // TemporaryToken grants only the single owner's chat scope.
-type TemporaryToken struct{ digest [32]byte }
+type TemporaryToken struct{ token string }
 
 // NewTemporaryToken refuses an empty gate rather than starting an open server.
 func NewTemporaryToken(token string) (*TemporaryToken, error) {
 	if strings.TrimSpace(token) == "" {
 		return nil, fmt.Errorf("Q15_WEB_TOKEN is required")
 	}
-	return &TemporaryToken{digest: sha256.Sum256([]byte(token))}, nil
+	return &TemporaryToken{token: token}, nil
 }
 
 // RequireScope accepts a bearer token or browser-native Basic auth (q15/token).
@@ -55,8 +54,10 @@ func (g *TemporaryToken) RequireScope(scope string, next http.Handler) http.Hand
 		if username, password, ok := r.BasicAuth(); ok && username == "q15" {
 			token = password
 		}
-		digest := sha256.Sum256([]byte(token))
-		if token == "" || subtle.ConstantTimeCompare(digest[:], g.digest[:]) != 1 {
+		// This temporary gate compares the environment token itself; it is not
+		// a password database or a password-hashing scheme. Equal-length tokens
+		// are compared in constant time without revealing matching prefixes.
+		if token == "" || subtle.ConstantTimeCompare([]byte(token), []byte(g.token)) != 1 {
 			w.Header().Set("WWW-Authenticate", `Basic realm="q15-web", charset="UTF-8"`)
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return

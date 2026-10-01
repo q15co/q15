@@ -105,13 +105,13 @@ func (s *Server) start(work func()) bool {
 }
 
 func (s *Server) history(w http.ResponseWriter, r *http.Request) {
-	after, err := queryInt(r, "after_seq", 0, 0, 1<<63-1)
-	if err != nil {
+	after, err := queryInt(r, "after_seq", 0)
+	if err != nil || after < 0 {
 		writeError(w, http.StatusBadRequest, "invalid_after_seq")
 		return
 	}
-	limit, err := queryInt(r, "limit", 50, 1, 500)
-	if err != nil {
+	limit, err := queryInt(r, "limit", 50)
+	if err != nil || limit < 1 || limit > 500 {
 		writeError(w, http.StatusBadRequest, "invalid_limit")
 		return
 	}
@@ -129,7 +129,7 @@ func (s *Server) history(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(protocol.FromPage(page))
 }
 
-func queryInt(r *http.Request, name string, fallback, minimum, maximum int64) (int64, error) {
+func queryInt(r *http.Request, name string, fallback int64) (int64, error) {
 	values, ok := r.URL.Query()[name]
 	if !ok {
 		return fallback, nil
@@ -138,7 +138,7 @@ func queryInt(r *http.Request, name string, fallback, minimum, maximum int64) (i
 		return 0, fmt.Errorf("duplicate %s", name)
 	}
 	value, err := strconv.ParseInt(values[0], 10, 64)
-	if err != nil || value < minimum || value > maximum {
+	if err != nil {
 		return 0, fmt.Errorf("invalid %s", name)
 	}
 	return value, nil
