@@ -329,7 +329,6 @@ test("live tool rows update from running to completed and collapse after the ans
       msg: { turn: "31", ordinal: -1 },
       kind: "model_start",
       text: "",
-      loop_turn: 1,
       seq: "0",
     }),
   );
@@ -367,7 +366,7 @@ test("live tool rows update from running to completed and collapse after the ans
       msg: { turn: "31", ordinal: -1 },
       kind: "model_start",
       text: "",
-      loop_turn: 2,
+      loop_turn: 1,
       seq: "3",
     }),
   );

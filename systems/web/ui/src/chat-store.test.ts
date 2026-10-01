@@ -126,6 +126,39 @@ describe("chat state", () => {
       disposition: "final",
     });
   });
+  it("rebuilds an earlier replayed model loop without duplicating completed tool work", () => {
+    const { store } = setup();
+    feed(store, streamed.slice(0, 8));
+    const msg = { turn: "42", ordinal: -1 };
+    event(store, "snapshot", { msg, seq: "10", kind: "model_start", text: "", loop_turn: 2 });
+    event(store, "delta", { msg, seq: "11", kind: "text", text: "second loop" });
+    // A reconnect replays model_start and snapshots from the retained run log.
+    feed(store, [streamed[2]!]);
+    expect(store.getSnapshot().messages[0]?.parts).toEqual([]);
+    feed(store, streamed.slice(3, 8));
+    expect(
+      store.getSnapshot().messages[0]?.parts.filter((p) => p.part_type === "tool_call"),
+    ).toHaveLength(1);
+    expect(
+      store.getSnapshot().messages[0]?.parts.filter((p) => p.part_type === "tool_result"),
+    ).toHaveLength(1);
+  });
+  it("treats an omitted loop counter as zero and retains its tools when loop one starts", () => {
+    const { store } = setup();
+    const msg = { turn: "42", ordinal: -1 };
+    const call = { id: "zero-loop", name: "exec", arguments: '{"command":"pwd"}' };
+    event(store, "snapshot", { msg, seq: "1", kind: "model_start", text: "" });
+    event(store, "delta", { msg, seq: "2", kind: "tool_call", text: "", call });
+    event(store, "delta", { msg, seq: "3", kind: "tool_result", text: "/workspace", call });
+    event(store, "snapshot", { msg, seq: "4", kind: "model_start", text: "", loop_turn: 1 });
+    expect(store.getSnapshot().messages[0]?.parts.map((p) => p.part_type)).toEqual([
+      "tool_call",
+      "tool_result",
+    ]);
+    // Replaying from loop zero clears the draft before tools are replayed.
+    event(store, "snapshot", { msg, seq: "1", kind: "model_start", text: "" });
+    expect(store.getSnapshot().messages[0]?.parts).toEqual([]);
+  });
   it("marks unacknowledged sends uncertain when disconnected", () => {
     const { store, transport } = setup();
     store.start();

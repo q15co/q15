@@ -318,15 +318,22 @@ export class ChatStore {
     let loopStart = previous?.loopStart ?? 0;
     let loopTurn = previous?.loopTurn;
     if (value.type === "snapshot" && p.kind === "model_start") {
-      if (p.loop_turn !== undefined && loopTurn !== undefined && p.loop_turn > loopTurn) {
+      // Go omits loop_turn at zero, the engine's initial loop counter.
+      const nextLoop = p.loop_turn ?? 0;
+      if (loopTurn !== undefined && nextLoop > loopTurn) {
         // A new model loop follows completed tool work. Keep that activity;
         // only a retry of the same loop replaces the current model attempt.
         parts = parts.map((part) =>
           part.part_type === "text" ? { ...part, disposition: "commentary" } : part,
         );
         loopStart = parts.length;
+      } else if (loopTurn === undefined || nextLoop < loopTurn) {
+        // Reconnect can replay an earlier loop from the retained run log.
+        // Rebuild from that boundary instead of appending duplicate tool work.
+        parts = [];
+        loopStart = 0;
       } else parts = parts.slice(0, loopStart);
-      loopTurn = p.loop_turn;
+      loopTurn = nextLoop;
     } else if (p.kind === "text" || p.kind === "reasoning") {
       const index = parts.findLastIndex((part, i) => i >= loopStart && part.part_type === p.kind);
       const entry = {
