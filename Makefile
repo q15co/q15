@@ -2,12 +2,14 @@ SHELL := bash
 
 GO ?= go
 DOCKER_COMPOSE ?= docker compose
+DOCKER ?= docker
 BIN_DIR ?= bin
 COMPOSE_FILE ?= docker-compose.yml
 COMPOSE_PROJECT_NAME ?= q15-local
 AGENT_MOD_DIR ?= systems/agent
 EXEC_MOD_DIR ?= systems/exec
 PROXY_MOD_DIR ?= systems/proxy
+WEB_MOD_DIR ?= systems/web
 EXEC_CONTRACT_MOD_DIR ?= libs/exec-contract
 PROXY_CONTRACT_MOD_DIR ?= libs/proxy-contract
 CHAT_CONTRACT_MOD_DIR ?= libs/chat-contract
@@ -20,11 +22,11 @@ COMPOSE_ENV := COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT_NAME)
 
 .DEFAULT_GOAL := build
 
-.PHONY: all build build-agent build-auth build-exec build-proxy project-setup fmt lint lint-changed test verify verify-ci hooks-install hooks-uninstall compose-secrets-init compose-up compose-down compose-logs compose-ps clean help protos protos-check
+.PHONY: all build build-agent build-auth build-exec build-proxy build-web build-web-image test-web project-setup fmt lint lint-changed test verify verify-ci hooks-install hooks-uninstall compose-secrets-init compose-up compose-down compose-logs compose-ps clean help protos protos-check
 
 all: build
 
-build: build-agent build-auth build-exec build-proxy
+build: build-agent build-auth build-exec build-proxy build-web
 
 build-agent:
 	@mkdir -p $(BIN_DIR)
@@ -42,6 +44,16 @@ build-proxy:
 	@mkdir -p $(BIN_DIR)
 	cd $(PROXY_MOD_DIR) && $(GO) build -o ../../$(BIN_DIR)/q15-proxy .
 
+build-web:
+	@mkdir -p $(BIN_DIR)
+	cd $(WEB_MOD_DIR) && $(GO) build -o ../../$(BIN_DIR)/q15-web .
+
+build-web-image:
+	$(DOCKER) build -f docker/web.Dockerfile -t q15-web:local .
+
+test-web: project-setup
+	cd $(WEB_MOD_DIR) && CGO_ENABLED=0 $(GO) test $(TEST_FLAGS) ./...
+
 project-setup:
 	./scripts/project-setup.sh
 
@@ -56,6 +68,7 @@ test:
 	cd $(AGENT_MOD_DIR) && CGO_ENABLED=0 $(GO) test ./...
 	cd $(EXEC_MOD_DIR) && CGO_ENABLED=0 $(GO) test ./...
 	cd $(PROXY_MOD_DIR) && CGO_ENABLED=0 $(GO) test ./...
+	$(MAKE) test-web
 
 protos: project-setup
 	buf generate
@@ -117,16 +130,19 @@ clean:
 
 help:
 	@echo "Available targets:"
-	@echo "  build         Build q15-agent, q15-auth, q15-exec, and q15-proxy into ./bin"
+	@echo "  build         Build q15-agent, q15-auth, q15-exec, q15-proxy, and q15-web into ./bin"
 	@echo "  build-agent   Build ./bin/q15-agent from $(AGENT_MOD_DIR)"
 	@echo "  build-auth    Build ./bin/q15-auth from $(AGENT_MOD_DIR)/cmd/q15-auth"
 	@echo "  build-exec    Build ./bin/q15-exec from $(EXEC_MOD_DIR)"
 	@echo "  build-proxy   Build ./bin/q15-proxy from $(PROXY_MOD_DIR)"
+	@echo "  build-web     Build ./bin/q15-web from $(WEB_MOD_DIR)"
+	@echo "  build-web-image  Build the local q15-web image (Corepack/pnpm UI, Go embedding)"
+	@echo "  test-web      Test the browser tier (optional TEST_FLAGS)"
 	@echo "  project-setup Install or refresh the pinned repo-local tooling under ./.tools"
 	@echo "  fmt           Format tracked files (or FILES='a b' for an explicit subset)"
 	@echo "  lint          Run full-repo file checks plus repo-wide Go static analysis"
 	@echo "  lint-changed  Run fast changed-file checks (or FILES='a b' for an explicit subset)"
-	@echo "  test          Run Go tests for exec/proxy/chat contracts + agent + exec + proxy"
+	@echo "  test          Run Go tests for exec/proxy/chat contracts + agent + exec + proxy + web"
 	@echo "  protos        Regenerate protobuf stubs under libs/ from proto sources"
 	@echo "  protos-check  Regenerate protobuf stubs and fail if they differ from tracked files"
 	@echo "  verify        Run project-setup, protos-check, lint, and test"

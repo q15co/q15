@@ -4,6 +4,7 @@ set -euo pipefail
 agent=false
 exec_service=false
 proxy=false
+web=false
 
 matches_any() {
 	local file="$1"
@@ -53,6 +54,16 @@ while IFS= read -r file; do
 		"docker/proxy.Dockerfile"; then
 		proxy=true
 	fi
+
+	if matches_any "${file}" \
+		"systems/web/**" \
+		"libs/chat-contract/**" \
+		".dockerignore" \
+		"go.work" \
+		"go.work.sum" \
+		"docker/web.Dockerfile"; then
+		web=true
+	fi
 done
 
-printf '{"agent":%s,"exec":%s,"proxy":%s}\n' "${agent}" "${exec_service}" "${proxy}"
+printf '{"agent":%s,"exec":%s,"proxy":%s,"web":%s}\n' "${agent}" "${exec_service}" "${proxy}" "${web}"

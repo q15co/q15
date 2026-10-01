@@ -9,6 +9,9 @@ bin/
 .pre-commit-config.yaml
 
 *.log
+systems/web/internal/assets/dist/*
+!systems/web/internal/assets/dist/.gitkeep
+systems/web/ui/node_modules/
 deploy/compose/secrets/*
 !deploy/compose/secrets/*.example
 !deploy/compose/secrets/README.md
