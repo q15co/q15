@@ -163,6 +163,19 @@ is_go_file() {
 	[[ $1 == *.go ]]
 }
 
+# Shared extension dispatch. File hygiene already applies to every UI file.
+is_typescript_file() {
+	case "$1" in
+	*.ts | *.tsx | *.mts | *.cts | *.js | *.jsx | *.mjs | *.cjs | *.jsonc) return 0 ;;
+	*) return 1 ;;
+	esac
+}
+
+ui_tool() {
+	[[ -x "${REPO_ROOT}/systems/web/ui/node_modules/.bin/vp" ]] || die "UI dependencies missing; run make ui-install"
+	(cd "${REPO_ROOT}/systems/web/ui" && pnpm exec vp "$@")
+}
+
 is_workflow_file() {
 	[[ $1 == .github/workflows/* ]] && is_yaml_file "$1"
 }

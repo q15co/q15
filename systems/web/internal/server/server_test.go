@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/coder/websocket"
@@ -212,7 +213,7 @@ func setup(t *testing.T, fake *fakeChat) (*Server, *httptest.Server) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	content, err := assets.Load("")
+	content, err := assets.New(fstest.MapFS{"index.html": {Data: []byte("<html>chat</html>")}})
 	if err != nil {
 		t.Fatal(err)
 	}

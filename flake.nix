@@ -6,6 +6,8 @@
   };
 
   outputs = {nixpkgs, ...}: let
+    toolVersions = builtins.readFile ./scripts/tool-versions.sh;
+    nodeMajor = builtins.head (builtins.match ".*NODE_VERSION=([0-9]+)\\.[0-9]+\\.[0-9]+.*" toolVersions);
     systems = [
       "x86_64-linux"
       "aarch64-linux"
@@ -25,7 +27,7 @@
           git
           gnumake
           go_1_26
-          nodejs_24
+          pkgs."nodejs_${nodeMajor}"
           python312
         ];
 
@@ -35,6 +37,10 @@
           GOSUMDB = "sum.golang.org";
           CGO_ENABLED = "0";
         };
+        # project-setup installs exact Node/pnpm versions from the shared manifest.
+        shellHook = ''
+          export PATH="$PWD/.tools/bin:$PATH"
+        '';
       };
     });
   };

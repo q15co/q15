@@ -88,17 +88,32 @@ func TestOrigin(t *testing.T) {
 	}{
 		{"", "same-origin", false}, {"https://evil.example", "same-origin", false},
 		{"https://chat.example", "same-origin", true}, {"https://chat.example", "cross-site", false},
-		{"https://chat.example", "", false}, {"http://chat.example", "same-origin", false},
+		{"https://chat.example", "", true}, {"http://chat.example", "same-origin", false},
+		{"https://evil.example", "", false}, {"https://chat.example", "same-site", false},
 		{"https://chat.example/", "same-origin", false},
 	} {
 		r := httptest.NewRequest("GET", "https://evil.example/ws", nil)
 		if test.origin != "" {
 			r.Header.Set("Origin", test.origin)
 		}
-		r.Header.Set("Sec-Fetch-Site", test.site)
+		if test.site != "" {
+			r.Header.Set("Sec-Fetch-Site", test.site)
+		}
 		if got := CheckOrigin(r, "https://chat.example"); got != test.want {
 			t.Errorf("%q/%q = %v", test.origin, test.site, got)
 		}
+	}
+	r := httptest.NewRequest("GET", "/ws", nil)
+	r.Header.Add("Origin", "https://chat.example")
+	r.Header.Add("Origin", "https://chat.example")
+	if CheckOrigin(r, "https://chat.example") {
+		t.Error("duplicate origins accepted")
+	}
+	r.Header.Set("Origin", "https://chat.example")
+	r.Header.Add("Sec-Fetch-Site", "same-origin")
+	r.Header.Add("Sec-Fetch-Site", "cross-site")
+	if CheckOrigin(r, "https://chat.example") {
+		t.Error("conflicting fetch metadata accepted")
 	}
 	for _, origin := range []string{"", "https://example/", "https://user@example", "https://example?x=1", "javascript:example", "https://example\r\nInjected: true"} {
 		if ValidateOrigin(origin) == nil {

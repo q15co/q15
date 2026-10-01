@@ -118,6 +118,7 @@ services:
     image: ghcr.io/q15co/q15-agent:${Q15_IMAGE_TAG:-stable}
     restart: unless-stopped
     init: true
+    group_add: ["1000"]
     depends_on:
       q15-exec:
         condition: service_healthy
@@ -195,8 +196,39 @@ services:
       - type: volume
         source: q15_agent_state
         target: /var/lib/q15/agent
+      - type: volume
+        source: q15_bridge
+        target: /run/q15
+
+  q15-web:
+    image: ghcr.io/q15co/q15-web:${Q15_IMAGE_TAG:-stable}
+    user: "65532:1000"
+    restart: unless-stopped
+    init: true
+    depends_on:
+      q15-agent:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      Q15_WEB_LISTEN: 0.0.0.0:8080
+      Q15_WEB_BRIDGE: unix:///run/q15/bridge.sock
+      Q15_WEB_ORIGIN: ${Q15_WEB_ORIGIN:-http://localhost:8080}
+      Q15_WEB_TOKEN: ${Q15_WEB_TOKEN:-}
+    volumes:
+      - type: volume
+        source: q15_bridge
+        target: /run/q15
+        read_only: true
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/q15-web", "--healthcheck"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
 
 volumes:
+  q15_bridge:
   q15_agent_state:
   q15_exec_nix_store:
   q15_media:

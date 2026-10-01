@@ -12,6 +12,10 @@ bin/
 systems/web/internal/assets/dist/*
 !systems/web/internal/assets/dist/.gitkeep
 systems/web/ui/node_modules/
+systems/web/ui/.vite/
+systems/web/ui/.vp/
+systems/web/ui/test-results/
+systems/web/ui/playwright-report/
 deploy/compose/secrets/*
 !deploy/compose/secrets/*.example
 !deploy/compose/secrets/README.md

@@ -27,17 +27,18 @@ For a long-running image-first deployment:
 ```bash
 make compose-secrets-init
 cp deploy/compose/release.env.example deploy/compose/release.env
+export Q15_WEB_TOKEN="$(openssl rand -hex 32)"
 docker compose --env-file deploy/compose/release.env \
   -f deploy/compose/docker-compose.image-first.yml up -d --wait
 ```
 
 Notes:
 
-- `stable` is updated on `q15-agent`, `q15-exec`, and `q15-proxy` only after the same immutable
-  DateVer has been published and verified on all three packages.
-- Pull `stable` only after the publish workflow succeeds, so all three moving tags have advanced.
+- `stable` is updated on `q15-agent`, `q15-exec`, `q15-proxy`, and `q15-web` only after the same
+  immutable DateVer has been published and verified on all four packages.
+- Pull `stable` only after the publish workflow succeeds, so all four moving tags have advanced.
 - Set `Q15_IMAGE_TAG` to an immutable `YYYY.MM.DD.<run-number>` DateVer when pinning or rolling back
-  a deployment. The same tag always selects one compatible three-image release.
+  a deployment. The same tag always selects one compatible four-image release.
 - `/workspace` is expected to persist long-term for one stack. It may be empty on first startup.
 - `/memory` should also persist across updates. `q15-agent` eagerly upgrades stored turn history to
   the latest transcript schema on startup.
@@ -158,3 +159,51 @@ sources); the re-embed cost is roughly proportional to the unique chunk count.
 
 Gemini stays available as a provider: switching back is the same two-line config change, and the
 same stamp invalidation plus automatic collection recreation applies in reverse.
+
+## Browser chat and the bridge socket
+
+Both Compose files include `q15-web`. Set a nonempty `Q15_WEB_TOKEN` before starting the stack:
+
+```bash
+export Q15_WEB_TOKEN="$(openssl rand -hex 32)"
+make compose-up
+```
+
+Open `http://localhost:8080` and use username `q15` with that token as the password in the browser's
+native Basic prompt. The token is temporary owner authentication; login and enrolment screens are a
+later slice. Persist your chosen token in your deployment environment if chat should survive a
+restart without a new challenge. `Q15_WEB_ORIGIN` defaults to exactly `http://localhost:8080`; an
+alternate hostname must be configured explicitly on the web tier.
+
+Only `127.0.0.1:8080` is published. Tunnel ingress is deliberately unchanged, and no external
+ingress is provisioned in this slice. **Kubernetes is out of scope**: `deploy/kubernetes/base/`
+remains untouched. Its TCP model does not implement this Unix-socket bridge deployment.
+
+The new `q15_bridge` named volume mounts at `/run/q15` in exactly the agent and the web tier. The
+agent's `bridge.listen_target`, the web's `Q15_WEB_BRIDGE` and the agent's documented default all
+use `unix:///run/q15/bridge.sock`. The agent adds GID 1000; the socket is owned by that group with
+mode 0660. The web runs as UID 65532, GID 1000 with a read-only directory mount. Neither the
+executor nor any other service mounts the bridge volume. The existing memory volume mounts are
+unchanged.
+
+A named volume is used because it is shared between containers and easy to inspect. The agent's bind
+path unlinks stale sockets after a restart. Definitions stay explicit in each standalone Compose
+file, without requiring an additional overlay. `q15-web --healthcheck` probes the gated process's
+public health endpoint; HTTP starts only after the startup bridge handshake succeeds.
+
+```bash
+make compose-check
+podman-compose -f docker-compose.yml config
+podman-compose -f deploy/compose/docker-compose.image-first.yml config
+```
+
+The contract check also runs in `make test` and asserts the shared path, group policy, loopback port
+and volume boundary without starting containers.
+
+## Browser review policy
+
+`.github/CODEOWNERS` assigns `systems/web/**` and `docker/web.Dockerfile` to `@avanderbergh`. This
+covers app/build configuration, the manifest and worker, package pins and lockfile, serving/CSP, and
+future authentication changes. The main branch's GitHub ruleset must require code-owner review and
+the `Browser Verify` check alongside `Pull Request Verify`. Browser Verify is skipped successfully
+on Go-only edits; fixture-copy validation runs on every PR.

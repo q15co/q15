@@ -34,6 +34,9 @@ type Config struct {
 // Run validates args and starts the web tier. The supervisor retries startup
 // when the agent is not ready; a protocol mismatch always fails hard.
 func Run(args []string) error {
+	if len(args) == 1 && args[0] == "--healthcheck" {
+		return healthcheck(os.Getenv("Q15_WEB_LISTEN"))
+	}
 	if len(args) != 0 {
 		return errors.New("q15-web accepts no arguments")
 	}
@@ -51,6 +54,35 @@ func Run(args []string) error {
 		config.Bridge = "unix:///run/q15/bridge.sock"
 	}
 	return Serve(ctx, config)
+}
+
+// healthcheck is an HTTP probe usable in the shell-free runtime image. The
+// listener opens only after policy, bundle and bridge handshake validation.
+func healthcheck(listen string) error {
+	if listen == "" {
+		listen = "127.0.0.1:8080"
+	}
+	host, port, err := net.SplitHostPort(listen)
+	if err != nil {
+		return err
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+	scheme := "http"
+	if os.Getenv("Q15_WEB_TLS_CERT") != "" {
+		scheme = "https"
+	}
+	client := &http.Client{Timeout: 2 * time.Second}
+	response, err := client.Get(scheme + "://" + net.JoinHostPort(host, port) + "/healthz")
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("web health status: %d", response.StatusCode)
+	}
+	return nil
 }
 
 // Serve checks policy, assets and bridge compatibility before opening HTTP.

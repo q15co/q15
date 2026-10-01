@@ -8,6 +8,8 @@ providers:
 
 agent:
   name: Q15
+  bridge:
+    listen_target: unix:///run/q15/bridge.sock
   memory_recent_turns: 6
   tools:
     web_search:

@@ -9,39 +9,23 @@ import (
 	"testing/fstest"
 )
 
-func TestBundleAssertionAndPlaceholder(t *testing.T) {
+func TestBundleAssertion(t *testing.T) {
 	for _, test := range []struct {
-		name         string
-		files        fstest.MapFS
-		allow, valid bool
+		name  string
+		files fstest.MapFS
+		valid bool
 	}{
-		{"missing", fstest.MapFS{}, true, false},
-		{"placeholder", fstest.MapFS{".gitkeep": {}}, true, true},
-		{"disk placeholder", fstest.MapFS{".gitkeep": {}}, false, false},
-		{"partial build", fstest.MapFS{".gitkeep": {}, "assets/app-12345678.js": {Data: []byte("app")}}, true, false},
-		{"empty index", fstest.MapFS{"index.html": {}}, true, false},
-		{"built", fstest.MapFS{"index.html": {Data: []byte("shell")}}, false, true},
+		{"missing", fstest.MapFS{}, false},
+		{"placeholder", fstest.MapFS{".gitkeep": {}}, false},
+		{"partial build", fstest.MapFS{".gitkeep": {}, "assets/app-12345678.js": {Data: []byte("app")}}, false},
+		{"empty index", fstest.MapFS{"index.html": {}}, false},
+		{"built", fstest.MapFS{"index.html": {Data: []byte("shell")}}, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if _, err := New(test.files, test.allow); (err == nil) != test.valid {
+			if _, err := New(test.files); (err == nil) != test.valid {
 				t.Fatalf("New = %v, valid %v", err, test.valid)
 			}
 		})
-	}
-	h, err := Load("")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer h.Close()
-	for _, test := range []struct {
-		path string
-		want int
-	}{{"/", 200}, {"/assets/no.js", 404}, {"/deep/link", 404}, {"/.gitkeep", 404}} {
-		w := httptest.NewRecorder()
-		h.ServeHTTP(w, httptest.NewRequest("GET", test.path, nil))
-		if w.Code != test.want {
-			t.Errorf("placeholder %s = %d", test.path, w.Code)
-		}
 	}
 }
 
@@ -52,7 +36,6 @@ func TestSPAFallbackAndCache(t *testing.T) {
 			"assets/app-aB123456.js": {Data: []byte("app")},
 			"sw.js":                  {Data: []byte("worker")},
 		},
-		false,
 	)
 	if err != nil {
 		t.Fatal(err)
