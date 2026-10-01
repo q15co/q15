@@ -82,6 +82,26 @@ accessibility rules. Buttons use the same module approach; there is no separate 
 framework. Keep responsive rules beside the component they affect and use the shared tokens for both
 themes.
 
+Shared typography tokens define a small scale, in `rem` so browser font preferences apply:
+
+| Token                       | Default size | Role                                             |
+| --------------------------- | ------------ | ------------------------------------------------ |
+| `--font-xs`                 | 12px         | Timestamps, status and secondary labels          |
+| `--font-sm`                 | 14px         | Controls, navigation, commentary and tool output |
+| `--font-md`                 | 16px         | Messages, introductory text and the composer     |
+| `--font-lg` / `--font-xl`   | 20px / 24px  | Page and Markdown headings                       |
+| `--font-2xl` / `--font-3xl` | 32px / 40px  | Compact / desktop welcome heading                |
+
+Body copy uses a 1.65 line height; controls use 1.5 and headings 1.25. Message and composer widths
+share a 48rem maximum. Spacing tokens follow a 4px scale and stay compact as text grows; controls
+use minimum heights and grow with their content. Drafts scroll internally after reaching the smaller
+of 12rem or 30% of the viewport height.
+
+The app shell provides the named `app` inline-size container. Component modules switch to compact
+layouts below 48rem, including when a larger browser font preference increases that threshold. Short
+viewports hide decorative copy and the composer footer to preserve room for messages. Browser tests
+cover doubled text, keyboard access, narrow screens and long drafts alongside chat behavior.
+
 The official [Catppuccin palette](https://github.com/catppuccin/palette) supplies Mocha and Latte
 theme tokens. The app follows the system's initial preference and remembers the user's choice.
 [Recursive](https://www.recursive.design/) is bundled locally with its full variation axes:

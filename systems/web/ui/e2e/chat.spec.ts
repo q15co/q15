@@ -382,3 +382,75 @@ test("live tool rows update from running to completed and collapse after the ans
   await expect(page.locator("[data-agent-activity]")).not.toHaveAttribute("open");
   await expect(page.getByLabel("Copy response")).toHaveCount(1);
 });
+
+test("enlarged text preserves conversation space, navigation, and keyboard access", async ({
+  page,
+}) => {
+  await backend(page, toolHistory());
+  await page.goto("/");
+  const answer = page.locator('[id="message-70:5"] p');
+  await expect(answer).toBeVisible();
+  const originalSize = await answer.evaluate((node) => parseFloat(getComputedStyle(node).fontSize));
+  await page.evaluate(() => {
+    document.documentElement.style.fontSize = "200%";
+  });
+  expect(await answer.evaluate((node) => parseFloat(getComputedStyle(node).fontSize))).toBeCloseTo(
+    originalSize * 2,
+  );
+  await expect(page.getByLabel("Open navigation")).toBeVisible();
+  await expect(page.getByRole("complementary", { name: "Chat navigation" })).toBeHidden();
+  const transcript = page.getByLabel("Conversation", { exact: true });
+  expect(await transcript.evaluate((node) => node.clientHeight / innerHeight)).toBeGreaterThan(0.4);
+  const skip = page.getByRole("link", { name: "Skip to message input" });
+  await expect(skip).not.toBeInViewport();
+  await skip.focus();
+  await expect(skip).toBeInViewport();
+  await skip.press("Enter");
+  await expect(page.getByLabel("Message q15")).toBeFocused();
+  await page.getByLabel("Open navigation").click();
+  const navigation = page.getByRole("complementary", { name: "Chat navigation" });
+  await expect(navigation).toBeInViewport();
+  await navigation.getByRole("button", { name: "Close navigation", exact: true }).click();
+  await expect(navigation).toBeHidden();
+  await page.getByText("Used 2 tools").click();
+  await page.getByText("Ran command", { exact: true }).click();
+  await expect(page.getByText("/workspace", { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
+test("short and narrow screens keep long drafts and send controls usable", async ({ page }) => {
+  const requests = await backend(page, toolHistory());
+  await page.goto("/");
+  const input = page.getByLabel("Message q15");
+  const scroller = page.getByLabel("Conversation", { exact: true });
+  const draft = "A longer thought that needs more than one line. ".repeat(20);
+  for (const viewport of [
+    { width: 1280, height: 600 },
+    { width: 640, height: 450 },
+    { width: 320, height: 640 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await input.fill(draft);
+    expect(await scroller.evaluate((node) => node.clientHeight / innerHeight)).toBeGreaterThan(
+      0.25,
+    );
+    const form = await page.locator("form").boundingBox();
+    expect(form!.y + form!.height).toBeLessThanOrEqual(viewport.height);
+    expect(await input.evaluate((node) => node.scrollHeight > node.clientHeight)).toBe(true);
+    await expect(page.getByLabel("Send message", { exact: true })).toBeInViewport();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+      true,
+    );
+  }
+  await page.getByLabel("Send message", { exact: true }).click();
+  expect(requests.find((request) => request.type === "msg.send")?.payload).toMatchObject({
+    text: draft.trim(),
+  });
+  await input.fill("The next thought");
+  await expect(page.getByLabel("Stop response")).toBeInViewport();
+  await expect(page.getByLabel("Queue message", { exact: true })).toBeInViewport();
+  await page.getByLabel("Queue message", { exact: true }).click();
+  await page.getByLabel("Stop response").click();
+  await expect(page.getByText("Stopped safely.")).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});

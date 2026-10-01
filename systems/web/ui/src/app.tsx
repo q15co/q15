@@ -107,10 +107,12 @@ export function App({ store, preview = false }: { store: ChatStore; preview?: bo
                 href={`#message-${m.key}`}
                 onClick={() => setMenu(false)}
               >
-                {m.parts
-                  .filter((p) => p.part_type === "text")
-                  .map((p) => p.text)
-                  .join("") || "Message"}
+                <span className={styles.recentText}>
+                  {m.parts
+                    .filter((p) => p.part_type === "text")
+                    .map((p) => p.text)
+                    .join("") || "Message"}
+                </span>
                 <ArrowUpRight size={13} />
               </a>
             ))}

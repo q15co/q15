@@ -1,5 +1,27 @@
 /* Official Catppuccin Mocha and Latte: https://github.com/catppuccin/palette */
+/* Text follows browser font preferences; spacing stays compact as text grows. */
 :root {
+  --font-xs: 0.75rem;
+  --font-sm: 0.875rem;
+  --font-md: 1rem;
+  --font-lg: 1.25rem;
+  --font-xl: 1.5rem;
+  --font-2xl: 2rem;
+  --font-3xl: 2.5rem;
+  --leading-body: 1.65;
+  --leading-ui: 1.5;
+  --leading-heading: 1.25;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --conversation-width: 48rem;
+  --message-inset: 44px;
   --background: #1e1e2e;
   --foreground: #cdd6f4;
   --sidebar: #181825;
@@ -46,7 +68,8 @@
     font-variation-settings:
       "CASL" 0.2,
       "MONO" 0;
-    font-size: 14px;
+    font-size: var(--font-md);
+    line-height: var(--leading-ui);
     color: var(--foreground);
     background: var(--background);
     -webkit-font-smoothing: antialiased;
@@ -85,7 +108,7 @@
     font-variation-settings:
       "MONO" 1,
       "CASL" 0;
-    font-size: 11px;
+    font-size: var(--font-sm);
   }
   h1,
   h2,

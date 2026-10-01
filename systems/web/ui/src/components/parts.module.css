@@ -1,5 +1,5 @@
 .partCard {
-  margin: 8px 0 12px;
+  margin: var(--space-2) 0 var(--space-3);
   border: 1px solid var(--border);
   border-radius: 9px;
   background: color-mix(in srgb, var(--sidebar) 45%, transparent);
@@ -8,10 +8,10 @@
 .partCard summary {
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 10px 12px;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
   color: var(--muted-foreground);
-  font-size: 10px;
+  font-size: var(--font-sm);
   list-style: none;
 }
 .partCard summary::-webkit-details-marker {
@@ -25,17 +25,17 @@
 }
 .partLabel {
   margin-left: auto;
-  font-size: 8px;
+  font-size: var(--font-xs);
 }
 .partCard .partContent {
   border-top: 1px solid var(--border);
-  padding: 12px 14px;
+  padding: var(--space-3) var(--space-4);
   margin: 0;
   white-space: pre-wrap;
-  max-height: 300px;
+  max-height: 20rem;
   overflow: auto;
-  font-size: 11px;
-  line-height: 1.8;
+  font-size: var(--font-sm);
+  line-height: var(--leading-body);
 }
 .reasoning summary {
   color: var(--primary);
@@ -49,17 +49,17 @@
 .mediaReference {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
+  gap: var(--space-3);
   border: 1px solid var(--border);
-  padding: 12px;
+  padding: var(--space-4);
   border-radius: 8px;
 }
 .mediaReference strong {
   display: block;
-  font-size: 11px;
+  font-size: var(--font-sm);
 }
 .mediaReference small {
   display: block;
-  font-size: 10px;
+  font-size: var(--font-sm);
   color: var(--muted-foreground);
 }

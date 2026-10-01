@@ -1,14 +1,14 @@
 .composerArea {
-  max-width: 780px;
+  max-width: var(--conversation-width);
   margin: 0 auto;
-  padding: 0 36px max(18px, env(safe-area-inset-bottom));
+  padding: 0 var(--space-6) max(var(--space-5), env(safe-area-inset-bottom));
   width: 100%;
   flex: none;
 }
 .composer {
   border: 1px solid color-mix(in srgb, var(--muted) 80%, transparent);
   background: color-mix(in srgb, var(--sidebar) 50%, var(--background));
-  border-radius: 16px;
+  border-radius: var(--space-4);
   overflow: hidden;
   box-shadow: 0 6px 25px color-mix(in srgb, #11111b 7%, transparent);
 }
@@ -16,16 +16,18 @@
   border-color: color-mix(in srgb, var(--primary) 55%, var(--border));
 }
 .composer textarea {
+  display: block;
   width: 100%;
   background: transparent;
   color: var(--foreground);
   border: 0;
   outline: none;
-  padding: 20px 20px 0;
-  font-size: 13px;
+  padding: var(--space-4) var(--space-5) var(--space-2);
+  font-size: var(--font-md);
+  line-height: var(--leading-ui);
   resize: none;
-  min-height: 80px;
-  max-height: 230px;
+  min-height: 56px;
+  max-height: min(12rem, 30dvh);
   field-sizing: content;
 }
 .composer textarea::placeholder {
@@ -35,65 +37,58 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 13px 13px 20px;
-  gap: 12px;
+  padding: var(--space-2) var(--space-3) var(--space-3) var(--space-5);
+  gap: var(--space-3);
 }
 .composerHint {
   color: var(--muted-foreground);
-  font-size: 9px;
+  font-size: var(--font-xs);
 }
 .composerButtons {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
 }
 .composerButtons button[type="submit"] {
-  height: 32px;
-  width: 32px;
-  border-radius: 9px;
+  border-radius: 0.625rem;
 }
 .composerFooter {
   color: var(--muted-foreground);
-  opacity: 0.7;
-  font-size: 8px;
+  font-size: var(--font-xs);
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  margin-top: 13px;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
 }
 .keyboardHint {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: var(--space-1);
 }
 .keyboardHint > span {
-  margin-left: 8px;
+  margin-left: var(--space-2);
 }
-@media (min-width: 1500px) {
+@container app (max-width: 48rem) {
   .composerArea {
-    max-width: 900px;
-  }
-}
-@media (max-width: 900px) {
-  .composerArea {
-    padding-inline: 24px;
-  }
-}
-@media (max-width: 640px) {
-  .composerArea {
-    padding-inline: 14px;
-  }
-  .composerHint {
-    font-size: 8px;
+    padding-inline: var(--space-3);
   }
   .composerFooter {
-    font-size: 7px;
-  }
-  .keyboardHint {
     display: none;
   }
+  .composerToolbar {
+    padding-left: var(--space-4);
+  }
   .composer textarea {
-    font-size: 16px;
-    padding-top: 16px;
+    padding-inline: var(--space-4);
+  }
+}
+@media (max-height: 600px) {
+  .composerArea {
+    padding-bottom: max(var(--space-3), env(safe-area-inset-bottom));
+  }
+  .composerFooter {
+    display: none;
   }
 }

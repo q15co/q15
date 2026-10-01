@@ -1,72 +1,76 @@
 .appShell {
   display: flex;
   height: 100dvh;
-  min-height: 420px;
+  min-height: 384px;
+  container: app / inline-size;
   overflow: hidden;
 }
 .sidebar {
-  width: 248px;
+  width: 272px;
   flex: none;
   display: flex;
   flex-direction: column;
   background: var(--sidebar);
   border-right: 1px solid var(--border);
-  padding: 33px 20px 18px;
+  padding: var(--space-6) var(--space-4) var(--space-5);
+  min-height: 0;
+  overflow-y: auto;
 }
 .brand {
   display: flex;
   align-items: center;
-  gap: 10px;
-  font-size: 28px;
+  gap: var(--space-3);
+  font-size: var(--font-xl);
   font-weight: 700;
   font-variation-settings: "CASL" 0.7;
   flex-wrap: wrap;
-  margin: 0 12px 46px;
+  margin: 0 var(--space-3) var(--space-8);
 }
 .brandIcon {
-  width: 33px;
-  height: 33px;
+  width: 36px;
+  height: 36px;
   color: var(--primary);
   display: grid;
   place-items: center;
   background: color-mix(in srgb, var(--primary) 12%, transparent);
   border: 1px solid color-mix(in srgb, var(--primary) 20%, transparent);
-  border-radius: 11px;
+  border-radius: 0.75rem;
 }
 .brandDot {
   color: var(--primary);
 }
 .brandCaption {
   flex-basis: 100%;
-  font-size: 8px;
-  letter-spacing: 0.2em;
+  font-size: var(--font-xs);
+  letter-spacing: 0.1em;
   color: var(--muted-foreground);
   font-weight: 500;
-  margin-left: 43px;
-  margin-top: -5px;
+  margin-left: 48px;
+  margin-top: 0;
 }
 .sidebarLabel,
 .eyebrow {
-  font-size: 9px;
+  font-size: var(--font-xs);
   font-weight: 600;
-  letter-spacing: 0.13em;
+  letter-spacing: 0.08em;
   color: var(--muted-foreground);
 }
 .sidebarLabel {
   display: block;
-  padding: 0 12px;
-  margin-bottom: 14px;
+  padding: 0 var(--space-3);
+  margin-bottom: var(--space-3);
 }
 .sidebarSection {
-  margin-bottom: 34px;
+  margin-bottom: var(--space-6);
 }
 .navItem {
   display: flex;
   align-items: center;
-  gap: 11px;
+  gap: var(--space-3);
   border-radius: 10px;
-  padding: 13px 12px;
-  font-size: 11px;
+  padding: var(--space-3);
+  min-height: 44px;
+  font-size: var(--font-sm);
   font-weight: 500;
 }
 .navActive {
@@ -86,8 +90,9 @@
   justify-content: space-between;
   align-items: center;
   gap: 8px;
-  padding: 10px 12px;
-  font-size: 10px;
+  padding: var(--space-3);
+  min-height: 44px;
+  font-size: var(--font-sm);
   color: var(--muted-foreground);
   overflow: hidden;
   white-space: nowrap;
@@ -101,50 +106,49 @@
   flex: none;
 }
 .sidebarNote {
-  margin: auto 12px 32px;
+  margin: auto var(--space-3) var(--space-6);
   color: var(--muted-foreground);
-  font-size: 10px;
-  line-height: 1.9;
+  font-size: var(--font-sm);
+  line-height: var(--leading-body);
 }
 .noteStars {
   color: var(--primary);
-  font-size: 21px;
+  font-size: var(--font-xl);
   display: block;
-  margin-bottom: 9px;
+  margin-bottom: var(--space-2);
 }
 .sidebarFooter {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding-top: 17px;
+  gap: var(--space-3);
+  padding-top: var(--space-4);
   border-top: 1px solid var(--border);
 }
 .ownerAvatar {
   background: var(--surface);
   color: var(--primary);
   border-radius: 10px;
-  width: 32px;
-  height: 32px;
+  width: var(--space-8);
+  height: var(--space-8);
   display: grid;
   place-items: center;
-  font-size: 12px;
+  font-size: var(--font-sm);
 }
 .sidebarFooter strong {
   display: block;
-  font-size: 9px;
+  font-size: var(--font-xs);
   font-weight: 500;
-  margin-bottom: 5px;
+  margin-bottom: var(--space-1);
 }
 .sidebarFooter span {
   display: flex;
   align-items: center;
   gap: 5px;
-  font-size: 8px;
+  font-size: var(--font-xs);
   color: var(--muted-foreground);
 }
 .sidebarFooter button {
   margin-left: auto;
-  width: 28px;
 }
 .statusDot {
   background: var(--green);
@@ -164,20 +168,21 @@
   flex: 1;
 }
 .topbar {
-  height: 73px;
+  min-height: 64px;
   border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 38px;
+  padding: var(--space-3) var(--space-8);
+  gap: var(--space-4);
   flex: none;
 }
 .topbarTitle,
 .topbarRight {
   display: flex;
   align-items: center;
-  gap: 14px;
-  font-size: 11px;
+  gap: var(--space-3);
+  font-size: var(--font-sm);
 }
 .topbarIcon {
   color: var(--muted-foreground);
@@ -187,14 +192,14 @@
 }
 .topbarSubtitle {
   color: var(--muted-foreground);
-  font-size: 10px;
+  font-size: var(--font-sm);
 }
 .privateBadge {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: var(--space-2);
   color: var(--muted-foreground);
-  font-size: 9px;
+  font-size: var(--font-xs);
 }
 .privateBadge span {
   width: 4px;
@@ -207,36 +212,39 @@
   border: 1px solid var(--border);
   border-radius: 5px;
   padding: 3px 7px;
-  font-size: 9px;
+  font-size: var(--font-xs);
 }
 .conversationTitle {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 26px 38px 22px;
+  padding: var(--space-4) var(--space-8);
+  gap: var(--space-4);
+  flex: none;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
 }
 .conversationTitle h2 {
-  font-size: 15px;
+  font-size: var(--font-lg);
   font-weight: 500;
-  margin: 7px 0 0;
+  margin: var(--space-1) 0 0;
+  line-height: var(--leading-heading);
 }
 .conversationStatus {
-  font-size: 9px;
+  font-size: var(--font-xs);
   color: var(--muted-foreground);
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: var(--space-2);
 }
 .connectionBanner,
 .noticeBanner {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 38px;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-8);
   background: color-mix(in srgb, var(--peach) 7%, transparent);
   color: var(--peach);
-  font-size: 11px;
+  font-size: var(--font-sm);
 }
 .noticeBanner {
   color: var(--muted-foreground);
@@ -251,15 +259,18 @@
 .skipLink {
   position: fixed;
   left: 20px;
-  top: -60px;
+  top: 0;
+  transform: translateY(-100%);
   z-index: 100;
-  padding: 10px 15px;
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--font-sm);
   background: var(--primary);
   color: var(--primary-foreground);
   border-radius: 8px;
 }
 .skipLink:focus {
-  top: 20px;
+  top: var(--space-5);
+  transform: translateY(0);
 }
 .mobileMenu,
 .mobileClose,
@@ -268,33 +279,29 @@
 }
 @media (max-width: 900px) {
   .sidebar {
-    width: 205px;
-    padding-inline: 14px;
-  }
-  .brandCaption {
-    font-size: 7px;
-  }
-  .sidebarFooter strong {
-    font-size: 8px;
+    width: 256px;
+    padding-inline: var(--space-4);
   }
   .topbar,
   .conversationTitle {
-    padding-inline: 24px;
+    padding-inline: var(--space-6);
   }
   .conversationStatus {
     display: none;
   }
 }
-@media (max-width: 640px) {
+@container app (max-width: 48rem) {
   .sidebar {
     position: fixed;
     inset: 0 auto 0 0;
     z-index: 30;
-    width: 260px;
+    width: min(20rem, calc(100vw - 48px));
+    visibility: hidden;
     transform: translateX(-100%);
     transition: transform 180ms;
   }
   .sidebarOpen {
+    visibility: visible;
     transform: translateX(0);
   }
   .sidebarBackdrop {
@@ -308,39 +315,62 @@
   .mobileClose {
     display: inline-flex;
     position: absolute;
-    top: 31px;
-    right: 12px;
+    top: var(--space-5);
+    right: var(--space-3);
   }
   .mobileMenu {
     display: inline-flex;
   }
   .topbar {
-    height: 62px;
-    padding-inline: 12px;
+    min-height: 56px;
+    padding-inline: var(--space-3);
   }
   .topbarTitle {
-    gap: 10px;
+    gap: var(--space-3);
   }
   .topbarIcon,
   .topbarSubtitle,
   .topbarDivider {
     display: none;
   }
-  .privateBadge {
-    font-size: 8px;
-  }
   .conversationTitle {
-    padding: 18px 22px;
-  }
-  .conversationTitle h2 {
-    font-size: 13px;
+    padding: var(--space-4) var(--space-5);
   }
   .connectionBanner,
   .noticeBanner {
-    padding-inline: 22px;
+    padding-inline: var(--space-5);
+  }
+  .conversationStatus {
+    display: none;
   }
   .recentSection {
     overflow-y: auto;
-    max-height: 35vh;
+    max-height: 35dvh;
+  }
+}
+
+.recentText {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+@media (max-height: 700px) {
+  .sidebarNote {
+    display: none;
+  }
+  .sidebarFooter {
+    margin-top: auto;
+  }
+}
+@media (max-height: 600px) {
+  .conversationTitle {
+    padding-block: var(--space-3);
+  }
+  .conversationTitle .eyebrow {
+    display: none;
+  }
+  .conversationTitle h2 {
+    margin: 0;
   }
 }

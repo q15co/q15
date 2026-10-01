@@ -32,7 +32,7 @@ export function Composer({ store, state }: { store: ChatStore; state: ChatState 
           id="message-input"
           ref={input}
           value={text}
-          rows={3}
+          rows={1}
           placeholder="What's on your mind?"
           onChange={(event) => setText(event.target.value)}
           onKeyDown={(event) => {

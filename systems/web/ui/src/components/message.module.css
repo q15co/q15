@@ -1,25 +1,26 @@
 .message {
-  margin: 23px 0 33px;
-  scroll-margin: 40px;
+  margin: var(--space-6) 0 var(--space-8);
+  scroll-margin: var(--space-10);
 }
 .message:target {
-  border-radius: 12px;
+  border-radius: var(--space-3);
   outline: 1px solid var(--primary);
-  outline-offset: 12px;
+  outline-offset: var(--space-3);
 }
 .messageHeading {
   display: flex;
   align-items: center;
-  gap: 10px;
-  font-size: 11px;
-  margin-bottom: 13px;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  font-size: var(--font-sm);
+  margin-bottom: var(--space-3);
 }
 .avatar {
   display: grid;
   place-items: center;
-  width: 27px;
-  height: 27px;
-  border-radius: 9px;
+  width: var(--space-8);
+  height: var(--space-8);
+  border-radius: 0.625rem;
   color: var(--primary);
   background: color-mix(in srgb, var(--primary) 11%, transparent);
   flex: none;
@@ -27,47 +28,49 @@
 .userAvatar {
   background: var(--surface);
   color: var(--muted-foreground);
-  font-size: 8px;
+  font-size: var(--font-xs);
 }
 .messageAuthor {
   font-weight: 600;
 }
 .messageTime {
   color: var(--muted-foreground);
-  font-size: 9px;
+  font-size: var(--font-xs);
+  font-variant-numeric: tabular-nums;
   margin-left: auto;
 }
 .modelTag {
-  font-size: 8px;
+  font-size: var(--font-xs);
   color: var(--muted-foreground);
   max-width: 45%;
   overflow: hidden;
+  white-space: nowrap;
   text-overflow: ellipsis;
 }
 .messageBody {
-  padding-left: 37px;
-  line-height: 1.85;
-  font-size: 13px;
+  padding-left: var(--message-inset);
+  line-height: var(--leading-body);
+  font-size: var(--font-md);
   overflow-wrap: anywhere;
 }
 .userMessage .messageBody {
   background: color-mix(in srgb, var(--surface) 40%, transparent);
   border: 1px solid var(--border);
-  padding: 14px 18px;
-  margin-left: 37px;
-  border-radius: 4px 12px 12px 12px;
+  padding: var(--space-3) var(--space-4);
+  margin-left: var(--message-inset);
+  border-radius: var(--space-1) var(--space-3) var(--space-3) var(--space-3);
 }
 .messageActions {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding-left: 28px;
-  padding-top: 5px;
-  opacity: 0.6;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding-left: calc(var(--message-inset) - var(--space-3));
+  padding-top: var(--space-2);
 }
 .messageActions small,
 .pendingLabel {
-  font-size: 9px;
+  font-size: var(--font-xs);
   color: var(--muted-foreground);
 }
 .pendingLabel {
@@ -75,7 +78,14 @@
   max-width: 70%;
   text-align: right;
 }
-@media (max-width: 640px) {
+.messageActions .failed,
+.failed {
+  color: var(--destructive);
+}
+.pendingText {
+  white-space: pre-wrap;
+}
+@container app (max-width: 48rem) {
   .messageBody {
     padding-left: 0;
   }
@@ -85,11 +95,4 @@
   .messageActions {
     padding-left: 0;
   }
-}
-.messageActions .failed,
-.failed {
-  color: var(--destructive);
-}
-.pendingText {
-  white-space: pre-wrap;
 }

@@ -21,8 +21,8 @@ export function MessageView({ message }: { message: ChatMessage }) {
       data-message-key={message.key}
     >
       <div className={styles.messageHeading}>
-        <span className={clsx(styles.avatar, user && styles.userAvatar)}>
-          {user ? "You" : <Sparkles size={16} />}
+        <span className={clsx(styles.avatar, user && styles.userAvatar)} aria-hidden="true">
+          {user ? "Y" : <Sparkles size={16} />}
         </span>
         <span className={styles.messageAuthor}>
           {user ? "You" : message.role === "assistant" ? "q15" : message.role}
@@ -77,7 +77,9 @@ export function PendingMessage({ pending: p }: { pending: Pending }) {
   return (
     <article className={clsx(styles.message, styles.userMessage)}>
       <div className={styles.messageHeading}>
-        <span className={clsx(styles.avatar, styles.userAvatar)}>You</span>
+        <span className={clsx(styles.avatar, styles.userAvatar)} aria-hidden="true">
+          Y
+        </span>
         <span className={styles.messageAuthor}>You</span>
         <span className={clsx(styles.pendingLabel, p.state === "failed" && styles.failed)}>
           {p.state === "uncertain"
