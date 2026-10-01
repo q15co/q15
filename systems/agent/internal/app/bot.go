@@ -59,10 +59,12 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 		}
 	}()
 
+	// Empty when the agent configures no Telegram at all. The transport is
+	// optional: the runtime is built from the transports a deployment
+	// configures, and runRuntime is what refuses a runtime that ends up with
+	// none. At this layer the bridge supplies no channel endpoint yet, so a
+	// Telegram-less runtime is refused there rather than run headless.
 	token := strings.TrimSpace(rt.TelegramToken)
-	if token == "" {
-		return errors.New("telegram token is required")
-	}
 
 	jobs := cognitionJobs()
 	selectionStore, err := selectionstore.Open(selectionstore.DefaultPath(rt.WorkspaceLocalDir))
@@ -207,8 +209,15 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 		DeliveryRecorder: &scheduledDeliveryRecorder{
 			store: store,
 		},
-		MaxJobs:        rt.Tools.Schedule.MaxJobs,
-		MaxTurns:       rt.Tools.Schedule.MaxRunTurns,
+		MaxJobs:  rt.Tools.Schedule.MaxJobs,
+		MaxTurns: rt.Tools.Schedule.MaxRunTurns,
+		// The owner allow-list is the Telegram one because Telegram is the
+		// only transport here that carries user identities to check. With
+		// Telegram unconfigured it is empty, which the manager reads as no
+		// restriction; that is not an escalation, because whoever reaches the
+		// bridge can already run the agent and every tool it holds. A
+		// per-channel owner policy is the change to make if a second transport
+		// ever brings identities of its own.
 		AllowedUserIDs: rt.TelegramAllowedUserIDs,
 		DefaultModel: func() schedule.ModelTarget {
 			provider, ref := selection.Current()
@@ -276,10 +285,17 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 	}
 	// The transports are assembled here, at the composition root, because that
 	// is where a transport's startup can fail and where the listener it bound
-	// has to be closed on the later failure paths. Their inbound publishing is
-	// bound to runCtx, which is the same context runRuntime cancels when its
-	// workers are shutting down, so a canceled runtime stops publishing instead
-	// of queueing work for an agent that is going away.
+	// has to be closed on the later failure paths. The Telegram channel's
+	// inbound publishing is bound to runCtx, which is the same context
+	// runRuntime cancels when its workers are shutting down, so a canceled
+	// runtime stops publishing instead of queueing work for an agent that is
+	// going away.
+	//
+	// Both transports are optional, and the endpoint guard in runRuntime is what
+	// refuses a runtime that ends up with no channel endpoint to be reached
+	// through. Note what that means at this layer: the bridge contributes a
+	// listener and a worker but no endpoint, so a Telegram-less runtime is
+	// refused there until the layer that gives the bridge its endpoint.
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -288,19 +304,25 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 		mediaStore:     mediaStore,
 		allowedUserIDs: rt.TelegramAllowedUserIDs,
 	}
-	telegramChannel, err := telegramTransport.newChannel(runCtx, messageBus)
-	if err != nil {
-		return err
+	var agentEndpoints []channelport.AgentEndpoint
+	var outboundEndpoints []channelport.OutboundEndpoint
+	if telegramTransport.configured() {
+		telegramChannel, err := telegramTransport.newChannel(runCtx, messageBus)
+		if err != nil {
+			return err
+		}
+		if err := telegramChannel.Start(runCtx); err != nil {
+			return err
+		}
+		telegramEndpoint := telegram.NewAgentEndpoint(telegramChannel)
+		agentEndpoints = append(agentEndpoints, telegramEndpoint)
+		outboundEndpoints = append(outboundEndpoints, telegramEndpoint)
 	}
-	if err := telegramChannel.Start(runCtx); err != nil {
-		return err
-	}
-	telegramEndpoint := telegram.NewAgentEndpoint(telegramChannel)
 
 	return runRuntime(runCtx, cancel, runtimeInputs{
 		messageBus:        messageBus,
-		agentEndpoints:    []channelport.AgentEndpoint{telegramEndpoint},
-		outboundEndpoints: []channelport.OutboundEndpoint{telegramEndpoint},
+		agentEndpoints:    agentEndpoints,
+		outboundEndpoints: outboundEndpoints,
 		transportWorkers:  transportWorkers,
 		botAgent:          botAgent,
 		scheduleManager:   scheduleManager,
@@ -338,6 +360,13 @@ type telegramSettings struct {
 	token          string
 	mediaStore     q15media.Store
 	allowedUserIDs []int64
+}
+
+// configured reports whether the deployment configures Telegram at all. The
+// transport is optional: a deployment that names no token names no Telegram,
+// and the runtime then builds no channel and long-polls for nothing.
+func (s telegramSettings) configured() bool {
+	return strings.TrimSpace(s.token) != ""
 }
 
 // newChannel builds the transport, binding its inbound publisher to ctx so a
@@ -410,6 +439,10 @@ func runRuntime(ctx context.Context, cancel context.CancelFunc, in runtimeInputs
 	if in.scheduleManager == nil {
 		return errors.New("schedule manager is required")
 	}
+	// Refused before the ready marker rather than inside the workers, so a
+	// runtime with nothing to be reached through fails as part of startup
+	// rather than in a goroutine after readiness. buildEndpointRegistry refuses
+	// the same thing again, which is what covers a list that carries only nils.
 	if len(in.agentEndpoints) == 0 {
 		return errors.New("at least one channel endpoint is required")
 	}
@@ -442,9 +475,11 @@ func runRuntime(ctx context.Context, cancel context.CancelFunc, in runtimeInputs
 	return runRuntimeWorkers(ctx, cancel, runtimeWorkerShutdownTimeout, workers...)
 }
 
-// bridgeSettings is everything the chat bridge's listener is built from, kept
-// as one value so that a transport's details travel together instead of sitting
-// loose beside the runtime's services, the way telegramSettings does.
+// bridgeSettings is the chat bridge listener's own configuration, kept as one
+// value so that a transport's details travel together instead of sitting loose
+// beside the runtime's services, the way telegramSettings keeps Telegram's. The
+// transcript lister the listener also needs is built from the store rather than
+// from config, so it stays a newServer parameter.
 type bridgeSettings struct {
 	listenTarget string
 }

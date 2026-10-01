@@ -8,7 +8,11 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/embed"
 )
 
-// TelegramToken resolves the Telegram token from inline value or token_env.
+// TelegramToken resolves the Telegram token from inline value or token_env. It
+// returns an empty token without error when the agent names no Telegram source
+// at all, which is how the transport stays optional: a deployment reachable
+// only through the chat bridge configures none, and the app builds no Telegram
+// channel for it. A named source that resolves to nothing is still an error.
 func (a Agent) TelegramToken() (string, error) {
 	token := strings.TrimSpace(a.Telegram.Token)
 	if token != "" {
@@ -17,9 +21,7 @@ func (a Agent) TelegramToken() (string, error) {
 
 	envName := strings.TrimSpace(a.Telegram.TokenEnv)
 	if envName == "" {
-		return "", errors.New(
-			"telegram token is required (set telegram.token or telegram.token_env)",
-		)
+		return "", nil
 	}
 
 	return resolveSecretEnvValue(envName)
@@ -28,7 +30,10 @@ func (a Agent) TelegramToken() (string, error) {
 // TelegramAllowedUserIDs resolves the Telegram allow-list from inline values or
 // allowed_user_ids_env. The environment source accepts comma-separated or
 // whitespace-separated integer user IDs and also supports the standard
-// *_FILE companion via resolveSecretEnvValue.
+// *_FILE companion via resolveSecretEnvValue. An unconfigured allow-list
+// resolves to an empty list rather than an error, for the same reason
+// TelegramToken resolves to an empty token: the transport is optional. When
+// Telegram is configured, validation has already required one.
 func (a Agent) TelegramAllowedUserIDs() ([]int64, error) {
 	envName := strings.TrimSpace(a.Telegram.AllowedUserIDsEnv)
 	if len(a.Telegram.AllowedUserIDs) > 0 && envName != "" {
@@ -37,6 +42,9 @@ func (a Agent) TelegramAllowedUserIDs() ([]int64, error) {
 		)
 	}
 	if envName == "" {
+		if len(a.Telegram.AllowedUserIDs) == 0 {
+			return nil, nil
+		}
 		return normalizeAllowedUserIDs(a.Telegram.AllowedUserIDs)
 	}
 

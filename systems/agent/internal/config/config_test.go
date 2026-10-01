@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -239,18 +240,90 @@ func TestValidateRejectsBadDiscoveryGlob(t *testing.T) {
 	}
 }
 
-func TestValidateRequiresTelegramToken(t *testing.T) {
+// TestValidateRejectsTelegramAllowListWithoutToken pins one direction of the
+// optional transport: an allow-list with no token source names no transport to
+// apply it to, so it is dead configuration rather than a Telegram whose
+// allow-list went missing. Both allow-list sources are covered, because the
+// guard does not care which one named the list.
+func TestValidateRejectsTelegramAllowListWithoutToken(t *testing.T) {
+	tests := []struct {
+		name     string
+		telegram Telegram
+	}{
+		{
+			name:     "inline allow-list",
+			telegram: Telegram{AllowedUserIDs: []int64{1}},
+		},
+		{
+			name:     "env allow-list",
+			telegram: Telegram{AllowedUserIDsEnv: "TEST_TELEGRAM_ALLOWED_USER_IDS"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Config{
+				Providers: []Provider{testProvider("p", "ollama", "", "")},
+				Agent:     &Agent{Name: "a", Telegram: tt.telegram},
+			}
+			err := cfg.Validate()
+			if err == nil {
+				t.Fatal("expected error for an allow-list with no telegram token")
+			}
+			if !strings.Contains(err.Error(), "without a token") {
+				t.Fatalf("Validate() error = %v, want the missing token named", err)
+			}
+		})
+	}
+}
+
+// TestValidateAllowsAgentWithoutTelegram pins the other direction, and the
+// point of making the transport optional: an agent may configure no Telegram
+// block at all. Whether such an agent can actually come up belongs to the app's
+// endpoint guard, not to validation.
+func TestValidateAllowsAgentWithoutTelegram(t *testing.T) {
 	cfg := Config{
 		Providers: []Provider{testProvider("p", "ollama", "", "")},
 		Agent: &Agent{
-			Name: "a",
-			Telegram: Telegram{
-				AllowedUserIDs: []int64{1},
-			},
+			Name:   "a",
+			Bridge: Bridge{ListenTarget: DefaultBridgeListenTarget},
 		},
 	}
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("expected error for missing telegram token")
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v, want an agent with no Telegram to be valid", err)
+	}
+}
+
+// TestResolveAgentRuntimeWithoutTelegram pins that the whole resolution path
+// tolerates the optional transport and not just validation: the token and the
+// allow-list both resolve to nothing without an error, which is what makes
+// runBot build no Telegram channel.
+func TestResolveAgentRuntimeWithoutTelegram(t *testing.T) {
+	cfg := Config{
+		Providers: []Provider{testProvider("p", "ollama", "", "")},
+		Agent: &Agent{
+			Name:   "a",
+			Bridge: Bridge{ListenTarget: DefaultBridgeListenTarget},
+		},
+	}
+	rt, err := cfg.ResolveAgentRuntime()
+	if err != nil {
+		t.Fatalf("ResolveAgentRuntime() error = %v", err)
+	}
+	if rt == nil {
+		t.Fatal("ResolveAgentRuntime() = nil, want a runtime")
+	}
+	if rt.TelegramToken != "" {
+		t.Fatalf("TelegramToken = %q, want empty", rt.TelegramToken)
+	}
+	if len(rt.TelegramAllowedUserIDs) != 0 {
+		t.Fatalf("TelegramAllowedUserIDs = %v, want none", rt.TelegramAllowedUserIDs)
+	}
+	if rt.BridgeListenTarget != DefaultBridgeListenTarget {
+		t.Fatalf(
+			"BridgeListenTarget = %q, want %q",
+			rt.BridgeListenTarget,
+			DefaultBridgeListenTarget,
+		)
 	}
 }
 

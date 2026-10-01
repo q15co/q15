@@ -45,8 +45,8 @@ func TestRunAgentWorkerCancelReturnsNil(_ *testing.T) {
 
 // TestRunRuntimeRequiresItsParts pins the guards runRuntime applies before it
 // marks itself ready: a runtime with no bus to report into, no agent to run, no
-// scheduler to run, or no transport to be reached through refuses to come up
-// rather than starting half of itself. The runtime's parts are keyed at the
+// scheduler to run, or no channel endpoint to be reached through refuses to come
+// up rather than starting half of itself. The runtime's parts are keyed at the
 // call site, so omitting one is otherwise silent until it fails in a goroutine.
 func TestRunRuntimeRequiresItsParts(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
