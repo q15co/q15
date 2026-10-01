@@ -13,6 +13,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -24,6 +25,12 @@ const (
 	// rather than a failure, so a run never stalls on a client that fell
 	// behind.
 	sessionEventRetention = 512
+	// sessionEventRetentionBytes caps the serialized history retained for one
+	// session. Snapshot keyframes carry the full answer draft, so a count-only
+	// limit lets a bounded model response consume the sum of every historical
+	// prefix. The newest event is always retained even when it alone exceeds
+	// this budget, which keeps replay and resync semantics defined.
+	sessionEventRetentionBytes = 4 << 20
 	// sessionSubscriberBuffer is how many events one WatchEvents
 	// subscriber's channel buffers before that subscriber is dropped. One
 	// buffered channel per subscriber keeps fan-out a non-blocking send.
@@ -57,9 +64,13 @@ type sessionEventLog struct {
 	// log's first entry has index 1 and zero stays free as the "no cursor"
 	// value of after_event_index.
 	nextIndex int64
-	// events are the retained events, oldest first. The window holds at most
-	// sessionEventRetention of them; evicted ones are gone for every reader.
+	// events are the retained events, oldest first. The window is bounded by
+	// both sessionEventRetention and sessionEventRetentionBytes; evicted ones
+	// are gone for every reader.
 	events []*chatpb.SessionEvent
+	// retainedBytes is the sum of proto.Size for events. Events are immutable
+	// after append, so the serialized-size accounting remains exact.
+	retainedBytes int
 	// subscribers are the live WatchEvents streams, keyed by their identity.
 	subscribers map[*sessionSubscriber]struct{}
 }
@@ -90,10 +101,22 @@ func (l *sessionEventLog) append(event *chatpb.SessionEvent) {
 	event.EventIndex = l.nextIndex
 	l.nextIndex++
 	l.events = append(l.events, event)
-	if over := len(l.events) - sessionEventRetention; over > 0 {
+	l.retainedBytes += proto.Size(event)
+
+	drop := 0
+	for len(l.events)-drop > 1 &&
+		(len(l.events)-drop > sessionEventRetention ||
+			l.retainedBytes > sessionEventRetentionBytes) {
+		l.retainedBytes -= proto.Size(l.events[drop])
+		drop++
+	}
+	if drop > 0 {
 		// Copy the newest events forward into the same backing array so a
-		// long-lived session's retention does not creep the slice's cap.
-		l.events = append(l.events[:0], l.events[over:]...)
+		// long-lived session's retention does not creep the slice's cap, then
+		// clear the vacated pointers so the evicted messages can be collected.
+		copy(l.events, l.events[drop:])
+		clear(l.events[len(l.events)-drop:])
+		l.events = l.events[:len(l.events)-drop]
 	}
 	for subscriber := range l.subscribers {
 		select {
@@ -209,6 +232,7 @@ func (s *logicalSession) appendEvent(event *chatpb.SessionEvent) {
 // member from a switch on event.Type. An event type the contract has no
 // member for maps to nil, which append drops.
 func runEventToSessionEvent(event agent.RunEvent) *chatpb.SessionEvent {
+	event = protobufSafeRunEvent(event)
 	var out *chatpb.SessionEvent
 	switch event.Type {
 	case agent.RunEventRunStarted: // run_events.go:15
@@ -265,7 +289,7 @@ func runEventToSessionEvent(event agent.RunEvent) *chatpb.SessionEvent {
 			Status:   runFailedStatus(event.Err),
 		}
 		if event.Err != nil {
-			failed.Error = event.Err.Error()
+			failed.Error = protobufSafeString(event.Err.Error())
 		}
 		out = &chatpb.SessionEvent{Event: &chatpb.SessionEvent_RunFailed{
 			RunFailed: failed,
@@ -296,10 +320,30 @@ func runFailedStatus(err error) chatpb.RunStatus {
 // raw JSON object the model produced; the bridge parses nothing.
 func toolCallToProto(call agent.ToolCall) *chatpb.ToolCall {
 	return &chatpb.ToolCall{
-		Id:        call.ID,
-		Name:      call.Name,
-		Arguments: call.Arguments,
+		Id:        protobufSafeString(call.ID),
+		Name:      protobufSafeString(call.Name),
+		Arguments: protobufSafeString(call.Arguments),
 	}
+}
+
+// protobufSafeRunEvent normalizes strings supplied by models and tools before
+// they enter protobuf messages or the bridge's accumulated drafts. Go strings
+// may contain arbitrary bytes, while protobuf string fields require UTF-8;
+// replacing malformed runs at this boundary keeps one tool result from
+// terminating both live delivery and every replay of the retained event.
+func protobufSafeRunEvent(event agent.RunEvent) agent.RunEvent {
+	event.ModelRef = protobufSafeString(event.ModelRef)
+	event.Delta = protobufSafeString(event.Delta)
+	event.ToolCall.ID = protobufSafeString(event.ToolCall.ID)
+	event.ToolCall.Name = protobufSafeString(event.ToolCall.Name)
+	event.ToolCall.Arguments = protobufSafeString(event.ToolCall.Arguments)
+	event.ToolOutput = protobufSafeString(event.ToolOutput)
+	event.FinalText = protobufSafeString(event.FinalText)
+	return event
+}
+
+func protobufSafeString(value string) string {
+	return strings.ToValidUTF8(value, "\uFFFD")
 }
 
 // OnRunEvent coalesces the run's raw, unthrottled deltas and appends the run
@@ -318,6 +362,7 @@ func (s *runSession) OnRunEvent(_ context.Context, event agent.RunEvent) {
 		// terminal frame, so a straggler is dropped rather than streamed.
 		return
 	}
+	event = protobufSafeRunEvent(event)
 	if event.ModelRef != "" {
 		s.modelRef = event.ModelRef
 	}
@@ -448,8 +493,8 @@ func (s *runSession) appendTerminalRunFinishedLocked(
 		OccurredAt: timestamppb.Now(),
 		TurnSeq:    s.seq,
 		Event: &chatpb.SessionEvent_RunFinished{RunFinished: &chatpb.RunFinished{
-			FullText: fullText,
-			ModelRef: s.modelRef,
+			FullText: protobufSafeString(fullText),
+			ModelRef: protobufSafeString(s.modelRef),
 			Status:   terminalStatus,
 		}},
 	})

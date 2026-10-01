@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/q15co/q15/libs/chat-contract/chatpb"
 	"github.com/q15co/q15/systems/agent/internal/agent"
@@ -16,6 +17,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
+	"google.golang.org/protobuf/proto"
 )
 
 // allRunEventTypes is every RunEventType constant, in the order
@@ -612,6 +614,128 @@ func TestServiceWatchEventsStreamsInOrderAndResumesWithoutGap(t *testing.T) {
 	}
 }
 
+// TestServiceWatchEventsNormalizesMalformedUTF8AtTheWireBoundary proves that
+// arbitrary bytes from a tool cannot poison either a live stream or replay.
+// The same normalization also covers model-owned strings accumulated into
+// snapshots and terminal events.
+func TestServiceWatchEventsNormalizesMalformedUTF8AtTheWireBoundary(t *testing.T) {
+	publisher := &fakePublisher{}
+	endpoint := NewAgentEndpoint(publisher)
+	client := startEventBridgeClient(t, NewService(&fakeTurnLister{}, endpoint))
+	ctx := context.Background()
+
+	opened, err := client.OpenSession(ctx, &chatpb.OpenSessionRequest{ChatId: "conv-bytes"})
+	if err != nil {
+		t.Fatalf("OpenSession() error = %v", err)
+	}
+	sessionID := opened.GetSession().GetSessionId()
+	run := startTestRun(t, endpoint, sessionID)
+
+	watchCtx, cancelWatch := context.WithCancel(ctx)
+	watch, err := client.WatchEvents(
+		watchCtx,
+		&chatpb.WatchEventsRequest{SessionId: sessionID},
+	)
+	if err != nil {
+		t.Fatalf("WatchEvents() error = %v", err)
+	}
+	if got := mustRecvWatchFrame(t, watch); got.GetSessionOpened() == nil {
+		t.Fatalf("first frame = %v, want session_opened", frameMember(t, got))
+	}
+
+	malformed := string([]byte{'a', 0xff, 0xe2, 0x82, 'z'})
+	normalized := strings.ToValidUTF8(malformed, "\uFFFD")
+	call := agent.ToolCall{ID: malformed, Name: malformed, Arguments: malformed}
+	run.OnRunEvent(ctx, agent.RunEvent{
+		Type:     agent.RunEventModelTurnStarted,
+		ModelRef: malformed,
+		Seq:      7,
+	})
+	run.OnRunEvent(ctx, agent.RunEvent{
+		Type:  agent.RunEventModelTurnDelta,
+		Delta: malformed,
+		Seq:   7,
+	})
+	run.flushDeltaBuffers()
+	run.OnRunEvent(ctx, agent.RunEvent{
+		Type:       agent.RunEventToolFinished,
+		ToolCall:   call,
+		ToolOutput: malformed,
+		Seq:        7,
+	})
+	run.OnRunEvent(ctx, agent.RunEvent{
+		Type:      agent.RunEventRunFinished,
+		ModelRef:  malformed,
+		FinalText: malformed,
+		Seq:       7,
+	})
+
+	assertNormalized := func(event *chatpb.SessionEvent) {
+		t.Helper()
+		var values []string
+		switch frameMember(t, event) {
+		case "model_turn_started":
+			values = []string{event.GetModelTurnStarted().GetModelRef()}
+		case "model_turn_delta":
+			values = []string{event.GetModelTurnDelta().GetDelta()}
+		case "snapshot":
+			values = []string{event.GetSnapshot().GetText()}
+		case "tool_finished":
+			finished := event.GetToolFinished()
+			values = []string{
+				finished.GetCall().GetId(),
+				finished.GetCall().GetName(),
+				finished.GetCall().GetArguments(),
+				finished.GetOutput(),
+			}
+		case "run_finished":
+			finished := event.GetRunFinished()
+			values = []string{finished.GetFullText(), finished.GetModelRef()}
+		default:
+			t.Fatalf("unexpected frame = %v", frameMember(t, event))
+		}
+		for _, value := range values {
+			if !utf8.ValidString(value) {
+				t.Fatalf("%s contains malformed UTF-8: %q", frameMember(t, event), value)
+			}
+			if value != normalized {
+				t.Fatalf("%s value = %q, want %q", frameMember(t, event), value, normalized)
+			}
+		}
+	}
+
+	wantOrder := []string{
+		"model_turn_started",
+		"model_turn_delta",
+		"snapshot",
+		"tool_finished",
+		"run_finished",
+	}
+	for _, wantMember := range wantOrder {
+		event := mustRecvWatchFrame(t, watch)
+		if got := frameMember(t, event); got != wantMember {
+			t.Fatalf("live frame = %v, want %v", got, wantMember)
+		}
+		assertNormalized(event)
+	}
+	cancelWatch()
+
+	replay, err := client.WatchEvents(ctx, &chatpb.WatchEventsRequest{
+		SessionId:       sessionID,
+		AfterEventIndex: 1,
+	})
+	if err != nil {
+		t.Fatalf("WatchEvents(replay) error = %v", err)
+	}
+	for _, wantMember := range wantOrder {
+		event := mustRecvWatchFrame(t, replay)
+		if got := frameMember(t, event); got != wantMember {
+			t.Fatalf("replay frame = %v, want %v", got, wantMember)
+		}
+		assertNormalized(event)
+	}
+}
+
 // TestServiceWatchEventsNoticesResyncWhenCursorFallsOutOfHistory pushes past
 // the retention bound and reconnects with a cursor that can no longer reach
 // the retained history: the stream opens with the resync Notice and restarts
@@ -776,6 +900,47 @@ func TestSessionEventLogRetainsABoundedWindow(t *testing.T) {
 			inWindow[0].GetEventIndex(),
 			retained[0].GetEventIndex(),
 		)
+	}
+}
+
+// TestSessionEventLogRetainsABoundedByteWindow pins the storage half of the
+// replay contract. Full-draft snapshots grow over a run, so retaining them by
+// count alone would retain the sum of every historical prefix.
+func TestSessionEventLogRetainsABoundedByteWindow(t *testing.T) {
+	log := newSessionEventLog()
+	snapshot := strings.Repeat("x", 256<<10)
+	const appended = 32
+	for i := 0; i < appended; i++ {
+		log.append(&chatpb.SessionEvent{
+			Event: &chatpb.SessionEvent_Snapshot{Snapshot: &chatpb.Snapshot{Text: snapshot}},
+		})
+	}
+
+	retained := log.retained()
+	if len(retained) >= appended {
+		t.Fatalf("retained events = %d, want byte eviction below %d", len(retained), appended)
+	}
+	retainedBytes := 0
+	for _, event := range retained {
+		retainedBytes += proto.Size(event)
+	}
+	if retainedBytes > sessionEventRetentionBytes {
+		t.Fatalf(
+			"retained bytes = %d, want at most %d",
+			retainedBytes,
+			sessionEventRetentionBytes,
+		)
+	}
+	if got := retained[len(retained)-1].GetEventIndex(); got != appended {
+		t.Fatalf("newest retained index = %d, want %d", got, appended)
+	}
+	if got := retained[0].GetEventIndex(); got <= 1 {
+		t.Fatalf("oldest retained index = %d, want an evicted prefix", got)
+	}
+
+	_, replay := log.subscribe(0)
+	if got := replay[0].GetNotice(); got == nil || got.GetCode() != resyncNoticeCode {
+		t.Fatalf("replay from a byte-evicted cursor starts = %v, want resync Notice", replay[0])
 	}
 }
 
