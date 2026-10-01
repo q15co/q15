@@ -2,12 +2,18 @@ package bridge
 
 import (
 	"context"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/test/bufconn"
 )
 
 func TestResolveListenTargetKeepsExecConvention(t *testing.T) {
@@ -31,6 +37,61 @@ func TestResolveListenTargetKeepsExecConvention(t *testing.T) {
 				tc.address,
 			)
 		}
+	}
+}
+
+func TestServerServeStopsWithIdleStreamingRPC(t *testing.T) {
+	listener := bufconn.Listen(1024 * 1024)
+	started := make(chan struct{})
+	stopped := make(chan struct{})
+	grpcServer := grpc.NewServer(
+		grpc.UnknownServiceHandler(func(_ any, stream grpc.ServerStream) error {
+			close(started)
+			<-stream.Context().Done()
+			close(stopped)
+			return nil
+		}),
+	)
+	server := &Server{listener: listener, server: grpcServer}
+	t.Cleanup(server.Close)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- server.Serve(ctx) }()
+	conn, err := grpc.NewClient(
+		"passthrough:///bridge-test",
+		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
+			return listener.Dial()
+		}),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	rpcCtx, rpcCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer rpcCancel()
+	if _, err := conn.NewStream(rpcCtx, &grpc.StreamDesc{ServerStreams: true}, "/test.Stream/Watch"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-rpcCtx.Done():
+		t.Fatal("streaming handler did not start")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Serve did not stop while an idle stream was connected")
+	}
+	select {
+	case <-stopped:
+	case <-rpcCtx.Done():
+		t.Fatal("shutdown did not cancel the streaming handler")
 	}
 }
 

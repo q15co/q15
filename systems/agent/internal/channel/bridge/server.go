@@ -7,12 +7,17 @@ import (
 	"net"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/q15co/q15/libs/chat-contract/chatpb"
 	"google.golang.org/grpc"
 )
 
 const (
+	// serverShutdownTimeout leaves time for the runtime's other workers to
+	// finish before Compose's stop deadline. Long-lived subscriptions cannot
+	// drain by themselves, so graceful shutdown needs a hard stop fallback.
+	serverShutdownTimeout = 2 * time.Second
 	// socketFileMode is the mode the bridge socket is chmod'ed to after
 	// binding: owner and group may connect, others may not.
 	//
@@ -79,10 +84,28 @@ func (s *Server) Serve(ctx context.Context) error {
 
 	select {
 	case <-ctx.Done():
-		s.server.GracefulStop()
+		s.stopServing()
 		return nil
 	case err := <-errCh:
 		return err
+	}
+}
+
+func (s *Server) stopServing() {
+	done := make(chan struct{})
+	go func() {
+		s.server.GracefulStop()
+		close(done)
+	}()
+	timer := time.NewTimer(serverShutdownTimeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-timer.C:
+		// Stop cancels the RPC contexts that idle streaming handlers wait on.
+		// Join GracefulStop here rather than leaving a shutdown goroutine behind.
+		s.server.Stop()
+		<-done
 	}
 }
 
