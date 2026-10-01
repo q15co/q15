@@ -9,10 +9,10 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/bus"
 	"github.com/q15co/q15/systems/agent/internal/channel/telegram"
-	"github.com/q15co/q15/systems/agent/internal/config"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
 	"github.com/q15co/q15/systems/agent/internal/modelcatalog"
 	"github.com/q15co/q15/systems/agent/internal/modelselection"
+	"github.com/q15co/q15/systems/agent/internal/schedule"
 	q15tools "github.com/q15co/q15/systems/agent/internal/tools"
 	"github.com/q15co/q15/systems/agent/internal/turnctx"
 )
@@ -44,66 +44,75 @@ func TestRunAgentWorkerCancelReturnsNil(_ *testing.T) {
 }
 
 // TestRunRuntimeRequiresItsParts pins the guards runRuntime applies before it
-// starts anything: a runtime with no bus to report into, no agent to run, or
-// no scheduler to run refuses to come up rather than starting half of itself.
-// The runtime's parts are keyed at the call site, so omitting one is otherwise
-// silent until it fails in a goroutine.
+// marks itself ready: a runtime with no bus to report into, no agent to run, no
+// scheduler to run, or no transport to be reached through refuses to come up
+// rather than starting half of itself. The runtime's parts are keyed at the
+// call site, so omitting one is otherwise silent until it fails in a goroutine.
 func TestRunRuntimeRequiresItsParts(t *testing.T) {
-	err := runRuntime(context.Background(), runtimeInputs{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err := runRuntime(ctx, cancel, runtimeInputs{})
 	if err == nil || !strings.Contains(err.Error(), "message bus") {
 		t.Fatalf("runRuntime() error = %v, want a missing message bus", err)
 	}
 
 	parts := runtimeInputs{messageBus: bus.New(1)}
-	err = runRuntime(context.Background(), parts)
+	err = runRuntime(ctx, cancel, parts)
 	if err == nil || !strings.Contains(err.Error(), "bot agent") {
 		t.Fatalf("runRuntime() error = %v, want a missing bot agent", err)
 	}
 
 	parts.botAgent = &fakeObservedAgent{}
-	err = runRuntime(context.Background(), parts)
+	err = runRuntime(ctx, cancel, parts)
 	if err == nil || !strings.Contains(err.Error(), "schedule manager") {
 		t.Fatalf("runRuntime() error = %v, want a missing schedule manager", err)
 	}
+
+	parts.scheduleManager = &schedule.Manager{}
+	err = runRuntime(ctx, cancel, parts)
+	if err == nil || !strings.Contains(err.Error(), "channel endpoint") {
+		t.Fatalf("runRuntime() error = %v, want a missing channel endpoint", err)
+	}
 }
 
-// TestNewBridgeServerDisabledWithoutTarget pins the bind-failure decision: an
-// unset listen target disables the listener instead of refusing to boot, so
+// TestBridgeDisabledWithoutTarget pins the bind-failure decision: an unset
+// listen target disables the listener instead of refusing to boot, so
 // deployments run unchanged until the socket volume exists.
-func TestNewBridgeServerDisabledWithoutTarget(t *testing.T) {
-	bridgeServer, err := newBridgeServer(config.AgentRuntime{}, nil)
+func TestBridgeDisabledWithoutTarget(t *testing.T) {
+	bridgeServer, err := bridgeSettings{}.newServer(nil)
 	if err != nil {
-		t.Fatalf("newBridgeServer() error = %v", err)
+		t.Fatalf("newServer() error = %v", err)
 	}
 	if bridgeServer != nil {
-		t.Fatal("newBridgeServer() = server, want nil while disabled")
+		t.Fatal("newServer() = server, want nil while disabled")
 	}
 }
 
-// TestNewBridgeServerSurfacesConfiguredBindFailure pins the other half of the
-// same decision: a configured target that cannot bind fails loudly, with the
-// socket path in the error.
-func TestNewBridgeServerSurfacesConfiguredBindFailure(t *testing.T) {
-	rt := config.AgentRuntime{
+// TestBridgeSurfacesConfiguredBindFailure pins the other half of the same
+// decision: a configured target that cannot bind fails loudly, with the socket
+// path in the error.
+func TestBridgeSurfacesConfiguredBindFailure(t *testing.T) {
+	settings := bridgeSettings{
 		// Built by concatenation on purpose: filepath.Join would clean the
 		// double slash away, the target would stop looking like unix://, and
 		// the test would exercise the TCP branch instead of the unix one.
-		BridgeListenTarget: "unix://" + filepath.Join(t.TempDir(), "missing-dir", "bridge.sock"),
+		listenTarget: "unix://" + filepath.Join(t.TempDir(), "missing-dir", "bridge.sock"),
 	}
 
-	_, err := newBridgeServer(rt, nil)
+	_, err := settings.newServer(nil)
 	if err == nil {
-		t.Fatal("newBridgeServer() error = nil, want bind failure")
+		t.Fatal("newServer() error = nil, want bind failure")
 	}
 	if !strings.Contains(err.Error(), filepath.Join("missing-dir", "bridge.sock")) {
-		t.Fatalf("newBridgeServer() error = %v, want the socket path named", err)
+		t.Fatalf("newServer() error = %v, want the socket path named", err)
 	}
 	// The whole point of building the target by concatenation above: this must
 	// fail on the unix branch. If the target lost its unix:// prefix the error
 	// would come from the TCP branch and the unix bind path would never be
 	// exercised.
 	if !strings.Contains(err.Error(), "listen unix ") {
-		t.Fatalf("newBridgeServer() error = %v, want a unix listen failure", err)
+		t.Fatalf("newServer() error = %v, want a unix listen failure", err)
 	}
 }
 
