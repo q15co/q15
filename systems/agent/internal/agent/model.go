@@ -53,6 +53,12 @@ type ToolResult struct {
 type ReplyResult struct {
 	// Text is the final assistant text to render back to the user.
 	Text string
+	// Err is the non-nil error of a run that ended without a normal answer.
+	// The worker folds a Reply error here while still calling Finish, so a
+	// transport can close the run honestly instead of reading the folded
+	// error text as a completed answer. A *StopError is a deliberate stop,
+	// not a failure; a nil Err is the only fully completed run.
+	Err error
 	// Attachments are typed canonical transcript parts attached to the final
 	// assistant response. Transports may support only a subset of attachment
 	// types.

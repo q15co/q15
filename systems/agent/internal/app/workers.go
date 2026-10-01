@@ -84,7 +84,11 @@ func runAgentWorker(
 				continue
 			}
 			if err != nil {
-				reply = agent.ReplyResult{Text: formatReplyError(err)}
+				// The error rides on the result rather than replacing the
+				// Finish call: the run still ends once, and the transport
+				// reads Err to close it as failed instead of reading the
+				// folded error text as a completed answer.
+				reply = agent.ReplyResult{Text: formatReplyError(err), Err: err}
 			}
 			session.Finish(runCtx, reply)
 			cancel()

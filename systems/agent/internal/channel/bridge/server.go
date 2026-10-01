@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"strings"
@@ -31,6 +32,16 @@ const (
 	// it. It is numeric because the images run as root and set up no named
 	// groups.
 	socketGroupID = 1000
+	// serverMaxConcurrentStreams caps the grpc server's concurrent streams.
+	// Each WatchEvents or Deliver stream is one goroutine plus buffered
+	// channels plus, on subscribe, a replay slice of up to
+	// sessionEventRetention retained events, and without this option all of
+	// that scales with client behaviour instead of with a limit. 128 is
+	// generous for one user's browser tabs — a tab holds one WatchEvents
+	// stream per open session — and deliberately above anything a real ui
+	// opens, so reaching it is an operational event, not everyday flow
+	// control.
+	serverMaxConcurrentStreams = 128
 )
 
 // Server owns the bridge's listener and its gRPC server. Binding happens in
@@ -41,9 +52,10 @@ type Server struct {
 	server   *grpc.Server
 }
 
-// NewServer resolves the listen target, unlinks a stale unix socket so a
-// crashed previous run does not block startup, binds, applies the socket's
-// mode and group, and registers the service. It does not serve.
+// NewServer resolves the listen target — only a unix:// socket binds, and a
+// non-unix target is refused rather than listened on — unlinks a stale unix
+// socket so a crashed previous run does not block startup, binds, applies
+// the socket's mode and group, and registers the service. It does not serve.
 func NewServer(target string, service *Service) (*Server, error) {
 	target = strings.TrimSpace(target)
 	if target == "" {
@@ -53,7 +65,10 @@ func NewServer(target string, service *Service) (*Server, error) {
 		return nil, errors.New("bridge service is required")
 	}
 
-	network, address := resolveListenTarget(target)
+	network, address, err := resolveListenTarget(target)
+	if err != nil {
+		return nil, err
+	}
 	if network == "unix" {
 		_ = os.Remove(address)
 	}
@@ -68,7 +83,15 @@ func NewServer(target string, service *Service) (*Server, error) {
 		}
 	}
 
-	server := grpc.NewServer()
+	// The grpc server keeps no credentials and no interceptor, so the
+	// bound transport is the whole trust story; logging it lets a reader
+	// see at startup which transport they got without a socket stat.
+	log.Printf(
+		"q15: runtime event=bridge_listening network=%s address=%q",
+		network,
+		address,
+	)
+	server := grpc.NewServer(grpc.MaxConcurrentStreams(serverMaxConcurrentStreams))
 	chatpb.RegisterChatServiceServer(server, service)
 	return &Server{listener: listener, server: server}, nil
 }
@@ -130,12 +153,22 @@ func prepareSocket(listener net.Listener) error {
 	return nil
 }
 
-// resolveListenTarget mirrors systems/exec/internal/app/app.go so both
-// runtimes keep one listen-target convention: a unix:// prefix selects a unix
-// socket and anything else is a TCP address.
-func resolveListenTarget(value string) (string, string) {
+// resolveListenTarget refuses everything but a unix:// socket. It
+// deliberately does not mirror systems/exec/internal/app/app.go, whose tcp
+// fallthrough exec may keep: exec is port-isolated and holds no identity,
+// while this bridge is the identity surface and its grpc server runs without
+// credentials or an interceptor, so a tcp bind would publish every rpc in
+// the clear on every interface the agent container can route to. The error
+// names the target so a misconfigured deployment fails with the offending
+// value in hand.
+func resolveListenTarget(value string) (string, string, error) {
 	if strings.HasPrefix(value, "unix://") {
-		return "unix", strings.TrimPrefix(value, "unix://")
+		return "unix", strings.TrimPrefix(value, "unix://"), nil
 	}
-	return "tcp", value
+	return "", "", fmt.Errorf(
+		"listen target %q must use the unix:// scheme; the chat bridge is the "+
+			"identity surface, so a host:port tcp listener is refused because the "+
+			"grpc server sets no credentials and no interceptor",
+		value,
+	)
 }

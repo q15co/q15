@@ -108,10 +108,12 @@ type Telegram struct {
 // Bridge defines the chat-contract bridge listener settings for an agent.
 type Bridge struct {
 	// ListenTarget is where the agent serves the frozen chat contract: a
-	// unix:///path/to/socket target, or a host:port TCP address. Empty
-	// disables the listener: the shared socket volume that backs the
-	// conventional DefaultBridgeListenTarget is provisioned by a later slice,
-	// so a deployment opts in once that volume exists.
+	// unix:///path/to/socket target. TCP is refused here and by the bridge's
+	// listener: the chat surface is the identity surface, so it is never
+	// published on a host:port. Empty disables the listener: the shared
+	// socket volume that backs the conventional DefaultBridgeListenTarget is
+	// provisioned by a later slice, so a deployment opts in once that volume
+	// exists.
 	ListenTarget string `yaml:"listen_target"`
 }
 

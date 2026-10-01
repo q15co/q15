@@ -2,6 +2,7 @@ package bridge
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -1620,5 +1621,107 @@ func TestServiceWatchEventsCoalescesADeltaFloodIntoKeyedFrames(t *testing.T) {
 	case err := <-silence:
 		t.Fatalf("a frame arrived after the terminal event (err=%v), want silence", err)
 	case <-time.After(3 * bridgeDeltaFlushInterval):
+	}
+}
+
+// TestRunSessionFinishClosesAFailedRunHonestly pins the worker's failure
+// seam: a run the worker closes with a non-nil error and no engine terminal
+// frame ends in exactly one failed terminal carrying the folded error text,
+// never the completion that made the contract's failure status unreachable
+// for a client-driven send.
+func TestRunSessionFinishClosesAFailedRunHonestly(t *testing.T) {
+	endpoint := NewAgentEndpoint(&fakePublisher{})
+	logical := endpoint.newSession("conv-close-failed")
+	run := startTestRun(t, endpoint, logical.id)
+	ctx := context.Background()
+
+	run.OnRunEvent(ctx, agent.RunEvent{Type: agent.RunEventRunStarted, Seq: 9})
+	run.Finish(ctx, agent.ReplyResult{
+		Text: "reply error: provider unreachable",
+		Err:  errors.New("provider unreachable"),
+	})
+
+	frames := logical.events.retained()
+	terminal := terminalFrames(frames)
+	if len(terminal) != 1 || terminal[0].GetRunFailed() == nil {
+		t.Fatalf("terminal frames = %v, want one RunFailed", terminal)
+	}
+	failed := terminal[0].GetRunFailed()
+	if failed.GetStatus() != chatpb.RunStatus_RUN_STATUS_FAILED {
+		t.Fatalf("terminal status = %v, want RUN_STATUS_FAILED", failed.GetStatus())
+	}
+	if failed.GetFullText() != "reply error: provider unreachable" {
+		t.Fatalf(
+			"terminal full text = %q, want the worker's folded error text",
+			failed.GetFullText(),
+		)
+	}
+	// The error itself rides the failure frame's own field, which is the
+	// reason this frame exists rather than a RunFinished carrying FAILED.
+	if failed.GetError() != "provider unreachable" {
+		t.Fatalf("terminal error = %q, want the worker's error", failed.GetError())
+	}
+	if terminal[0].GetTurnSeq() != 9 {
+		t.Fatalf(
+			"terminal turn_seq = %d, want the run's transcript sequence",
+			terminal[0].GetTurnSeq(),
+		)
+	}
+}
+
+// TestRunSessionFinishClassifiesAControlledStopAsAborted pins the deliberate
+// stop: a *StopError end is a controlled stop whose progress the loop
+// persists and whose text reports the deliberate summary, so the synthesised
+// terminal carries the contract's aborted status, not a failure a client
+// would read as a malfunction.
+func TestRunSessionFinishClassifiesAControlledStopAsAborted(t *testing.T) {
+	endpoint := NewAgentEndpoint(&fakePublisher{})
+	logical := endpoint.newSession("conv-close-stop")
+	run := startTestRun(t, endpoint, logical.id)
+	ctx := context.Background()
+
+	run.OnRunEvent(ctx, agent.RunEvent{Type: agent.RunEventRunStarted, Seq: 9})
+	run.Finish(ctx, agent.ReplyResult{
+		Text: "I stopped this run after reaching an internal tool-call safety limit.",
+		Err:  &agent.StopError{Reason: agent.StopReasonToolTurnLimit},
+	})
+
+	frames := logical.events.retained()
+	terminal := terminalFrames(frames)
+	if len(terminal) != 1 || terminal[0].GetRunFinished() == nil {
+		t.Fatalf("terminal frames = %v, want one RunFinished", terminal)
+	}
+	finished := terminal[0].GetRunFinished()
+	if finished.GetStatus() != chatpb.RunStatus_RUN_STATUS_ABORTED {
+		t.Fatalf("terminal status = %v, want RUN_STATUS_ABORTED", finished.GetStatus())
+	}
+	if !strings.Contains(finished.GetFullText(), "tool-call safety limit") {
+		t.Fatalf(
+			"terminal full text = %q, want the deliberate stop summary",
+			finished.GetFullText(),
+		)
+	}
+}
+
+// TestRunFailedMappingClassifiesAControlledStopAsAborted pins the same rule
+// on the engine's own run_failed frames: a loop whose tool-turn limit or
+// tool-loop guard fires reports the end through run_failed carrying the
+// StopError, and the contract's aborted status is the one that means a
+// controlled end, so both terminal paths agree on what a stop is.
+func TestRunFailedMappingClassifiesAControlledStopAsAborted(t *testing.T) {
+	failed := runEventToSessionEvent(agent.RunEvent{
+		Type:      agent.RunEventRunFailed,
+		FinalText: "max tool-call turns reached",
+		Err:       &agent.StopError{Reason: agent.StopReasonToolTurnLimit},
+	})
+	got := failed.GetRunFailed()
+	if got == nil {
+		t.Fatalf("run_failed mapped to %v, want RunFailed", frameMember(t, failed))
+	}
+	if got.GetStatus() != chatpb.RunStatus_RUN_STATUS_ABORTED {
+		t.Fatalf("stopped run status = %v, want RUN_STATUS_ABORTED", got.GetStatus())
+	}
+	if got.GetError() == "" {
+		t.Fatal("stopped run error = empty, want the StopError's text")
 	}
 }
