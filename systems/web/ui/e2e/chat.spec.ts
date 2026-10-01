@@ -570,6 +570,15 @@ test("animated tool disclosures follow the latest message without moving a reade
   const scroller = page.getByLabel("Conversation", { exact: true });
   const gap = () =>
     scroller.evaluate((node) => node.scrollHeight - node.scrollTop - node.clientHeight);
+  await expect.poll(gap).toBeLessThan(2);
+  // Reproduce a queued scroll notification reaching a newly enlarged layout
+  // before ResizeObserver follows it. The reader has not moved their position.
+  await scroller.evaluate((node) => {
+    document.documentElement.style.fontSize = "105%";
+    node.dispatchEvent(new Event("scroll", { bubbles: true }));
+  });
+  await expect.poll(gap).toBeLessThan(2);
+  await expect(page.getByRole("button", { name: "Back to latest" })).toBeHidden();
   await page.getByLabel("Message q15").fill("Read the workspace");
   await page.getByLabel("Send message", { exact: true }).click();
   const msg = { turn: "31", ordinal: -1 };

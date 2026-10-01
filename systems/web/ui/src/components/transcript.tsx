@@ -30,6 +30,7 @@ export function Transcript({ state, store }: { state: ChatState; store: ChatStor
     scrollHeight: number;
   } | null>(null);
   const following = useRef(true);
+  const followedTop = useRef(0);
   const [showLatest, setShowLatest] = useState(false);
   const [jumping, setJumping] = useState(false);
   const loadOlder = () => {
@@ -62,7 +63,10 @@ export function Transcript({ state, store }: { state: ChatState; store: ChatStor
         ? item.getBoundingClientRect().top - saved.top
         : node.scrollHeight - saved.scrollHeight;
       anchor.current = null;
-    } else if (following.current && !anchor.current) node.scrollTop = node.scrollHeight;
+    } else if (following.current && !anchor.current) {
+      node.scrollTop = node.scrollHeight;
+      followedTop.current = node.scrollTop;
+    }
   }, [state.messages, state.pending, state.loadingHistory]);
 
   // Follow expanding disclosures as well as text deltas, without moving a reader
@@ -71,7 +75,10 @@ export function Transcript({ state, store }: { state: ChatState; store: ChatStor
     if (!content.current || typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(() => {
       const node = scroller.current;
-      if (node && following.current && !anchor.current) node.scrollTop = node.scrollHeight;
+      if (node && following.current && !anchor.current) {
+        node.scrollTop = node.scrollHeight;
+        followedTop.current = node.scrollTop;
+      }
     });
     observer.observe(content.current);
     return () => observer.disconnect();
@@ -116,7 +123,14 @@ export function Transcript({ state, store }: { state: ChatState; store: ChatStor
         aria-label="Conversation"
         onScroll={() => {
           const node = scroller.current!;
-          following.current = node.scrollHeight - node.scrollTop - node.clientHeight < 100;
+          const atBottom = node.scrollHeight - node.scrollTop - node.clientHeight < 100;
+          // A queued scroll event can arrive after content grows but before its
+          // ResizeObserver callback. Keep following when our last scroll position
+          // is unchanged; only the reader moving away should interrupt it.
+          if (atBottom) {
+            following.current = true;
+            followedTop.current = node.scrollTop;
+          } else if (Math.abs(node.scrollTop - followedTop.current) > 1) following.current = false;
           setShowLatest(!following.current);
           if (node.scrollTop < 80 && !following.current) loadOlder();
         }}
