@@ -894,9 +894,9 @@ func TestSessionEventLogDropsNoEventBetweenReplayAndLive(t *testing.T) {
 func startTestRun(t *testing.T, endpoint *AgentEndpoint, sessionID string) *runSession {
 	t.Helper()
 	run, err := endpoint.OpenSession(context.Background(), bus.InboundMessage{
-		Channel: bus.ChannelBridge,
-		ChatID:  sessionID,
-		Text:    "hello",
+		Channel:   bus.ChannelBridge,
+		SessionID: sessionID,
+		Text:      "hello",
 	})
 	if err != nil {
 		t.Fatalf("OpenSession() worker seam error = %v", err)
@@ -1201,6 +1201,70 @@ func TestRunSessionEngineTerminalIsNotDoubled(t *testing.T) {
 			"failed terminal = %v, want the engine's RunFailed with its error",
 			failedTerminal[0],
 		)
+	}
+}
+
+func TestRunSessionFailedTerminalRecoversOnlyTheCurrentDraft(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		err       error
+		finalText string
+		wantText  string
+		status    chatpb.RunStatus
+	}{
+		{name: "canceled stream", err: context.Canceled, wantText: "current draft", status: chatpb.RunStatus_RUN_STATUS_ABORTED},
+		{name: "failed stream", err: fmt.Errorf("upstream failed"), wantText: "current draft", status: chatpb.RunStatus_RUN_STATUS_FAILED},
+		{name: "explicit final text", err: context.Canceled, finalText: "canonical", wantText: "canonical", status: chatpb.RunStatus_RUN_STATUS_ABORTED},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			endpoint := NewAgentEndpoint(&fakePublisher{})
+			logical := endpoint.newSession("")
+			run := startTestRun(t, endpoint, logical.id)
+			ctx := context.Background()
+			run.OnRunEvent(ctx, agent.RunEvent{Type: agent.RunEventRunStarted, Seq: 42})
+			run.OnRunEvent(
+				ctx,
+				agent.RunEvent{
+					Type:  agent.RunEventModelTurnDelta,
+					Seq:   42,
+					Delta: "discarded attempt",
+				},
+			)
+			run.OnRunEvent(ctx, agent.RunEvent{Type: agent.RunEventModelTurnStarted, Seq: 42})
+			run.OnRunEvent(
+				ctx,
+				agent.RunEvent{Type: agent.RunEventModelTurnDelta, Seq: 42, Delta: "current draft"},
+			)
+			failed := agent.RunEvent{
+				Type:      agent.RunEventRunFailed,
+				Seq:       42,
+				Err:       tc.err,
+				FinalText: tc.finalText,
+			}
+			run.OnRunEvent(ctx, failed)
+			run.Abort(ctx, "worker noticed cancellation")
+
+			terminals := terminalFrames(logical.events.retained())
+			if len(terminals) != 1 {
+				t.Fatalf("terminal frames = %d, want one", len(terminals))
+			}
+			terminal := terminals[0].GetRunFailed()
+			if terminal == nil || terminal.GetFullText() != tc.wantText ||
+				terminal.GetStatus() != tc.status {
+				t.Fatalf(
+					"terminal = %v, want text %q and status %v",
+					terminal,
+					tc.wantText,
+					tc.status,
+				)
+			}
+			if terminal.GetError() != tc.err.Error() {
+				t.Fatalf("terminal error = %q, want %q", terminal.GetError(), tc.err.Error())
+			}
+			if failed.FinalText != tc.finalText {
+				t.Fatal("observer changed the engine's canonical event")
+			}
+		})
 	}
 }
 

@@ -373,8 +373,7 @@ func TestServiceAbortCancelsRecordedRun(t *testing.T) {
 	canceled := 0
 	cancelable.SetCancel(func() { canceled++ })
 
-	// The request names an unrelated turn_seq; in this layer a session has at
-	// most one run, so it must not matter.
+	run.OnRunEvent(ctx, agent.RunEvent{Type: agent.RunEventRunStarted, Seq: 9})
 	aborted, err := service.Abort(ctx, &chatpb.AbortRequest{SessionId: sessionID, TurnSeq: 9})
 	if err != nil {
 		t.Fatalf("Abort() error = %v", err)
@@ -573,4 +572,70 @@ func TestBridgeOwnerAndConversationSurviveNewSessions(t *testing.T) {
 			)
 		}
 	}
+}
+
+func TestServiceAbortTargetsOnlyTheNamedActiveRun(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		requested int64
+		wantAbort bool
+	}{
+		{name: "stale", requested: 41},
+		{name: "future", requested: 43},
+		{name: "active", requested: 42, wantAbort: true},
+		{name: "current", wantAbort: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			service, endpoint := newTestEndpoint(&fakePublisher{})
+			logical := endpoint.newSession("")
+			first := startTestRun(t, endpoint, logical.id)
+			first.OnRunEvent(
+				context.Background(),
+				agent.RunEvent{Type: agent.RunEventRunStarted, Seq: 41},
+			)
+			first.Finish(context.Background(), agent.ReplyResult{})
+
+			second := startTestRun(t, endpoint, logical.id)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			second.SetCancel(cancel)
+			second.OnRunEvent(ctx, agent.RunEvent{Type: agent.RunEventRunStarted, Seq: 42})
+			if _, err := service.Abort(ctx, &chatpb.AbortRequest{
+				SessionId: logical.id, TurnSeq: tc.requested,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if got := ctx.Err() != nil; got != tc.wantAbort {
+				t.Fatalf(
+					"Abort(%d) canceled active turn 42 = %v, want %v",
+					tc.requested,
+					got,
+					tc.wantAbort,
+				)
+			}
+			second.Abort(context.Background(), "test cleanup")
+		})
+	}
+}
+
+func TestServiceStaleAbortDoesNotLatchDuringNextRunStartup(t *testing.T) {
+	service, endpoint := newTestEndpoint(&fakePublisher{})
+	logical := endpoint.newSession("")
+	first := startTestRun(t, endpoint, logical.id)
+	first.OnRunEvent(context.Background(), agent.RunEvent{Type: agent.RunEventRunStarted, Seq: 41})
+	first.Abort(context.Background(), "first stopped")
+
+	second := startTestRun(t, endpoint, logical.id)
+	if _, err := service.Abort(context.Background(), &chatpb.AbortRequest{
+		SessionId: logical.id, TurnSeq: 41,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	second.SetCancel(cancel)
+	if ctx.Err() != nil {
+		t.Fatal("stale Stop was remembered for the next run's cancel function")
+	}
+	second.Abort(context.Background(), "test cleanup")
 }

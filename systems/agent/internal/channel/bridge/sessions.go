@@ -67,8 +67,8 @@ func (e *AgentEndpoint) Channel() string {
 // OpenSession resolves the logical session for one inbound bus message and
 // marks it running for the run the worker starts next. SendMessage publishes
 // with a transient session id separate from the conversation, so msg.SessionID
-// is the join key. A message
-// for an unknown session resolves to a nil session, which the worker skips.
+// is the join key. A message for an unknown session resolves to a nil session,
+// which the worker skips.
 func (e *AgentEndpoint) OpenSession(
 	_ context.Context,
 	msg bus.InboundMessage,
@@ -176,6 +176,9 @@ type logicalSession struct {
 	// running is true between the worker's OpenSession call and the run
 	// session's Finish or Abort.
 	running bool
+	// turnSeq is the active run's durable sequence, learned from its observer.
+	// It shares the cancellation lock so a stale Stop cannot reach a later run.
+	turnSeq int64
 	// cancel is the in-flight run's cancel func, recorded by the run session's
 	// SetCancel. The Service's Abort rpc invokes it. Finished runs clear it,
 	// so a Stop during the next run's startup is remembered for SetCancel.
@@ -215,6 +218,7 @@ func (s *logicalSession) startRun() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.running = true
+	s.turnSeq = 0
 	s.cancel = nil
 	s.abortRequested = false
 }
@@ -240,12 +244,22 @@ func (s *logicalSession) setCancel(cancel context.CancelFunc) {
 	}
 }
 
-// cancelRun cancels the in-flight run, if any. With nothing in flight it is a
-// no-op.
-func (s *logicalSession) cancelRun() {
+// setTurnSeq records the active run's sequence once its observer receives it.
+func (s *logicalSession) setTurnSeq(seq int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.running {
+	if s.running {
+		s.turnSeq = seq
+	}
+}
+
+// cancelRun cancels the named run, or the current run when turnSeq is zero.
+// An idle session or a mismatched sequence is a no-op, including a stale Stop
+// arriving before the next run has received its sequence.
+func (s *logicalSession) cancelRun(turnSeq int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.running || (turnSeq != 0 && turnSeq != s.turnSeq) {
 		return
 	}
 	if s.cancel == nil {
@@ -264,6 +278,7 @@ func (s *logicalSession) finish(result agent.ReplyResult) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.running = false
+	s.turnSeq = 0
 	s.cancel = nil
 	s.abortRequested = false
 	s.reply = result
@@ -274,6 +289,7 @@ func (s *logicalSession) abortRun() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.running = false
+	s.turnSeq = 0
 	s.cancel = nil
 	s.abortRequested = false
 }

@@ -321,7 +321,10 @@ func (s *runSession) OnRunEvent(_ context.Context, event agent.RunEvent) {
 	if event.ModelRef != "" {
 		s.modelRef = event.ModelRef
 	}
-	s.seq = event.Seq
+	if event.Seq > 0 {
+		s.seq = event.Seq
+		s.session.setTurnSeq(event.Seq)
+	}
 
 	switch event.Type {
 	case agent.RunEventModelTurnDelta: // run_events.go:17
@@ -337,6 +340,12 @@ func (s *runSession) OnRunEvent(_ context.Context, event agent.RunEvent) {
 		// second terminal event.
 		s.terminalEmitted = true
 		s.flushDeltaBuffersLocked()
+		if event.Type == agent.RunEventRunFailed && event.FinalText == "" {
+			// A canceled or failed stream has no canonical response. Preserve
+			// its current attempt's draft for UI recovery only; the engine's
+			// transcript and any explicit final text remain authoritative.
+			event.FinalText = s.answerSoFar
+		}
 		s.session.appendEvent(runEventToSessionEvent(event))
 	default:
 		s.flushDeltaBuffersLocked()

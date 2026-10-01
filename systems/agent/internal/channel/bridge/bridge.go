@@ -122,10 +122,9 @@ func publishSendError(err error) error {
 // Abort cancels the in-flight run of a session and returns it.
 //
 // Nothing in flight is deliberately not an error: a client racing a finished
-// run still gets the session, not a failure. req.TurnSeq stays advisory in
-// this layer because a session owns at most one run at a time (the worker is
-// sequential), so whatever run is in flight is the one aborted, whatever seq
-// the request names.
+// run still gets the session, not a failure. A nonzero turn_seq targets only
+// that run, so a delayed Stop cannot cancel its successor. Zero targets the
+// current run, including its startup before the observer receives a sequence.
 func (s *Service) Abort(
 	_ context.Context,
 	req *chatpb.AbortRequest,
@@ -138,7 +137,7 @@ func (s *Service) Abort(
 			req.GetSessionId(),
 		)
 	}
-	session.cancelRun()
+	session.cancelRun(req.GetTurnSeq())
 	return &chatpb.AbortResponse{Session: session.snapshot()}, nil
 }
 
