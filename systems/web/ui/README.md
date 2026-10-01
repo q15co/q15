@@ -97,8 +97,8 @@ share a 48rem maximum. Spacing tokens follow a 4px scale and stay compact as tex
 use minimum heights and grow with their content. Drafts scroll internally after reaching the smaller
 of 12rem or 30% of the viewport height.
 
-The app shell provides the named `app` inline-size container. Component modules switch to compact
-layouts below 48rem, including when a larger browser font preference increases that threshold. Short
+The app shell provides the named `app` size container. Component modules switch to compact layouts
+below 48rem, including when a larger browser font preference increases that threshold. Short
 viewports hide decorative copy and the composer footer to preserve room for messages. Browser tests
 cover doubled text, keyboard access, narrow screens and long drafts alongside chat behavior.
 

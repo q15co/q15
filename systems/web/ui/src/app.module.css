@@ -2,7 +2,7 @@
   display: flex;
   height: 100dvh;
   min-height: 384px;
-  container: app / inline-size;
+  container: app / size;
   overflow: hidden;
 }
 .sidebar {
@@ -73,12 +73,20 @@
   font-size: var(--font-sm);
   font-weight: 500;
 }
+.navItem > svg {
+  flex: none;
+}
+.navItem > span:first-of-type {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .navActive {
   background: color-mix(in srgb, var(--primary) 9%, transparent);
   color: var(--primary);
   border: 1px solid color-mix(in srgb, var(--primary) 13%, transparent);
 }
 .navDot {
+  flex: none;
   margin-left: auto;
   width: 5px;
   height: 5px;
@@ -125,6 +133,7 @@
   border-top: 1px solid var(--border);
 }
 .ownerAvatar {
+  flex: none;
   background: var(--surface);
   color: var(--primary);
   border-radius: 10px;
@@ -139,6 +148,10 @@
   font-size: var(--font-xs);
   font-weight: 500;
   margin-bottom: var(--space-1);
+}
+.sidebarFooter > div:nth-child(2) {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .sidebarFooter span {
   display: flex;
@@ -295,7 +308,7 @@
     position: fixed;
     inset: 0 auto 0 0;
     z-index: 30;
-    width: min(20rem, calc(100vw - 48px));
+    width: min(20rem, calc(100vw - var(--space-4)));
     visibility: hidden;
     transform: translateX(-100%);
     transition: transform 180ms;
@@ -355,7 +368,7 @@
   white-space: nowrap;
   text-overflow: ellipsis;
 }
-@media (max-height: 700px) {
+@container app (max-height: 44rem) {
   .sidebarNote {
     display: none;
   }
@@ -363,7 +376,7 @@
     margin-top: auto;
   }
 }
-@media (max-height: 600px) {
+@container app (max-height: 37.5rem) {
   .conversationTitle {
     padding-block: var(--space-3);
   }

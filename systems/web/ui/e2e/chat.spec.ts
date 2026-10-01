@@ -407,9 +407,14 @@ test("enlarged text preserves conversation space, navigation, and keyboard acces
   await expect(skip).toBeInViewport();
   await skip.press("Enter");
   await expect(page.getByLabel("Message q15")).toBeFocused();
+  await page.setViewportSize({ width: 320, height: 844 });
   await page.getByLabel("Open navigation").click();
   const navigation = page.getByRole("complementary", { name: "Chat navigation" });
   await expect(navigation).toBeInViewport();
+  expect(await navigation.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
+  await expect(
+    navigation.getByRole("link", { name: "Check the workspace and search the web." }),
+  ).toBeInViewport();
   await navigation.getByRole("button", { name: "Close navigation", exact: true }).click();
   await expect(navigation).toBeHidden();
   await page.getByText("Used 2 tools").click();
