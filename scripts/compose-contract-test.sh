@@ -18,5 +18,5 @@ for file in docker-compose.yml deploy/compose/docker-compose.image-first.yml; do
 	' >/dev/null || die "bridge isolation contract failed: ${file}"
 done
 [[ $(yq '.agent.bridge.listen_target' deploy/compose/agent-config.yaml) == 'unix:///run/q15/bridge.sock' ]] || die "agent bridge config differs"
-rg -q 'DefaultBridgeListenTarget = "unix:///run/q15/bridge.sock"' systems/agent/internal/config/config.go || die "agent socket default differs"
+grep -Fq 'DefaultBridgeListenTarget = "unix:///run/q15/bridge.sock"' systems/agent/internal/config/config.go || die "agent socket default differs"
 printf 'compose bridge isolation contract passed\n'
