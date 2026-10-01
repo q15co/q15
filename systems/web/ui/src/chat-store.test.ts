@@ -127,12 +127,15 @@ describe("chat state", () => {
     });
   });
   it("rebuilds an earlier replayed model loop without duplicating completed tool work", () => {
-    const { store } = setup();
+    const { store, transport } = setup();
+    store.start();
     feed(store, streamed.slice(0, 8));
     const msg = { turn: "42", ordinal: -1 };
     event(store, "snapshot", { msg, seq: "10", kind: "model_start", text: "", loop_turn: 2 });
     event(store, "delta", { msg, seq: "11", kind: "text", text: "second loop" });
     // A reconnect replays model_start and snapshots from the retained run log.
+    const events = vi.mocked(transport.start).mock.calls[0]![0] as TransportEvents;
+    events.connection("reconnecting");
     feed(store, [streamed[2]!]);
     expect(store.getSnapshot().messages[0]?.parts).toEqual([]);
     feed(store, streamed.slice(3, 8));
