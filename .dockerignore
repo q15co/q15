@@ -5,3 +5,6 @@ bin
 revive.log
 result
 result-*
+systems/web/internal/assets/dist/*
+!systems/web/internal/assets/dist/.gitkeep
+systems/web/ui/node_modules

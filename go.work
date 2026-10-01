@@ -7,4 +7,5 @@ use (
 	./systems/agent
 	./systems/exec
 	./systems/proxy
+	./systems/web
 )

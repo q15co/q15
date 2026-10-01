@@ -10,7 +10,7 @@ permissions:
 
 concurrency:
   group: publish-main-images-${{ github.ref }}
-  # Let a release finish moving all three stable tags before the next run.
+  # Let a release finish moving all stable tags before the next run.
   cancel-in-progress: false
 
 jobs:
@@ -62,7 +62,7 @@ jobs:
           args: check
 
   # Detect which service images actually need to be built for this push.
-  # This keeps the 3 services × 2 platforms matrix from running on every
+  # This keeps the 4 services × 2 platforms matrix from running on every
   # unrelated main-branch change, while still building every service on the
   # first push to main or any shared-path change.
   detect-changes:
@@ -76,6 +76,7 @@ jobs:
       agent: ${{ steps.detect.outputs.agent }}
       exec: ${{ steps.detect.outputs.exec }}
       proxy: ${{ steps.detect.outputs.proxy }}
+      web: ${{ steps.detect.outputs.web }}
       any: ${{ steps.detect.outputs.any }}
       release: ${{ steps.detect.outputs.release }}
     steps:
@@ -149,6 +150,7 @@ jobs:
           AGENT="$(jq -r '.agent' <<< "${IMPACT_JSON}")"
           EXEC="$(jq -r '.exec' <<< "${IMPACT_JSON}")"
           PROXY="$(jq -r '.proxy' <<< "${IMPACT_JSON}")"
+          WEB="$(jq -r '.web' <<< "${IMPACT_JSON}")"
           RELEASE=false
 
           while IFS= read -r file; do
@@ -164,7 +166,7 @@ jobs:
           done <<< "${CHANGED_FILES}"
 
           ANY=false
-          if [[ "${AGENT}" == true || "${EXEC}" == true || "${PROXY}" == true ]]; then
+          if [[ "${AGENT}" == true || "${EXEC}" == true || "${PROXY}" == true || "${WEB}" == true ]]; then
             ANY=true
             RELEASE=true
           fi
@@ -172,6 +174,7 @@ jobs:
           echo "agent=${AGENT}"
           echo "exec=${EXEC}"
           echo "proxy=${PROXY}"
+          echo "web=${WEB}"
           echo "any=${ANY}"
           echo "release=${RELEASE}"
 
@@ -179,6 +182,7 @@ jobs:
             echo "agent=${AGENT}"
             echo "exec=${EXEC}"
             echo "proxy=${PROXY}"
+            echo "web=${WEB}"
             echo "any=${ANY}"
             echo "release=${RELEASE}"
           } >> "${GITHUB_OUTPUT}"
@@ -207,6 +211,10 @@ jobs:
             build_entries+=("$(build_entry q15-proxy ghcr.io/q15co/q15-proxy docker/proxy.Dockerfile linux/amd64 amd64 ubuntu-24.04)")
             build_entries+=("$(build_entry q15-proxy ghcr.io/q15co/q15-proxy docker/proxy.Dockerfile linux/arm64 arm64 ubuntu-24.04-arm)")
           fi
+          if [[ "${WEB}" == true ]]; then
+            build_entries+=("$(build_entry q15-web ghcr.io/q15co/q15-web docker/web.Dockerfile linux/amd64 amd64 ubuntu-24.04)")
+            build_entries+=("$(build_entry q15-web ghcr.io/q15co/q15-web docker/web.Dockerfile linux/arm64 arm64 ubuntu-24.04-arm)")
+          fi
 
           if [[ ${#build_entries[@]} -eq 0 ]]; then
             BUILD_JSON="[]"
@@ -231,6 +239,9 @@ jobs:
           fi
           if [[ "${PROXY}" == true ]]; then
             publish_entries+=("$(publish_entry q15-proxy ghcr.io/q15co/q15-proxy)")
+          fi
+          if [[ "${WEB}" == true ]]; then
+            publish_entries+=("$(publish_entry q15-web ghcr.io/q15co/q15-web)")
           fi
 
           if [[ ${#publish_entries[@]} -eq 0 ]]; then
@@ -423,9 +434,11 @@ jobs:
       AGENT_CHANGED: ${{ needs.detect-changes.outputs.agent }}
       EXEC_CHANGED: ${{ needs.detect-changes.outputs.exec }}
       PROXY_CHANGED: ${{ needs.detect-changes.outputs.proxy }}
+      WEB_CHANGED: ${{ needs.detect-changes.outputs.web }}
       AGENT_IMAGE: ghcr.io/q15co/q15-agent
       EXEC_IMAGE: ghcr.io/q15co/q15-exec
       PROXY_IMAGE: ghcr.io/q15co/q15-proxy
+      WEB_IMAGE: ghcr.io/q15co/q15-web
     steps:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -573,12 +586,14 @@ jobs:
           agent_digest="$(resolve_main_digest agent "${AGENT_IMAGE}")"
           exec_digest="$(resolve_main_digest exec "${EXEC_IMAGE}")"
           proxy_digest="$(resolve_main_digest proxy "${PROXY_IMAGE}")"
+          web_digest="$(resolve_main_digest web "${WEB_IMAGE}")"
 
           # Publish and verify every immutable DateVer before moving any
           # stable tag. Unchanged components are retagged without rebuilding.
           publish_datever agent "${AGENT_IMAGE}" "${agent_digest}"
           publish_datever exec "${EXEC_IMAGE}" "${exec_digest}"
           publish_datever proxy "${PROXY_IMAGE}" "${proxy_digest}"
+          publish_datever web "${WEB_IMAGE}" "${web_digest}"
 
           assert_current_main
           # q15-agent moves last because its stable annotation is the
@@ -586,6 +601,7 @@ jobs:
           for specification in \
             "exec|${EXEC_IMAGE}" \
             "proxy|${PROXY_IMAGE}" \
+            "web|${WEB_IMAGE}" \
             "agent|${AGENT_IMAGE}"; do
             IFS='|' read -r component image <<< "${specification}"
             release_digest="$(< "/tmp/${component}-release-digest")"
@@ -603,6 +619,7 @@ jobs:
             echo "| q15-agent | \`${agent_digest}\` | \`${AGENT_CHANGED}\` | \`stable\`, \`${release_version}\` |"
             echo "| q15-exec | \`${exec_digest}\` | \`${EXEC_CHANGED}\` | \`stable\`, \`${release_version}\` |"
             echo "| q15-proxy | \`${proxy_digest}\` | \`${PROXY_CHANGED}\` | \`stable\`, \`${release_version}\` |"
+            echo "| q15-web | \`${web_digest}\` | \`${WEB_CHANGED}\` | \`stable\`, \`${release_version}\` |"
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Inspect synchronized release tags
@@ -610,7 +627,7 @@ jobs:
           RELEASE_VERSION: ${{ steps.release.outputs.release-version }}
         run: |
           set -euo pipefail
-          for image in "${AGENT_IMAGE}" "${EXEC_IMAGE}" "${PROXY_IMAGE}"; do
+          for image in "${AGENT_IMAGE}" "${EXEC_IMAGE}" "${PROXY_IMAGE}" "${WEB_IMAGE}"; do
             docker buildx imagetools inspect "${image}:${RELEASE_VERSION}"
             docker buildx imagetools inspect "${image}:stable"
           done

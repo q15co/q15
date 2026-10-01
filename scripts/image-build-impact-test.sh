@@ -17,27 +17,30 @@ assert_impact() {
 	fi
 }
 
-assert_impact '{"agent":true,"exec":false,"proxy":false}' \
+assert_impact '{"agent":true,"exec":false,"proxy":false,"web":false}' \
 	'systems/agent/internal/app/bot.go'
-assert_impact '{"agent":false,"exec":true,"proxy":false}' \
+assert_impact '{"agent":false,"exec":true,"proxy":false,"web":false}' \
 	'systems/exec/internal/service/grpc.go'
-assert_impact '{"agent":false,"exec":false,"proxy":true}' \
+assert_impact '{"agent":false,"exec":false,"proxy":true,"web":false}' \
 	'systems/proxy/internal/service/grpc.go'
-assert_impact '{"agent":true,"exec":true,"proxy":false}' \
+assert_impact '{"agent":true,"exec":true,"proxy":false,"web":false}' \
 	'libs/exec-contract/proto/q15/exec/v1/execution.proto'
-assert_impact '{"agent":true,"exec":false,"proxy":false}' \
+assert_impact '{"agent":true,"exec":false,"proxy":false,"web":true}' \
 	'libs/chat-contract/proto/q15/chat/v1/chat.proto'
-assert_impact '{"agent":false,"exec":true,"proxy":true}' \
+assert_impact '{"agent":false,"exec":true,"proxy":true,"web":false}' \
 	'libs/proxy-contract/proto/q15/proxy/v1/proxy.proto'
-assert_impact '{"agent":true,"exec":true,"proxy":true}' \
+assert_impact '{"agent":true,"exec":true,"proxy":true,"web":true}' \
 	'go.work'
-assert_impact '{"agent":true,"exec":true,"proxy":true}' \
+assert_impact '{"agent":true,"exec":true,"proxy":true,"web":true}' \
 	'.dockerignore'
-assert_impact '{"agent":true,"exec":true,"proxy":true}' \
+assert_impact '{"agent":true,"exec":true,"proxy":true,"web":false}' \
 	'systems/agent/main.go' \
 	'systems/exec/main.go' \
 	'systems/proxy/main.go'
-assert_impact '{"agent":false,"exec":false,"proxy":false}' \
+assert_impact '{"agent":false,"exec":false,"proxy":false,"web":true}' \
+	'systems/web/internal/server/socket.go' \
+	'docker/web.Dockerfile'
+assert_impact '{"agent":false,"exec":false,"proxy":false,"web":false}' \
 	'README.md' \
 	'deploy/compose/README.md'
 
