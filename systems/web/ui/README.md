@@ -61,13 +61,14 @@ the allocated `head_seq`. An uncertain send is shown explicitly and never resubm
 Retention gaps refresh completed history and send `sync` from a readable turn.
 
 Text uses safe Markdown. Each turn groups commentary, reasoning and paired tool calls/results in an
-activity disclosure above the final answer. Active work expands automatically; completed work
-collapses. Tool rows summarize the action and status, with full inputs and outputs one click away.
-Missing results and unmatched errors remain visible. Message links open containing disclosures.
-Media parts show their references until attachment transfer lands. Unknown parts show their type and
-raw data. Sending during an active run uses the server queue; Stop targets the active run, including
-its startup. History pages backwards automatically near the top, preserves the visible message, and
-supports `#message-<turn>:<ordinal>` links. Recent user messages in the sidebar use those links.
+activity disclosure above the final answer. Disclosures start closed, including during active work,
+and preserve the reader's choice across live updates and completion. Tool rows summarize the action
+and status, with full inputs and outputs one click away. Missing results and unmatched errors remain
+visible. Message links open containing disclosures. Media parts show their references until
+attachment transfer lands. Unknown parts show their type and raw data. Sending during an active run
+uses the server queue; Stop targets the active run, including its startup. History pages backwards
+automatically near the top, preserves the visible message, and supports `#message-<turn>:<ordinal>`
+links. Recent user messages in the sidebar use those links.
 
 The manifest is `/manifest.webmanifest` and the service worker is `/sw.js`. The build emits an
 explicit shell precache manifest and a content-derived cache name. The worker only handles exact
@@ -120,6 +121,13 @@ and tool statuses and send/queue icons ease between states. Native disclosures a
 where `interpolate-size` and `::details-content` are supported and open instantly elsewhere. History
 does not animate on entry, and message links open disclosures instantly before scrolling. A content
 resize observer keeps readers at the bottom only while they are following the latest message.
+
+Active work floats gently above a breathing pastel glow: Mauve for thinking and Blue for tool calls.
+Progress remains visible with the accordion closed. Motion animates Recursive's Casual, Weight and
+Slant axes on short activity labels, the welcome heading and control hover/focus. The Monospace axis
+stays at Sans and cursive alternates stay off, preserving label widths and legibility. Transcript
+copy, code and input text keep their reading styles. Effects settle when work ends and become static
+when reduced motion is enabled.
 
 Theme changes use a circular native View Transition from the theme button, with an immediate
 fallback. `prefers-reduced-motion` disables entrance, gesture, disclosure, decoration, theme and

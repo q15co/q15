@@ -18,6 +18,10 @@ export function Transcript({ state, store }: { state: ChatState; store: ChatStor
     messages.push(message);
     turns.set(message.turn, messages);
   }
+  // Show thinking as soon as a turn starts, before its first model snapshot.
+  // Keep the same turn subtree when that snapshot arrives so disclosures retain
+  // the reader's choice.
+  if (state.active && !turns.has(state.active)) turns.set(state.active, []);
   const scroller = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const anchor = useRef<{

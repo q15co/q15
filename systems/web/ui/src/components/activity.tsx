@@ -14,6 +14,7 @@ import type { Part } from "../generated/protocol";
 import { MessageView } from "./message";
 import { PartView, pretty } from "./parts";
 import { useMotionPreference } from "./ui/motion";
+import { recursiveAxes } from "./ui/font-motion";
 import styles from "./activity.module.css";
 
 interface Source {
@@ -157,6 +158,7 @@ function ToolActivity({
     <details
       className={clsx(styles.tool, error && styles.error)}
       data-tool-call-id={part.tool_call?.id ?? part.tool_call_id}
+      data-running={running || undefined}
     >
       <summary>
         {anchors.has(item.source.key) && <MessageAnchor source={item.source} />}
@@ -200,7 +202,12 @@ function ToolActivity({
 }
 
 export function TurnView({ messages, working }: { messages: ChatMessage[]; working: boolean }) {
+  const reduced = useMotionPreference();
   const { activity, answers } = presentTurn(messages);
+  const usingTool = activity.some(
+    (item) => item.source.part.part_type === "tool_call" && toolPresentation(item, working).running,
+  );
+  const phase = usingTool ? "tool" : "thinking";
   const toolCount = activity.filter((item) =>
     ["tool_call", "tool_result"].includes(item.source.part.part_type),
   ).length;
@@ -209,7 +216,9 @@ export function TurnView({ messages, working }: { messages: ChatMessage[]; worki
   ).length;
   const status = messages.findLast((m) => m.status)?.status;
   const label = working
-    ? "Working…"
+    ? usingTool
+      ? "Using tools…"
+      : "Thinking…"
     : status === "aborted"
       ? "Work stopped"
       : status === "failed"
@@ -235,7 +244,12 @@ export function TurnView({ messages, working }: { messages: ChatMessage[]; worki
           <MessageView message={m} key={m.key} />
         ))}
       {(activity.length > 0 || working || empty.length > 0) && (
-        <details className={styles.activity} open={working} data-agent-activity>
+        <details
+          className={styles.activity}
+          data-agent-activity
+          data-working={working || undefined}
+          data-phase={phase}
+        >
           <summary>
             {empty.map((m) => (
               <span
@@ -245,26 +259,65 @@ export function TurnView({ messages, working }: { messages: ChatMessage[]; worki
                 data-message-key={m.key}
               />
             ))}
-            <Brain size={15} className={working ? styles.thinking : undefined} aria-hidden="true" />
-            <span>{label}</span>
-            {working && (
-              <span className={styles.workingDots} aria-hidden="true">
-                <i />
-                <i />
-                <i />
-              </span>
-            )}
-            {working && toolCount > 0 && (
-              <span className={styles.status}>
-                {toolCount} {toolCount === 1 ? "tool" : "tools"}
-              </span>
-            )}
-            {errors > 0 && (
-              <span className={styles.error}>
-                {errors} {errors === 1 ? "error" : "errors"}
-              </span>
-            )}
-            <ChevronDown size={14} className={styles.chevron} aria-hidden="true" />
+            <m.span
+              className={styles.summaryContent}
+              initial={reduced ? false : { y: 0 }}
+              animate={{ y: working && !reduced ? [0, -3, 0] : 0 }}
+              transition={{
+                duration: reduced ? 0 : working ? 4.8 : 0.3,
+                repeat: working && !reduced ? Infinity : 0,
+                ease: "easeInOut",
+              }}
+            >
+              {usingTool ? (
+                <Wrench size={15} className={styles.thinking} aria-hidden="true" />
+              ) : (
+                <Brain
+                  size={15}
+                  className={working ? styles.thinking : undefined}
+                  aria-hidden="true"
+                />
+              )}
+              <m.span
+                className={styles.activityLabel}
+                initial={reduced ? false : { fontVariationSettings: recursiveAxes(0.2, 500) }}
+                animate={{
+                  fontVariationSettings:
+                    working && !reduced
+                      ? [
+                          recursiveAxes(0.2, 500),
+                          recursiveAxes(0.9, 570, -4),
+                          recursiveAxes(0.2, 500),
+                        ]
+                      : recursiveAxes(0.2, 500),
+                }}
+                transition={{
+                  duration: reduced ? 0 : working ? 4.8 : 0.3,
+                  repeat: working && !reduced ? Infinity : 0,
+                  ease: "easeInOut",
+                }}
+              >
+                {label}
+              </m.span>
+              {working && (
+                <span className={styles.workingDots} aria-hidden="true">
+                  <i />
+                  <i />
+                  <i />
+                </span>
+              )}
+              {working && toolCount > 0 && (
+                <span className={styles.status}>
+                  {toolCount} {toolCount === 1 ? "tool" : "tools"}
+                </span>
+              )}
+              {errors > 0 && (
+                <span className={styles.error}>
+                  {errors} {errors === 1 ? "error" : "errors"}
+                </span>
+              )}
+              <ChevronDown size={14} className={styles.chevron} aria-hidden="true" />
+            </m.span>
           </summary>
           <div className={styles.timeline}>
             {activity.map((item) =>

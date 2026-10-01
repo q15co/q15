@@ -1,7 +1,11 @@
 .activity {
+  --activity-light: var(--primary);
   margin: var(--space-5) 0 var(--space-6) var(--message-inset);
   color: var(--subtext);
   font-size: var(--font-sm);
+}
+.activity[data-phase="tool"] {
+  --activity-light: var(--blue);
 }
 .activity > summary,
 .tool > summary {
@@ -15,7 +19,57 @@
 .activity > summary {
   width: fit-content;
   max-width: 100%;
-  padding: var(--space-2) 0;
+  padding: var(--space-2) var(--space-3);
+  margin-left: calc(-1 * var(--space-3));
+  border: 1px solid transparent;
+  border-radius: var(--space-3);
+  min-height: 40px;
+  isolation: isolate;
+  transition:
+    background-color var(--motion-slow),
+    border-color var(--motion-slow);
+}
+.activity[data-working] > summary {
+  background: var(--surface);
+  border-color: color-mix(in srgb, var(--activity-light) 35%, var(--border));
+  color: var(--foreground);
+}
+.activity > summary::before,
+.tool > summary::before {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
+  box-shadow:
+    -5px 0 16px color-mix(in srgb, var(--activity-light) 32%, transparent),
+    5px 0 20px color-mix(in srgb, var(--blue) 24%, transparent),
+    0 0 12px color-mix(in srgb, var(--rosewater) 20%, transparent);
+  opacity: 0;
+  transition: opacity var(--motion-slow);
+}
+.activity[data-working] > summary::before,
+.tool[data-running] > summary::before {
+  opacity: 0.55;
+  animation: glow 4.8s ease-in-out infinite;
+}
+.activityLabel {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.summaryContent {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  flex: 1;
+}
+.summaryContent > svg {
+  flex-shrink: 0;
+}
+.activity[data-working] .activityLabel {
+  color: var(--foreground);
 }
 .activity > summary:hover,
 .tool > summary:hover {
@@ -30,7 +84,7 @@
 .chevron {
   transition: transform var(--motion-normal) var(--ease-out);
 }
-.activity[open] > summary > .chevron,
+.activity[open] > summary .chevron,
 .tool[open] > summary > .chevron {
   transform: rotate(180deg);
 }
@@ -56,6 +110,12 @@
 .tool > summary {
   padding: var(--space-2) 0;
   font-size: var(--font-sm);
+  border-radius: var(--space-2);
+  isolation: isolate;
+}
+.tool[data-running] > summary {
+  --activity-light: var(--blue);
+  color: var(--foreground);
 }
 .toolTitle {
   min-width: 0;
@@ -152,7 +212,7 @@
 }
 .thinking,
 .workingDots {
-  color: var(--blue);
+  color: var(--activity-light);
 }
 .workingDots {
   display: inline-flex;
@@ -182,6 +242,17 @@
   40% {
     opacity: 1;
     transform: translateY(-2px);
+  }
+}
+@keyframes glow {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: translateY(0);
+  }
+  50% {
+    opacity: 0.7;
+    transform: translateY(-3px);
   }
 }
 /* Native disclosure semantics, with an instant fallback in older browsers. */

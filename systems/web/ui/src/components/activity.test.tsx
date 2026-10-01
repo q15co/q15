@@ -96,14 +96,19 @@ describe("turn activity", () => {
     expect(presentation.answers.map((m) => m.parts[0]?.text)).toEqual(["done"]);
     expect(presentation.activity[0]?.source.part.text).toBe("checking");
   });
-  it("keeps work expanded while running, then collapses it on completion", () => {
+  it("starts work closed and preserves the reader's disclosure choice across updates", () => {
     const { container, rerender } = render(<TurnView messages={[history[1]!]} working />);
     const activity = container.querySelector<HTMLDetailsElement>("[data-agent-activity]")!;
-    expect(activity.open).toBe(true);
-    expect(screen.getByText("Running command")).toBeDefined();
-    rerender(<TurnView messages={history} working={false} />);
     expect(activity.open).toBe(false);
+    expect(screen.getByText("Using tools…")).toBeDefined();
+    expect(screen.getByText("Running command")).toBeDefined();
+    activity.open = true;
+    rerender(<TurnView messages={history} working={false} />);
+    expect(activity.open).toBe(true);
     expect(screen.getByText("Completed")).toBeDefined();
+    activity.open = false;
+    rerender(<TurnView messages={[history[1]!]} working />);
+    expect(activity.open).toBe(false);
   });
   it("preserves unknown parts visibly and does not invent a duration or successful result", () => {
     render(

@@ -312,7 +312,7 @@ test("deep links reveal completed tool outputs inside both disclosures", async (
   await expect(page.locator('[data-tool-call-id="command"]')).toHaveAttribute("open", "");
 });
 
-test("live tool rows update from running to completed and collapse after the answer", async ({
+test("live work stays closed by default and tool updates preserve the reader's choice", async ({
   page,
 }) => {
   let deliver: ((value: Frame) => void) | undefined;
@@ -332,6 +332,9 @@ test("live tool rows update from running to completed and collapse after the ans
       seq: "0",
     }),
   );
+  const activity = page.locator("[data-agent-activity]");
+  await expect(page.getByText("Thinking…", { exact: true })).toBeVisible();
+  await expect(activity).not.toHaveAttribute("open");
   deliver!(
     frame("delta", {
       msg: { turn: "31", ordinal: -1 },
@@ -341,6 +344,10 @@ test("live tool rows update from running to completed and collapse after the ans
       seq: "1",
     }),
   );
+  await expect(page.getByText("Using tools…", { exact: true })).toBeVisible();
+  await expect(activity).not.toHaveAttribute("open");
+  await expect(page.getByText("Running command", { exact: true })).toBeHidden();
+  await activity.locator(":scope > summary").press("Enter");
   await expect(page.getByText("Running command", { exact: true })).toBeVisible();
   const promptTop = await page
     .getByText("Check the workspace", { exact: true })
@@ -361,6 +368,7 @@ test("live tool rows update from running to completed and collapse after the ans
     }),
   );
   await expect(page.getByText("Completed", { exact: true })).toBeVisible();
+  await expect(activity).toHaveAttribute("open", "");
   deliver!(
     frame("snapshot", {
       msg: { turn: "31", ordinal: -1 },
@@ -371,6 +379,7 @@ test("live tool rows update from running to completed and collapse after the ans
     }),
   );
   await expect(page.getByText("Completed", { exact: true })).toBeVisible();
+  await activity.locator(":scope > summary").press("Enter");
   deliver!(
     frame("msg.final", {
       msg: { turn: "31", ordinal: -1 },
@@ -567,6 +576,7 @@ test("animated tool disclosures follow the latest message without moving a reade
   const call = { id: "motion-command", name: "exec", arguments: '{"command":"ls"}' };
   deliver!(frame("snapshot", { msg, kind: "model_start", text: "", seq: "0" }));
   deliver!(frame("delta", { msg, kind: "tool_call", text: "", call, seq: "1" }));
+  await page.locator("[data-agent-activity] > summary").click();
   const summary = page.locator('[data-tool-call-id="motion-command"] > summary');
   await expect(summary).toBeVisible();
   await summary.focus();
@@ -604,4 +614,86 @@ test("animated tool disclosures follow the latest message without moving a reade
   await summary.evaluate((node: HTMLElement) => node.click());
   await expect(page.locator('[data-tool-call-id="motion-command"] pre').last()).toBeHidden();
   await expect.poll(gap).toBeLessThan(2);
+});
+
+test("working glow and font axes animate without moving text, and settle with reduced motion", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  let deliver: ((value: Frame) => void) | undefined;
+  await backend(page, undefined, (send) => {
+    deliver = send;
+  });
+  await page.goto("/");
+  await page.getByLabel("Message q15").fill("Think through a useful next step");
+  await page.evaluate(() => document.fonts.ready);
+  await page.getByLabel("Send message", { exact: true }).click();
+  const activity = page.locator("[data-agent-activity]");
+  const summary = activity.locator(":scope > summary");
+  const label = summary.getByText("Thinking…", { exact: true });
+  const floating = label.locator("..");
+  await expect(activity).not.toHaveAttribute("open");
+  await expect(activity).toHaveAttribute("data-phase", "thinking");
+  const before = await label.evaluate((node) => ({
+    axes: getComputedStyle(node).fontVariationSettings,
+    width: node.getBoundingClientRect().width,
+  }));
+  await expect
+    .poll(() => label.evaluate((node) => getComputedStyle(node).fontVariationSettings))
+    .not.toBe(before.axes);
+  expect(await label.evaluate((node) => node.getBoundingClientRect().width)).toBeCloseTo(
+    before.width,
+    1,
+  );
+  await expect
+    .poll(() => floating.evaluate((node) => getComputedStyle(node).transform))
+    .not.toBe("none");
+  expect(
+    await summary.evaluate((node) => parseFloat(getComputedStyle(node, "::before").opacity)),
+  ).toBeGreaterThan(0);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await expect.poll(() => page.evaluate(() => document.getAnimations().length)).toBe(0);
+  await expect
+    .poll(() => floating.evaluate((node) => getComputedStyle(node).transform))
+    .toBe("none");
+  const stationary = await label.evaluate(async (node) => {
+    const samples: string[] = [];
+    for (let i = 0; i < 6; i++) {
+      await new Promise(requestAnimationFrame);
+      samples.push(getComputedStyle(node).fontVariationSettings);
+    }
+    return samples;
+  });
+  expect(new Set(stationary).size).toBe(1);
+  const msg = { turn: "31", ordinal: -1 };
+  const call = { id: "glow-command", name: "exec", arguments: '{"command":"pwd"}' };
+  deliver!(frame("delta", { msg, kind: "tool_call", text: "", call, seq: "1" }));
+  await expect(activity).toHaveAttribute("data-phase", "tool");
+  await expect(activity).not.toHaveAttribute("open");
+  await expect(page.getByText("Using tools…", { exact: true })).toBeVisible();
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          document.getAnimations().filter((a) => a.effect?.getTiming().iterations === Infinity)
+            .length,
+      ),
+    )
+    .toBeGreaterThan(0);
+  await summary.press("Enter");
+  await expect(page.getByText("Running command", { exact: true })).toBeVisible();
+  deliver!(frame("msg.final", { msg, status: "completed", full_text: "The workspace is ready." }));
+  await expect(page.getByText("The workspace is ready.", { exact: true })).toBeVisible();
+  await expect(activity).toHaveAttribute("open", "");
+  await expect(activity).not.toHaveAttribute("data-working");
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          document.getAnimations().filter((a) => a.effect?.getTiming().iterations === Infinity)
+            .length,
+      ),
+    )
+    .toBe(0);
 });

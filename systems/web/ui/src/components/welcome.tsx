@@ -2,6 +2,7 @@ import * as m from "motion/react-m";
 import { Sparkles, ArrowUpRight } from "lucide-react";
 import type { ChatStore } from "../chat-store";
 import { useMotionPreference } from "./ui/motion";
+import { recursiveAxes } from "./ui/font-motion";
 import styles from "./welcome.module.css";
 
 export function Welcome({ store, connected }: { store: ChatStore; connected: boolean }) {
@@ -26,7 +27,24 @@ export function Welcome({ store, connected }: { store: ChatStore; connected: boo
       <m.span className={styles.eyebrow} {...reveal(0.04)}>
         A SPACE FOR YOUR IDEAS
       </m.span>
-      <m.h1 {...reveal(0.08)}>
+      <m.h1
+        {...reveal(0.08)}
+        animate={{
+          opacity: 1,
+          y: 0,
+          fontVariationSettings: reduced
+            ? recursiveAxes(0.5, 500)
+            : [recursiveAxes(0.5, 500), recursiveAxes(1, 540, -2.5), recursiveAxes(0.5, 500)],
+        }}
+        transition={{
+          ...reveal(0.08).transition,
+          fontVariationSettings: {
+            duration: reduced ? 0 : 8,
+            repeat: reduced ? 0 : Infinity,
+            ease: "easeInOut",
+          },
+        }}
+      >
         Where shall we
         <br />
         begin?
