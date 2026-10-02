@@ -100,7 +100,7 @@ test("send, queue, stop, themes, and narrow screens work in a browser", async ({
   page.on("pageerror", (error) => errors.push(error.message));
   const requests = await backend(page);
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: /Where shall we/ })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Start a conversation" })).toBeVisible();
   const input = page.getByLabel("Message q15");
   await input.fill("first question");
   await page.getByRole("button", { name: "Send message", exact: true }).click();
@@ -482,9 +482,7 @@ test("enlarged text preserves conversation space, navigation, and keyboard acces
   const navigation = page.getByRole("complementary", { name: "Chat navigation" });
   await expect(navigation).toBeInViewport();
   expect(await navigation.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
-  await expect(
-    navigation.getByRole("link", { name: "Check the workspace and search the web." }),
-  ).toBeInViewport();
+  await expect(navigation.getByRole("link", { name: "Chat", exact: true })).toBeInViewport();
   await navigation.getByRole("button", { name: "Close navigation", exact: true }).click();
   await expect(navigation).toBeHidden();
   await page.getByText("Used 2 tools").click();
@@ -538,7 +536,7 @@ test("motion follows a changed accessibility preference and themes have a native
   await page.emulateMedia({ reducedMotion: "no-preference" });
   await backend(page);
   await page.goto("/");
-  const heading = page.getByRole("heading", { name: /Where shall we/ });
+  const heading = page.getByRole("heading", { name: "Start a conversation" });
   await expect(heading).toBeVisible();
   const afterRapidToggle = await page.getByRole("button", { name: /Switch to .* theme/ }).evaluate(
     (button: HTMLButtonElement) =>

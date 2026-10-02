@@ -37,7 +37,7 @@ export function Composer({ store, state }: { store: ChatStore; state: ChatState 
           ref={input}
           value={text}
           rows={1}
-          placeholder="What's on your mind?"
+          placeholder="Message q15"
           onChange={(event) => setText(event.target.value)}
           onKeyDown={(event) => {
             if (
@@ -52,9 +52,7 @@ export function Composer({ store, state }: { store: ChatStore; state: ChatState 
           }}
         />
         <div className={styles.composerToolbar}>
-          <span className={styles.composerHint}>
-            {busy ? "Your next message joins the queue" : "A little curiosity goes a long way"}
-          </span>
+          {busy && <span className={styles.composerHint}>Next message will be queued</span>}
           <div className={styles.composerButtons}>
             {busy && (
               <m.span
@@ -98,7 +96,6 @@ export function Composer({ store, state }: { store: ChatStore; state: ChatState 
         </div>
       </form>
       <div className={styles.composerFooter}>
-        <span>q15 · your personal agent</span>
         <span className={styles.keyboardHint}>
           <CornerDownLeft size={12} /> send<span>Shift + Enter for a new line</span>
         </span>

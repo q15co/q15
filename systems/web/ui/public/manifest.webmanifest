@@ -1,8 +1,8 @@
 {
   "id": "/",
-  "name": "q15 · Your own space",
+  "name": "q15 · Chat",
   "short_name": "q15",
-  "description": "Think, explore, and get things done with your personal agent.",
+  "description": "Chat with q15.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

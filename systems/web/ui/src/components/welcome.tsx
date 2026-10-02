@@ -24,9 +24,6 @@ export function Welcome({ store, connected }: { store: ChatStore; connected: boo
         </span>
         <Sparkles />
       </m.div>
-      <m.span className={styles.eyebrow} {...reveal(0.04)}>
-        A SPACE FOR YOUR IDEAS
-      </m.span>
       <m.h1
         {...reveal(0.08)}
         animate={{
@@ -45,15 +42,8 @@ export function Welcome({ store, connected }: { store: ChatStore; connected: boo
           },
         }}
       >
-        Where shall we
-        <br />
-        begin?
+        Start a conversation
       </m.h1>
-      <m.p {...reveal(0.12)}>
-        A question, a plan, a half-formed thought.
-        <br />
-        Bring it here. We'll work it out together.
-      </m.p>
       <div className={styles.suggestions}>
         {["Help me think through an idea", "Explore something new", "Let's get something done"].map(
           (text, i) => (

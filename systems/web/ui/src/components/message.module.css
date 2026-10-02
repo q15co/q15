@@ -57,13 +57,29 @@
   font-size: var(--font-md);
   overflow-wrap: anywhere;
 }
+.userMessage {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+.userMessage .messageHeading {
+  flex-direction: row-reverse;
+  max-width: 100%;
+}
+.userMessage .messageTime,
+.userMessage .pendingLabel {
+  margin-left: 0;
+}
 .userMessage .messageBody {
   --subtext: var(--foreground);
   background: var(--surface);
   border: 1px solid var(--border);
   padding: var(--space-3) var(--space-4);
-  margin-left: var(--message-inset);
-  border-radius: var(--space-1) var(--space-3) var(--space-3) var(--space-3);
+  width: fit-content;
+  max-width: min(85%, calc(100% - var(--message-inset)));
+  min-width: 0;
+  text-align: left;
+  border-radius: var(--space-3) var(--space-1) var(--space-3) var(--space-3);
 }
 .messageActions {
   display: flex;
@@ -111,7 +127,7 @@
     padding-left: 0;
   }
   .userMessage .messageBody {
-    margin-left: 0;
+    max-width: calc(100% - var(--space-6));
   }
   .messageActions {
     padding-left: 0;

@@ -39,17 +39,7 @@
 .brandDot {
   color: var(--primary);
 }
-.brandCaption {
-  flex-basis: 100%;
-  font-size: var(--font-xs);
-  letter-spacing: 0.1em;
-  color: var(--muted-foreground);
-  font-weight: 500;
-  margin-left: 48px;
-  margin-top: 0;
-}
-.sidebarLabel,
-.eyebrow {
+.sidebarLabel {
   font-size: var(--font-xs);
   font-weight: 600;
   letter-spacing: 0.08em;
@@ -93,74 +83,17 @@
   border-radius: 50%;
   background: var(--primary);
 }
-.recentLink {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 8px;
-  padding: var(--space-3);
-  min-height: 44px;
-  font-size: var(--font-sm);
-  color: var(--muted-foreground);
-  overflow: hidden;
-  white-space: nowrap;
-  transition:
-    background-color var(--motion-fast),
-    color var(--motion-fast);
-}
-.recentLink:hover {
-  color: var(--foreground);
-  background: var(--surface);
-  border-radius: 8px;
-}
-.recentLink svg {
-  flex: none;
-  transition: transform var(--motion-normal) var(--ease-out);
-}
-.recentLink:hover svg {
-  transform: translate(2px, -2px);
-}
-.sidebarNote {
-  margin: auto var(--space-3) var(--space-6);
-  color: var(--foreground);
-  font-size: var(--font-sm);
-  line-height: var(--leading-body);
-}
-.noteStars {
-  color: var(--primary);
-  font-size: var(--font-xl);
-  display: block;
-  margin-bottom: var(--space-2);
-}
 .sidebarFooter {
   display: flex;
   align-items: center;
   gap: var(--space-3);
+  margin-top: auto;
   padding-top: var(--space-4);
   border-top: 1px solid var(--border);
 }
-.ownerAvatar {
-  flex: none;
-  background: var(--surface);
-  color: var(--primary);
-  border-radius: 10px;
-  width: var(--space-8);
-  height: var(--space-8);
-  display: grid;
-  place-items: center;
-  font-size: var(--font-sm);
-}
-.sidebarFooter strong {
-  display: block;
-  font-size: var(--font-xs);
-  font-weight: 500;
-  margin-bottom: var(--space-1);
-}
-.sidebarFooter > div:nth-child(2) {
+.connectionStatus {
   min-width: 0;
   overflow-wrap: anywhere;
-}
-.sidebarFooter span {
   display: flex;
   align-items: center;
   gap: 5px;
@@ -207,26 +140,6 @@
 .topbarIcon {
   color: var(--muted-foreground);
 }
-.topbarDivider {
-  color: var(--muted);
-}
-.topbarSubtitle {
-  color: var(--muted-foreground);
-  font-size: var(--font-sm);
-}
-.privateBadge {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  color: var(--muted-foreground);
-  font-size: var(--font-xs);
-}
-.privateBadge span {
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: var(--primary);
-}
 .previewBadge {
   color: var(--foreground);
   background: color-mix(in srgb, var(--blue) 12%, transparent);
@@ -234,28 +147,6 @@
   border-radius: 5px;
   padding: 3px 7px;
   font-size: var(--font-xs);
-}
-.conversationTitle {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: var(--space-4) var(--space-8);
-  gap: var(--space-4);
-  flex: none;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
-}
-.conversationTitle h2 {
-  font-size: var(--font-lg);
-  font-weight: 500;
-  margin: var(--space-1) 0 0;
-  line-height: var(--leading-heading);
-}
-.conversationStatus {
-  font-size: var(--font-xs);
-  color: var(--muted-foreground);
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
 }
 .connectionBanner,
 .noticeBanner {
@@ -307,12 +198,8 @@
     width: 256px;
     padding-inline: var(--space-4);
   }
-  .topbar,
-  .conversationTitle {
+  .topbar {
     padding-inline: var(--space-6);
-  }
-  .conversationStatus {
-    display: none;
   }
 }
 @container app (max-width: 48rem) {
@@ -358,49 +245,11 @@
   .topbarTitle {
     gap: var(--space-3);
   }
-  .topbarIcon,
-  .topbarSubtitle,
-  .topbarDivider {
+  .topbarIcon {
     display: none;
-  }
-  .conversationTitle {
-    padding: var(--space-4) var(--space-5);
   }
   .connectionBanner,
   .noticeBanner {
     padding-inline: var(--space-5);
-  }
-  .conversationStatus {
-    display: none;
-  }
-  .recentSection {
-    overflow-y: auto;
-    max-height: 35dvh;
-  }
-}
-
-.recentText {
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-@container app (max-height: 44rem) {
-  .sidebarNote {
-    display: none;
-  }
-  .sidebarFooter {
-    margin-top: auto;
-  }
-}
-@container app (max-height: 37.5rem) {
-  .conversationTitle {
-    padding-block: var(--space-3);
-  }
-  .conversationTitle .eyebrow {
-    display: none;
-  }
-  .conversationTitle h2 {
-    margin: 0;
   }
 }

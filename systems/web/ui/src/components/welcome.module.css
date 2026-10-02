@@ -39,27 +39,14 @@
   background: var(--blue);
   box-shadow: 0 0 10px color-mix(in srgb, var(--blue) 40%, transparent);
 }
-.eyebrow {
-  display: block;
-  color: var(--muted-foreground);
-  font-size: var(--font-xs);
-  font-weight: 600;
-  letter-spacing: 0.08em;
-}
 .welcome h1 {
   color: var(--foreground);
   font-size: var(--font-3xl);
   font-weight: 500;
   line-height: var(--leading-heading);
   letter-spacing: -0.035em;
-  margin: var(--space-3) 0 var(--space-5);
+  margin: 0 0 var(--space-6);
   font-variation-settings: "CASL" 0.5;
-}
-.welcome p {
-  color: var(--foreground);
-  font-size: var(--font-md);
-  line-height: var(--leading-body);
-  margin-bottom: var(--space-6);
 }
 .suggestions {
   display: grid;

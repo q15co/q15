@@ -68,7 +68,9 @@ visible. Message links open containing disclosures. Media parts show their refer
 attachment transfer lands. Unknown parts show their type and raw data. Sending during an active run
 uses the server queue; Stop targets the active run, including its startup. History pages backwards
 automatically near the top, preserves the visible message, and supports `#message-<turn>:<ordinal>`
-links. Recent user messages in the sidebar use those links.
+links. User bubbles and avatars sit on the right, with left-aligned text and an inset for wrapped
+messages. Pending and queued messages use the same layout. The sidebar contains Chat navigation,
+connection status and the theme toggle; it does not list individual recent messages.
 
 The manifest is `/manifest.webmanifest` and the service worker is `/sw.js`. Edit the worker in
 `worker/sw.ts`, which has its own WebWorker TypeScript environment in `worker/tsconfig.json`. The
@@ -103,8 +105,8 @@ of 12rem or 30% of the viewport height.
 
 The app shell provides the named `app` size container. Component modules switch to compact layouts
 below 48rem, including when a larger browser font preference increases that threshold. Short
-viewports hide decorative copy and the composer footer to preserve room for messages. Browser tests
-cover doubled text, keyboard access, narrow screens and long drafts alongside chat behavior.
+viewports hide the composer footer to preserve room for messages. Browser tests cover doubled text,
+keyboard access, narrow screens and long drafts alongside chat behavior.
 
 Theme tokens in `src/styles.css` use the official
 [Catppuccin palette](https://github.com/catppuccin/palette) values for Mocha and Latte. The app

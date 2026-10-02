@@ -11,7 +11,6 @@ import {
   Sun,
   Menu,
   X,
-  ArrowUpRight,
   Download,
   WifiOff,
   CircleAlert,
@@ -51,10 +50,6 @@ export function App({ store, preview = false }: { store: ChatStore; preview?: bo
       window.removeEventListener("beforeinstallprompt", onInstall);
     };
   }, [store]);
-  const recent = state.messages
-    .filter((m) => m.role === "user")
-    .slice(-6)
-    .reverse();
   const connected = state.connection === "connected";
   return (
     <div className={styles.appShell}>
@@ -85,7 +80,6 @@ export function App({ store, preview = false }: { store: ChatStore; preview?: bo
           <span>
             q15<span className={styles.brandDot}>.</span>
           </span>
-          <span className={styles.brandCaption}>YOUR OWN SPACE</span>
         </a>
         <Button
           className={styles.mobileClose}
@@ -104,48 +98,15 @@ export function App({ store, preview = false }: { store: ChatStore; preview?: bo
             onClick={() => setMenu(false)}
           >
             <MessageSquare size={17} />
-            <span>Your conversation</span>
+            <span>Chat</span>
             <span className={styles.navDot} />
           </a>
         </div>
-        {recent.length > 0 && (
-          <div className={styles.sidebarSection + " " + styles.recentSection}>
-            <span className={styles.sidebarLabel}>RECENT THOUGHTS</span>
-            {recent.map((m) => (
-              <a
-                className={styles.recentLink}
-                key={m.key}
-                href={`#message-${m.key}`}
-                onClick={() => setMenu(false)}
-              >
-                <span className={styles.recentText}>
-                  {m.parts
-                    .filter((p) => p.part_type === "text")
-                    .map((p) => p.text)
-                    .join("") || "Message"}
-                </span>
-                <ArrowUpRight size={13} />
-              </a>
-            ))}
-          </div>
-        )}
-        <div className={styles.sidebarNote}>
-          <span className={styles.noteStars}>✦</span>
-          <p>
-            Room to think.
-            <br />
-            Space to make things happen.
-          </p>
-        </div>
         <div className={styles.sidebarFooter}>
-          <div className={styles.ownerAvatar}>Y</div>
-          <div>
-            <strong>Your personal agent</strong>
-            <span>
-              <i className={clsx(styles.statusDot, !connected && styles.disconnected)} />
-              {preview ? "Offline preview" : connected ? "Connected" : "Reconnecting…"}
-            </span>
-          </div>
+          <span className={styles.connectionStatus}>
+            <i className={clsx(styles.statusDot, !connected && styles.disconnected)} />
+            {preview ? "Offline preview" : connected ? "Connected" : "Reconnecting…"}
+          </span>
           <Button
             variant="ghost"
             size="icon"
@@ -184,8 +145,6 @@ export function App({ store, preview = false }: { store: ChatStore; preview?: bo
               <MessageSquare size={17} />
             </span>
             <span>Chat</span>
-            <span className={styles.topbarDivider}>/</span>
-            <span className={styles.topbarSubtitle}>Your conversation</span>
           </div>
           <div className={styles.topbarRight}>
             {preview && <span className={styles.previewBadge}>Preview</span>}
@@ -201,32 +160,14 @@ export function App({ store, preview = false }: { store: ChatStore; preview?: bo
                 Install
               </Button>
             )}
-            <span className={styles.privateBadge}>
-              <span />
-              Just for you
-            </span>
           </div>
         </header>
-        <div className={styles.conversationTitle}>
-          <div>
-            <span className={styles.eyebrow}>THINK OUT LOUD</span>
-            <h2>A conversation with q15</h2>
-          </div>
-          <span className={styles.conversationStatus}>
-            <span className={clsx(styles.statusDot, !connected && styles.disconnected)} />
-            {state.active !== null
-              ? "Working on it"
-              : connected
-                ? "Here when you need me"
-                : "Connecting"}
-          </span>
-        </div>
         {!connected && (
           <output className={styles.connectionBanner}>
             <WifiOff size={15} />
             {state.connection === "offline"
               ? "Disconnected. Refresh to reconnect."
-              : "Reconnecting to q15. Your draft is safe here."}
+              : "Reconnecting to q15…"}
           </output>
         )}
         {(state.notice || state.error) && (
