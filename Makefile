@@ -24,7 +24,7 @@ COMPOSE_ENV := COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT_NAME)
 
 .DEFAULT_GOAL := build
 
-.PHONY: all build build-agent build-auth build-exec build-proxy build-web build-web-image test-web project-setup fmt lint lint-changed test verify verify-ci hooks-install hooks-uninstall compose-secrets-init compose-up compose-down compose-logs compose-ps clean help protos protos-check ui-install ui-dev ui-build ui-lint ui-fix ui-test ui-e2e ui-clean ui-fixtures-check compose-check
+.PHONY: all build build-agent build-auth build-exec build-proxy build-web build-web-image test-web project-setup fmt lint lint-changed test verify verify-ci hooks-install hooks-uninstall compose-secrets-init compose-up compose-down compose-logs compose-ps clean help protos protos-check ui-install ui-dev ui-build ui-lint ui-fix ui-test ui-test-coverage ui-e2e ui-clean ui-fixtures-check compose-check
 
 all: build
 
@@ -106,6 +106,9 @@ ui-fix: ui-install
 ui-test: ui-install
 	cd $(UI_DIR) && $(PNPM) test
 
+ui-test-coverage: ui-install
+	cd $(UI_DIR) && $(PNPM) test:coverage $(UI_TEST_ARGS)
+
 ui-e2e: ui-build
 	cd $(UI_DIR) && $(PNPM) test:e2e
 
@@ -183,6 +186,7 @@ help:
 	@echo "  ui-lint       Check browser formatting, lint, and TypeScript with Oxc"
 	@echo "  ui-fix        Apply safe browser format and lint fixes, then type-check"
 	@echo "  ui-test       Run browser contract and UI tests"
+	@echo "  ui-test-coverage  Measure browser test coverage and enforce thresholds"
 	@echo "  ui-e2e        Run real browser tests against the compiled PWA"
 	@echo "  ui-clean      Remove the bundle and restore dist/.gitkeep"
 	@echo "  ui-fixtures-check  Check vendored browser fixtures and generated contract types"

@@ -26,23 +26,18 @@ go_files=()
 markdown_files=()
 nix_files=()
 shell_files=()
-typescript_files=()
+ui_format_files=()
 
 for rel_path in "${files[@]}"; do
 	is_go_file "${rel_path}" && append_file go_files "${rel_path}"
 	is_markdown_file "${rel_path}" && append_file markdown_files "${rel_path}"
 	is_nix_file "${rel_path}" && append_file nix_files "${rel_path}"
 	is_shell_file "${rel_path}" && append_file shell_files "${rel_path}"
-	is_typescript_file "${rel_path}" && append_file typescript_files "${REPO_ROOT}/${rel_path}"
-	if [[ ${rel_path} == systems/web/ui/* ]]; then
-		case "${rel_path}" in
-		*.css | *.html | *.json | *.webmanifest) append_file typescript_files "${REPO_ROOT}/${rel_path}" ;;
-		esac
-	fi
+	is_ui_format_file "${rel_path}" && append_file ui_format_files "${REPO_ROOT}/${rel_path}"
 done
 
-if [[ ${#typescript_files[@]} -gt 0 ]]; then
-	ui_tool fmt "${typescript_files[@]}"
+if [[ ${#ui_format_files[@]} -gt 0 ]]; then
+	ui_tool fmt "${ui_format_files[@]}"
 fi
 
 if [[ ${#go_files[@]} -gt 0 ]]; then

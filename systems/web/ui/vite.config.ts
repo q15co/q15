@@ -16,7 +16,7 @@ export default defineConfig({
     },
   },
   fmt: {
-    ignorePatterns: ["src/fixtures/**", "src/generated/**", "pnpm-lock.yaml", "**/*.md"],
+    ignorePatterns: ["src/generated/**", "pnpm-lock.yaml", "**/*.md"],
     printWidth: 100,
     sortImports: {
       groups: [
@@ -36,5 +36,35 @@ export default defineConfig({
     environment: "jsdom",
     include: ["src/**/*.test.{ts,tsx}", "build/**/*.test.ts", "lint/**/*.test.ts"],
     restoreMocks: true,
+    coverage: {
+      provider: "v8",
+      include: ["src/**/*.{ts,tsx}", "build/**/*.ts", "worker/**/*.ts"],
+      exclude: ["**/*.test.{ts,tsx}", "src/generated/**", "src/testing/**"],
+      reporter: ["text", "html", "lcov", "json", "json-summary"],
+      reportsDirectory: "coverage",
+      reportOnFailure: true,
+      thresholds: {
+        lines: 98,
+        statements: 97,
+        functions: 95,
+        branches: 90,
+        perFile: { lines: 90, statements: 90, functions: 90, branches: 80 },
+        "src/{application,domain,infrastructure,shared}/**/*.ts": {
+          perFile: true,
+          lines: 95,
+          statements: 95,
+          functions: 90,
+          branches: 85,
+        },
+        "src/domain/**/*.ts": {
+          perFile: true,
+          lines: 98,
+          statements: 95,
+          functions: 100,
+          branches: 95,
+        },
+        "worker/**/*.ts": { perFile: true, 100: true },
+      },
+    },
   },
 });

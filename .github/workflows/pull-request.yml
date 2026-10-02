@@ -64,9 +64,17 @@ jobs:
       - name: Typecheck, lint and formatting
         working-directory: systems/web/ui
         run: pnpm check
-      - name: Contract and component tests
+      - name: Contract and component tests with coverage
         working-directory: systems/web/ui
-        run: pnpm test
+        run: pnpm test:coverage
+      - name: Upload browser coverage report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: browser-coverage
+          path: systems/web/ui/coverage/
+          retention-days: 7
+          if-no-files-found: warn
       - name: Build embedded PWA
         working-directory: systems/web/ui
         run: pnpm build

@@ -1,1 +1,12 @@
-{"v":1,"id":"event:2","type":"msg.final","ts":"2026-10-01T00:00:00Z","seq":"2","payload":{"msg":{"turn":"43","ordinal":-1},"full_text":"partial failure","status":"failed"}}
+{
+  "v": 1,
+  "id": "event:2",
+  "type": "msg.final",
+  "ts": "2026-10-01T00:00:00Z",
+  "seq": "2",
+  "payload": {
+    "msg": { "turn": "43", "ordinal": -1 },
+    "full_text": "partial failure",
+    "status": "failed"
+  }
+}

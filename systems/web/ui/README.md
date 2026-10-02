@@ -24,6 +24,7 @@ native Basic challenge before using chat; production and the embedded bundle sha
 ```bash
 make ui-lint
 make ui-test
+make ui-test-coverage
 make ui-build
 pnpm --dir systems/web/ui exec playwright install chromium
 make ui-e2e
@@ -39,6 +40,21 @@ built bundle; `make build-web` builds it first. Build output and dependencies st
 `.gitkeep` is tracked in `internal/assets/dist`. `make test` and `make lint` retain their Go
 workflow without installing UI dependencies. The latter still checks all UI file hygiene. Use
 `make lint-changed FILES='...'` for TypeScript changes and `make ui-lint` for the full UI gate.
+
+`test:coverage` uses Vite+'s Vitest runner and its matching V8 provider. Run it through
+`make ui-test-coverage`; optional `UI_TEST_ARGS` select tests or pass runner options. Coverage
+includes all handwritten source, bootstrap, fixture adapter, build plugin and service worker code,
+including files that tests never import. Generated contract types and test support are excluded. CI
+requires 98% lines, 97% statements, 95% functions and 90% branches overall, plus per-file floors so
+aggregate coverage cannot hide an untested module. Every file requires 90% lines, statements and
+functions, and 80% branches. Domain files require 98% lines, 95% statements and branches, and 100%
+functions; application, infrastructure and shared files require 95% lines and statements, 90%
+functions and 85% branches. The service worker requires 100% of all four metrics.
+
+Reports stay ignored under `systems/web/ui/coverage/`: open `index.html` for uncovered paths, or use
+the LCOV/JSON reports for tooling. The Browser Verify job runs this gate and uploads its reports as
+the `browser-coverage` artifact, including on failure. Browser tests remain a separate gate for
+native scrolling, layout, keyboard access and compiled PWA behavior.
 
 ## Architecture and linting
 
@@ -102,6 +118,15 @@ make ui-fixtures-check
 
 Run those commands from the repository root. CI checks copies and generated types on every PR,
 including changes to the fixture producers. Go-only changes do not trigger the separate UI job.
+
+JSON fixtures participate in Oxfmt, including their canonical Go sources. After editing a source and
+updating its browser copy, format and check both through the shared workflow:
+
+```bash
+make fmt FILES='systems/web/internal/protocol/testdata/frames.json systems/web/ui/src/fixtures/protocol/frames.json'
+make lint-changed FILES='systems/web/internal/protocol/testdata/frames.json systems/web/ui/src/fixtures/protocol/frames.json'
+make ui-fixtures-check
+```
 
 Incoming JSON remains `unknown` until runtime predicates validate the envelope, event payload and
 nested history. Outgoing requests use a discriminated union and a typed constructor that associates

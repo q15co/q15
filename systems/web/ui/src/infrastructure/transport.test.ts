@@ -107,4 +107,73 @@ describe("socket transport", () => {
     expect(sockets).toHaveLength(3);
     transport.stop();
   });
+
+  it("acknowledges sequenced events, skips error acknowledgements and reports presence", () => {
+    const { transport, socket, events } = setup();
+    transport.presence(false);
+    expect(socket.sent.at(-1)).toMatchObject({ type: "presence", payload: { fg: false } });
+    socket.onmessage?.(
+      new MessageEvent("message", {
+        data: JSON.stringify({ ...frame("notice", { code: "info", text: "hello" }), seq: "100" }),
+      }),
+    );
+    expect(socket.sent.at(-1)).toMatchObject({ type: "msg.ack", payload: { seq: "100" } });
+    const count = socket.sent.length;
+    socket.onmessage?.(
+      new MessageEvent("message", {
+        data: JSON.stringify({
+          ...frame("error", { code: "invalid_message", ref: "send" }),
+          seq: "101",
+        }),
+      }),
+    );
+    expect(events.frame).toHaveBeenLastCalledWith(expect.objectContaining({ type: "error" }));
+    expect(socket.sent).toHaveLength(count);
+    socket.readyState = 3;
+    expect(() => transport.send("keep my draft", "send")).toThrow("draft is still here");
+    transport.stop();
+    transport.presence(true);
+    expect(socket.sent).toHaveLength(count);
+  });
+
+  it("retries a socket constructor failure and ignores late close notifications after stop", () => {
+    vi.useFakeTimers();
+    const socket = new FakeSocket();
+    const create = vi
+      .fn<(address: string) => SocketLike>()
+      .mockImplementationOnce(() => {
+        throw new Error("connection refused");
+      })
+      .mockReturnValue(socket);
+    const events = {
+      frame: vi.fn<TransportEvents["frame"]>(),
+      connection: vi.fn<TransportEvents["connection"]>(),
+      error: vi.fn<TransportEvents["error"]>(),
+    };
+    const transport = new SocketTransport("ws://localhost/ws", create);
+    transport.start(events, () => "0");
+    expect(events.connection).toHaveBeenLastCalledWith("reconnecting");
+    vi.advanceTimersByTime(1000);
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(() => transport.send("too soon", "send")).toThrow("Wait for chat");
+    const close = required(socket.onclose);
+    socket.onerror?.(new Event("error"));
+    transport.stop();
+    close(new CloseEvent("close"));
+    vi.advanceTimersByTime(60_000);
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(() => transport.abort("42")).toThrow("disconnected");
+  });
+
+  it("closes incompatible binary frames without retrying them", () => {
+    vi.useFakeTimers();
+    const { transport, socket, events, sockets } = setup();
+    socket.onmessage?.(new MessageEvent("message", { data: new Uint8Array([1, 2, 3]) }));
+    expect(events.error).toHaveBeenCalledWith("Expected a text chat frame.");
+    expect(events.connection).toHaveBeenLastCalledWith("offline");
+    vi.advanceTimersByTime(60_000);
+    expect(sockets).toHaveLength(1);
+    transport.stop();
+  });
 });

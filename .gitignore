@@ -16,6 +16,7 @@ systems/web/ui/.vite/
 systems/web/ui/.vp/
 systems/web/ui/test-results/
 systems/web/ui/playwright-report/
+systems/web/ui/coverage/
 deploy/compose/secrets/*
 !deploy/compose/secrets/*.example
 !deploy/compose/secrets/README.md

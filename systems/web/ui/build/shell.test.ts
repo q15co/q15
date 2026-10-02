@@ -2,11 +2,12 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { runInNewContext } from "node:vm";
-import { beforeAll, describe, expect, it, vi } from "vite-plus/test";
+import { build } from "vite-plus";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vite-plus/test";
 
 import { parseShellManifest } from "../src/shared/shell-manifest";
 import { required } from "../src/testing/required";
-import { buildWorker } from "./shell";
+import { buildWorker, shell } from "./shell";
 
 const paths = ["/index.html", "/assets/app-abcdef12.js"];
 const cacheName = "q15-shell-abcdef12";
@@ -20,7 +21,7 @@ interface WorkerEvent {
 
 const cacheMiss: Response | undefined = undefined;
 
-function worker() {
+async function worker(mode: "source" | "compiled") {
   const handlers = new Map<string, (event: WorkerEvent) => void>();
   const cache = {
     addAll: vi.fn<(paths: string[]) => Promise<void>>().mockResolvedValue(),
@@ -40,7 +41,7 @@ function worker() {
   const fetch = vi
     .fn<(request: Request) => Promise<Response>>()
     .mockResolvedValue(new Response("network"));
-  runInNewContext(source, {
+  const environment = {
     self: {
       location: { origin: "https://chat.example" },
       addEventListener: (type: string, handler: (event: WorkerEvent) => void) =>
@@ -50,7 +51,15 @@ function worker() {
     fetch,
     URL,
     Response,
-  });
+  };
+  if (mode === "compiled") runInNewContext(source, environment);
+  else {
+    vi.resetModules();
+    for (const [key, value] of Object.entries(environment)) vi.stubGlobal(key, value);
+    vi.stubGlobal("__SHELL__", { paths, version: "abcdef12" });
+    // Keep the worker's WebWorker type environment separate from the DOM test project.
+    await vi.importActual("../worker/sw.ts");
+  }
   return {
     cache,
     caches,
@@ -82,86 +91,137 @@ function worker() {
   };
 }
 
-describe("shell-only PWA", () => {
-  beforeAll(async () => {
-    source = (await buildWorker(resolve("."), paths, "abcdef12")).code;
-  });
+afterEach(() => vi.unstubAllGlobals());
 
-  it("validates decoded shell manifests before using their paths", () => {
-    const manifest = { version: "abcdef12", paths };
-    expect(parseShellManifest(manifest)).toBe(manifest);
-    for (const value of [
-      null,
-      { version: 42, paths },
-      { version: "abcdef12", paths: "/index.html" },
-      { version: "abcdef12", paths: ["/index.html", null] },
-    ])
-      expect(() => parseShellManifest(value)).toThrow(/unsupported/iu);
+async function shellBundle(content: string) {
+  const result = await build({
+    root: resolve("."),
+    configFile: false,
+    logLevel: "silent",
+    plugins: [
+      shell(),
+      {
+        name: "test-html",
+        transformIndexHtml: (html) => html.replace("</head>", `${content}</head>`),
+      },
+    ],
+    build: { write: false },
   });
+  if (Array.isArray(result) || !("output" in result)) throw new Error("Expected one app bundle");
+  const manifest = required(
+    result.output.find((entry) => entry.fileName === "shell-manifest.json"),
+  );
+  if (manifest.type !== "asset" || typeof manifest.source !== "string")
+    throw new Error("Expected a shell manifest asset");
+  const decoded: unknown = JSON.parse(manifest.source);
+  return { manifest: parseShellManifest(decoded), output: result.output };
+}
 
-  it("precaches only the injected shell and deletes only older q15 shell caches", async () => {
-    const sw = worker();
-    await sw.lifecycle("install");
-    expect(sw.caches.open).toHaveBeenCalledWith(cacheName);
-    expect(sw.cache.addAll).toHaveBeenCalledWith(paths);
-    await sw.lifecycle("activate");
-    expect(sw.caches.delete.mock.calls).toEqual([["q15-shell-old"]]);
-  });
-
-  it("does not intercept API, sockets, media, query strings, other origins or writes", () => {
-    const sw = worker();
-    const excluded = [
-      new Request("https://chat.example/api/turns?after_seq=0"),
-      new Request("https://chat.example/api/turns"),
-      new Request("https://chat.example/ws"),
-      new Request("https://chat.example/media/private.png"),
-      new Request("https://chat.example/assets/app-abcdef12.js?token=private"),
-      new Request("https://other.example/assets/app-abcdef12.js"),
-      new Request("https://chat.example/index.html", { method: "POST" }),
-      new Request("https://chat.example/assets/app-abcdef12.js", { method: "HEAD" }),
-      new Request("https://chat.example/unlisted.html"),
-    ];
-    for (const request of excluded) expect(sw.request(request)).toBeUndefined();
-    expect(sw.fetch).not.toHaveBeenCalled();
-    expect(sw.caches.open).not.toHaveBeenCalled();
-  });
-
-  it("uses the network for HTML and the precached entry when navigation is offline", async () => {
-    const sw = worker();
-    const request = new Request("https://chat.example/");
-    Object.defineProperty(request, "mode", { value: "navigate" });
-    expect(await required(await sw.request(request)).text()).toBe("network");
-    expect(sw.cache.match).not.toHaveBeenCalled();
-    sw.fetch.mockRejectedValue(new Error("offline"));
-    expect(await required(await sw.request(request)).text()).toBe("cached /index.html");
-    expect(sw.cache.put).not.toHaveBeenCalled();
-  });
-
-  it("returns a network error when both navigation and the cached HTML are unavailable", async () => {
-    const sw = worker();
-    sw.fetch.mockRejectedValue(new Error("offline"));
-    sw.cache.match.mockResolvedValue(cacheMiss);
-    expect(required(await sw.request(new Request("https://chat.example/index.html"))).type).toBe(
-      "error",
-    );
-  });
-
-  it("serves cached assets and fetches cache misses without storing runtime responses", async () => {
-    const sw = worker();
-    const request = new Request("https://chat.example/assets/app-abcdef12.js");
-    expect(await required(await sw.request(request)).text()).toBe("cached /assets/app-abcdef12.js");
-    expect(sw.fetch).not.toHaveBeenCalled();
-    sw.cache.match.mockResolvedValue(cacheMiss);
-    expect(await required(await sw.request(request)).text()).toBe("network");
-    expect(sw.cache.put).not.toHaveBeenCalled();
-    expect(sw.cache.addAll).not.toHaveBeenCalled();
-  });
-  it("publishes installable paths with standalone icons", () => {
-    const manifest: unknown = JSON.parse(readFileSync("public/manifest.webmanifest", "utf8"));
-    expect(manifest).toMatchObject({
-      display: "standalone",
-      start_url: "/",
-      icons: [{ sizes: "192x192" }, { sizes: "512x512" }, { sizes: "any" }],
-    });
-  });
+it("builds an exact shell manifest and changes its cache version when HTML changes", async () => {
+  const original = await shellBundle("");
+  expect(original.manifest.paths).toEqual(
+    [
+      "/icon-192.png",
+      "/icon-512.png",
+      "/icon.svg",
+      "/index.html",
+      "/manifest.webmanifest",
+      ...original.output
+        .filter((entry) => entry.fileName.startsWith("assets/"))
+        .map((entry) => `/${entry.fileName}`),
+    ].toSorted(),
+  );
+  expect(original.output.map((entry) => entry.fileName)).toContain("sw.js");
+  const changed = await shellBundle('<meta name="test-content" content="changed">');
+  expect(changed.manifest.paths).toEqual(original.manifest.paths);
+  expect(changed.manifest.version).not.toBe(original.manifest.version);
 });
+
+describe.each(["source", "compiled"] satisfies ("source" | "compiled")[])(
+  "%s shell-only PWA",
+  (mode) => {
+    beforeAll(async () => {
+      source = (await buildWorker(resolve("."), paths, "abcdef12")).code;
+    });
+
+    it("validates decoded shell manifests before using their paths", () => {
+      const manifest = { version: "abcdef12", paths };
+      expect(parseShellManifest(manifest)).toBe(manifest);
+      for (const value of [
+        null,
+        { version: 42, paths },
+        { version: "abcdef12", paths: "/index.html" },
+        { version: "abcdef12", paths: ["/index.html", null] },
+      ])
+        expect(() => parseShellManifest(value)).toThrow(/unsupported/iu);
+    });
+
+    it("precaches only the injected shell and deletes only older q15 shell caches", async () => {
+      const sw = await worker(mode);
+      await sw.lifecycle("install");
+      expect(sw.caches.open).toHaveBeenCalledWith(cacheName);
+      expect(sw.cache.addAll).toHaveBeenCalledWith(paths);
+      await sw.lifecycle("activate");
+      expect(sw.caches.delete.mock.calls).toEqual([["q15-shell-old"]]);
+    });
+
+    it("does not intercept API, sockets, media, query strings, other origins or writes", async () => {
+      const sw = await worker(mode);
+      const excluded = [
+        new Request("https://chat.example/api/turns?after_seq=0"),
+        new Request("https://chat.example/api/turns"),
+        new Request("https://chat.example/ws"),
+        new Request("https://chat.example/media/private.png"),
+        new Request("https://chat.example/assets/app-abcdef12.js?token=private"),
+        new Request("https://other.example/assets/app-abcdef12.js"),
+        new Request("https://chat.example/index.html", { method: "POST" }),
+        new Request("https://chat.example/assets/app-abcdef12.js", { method: "HEAD" }),
+        new Request("https://chat.example/unlisted.html"),
+      ];
+      for (const request of excluded) expect(sw.request(request)).toBeUndefined();
+      expect(sw.fetch).not.toHaveBeenCalled();
+      expect(sw.caches.open).not.toHaveBeenCalled();
+    });
+
+    it("uses the network for HTML and the precached entry when navigation is offline", async () => {
+      const sw = await worker(mode);
+      const request = new Request("https://chat.example/");
+      Object.defineProperty(request, "mode", { value: "navigate" });
+      expect(await required(await sw.request(request)).text()).toBe("network");
+      expect(sw.cache.match).not.toHaveBeenCalled();
+      sw.fetch.mockRejectedValue(new Error("offline"));
+      expect(await required(await sw.request(request)).text()).toBe("cached /index.html");
+      expect(sw.cache.put).not.toHaveBeenCalled();
+    });
+
+    it("returns a network error when both navigation and the cached HTML are unavailable", async () => {
+      const sw = await worker(mode);
+      sw.fetch.mockRejectedValue(new Error("offline"));
+      sw.cache.match.mockResolvedValue(cacheMiss);
+      expect(required(await sw.request(new Request("https://chat.example/index.html"))).type).toBe(
+        "error",
+      );
+    });
+
+    it("serves cached assets and fetches cache misses without storing runtime responses", async () => {
+      const sw = await worker(mode);
+      const request = new Request("https://chat.example/assets/app-abcdef12.js");
+      expect(await required(await sw.request(request)).text()).toBe(
+        "cached /assets/app-abcdef12.js",
+      );
+      expect(sw.fetch).not.toHaveBeenCalled();
+      sw.cache.match.mockResolvedValue(cacheMiss);
+      expect(await required(await sw.request(request)).text()).toBe("network");
+      expect(sw.cache.put).not.toHaveBeenCalled();
+      expect(sw.cache.addAll).not.toHaveBeenCalled();
+    });
+    it("publishes installable paths with standalone icons", () => {
+      const manifest: unknown = JSON.parse(readFileSync("public/manifest.webmanifest", "utf8"));
+      expect(manifest).toMatchObject({
+        display: "standalone",
+        start_url: "/",
+        icons: [{ sizes: "192x192" }, { sizes: "512x512" }, { sizes: "any" }],
+      });
+    });
+  },
+);

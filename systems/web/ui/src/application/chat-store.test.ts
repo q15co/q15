@@ -273,4 +273,129 @@ describe("chat state", () => {
     await vi.waitFor(() => expect(transport.sync).toHaveBeenCalledWith("42"));
     expect(store.getSnapshot().cursor).toBe("42");
   });
+
+  it("validates trimmed UTF-8 byte length without sending rejected input", () => {
+    const { store, transport } = setup();
+    expect(store.send(" \n ")).toBe(false);
+    expect(store.send("😀".repeat(16_385))).toBe(false);
+    expect(store.getSnapshot().error).toContain("64 KiB");
+    expect(transport.send).not.toHaveBeenCalled();
+    expect(store.send("  hello  ")).toBe(true);
+    expect(transport.send).toHaveBeenLastCalledWith("hello", expect.any(String));
+    expect(store.getSnapshot().error).toBeNull();
+    expect(store.send("é".repeat(32_768))).toBe(true);
+  });
+
+  it("reports failed Stop and history reads while retaining the current draft", async () => {
+    const { store, transport } = setup(vi.fn<HistoryMock>().mockRejectedValue("network failure"));
+    vi.mocked(transport.abort).mockImplementationOnce(() => {
+      throw new Error("Stop unavailable");
+    });
+    store.abort();
+    expect(store.getSnapshot().error).toBe("Stop unavailable");
+    await store.loadHistory(false);
+    expect(store.getSnapshot().error).toBe("Chat is unavailable. Try again.");
+    expect(store.getSnapshot().loadingHistory).toBe(false);
+    store.dismiss();
+    expect(store.getSnapshot().error).toBeNull();
+  });
+
+  it("bounds duplicate retention and notifies only subscribed readers", () => {
+    const { store } = setup();
+    const listener = vi.fn<() => void>();
+    const unsubscribe = store.subscribe(listener);
+    const first = parseFrame(JSON.stringify({ ...frame("pong", {}, "first"), seq: "1" }));
+    store.consume(first);
+    store.consume(first);
+    expect(listener).toHaveBeenCalledOnce();
+    for (let index = 0; index < 4096; index++) {
+      store.consume(
+        parseFrame(
+          JSON.stringify({ ...frame("pong", {}, `event-${index}`), seq: String(index + 2) }),
+        ),
+      );
+    }
+    listener.mockClear();
+    store.consume(first);
+    expect(listener).toHaveBeenCalledOnce();
+    unsubscribe();
+    event(store, "notice", { code: "status", text: "hello" });
+    expect(listener).toHaveBeenCalledOnce();
+  });
+
+  it("coalesces a newest-page refresh requested while another history request is pending", async () => {
+    let resolve: ((page: ReturnType<typeof parsePage>) => void) | undefined;
+    const first = new Promise<ReturnType<typeof parsePage>>((done) => {
+      resolve = done;
+    });
+    const fetch = vi
+      .fn<HistoryMock>()
+      .mockReturnValueOnce(first)
+      .mockResolvedValue(parsePage(history));
+    const { store } = setup(fetch);
+    const loading = store.loadHistory();
+    await store.loadHistory(false);
+    expect(fetch).toHaveBeenCalledOnce();
+    required(resolve)(parsePage(empty));
+    await loading;
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+    expect(fetch).toHaveBeenLastCalledWith("0", undefined);
+    await vi.waitFor(() => expect(store.getSnapshot().messages).toHaveLength(2));
+  });
+
+  it("cancels pending history on stop and ignores a response from an earlier generation", async () => {
+    let resolve: ((page: ReturnType<typeof parsePage>) => void) | undefined;
+    const first = new Promise<ReturnType<typeof parsePage>>((done) => {
+      resolve = done;
+    });
+    const fetch = vi
+      .fn<HistoryMock>()
+      .mockReturnValueOnce(first)
+      .mockResolvedValue(parsePage(empty));
+    const { store } = setup(fetch);
+    store.start();
+    const signal = required(required(fetch.mock.calls[0])[1]);
+    store.stop();
+    expect(signal.aborted).toBe(true);
+    store.start();
+    required(resolve)(parsePage(history));
+    await vi.waitFor(() => expect(store.getSnapshot().loadingHistory).toBe(false));
+    expect(store.getSnapshot().messages).toEqual([]);
+    expect(await store.findMessage("missing", 0)).toBeNull();
+  });
+
+  it("limits terminal-history retries when persistence never appears", async () => {
+    vi.useFakeTimers();
+    const { store, historyFn } = setup();
+    event(store, "msg.final", {
+      msg: { turn: "42", ordinal: -1 },
+      status: "completed",
+      full_text: "answer",
+    });
+    await vi.runAllTimersAsync();
+    expect(historyFn).toHaveBeenCalledTimes(9);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(store.getSnapshot().messages[0]?.parts.at(-1)?.text).toBe("answer");
+  });
+
+  it("coalesces recovery, surfaces its failure and can retry against empty canonical history", async () => {
+    let reject: ((reason: Error) => void) | undefined;
+    const first = new Promise<ReturnType<typeof parsePage>>((_resolve, fail) => {
+      reject = fail;
+    });
+    const fetch = vi
+      .fn<HistoryMock>()
+      .mockReturnValueOnce(first)
+      .mockResolvedValue(parsePage(empty));
+    const { store, transport } = setup(fetch);
+    event(store, "error", { code: "resync_from_head", ref: "" });
+    event(store, "error", { code: "resync_from_head", ref: "" });
+    expect(fetch).toHaveBeenCalledOnce();
+    required(reject)(new Error("History unavailable"));
+    await vi.waitFor(() => expect(store.getSnapshot().error).toBe("History unavailable"));
+    event(store, "error", { code: "resync_from_head", ref: "" });
+    await vi.waitFor(() => expect(transport.sync).toHaveBeenCalledWith("0"));
+    expect(store.getSnapshot().messages).toEqual([]);
+    expect(store.getSnapshot().cursor).toBe("0");
+  });
 });

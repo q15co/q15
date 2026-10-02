@@ -22,6 +22,14 @@ function probe(cases: Record<string, string>) {
   }
 }
 
+function formatFixture(path: string, ...args: string[]) {
+  return spawnSync(resolve("node_modules/.bin/vp"), ["fmt", ...args, path], {
+    encoding: "utf8",
+    timeout: 30_000,
+    env: { ...process.env, NO_COLOR: "1" },
+  });
+}
+
 describe("Oxlint architecture guards", () => {
   it("rejects forbidden dependencies, including type imports, re-exports and dynamic imports", () => {
     const cases = {
@@ -166,6 +174,28 @@ import "./a-theme.css";
       expect(run("--check").status).toBe(0);
     } finally {
       rmSync(path, { force: true });
+    }
+  });
+
+  it("formats canonical and browser JSON fixtures identically", () => {
+    const canonical = resolve("../internal/protocol/testdata/architecture-probe-format.json");
+    const copy = resolve("src/fixtures/protocol/architecture-probe-format.json");
+    const paths = [canonical, copy];
+    const source = '{"turns":[],"head_seq":"0","has_more":false}\n';
+    try {
+      for (const path of paths) {
+        writeFileSync(path, source);
+        expect(formatFixture(path, "--check").status).toBe(1);
+        const formatted = formatFixture(path);
+        expect(formatted.error).toBeUndefined();
+        expect(formatted.status).toBe(0);
+        expect(formatFixture(path, "--check").status).toBe(0);
+      }
+      expect(readFileSync(canonical, "utf8")).toBe(readFileSync(copy, "utf8"));
+      const value: unknown = JSON.parse(readFileSync(canonical, "utf8"));
+      expect(value).toEqual({ turns: [], head_seq: "0", has_more: false });
+    } finally {
+      for (const path of paths) rmSync(path, { force: true });
     }
   });
 });

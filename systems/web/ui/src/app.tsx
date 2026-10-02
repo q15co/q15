@@ -39,6 +39,15 @@ export function App({ store, preview = false }: { store: ChatStore; preview?: bo
   const [theme, setTheme] = useState(initialTheme);
   const [menu, setMenu] = useState(false);
   const [install, setInstall] = useState<InstallEvent | null>(null);
+  const promptInstall = async (event: InstallEvent) => {
+    try {
+      await event.prompt();
+    } catch {
+      // Installation is optional; a dismissed or unavailable prompt leaves chat usable.
+    } finally {
+      setInstall(null);
+    }
+  };
   useLayoutEffect(() => {
     applyTheme(theme);
   }, [theme]);
@@ -161,7 +170,7 @@ export function App({ store, preview = false }: { store: ChatStore; preview?: bo
                 variant="ghost"
                 size="sm"
                 onClick={() => {
-                  void Promise.resolve(install.prompt()).then(() => setInstall(null));
+                  void promptInstall(install);
                 }}
               >
                 <Download />

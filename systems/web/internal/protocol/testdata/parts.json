@@ -1,1 +1,38 @@
-{"turns":[{"seq":"9007199254740992","created_at":"0001-01-01T00:00:00Z","messages":[{"ordinal":0,"role":"assistant","parts":[{"ordinal":0,"part_type":"reasoning","text":"thinking"},{"ordinal":1,"part_type":"tool_call","tool_call":{"id":"call-1","name":"bash","arguments":"{\"command\":\"pwd\"}"}},{"ordinal":2,"part_type":"tool_result","tool_call_id":"call-1","content":"/workspace","is_error":true},{"ordinal":3,"part_type":"media","media_kind":"image","media_ref":"media://sha256/hash"},{"ordinal":4,"part_type":"text","text":"answer","disposition":"final"}]}]}],"head_seq":"9007199254740993","has_more":false}
+{
+  "turns": [
+    {
+      "seq": "9007199254740992",
+      "created_at": "0001-01-01T00:00:00Z",
+      "messages": [
+        {
+          "ordinal": 0,
+          "role": "assistant",
+          "parts": [
+            { "ordinal": 0, "part_type": "reasoning", "text": "thinking" },
+            {
+              "ordinal": 1,
+              "part_type": "tool_call",
+              "tool_call": { "id": "call-1", "name": "bash", "arguments": "{\"command\":\"pwd\"}" }
+            },
+            {
+              "ordinal": 2,
+              "part_type": "tool_result",
+              "tool_call_id": "call-1",
+              "content": "/workspace",
+              "is_error": true
+            },
+            {
+              "ordinal": 3,
+              "part_type": "media",
+              "media_kind": "image",
+              "media_ref": "media://sha256/hash"
+            },
+            { "ordinal": 4, "part_type": "text", "text": "answer", "disposition": "final" }
+          ]
+        }
+      ]
+    }
+  ],
+  "head_seq": "9007199254740993",
+  "has_more": false
+}
