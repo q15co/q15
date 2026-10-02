@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { expect, test } from "@playwright/test";
 import type { Page as BrowserPage } from "@playwright/test";
@@ -167,7 +168,67 @@ test("generated precache contains only shell files and preserves the embed senti
         ].includes(path) || /^\/assets\//.test(path),
     ),
   ).toBe(true);
+  const digest = createHash("sha256");
+  for (const path of manifest.paths) {
+    digest.update(path);
+    digest.update(readFileSync(new URL(path.slice(1), root)));
+  }
+  expect(manifest.version).toBe(digest.digest("hex").slice(0, 16));
   expect(readFileSync(new URL(".gitkeep", root), "utf8")).toBe("");
+});
+
+test("the compiled worker loads the shell offline without caching chat data", async ({
+  page,
+  context,
+}) => {
+  const history = turn(30);
+  history.messages[0]!.parts[0]!.text = "Private history stays out of the shell cache";
+  await backend(page, { turns: [history], head_seq: "30", has_more: false });
+  await page.goto("/");
+  await expect(
+    page
+      .getByLabel("Conversation", { exact: true })
+      .getByText("Private history stays out of the shell cache", { exact: true }),
+  ).toBeVisible();
+  const manifest: { version: string; paths: string[] } = await (
+    await page.request.get("/shell-manifest.json")
+  ).json();
+  await page.evaluate(() => navigator.serviceWorker.ready);
+  await page.reload();
+  await expect
+    .poll(() => page.evaluate(() => navigator.serviceWorker.controller?.scriptURL))
+    .toMatch(/\/sw\.js$/);
+  const cached = await page.evaluate(async () => {
+    const names = await caches.keys();
+    const entries = await Promise.all(names.map(async (name) => (await caches.open(name)).keys()));
+    return {
+      names,
+      paths: entries
+        .flat()
+        .map((request) => new URL(request.url).pathname)
+        .sort(),
+    };
+  });
+  expect(cached.names).toEqual([`q15-shell-${manifest.version}`]);
+  expect(cached.paths).toEqual(manifest.paths);
+
+  await page.unroute("**/api/turns?**");
+  await context.setOffline(true);
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await expect(page.getByLabel("Message q15")).toBeVisible();
+  await expect(
+    page
+      .getByLabel("Conversation", { exact: true })
+      .getByText("Private history stays out of the shell cache", { exact: true }),
+  ).toBeHidden();
+  expect(
+    await page.evaluate(() =>
+      fetch("/api/turns?after_seq=0&limit=1").then(
+        (response) => response.status,
+        () => null,
+      ),
+    ),
+  ).toBeNull();
 });
 
 test("a message link in the initial page waits for history to load", async ({ page }) => {

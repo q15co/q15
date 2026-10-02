@@ -70,10 +70,13 @@ uses the server queue; Stop targets the active run, including its startup. Histo
 automatically near the top, preserves the visible message, and supports `#message-<turn>:<ordinal>`
 links. Recent user messages in the sidebar use those links.
 
-The manifest is `/manifest.webmanifest` and the service worker is `/sw.js`. The build emits an
-explicit shell precache manifest and a content-derived cache name. The worker only handles exact
-shell paths, ignores queries, and never handles API, socket or media requests. Existing pages retain
-their active worker until they close, avoiding a forced reload during a response.
+The manifest is `/manifest.webmanifest` and the service worker is `/sw.js`. Edit the worker in
+`worker/sw.ts`, which has its own WebWorker TypeScript environment in `worker/tsconfig.json`. The
+shell build plugin uses Vite's build API through Vite+ to compile and bundle the worker, including
+imports, as a standalone script. It injects an explicit shell precache manifest and a
+content-derived cache name after the HTML and assets have been generated. The worker only handles
+exact shell paths, ignores queries, and never handles API, socket or media requests. Existing pages
+retain their active worker until they close, avoiding a forced reload during a response.
 
 ## Appearance
 
