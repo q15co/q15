@@ -1,13 +1,49 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, expectTypeOf, it } from "vite-plus/test";
+import type { SendRequest } from "./generated/protocol";
 import frames from "./fixtures/protocol/frames.json";
 import parts from "./fixtures/protocol/parts.json";
 import streamed from "./fixtures/server/streamed.json";
 import aborted from "./fixtures/server/aborted.json";
 import failed from "./fixtures/server/failed.json";
 import resumed from "./fixtures/server/resumed.json";
-import { compareSeq, frame, parseFrame, parsePage } from "./protocol";
+import {
+  clientFrame,
+  compareSeq,
+  frame,
+  parseClientFrame,
+  parseFrame,
+  parsePage,
+} from "./protocol";
 
 describe("frozen browser contract", () => {
+  it("validates client fixtures and preserves typed outgoing requests", () => {
+    const client = frames.filter(
+      (value) =>
+        ["hello", "sync", "msg.send", "msg.abort", "msg.ack", "presence", "ping"].includes(
+          value.type,
+        ) ||
+        (value.type === "msg.status" && !("state" in value.payload)),
+    );
+    expect(client).toHaveLength(8);
+    for (const value of client) expect(parseClientFrame(JSON.stringify(value))).toEqual(value);
+    const request = clientFrame("msg.send", { client_msg_id: "client-1", text: "hello" });
+    expectTypeOf(request.payload).toEqualTypeOf<SendRequest>();
+    expect(parseClientFrame(JSON.stringify(request))).toEqual(request);
+    for (const [type, payload] of [
+      ["hello", { cursor: 41 }],
+      ["sync", { cursor: "-1" }],
+      ["msg.send", { client_msg_id: "client-1", text: null }],
+      ["msg.abort", { turn: 42 }],
+      ["msg.ack", { seq: "9223372036854775808" }],
+      ["presence", { fg: "true" }],
+      ["msg.status", { unexpected: true }],
+      ["ping", { unexpected: true }],
+      ["ready", { cursor: "0", head_seq: "0", device_id: "device-1" }],
+    ] satisfies [string, unknown][]) {
+      expect(() => parseClientFrame(JSON.stringify(frame(type, payload)))).toThrow(/unsupported/i);
+    }
+    expect(() => parseClientFrame(JSON.stringify({ ...request, v: 2 }))).toThrow(/unsupported/i);
+  });
   it("decodes every server frame without losing content", () => {
     const server = frames.filter((f) =>
       [
@@ -53,5 +89,76 @@ describe("frozen browser contract", () => {
       /unsupported/i,
     );
     expect(() => parsePage({ ...parts, turns: [{ seq: 42 }] })).toThrow(/unsupported/i);
+  });
+  it("validates optional model loop counters in progress events", () => {
+    const progress = {
+      msg: { turn: "42", ordinal: -1 },
+      seq: "3",
+      kind: "model_start",
+      text: "",
+    };
+    for (const type of ["delta", "snapshot"]) {
+      for (const loop_turn of [undefined, 0, 1]) {
+        const payload = loop_turn === undefined ? progress : { ...progress, loop_turn };
+        const value = frame(type, payload);
+        expect(parseFrame(JSON.stringify(value))).toEqual(value);
+      }
+      for (const loop_turn of [null, "1", 1.5]) {
+        expect(() => parseFrame(JSON.stringify(frame(type, { ...progress, loop_turn })))).toThrow(
+          /unsupported/i,
+        );
+      }
+    }
+  });
+  it("rejects nonempty pong payloads and unknown server events", () => {
+    expect(() => parseFrame(JSON.stringify(frame("pong", { unexpected: true })))).toThrow(
+      /unsupported/i,
+    );
+    expect(() => parseFrame(JSON.stringify(frame("future.event", {})))).toThrow(/unsupported/i);
+  });
+  it("rejects malformed nested parts in history and final events", () => {
+    const turn = parts.turns[0]!;
+    const original = turn.messages[0]!;
+    for (const invalid of [
+      null,
+      { ordinal: "0", part_type: "text", text: "answer" },
+      { ordinal: 0, part_type: "media", media_kind: 42 },
+      { ordinal: 0, part_type: "tool_result", is_error: "true" },
+      {
+        ordinal: 0,
+        part_type: "tool_call",
+        tool_call: { id: "call-1", name: "bash", arguments: { command: "pwd" } },
+      },
+    ]) {
+      const message = { ...original, parts: [invalid] };
+      expect(() => parsePage({ ...parts, turns: [{ ...turn, messages: [message] }] })).toThrow(
+        /unsupported/i,
+      );
+      expect(() =>
+        parseFrame(
+          JSON.stringify(
+            frame("msg.final", {
+              msg: { turn: turn.seq, ordinal: original.ordinal },
+              full_text: "answer",
+              status: "completed",
+              message,
+            }),
+          ),
+        ),
+      ).toThrow(/unsupported/i);
+    }
+  });
+  it("preserves unfamiliar part types for the renderer fallback", () => {
+    const turn = parts.turns[0]!;
+    const value = {
+      ...parts,
+      turns: [
+        {
+          ...turn,
+          messages: [{ ...turn.messages[0]!, parts: [{ ordinal: 0, part_type: "future_part" }] }],
+        },
+      ],
+    };
+    expect(parsePage(value)).toEqual(value);
   });
 });

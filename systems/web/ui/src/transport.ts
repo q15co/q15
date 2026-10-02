@@ -1,6 +1,5 @@
-import { frame, parseFrame } from "./protocol";
-import type { ServerFrame } from "./protocol";
-import type { Frame } from "./generated/protocol";
+import { clientFrame, parseFrame } from "./protocol";
+import type { ClientFrame, ServerFrame } from "./protocol";
 
 export type Connection = "connecting" | "connected" | "reconnecting" | "offline";
 export interface TransportEvents {
@@ -75,7 +74,7 @@ export class SocketTransport implements Transport {
     this.socket = socket;
     // A stalled handshake must not leave the composer waiting indefinitely.
     this.handshake = setTimeout(() => socket.close(), 15_000);
-    socket.onopen = () => this.write(frame("hello", { cursor: this.cursor() }));
+    socket.onopen = () => this.write(clientFrame("hello", { cursor: this.cursor() }));
     socket.onmessage = (event) => {
       try {
         if (typeof event.data !== "string") throw new Error("Expected a text chat frame.");
@@ -87,10 +86,10 @@ export class SocketTransport implements Transport {
           this.events?.connection("connected");
         }
         this.events?.frame(value);
-        if (value.type === "ready") this.write(frame("msg.status", {}));
+        if (value.type === "ready") this.write(clientFrame("msg.status", {}));
         // Event acknowledgements are separate from the durable replay cursor.
         if (value.seq !== "0" && value.type !== "error")
-          this.write(frame("msg.ack", { seq: value.seq }));
+          this.write(clientFrame("msg.ack", { seq: value.seq }));
       } catch (error) {
         this.events?.error(error instanceof Error ? error.message : "Invalid chat frame.");
         // Stop on a contract mismatch; retrying the same incompatible server cannot fix it.
@@ -114,7 +113,7 @@ export class SocketTransport implements Transport {
     this.timer = setTimeout(() => this.connect(), delay);
   }
 
-  private write(value: Frame) {
+  private write(value: ClientFrame) {
     if (this.socket?.readyState !== 1)
       throw new Error("Chat is disconnected. Your draft is still here.");
     this.socket.send(JSON.stringify(value));
@@ -123,15 +122,15 @@ export class SocketTransport implements Transport {
   send(text: string, clientID: string) {
     if (!this.ready) throw new Error("Wait for chat to reconnect. Your draft is still here.");
     // Never replay a send after reconnect: client_msg_id is correlation, not idempotency.
-    this.write(frame("msg.send", { client_msg_id: clientID, text }, clientID));
+    this.write(clientFrame("msg.send", { client_msg_id: clientID, text }, clientID));
   }
   abort(turn: string) {
-    this.write(frame("msg.abort", { turn }));
+    this.write(clientFrame("msg.abort", { turn }));
   }
   sync(cursor: string) {
-    this.write(frame("sync", { cursor }));
+    this.write(clientFrame("sync", { cursor }));
   }
   presence(foreground: boolean) {
-    if (this.ready) this.write(frame("presence", { fg: foreground }));
+    if (this.ready) this.write(clientFrame("presence", { fg: foreground }));
   }
 }

@@ -1,19 +1,41 @@
 import { VERSION } from "./generated/protocol";
+import { isRecord } from "./type-guards";
 import type {
+  AbortRequest,
+  AckRequest,
+  Cursor,
   ErrorPayload,
   FinalPayload,
   Frame,
   Message,
+  MessageID,
   NoticePayload,
   Page,
   Part,
+  PresenceRequest,
   ProgressPayload,
   ReadyPayload,
+  SendRequest,
   StatusPayload,
+  ToolCall,
+  Turn,
   TurnStartPayload,
 } from "./generated/protocol";
 
 type Envelope<T extends string, P> = Omit<Frame, "type" | "payload"> & { type: T; payload: P };
+type ClientPayloads = {
+  hello: Cursor;
+  sync: Cursor;
+  "msg.send": SendRequest;
+  "msg.abort": AbortRequest;
+  "msg.ack": AckRequest;
+  "msg.status": Record<string, never>;
+  presence: PresenceRequest;
+  ping: Record<string, never>;
+};
+export type ClientFrame = {
+  [T in keyof ClientPayloads]: Envelope<T, ClientPayloads[T]>;
+}[keyof ClientPayloads];
 export type ServerFrame =
   | Envelope<"ready", ReadyPayload>
   | Envelope<"turn.start", TurnStartPayload>
@@ -28,20 +50,19 @@ export const decimal = (value: unknown): value is string =>
   typeof value === "string" &&
   /^(0|[1-9]\d{0,18})$/.test(value) &&
   BigInt(value) <= 9223372036854775807n;
-const record = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
 const integer = (value: unknown): value is number => Number.isInteger(value);
 const optionalString = (value: unknown) => value === undefined || typeof value === "string";
 const optionalBool = (value: unknown) => value === undefined || typeof value === "boolean";
-const call = (value: unknown) =>
-  record(value) &&
+const call = (value: unknown): value is ToolCall =>
+  isRecord(value) &&
   typeof value.id === "string" &&
   typeof value.name === "string" &&
   typeof value.arguments === "string";
-const identity = (value: unknown) => record(value) && decimal(value.turn) && integer(value.ordinal);
+const identity = (value: unknown): value is MessageID =>
+  isRecord(value) && decimal(value.turn) && integer(value.ordinal);
 function part(value: unknown): value is Part {
   return (
-    record(value) &&
+    isRecord(value) &&
     integer(value.ordinal) &&
     typeof value.part_type === "string" &&
     [
@@ -58,7 +79,7 @@ function part(value: unknown): value is Part {
 }
 function message(value: unknown): value is Message {
   return (
-    record(value) &&
+    isRecord(value) &&
     integer(value.ordinal) &&
     typeof value.role === "string" &&
     Array.isArray(value.parts) &&
@@ -66,93 +87,145 @@ function message(value: unknown): value is Message {
   );
 }
 
-export function parseFrame(data: string): ServerFrame {
-  const f: unknown = JSON.parse(data);
-  if (
-    !record(f) ||
-    f.v !== VERSION ||
-    typeof f.id !== "string" ||
-    typeof f.type !== "string" ||
-    typeof f.ts !== "string" ||
-    !decimal(f.seq) ||
-    !record(f.payload)
-  ) {
-    throw new Error("The server sent an unsupported chat frame. Refresh after updating q15.");
-  }
+function isEnvelope(value: unknown): value is Frame {
+  return (
+    isRecord(value) &&
+    value.v === VERSION &&
+    typeof value.id === "string" &&
+    typeof value.type === "string" &&
+    typeof value.ts === "string" &&
+    decimal(value.seq) &&
+    isRecord(value.payload)
+  );
+}
+
+function isServerFrame(f: Frame): f is ServerFrame {
   const p = f.payload;
-  let valid = false;
+  if (!isRecord(p)) return false;
   switch (f.type) {
     case "ready":
-      valid = decimal(p.cursor) && decimal(p.head_seq) && typeof p.device_id === "string";
-      break;
+      return decimal(p.cursor) && decimal(p.head_seq) && typeof p.device_id === "string";
     case "turn.start":
-      valid = decimal(p.turn) && identity(p.msg);
-      break;
+      return decimal(p.turn) && identity(p.msg);
     case "delta":
     case "snapshot":
-      valid =
+      return (
         identity(p.msg) &&
         decimal(p.seq) &&
         typeof p.kind === "string" &&
         typeof p.text === "string" &&
         optionalString(p.reasoning) &&
         optionalString(p.model_ref) &&
+        (p.loop_turn === undefined || integer(p.loop_turn)) &&
         optionalBool(p.is_error) &&
-        (p.call === undefined || call(p.call));
-      break;
+        (p.call === undefined || call(p.call))
+      );
     case "msg.final":
-      valid =
+      return (
         identity(p.msg) &&
         typeof p.full_text === "string" &&
         typeof p.status === "string" &&
         optionalString(p.model_ref) &&
-        (p.message === undefined || message(p.message));
-      break;
+        (p.message === undefined || message(p.message))
+      );
     case "msg.status":
-      valid =
+      return (
         decimal(p.turn) &&
         typeof p.state === "string" &&
         typeof p.queued === "boolean" &&
-        optionalString(p.client_msg_id);
-      break;
+        optionalString(p.client_msg_id)
+      );
     case "notice":
-      valid = typeof p.code === "string" && typeof p.text === "string";
-      break;
+      return typeof p.code === "string" && typeof p.text === "string";
     case "error":
-      valid =
+      return (
         typeof p.code === "string" &&
         typeof p.ref === "string" &&
-        (p.head_seq === undefined || decimal(p.head_seq));
-      break;
+        (p.head_seq === undefined || decimal(p.head_seq))
+      );
     case "pong":
-      valid = true;
-      break;
+      return Object.keys(p).length === 0;
+    default:
+      return false;
   }
-  if (!valid) throw new Error(`Unsupported chat event: ${f.type}. Refresh after updating q15.`);
-  return f as ServerFrame;
+}
+
+function isClientFrame(f: Frame): f is ClientFrame {
+  const p = f.payload;
+  if (!isRecord(p)) return false;
+  switch (f.type) {
+    case "hello":
+    case "sync":
+      return decimal(p.cursor);
+    case "msg.send":
+      return typeof p.client_msg_id === "string" && typeof p.text === "string";
+    case "msg.abort":
+      return decimal(p.turn);
+    case "msg.ack":
+      return decimal(p.seq);
+    case "presence":
+      return typeof p.fg === "boolean";
+    case "msg.status":
+    case "ping":
+      return Object.keys(p).length === 0;
+    default:
+      return false;
+  }
+}
+
+export function parseClientFrame(data: string): ClientFrame {
+  const value: unknown = JSON.parse(data);
+  if (!isEnvelope(value) || !isClientFrame(value)) {
+    throw new Error("Unsupported client chat frame.");
+  }
+  return value;
+}
+
+export function parseFrame(data: string): ServerFrame {
+  const f: unknown = JSON.parse(data);
+  if (!isEnvelope(f)) {
+    throw new Error("The server sent an unsupported chat frame. Refresh after updating q15.");
+  }
+  if (!isServerFrame(f)) {
+    throw new Error(`Unsupported chat event: ${f.type}. Refresh after updating q15.`);
+  }
+  return f;
+}
+
+function isTurn(value: unknown): value is Turn {
+  return (
+    isRecord(value) &&
+    decimal(value.seq) &&
+    typeof value.created_at === "string" &&
+    Array.isArray(value.messages) &&
+    value.messages.every(message)
+  );
+}
+
+function isPage(value: unknown): value is Page {
+  return (
+    isRecord(value) &&
+    decimal(value.head_seq) &&
+    typeof value.has_more === "boolean" &&
+    Array.isArray(value.turns) &&
+    value.turns.every(isTurn)
+  );
 }
 
 export function parsePage(value: unknown): Page {
-  if (
-    !record(value) ||
-    !decimal(value.head_seq) ||
-    typeof value.has_more !== "boolean" ||
-    !Array.isArray(value.turns) ||
-    !value.turns.every(
-      (t) =>
-        record(t) &&
-        decimal(t.seq) &&
-        typeof t.created_at === "string" &&
-        Array.isArray(t.messages) &&
-        t.messages.every(message),
-    )
-  ) {
-    throw new Error("The server returned unsupported history.");
-  }
-  return value as unknown as Page;
+  if (!isPage(value)) throw new Error("The server returned unsupported history.");
+  return value;
 }
 
 export function frame(type: string, payload: unknown, id: string = crypto.randomUUID()): Frame {
+  return { v: VERSION, id, type, ts: new Date().toISOString(), seq: "0", payload };
+}
+
+export function clientFrame<T extends keyof ClientPayloads>(
+  type: T,
+  payload: ClientPayloads[T],
+  id: string = crypto.randomUUID(),
+): Envelope<T, ClientPayloads[T]> {
   return { v: VERSION, id, type, ts: new Date().toISOString(), seq: "0", payload };
 }
 

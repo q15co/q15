@@ -3,14 +3,16 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { build } from "vite-plus";
 import type { Plugin, ResolvedConfig } from "vite-plus";
+import type { ShellManifest } from "../src/shell-manifest";
 
 export async function buildWorker(root: string, paths: string[], version: string) {
+  const manifest = { paths, version } satisfies ShellManifest;
   const result = await build({
     root,
     configFile: false,
     publicDir: false,
     logLevel: "silent",
-    define: { __SHELL__: JSON.stringify({ paths, version }) },
+    define: { __SHELL__: JSON.stringify(manifest) },
     build: {
       write: false,
       rolldownOptions: {

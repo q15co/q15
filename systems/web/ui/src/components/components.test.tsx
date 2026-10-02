@@ -2,12 +2,19 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import parts from "../fixtures/protocol/parts.json";
 import { ChatStore } from "../chat-store";
+import type { ChatState } from "../chat-store";
 import { parsePage } from "../protocol";
 import { MessageView } from "./message";
 import { PartView } from "./parts";
 import { Composer } from "./composer";
 import type { Transport } from "../transport";
 afterEach(cleanup);
+
+function messageInput() {
+  const input = screen.getByLabelText("Message q15");
+  if (!(input instanceof HTMLTextAreaElement)) throw new Error("Expected a message textarea.");
+  return input;
+}
 
 describe("message rendering", () => {
   it("renders every frozen part including visible media and unknown-type fallbacks", () => {
@@ -70,13 +77,17 @@ describe("composer", () => {
       head_seq: "42",
       has_more: false,
     }));
-    const state = { ...store.getSnapshot(), connection: "connected" as const, active: "42" };
+    const state = {
+      ...store.getSnapshot(),
+      connection: "connected",
+      active: "42",
+    } satisfies ChatState;
     const { rerender } = render(<Composer store={store} state={state} />);
-    const input = screen.getByLabelText("Message q15");
+    const input = messageInput();
     fireEvent.change(input, { target: { value: "next question" } });
     fireEvent.click(screen.getByLabelText("Queue message"));
     expect(transport.send).toHaveBeenCalledWith("next question", expect.any(String));
-    expect((input as HTMLTextAreaElement).value).toBe("");
+    expect(input.value).toBe("");
     // The store owns the authoritative active turn.
     store.consume({
       v: 1,
@@ -118,7 +129,7 @@ describe("composer", () => {
     };
     const store = new ChatStore(transport);
     render(<Composer store={store} state={{ ...store.getSnapshot(), connection: "connected" }} />);
-    const input = screen.getByLabelText("Message q15") as HTMLTextAreaElement;
+    const input = messageInput();
     fireEvent.change(input, { target: { value: "my draft" } });
     fireEvent.keyDown(input, { key: "Enter", isComposing: true });
     expect(transport.send).not.toHaveBeenCalled();

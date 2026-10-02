@@ -14,7 +14,9 @@ const store = preview
       return new ChatStore(transport, transport.history);
     })
   : new ChatStore(new SocketTransport());
-createRoot(document.getElementById("root")!).render(
+const root = document.getElementById("root");
+if (!root) throw new Error("The chat shell is missing its root element.");
+createRoot(root).render(
   <StrictMode>
     <MotionProvider>
       <App store={store} preview={preview} />

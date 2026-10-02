@@ -1,8 +1,8 @@
-export {};
+import type { ShellManifest } from "../src/shell-manifest";
 
 declare const self: ServiceWorkerGlobalScope;
 // Vite injects the completed build's exact shell allow-list and content digest.
-declare const __SHELL__: { paths: string[]; version: string };
+declare const __SHELL__: ShellManifest;
 
 const manifest = __SHELL__;
 const shell = new Set(manifest.paths);

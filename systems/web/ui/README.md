@@ -54,6 +54,14 @@ make ui-fixtures-check
 Run those commands from the repository root. CI checks copies and generated types on every PR,
 including changes to the fixture producers. Go-only changes do not trigger the separate UI job.
 
+Incoming JSON remains `unknown` until runtime predicates validate the envelope, event payload and
+nested history. Outgoing requests use a discriminated union and a typed constructor that associates
+each request with its payload. Pending-message states require a turn ID only once assigned, and
+activity entries distinguish tool work from commentary. Event handling checks exhaustiveness;
+unknown wire part types remain available to the visible renderer fallback. Shell manifests and
+install events are also checked before use. Type-aware Oxc rules reject unsafe assertions and unsafe
+uses of `any`, while `satisfies` checks configuration without widening literal values.
+
 The app keeps transcript content and drafts in memory. It does not store messages or credentials in
 localStorage, IndexedDB, or the service worker. Only the theme preference uses localStorage. Resume
 uses `ready.cursor` after replay has been consumed, independently of live event acknowledgements or

@@ -11,6 +11,7 @@ import { clsx } from "clsx";
 import * as m from "motion/react-m";
 import type { ChatMessage } from "../chat-store";
 import type { Part } from "../generated/protocol";
+import { isRecord } from "../type-guards";
 import { MessageView } from "./message";
 import { PartView, pretty } from "./parts";
 import { useMotionPreference } from "./ui/motion";
@@ -22,10 +23,12 @@ interface Source {
   message: ChatMessage;
   part: Part;
 }
-interface ActivityItem {
+interface ToolActivityItem {
+  kind: "tool";
   source: Source;
   results: Source[];
 }
+type ActivityItem = ToolActivityItem | { kind: "message"; source: Source };
 
 // History separates calls and results into messages; live drafts contain both.
 // Present either shape without changing canonical message or part identities.
@@ -45,10 +48,9 @@ export function presentTurn(messages: ChatMessage[]) {
       s.part.part_type === "text" &&
       !s.part.disposition,
   );
-  const answerKeys = new Set<string>();
   const answerParts = new Map<string, Part[]>();
   const activity: ActivityItem[] = [];
-  const calls = new Map<string, ActivityItem[]>();
+  const calls = new Map<string, ToolActivityItem[]>();
   sources.forEach((source, i) => {
     const { part, message } = source;
     const final =
@@ -57,21 +59,25 @@ export function presentTurn(messages: ChatMessage[]) {
       (part.disposition === "final" ||
         (!part.disposition && i > lastTool && message.key === lastAnswer?.message.key));
     if (final || !["text", "reasoning", "tool_call", "tool_result"].includes(part.part_type)) {
-      answerKeys.add(message.key);
       const parts = answerParts.get(message.key) ?? [];
       parts.push(part);
       answerParts.set(message.key, parts);
-    } else if (
-      part.part_type === "tool_result" &&
-      part.tool_call_id &&
-      calls.get(part.tool_call_id)?.length
-    ) {
-      // Match the nearest preceding unmatched call, even if a provider reuses IDs.
-      calls.get(part.tool_call_id)!.pop()!.results.push(source);
     } else {
-      const item = { source, results: [] as Source[] };
+      // Match the nearest preceding unmatched call, even if a provider reuses IDs.
+      const paired =
+        part.part_type === "tool_result" && part.tool_call_id
+          ? calls.get(part.tool_call_id)?.pop()
+          : undefined;
+      if (paired) {
+        paired.results.push(source);
+        return;
+      }
+      const item: ActivityItem =
+        part.part_type === "tool_call" || part.part_type === "tool_result"
+          ? { kind: "tool", source, results: [] }
+          : { kind: "message", source };
       activity.push(item);
-      if (part.part_type === "tool_call" && part.tool_call?.id) {
+      if (item.kind === "tool" && part.part_type === "tool_call" && part.tool_call?.id) {
         const pending = calls.get(part.tool_call.id) ?? [];
         pending.push(item);
         calls.set(part.tool_call.id, pending);
@@ -80,26 +86,26 @@ export function presentTurn(messages: ChatMessage[]) {
   });
   return {
     activity,
-    answers: messages
-      .filter((m) => answerKeys.has(m.key))
-      .map((m) => ({ ...m, parts: answerParts.get(m.key)! })),
+    answers: messages.flatMap((message) => {
+      const parts = answerParts.get(message.key);
+      return parts ? [{ ...message, parts }] : [];
+    }),
   };
 }
 
 function context(part: Part) {
   try {
     const args: unknown = JSON.parse(part.tool_call?.arguments ?? "");
-    if (!args || typeof args !== "object" || Array.isArray(args)) return "";
-    const fields = args as Record<string, unknown>;
+    if (!isRecord(args)) return "";
     for (const key of ["command", "query", "url", "path", "file_path"])
-      if (typeof fields[key] === "string") return fields[key];
+      if (typeof args[key] === "string") return args[key];
   } catch {
     /* Invalid arguments remain visible in the expanded row. */
   }
   return "";
 }
 
-function toolPresentation(item: ActivityItem, working: boolean) {
+function toolPresentation(item: ToolActivityItem, working: boolean) {
   const name = item.source.part.tool_call?.name ?? "";
   const error = item.source.part.is_error || item.results.some((s) => s.part.is_error);
   const finished = item.source.part.part_type === "tool_result" || item.results.length > 0;
@@ -146,7 +152,7 @@ function ToolActivity({
   working,
   anchors,
 }: {
-  item: ActivityItem;
+  item: ToolActivityItem;
   working: boolean;
   anchors: Set<string>;
 }) {
@@ -205,14 +211,17 @@ export function TurnView({ messages, working }: { messages: ChatMessage[]; worki
   const reduced = useMotionPreference();
   const { activity, answers } = presentTurn(messages);
   const usingTool = activity.some(
-    (item) => item.source.part.part_type === "tool_call" && toolPresentation(item, working).running,
+    (item) =>
+      item.kind === "tool" &&
+      item.source.part.part_type === "tool_call" &&
+      toolPresentation(item, working).running,
   );
   const phase = usingTool ? "tool" : "thinking";
-  const toolCount = activity.filter((item) =>
-    ["tool_call", "tool_result"].includes(item.source.part.part_type),
-  ).length;
+  const toolCount = activity.filter((item) => item.kind === "tool").length;
   const errors = activity.filter(
-    (item) => item.source.part.is_error || item.results.some((s) => s.part.is_error),
+    (item) =>
+      item.source.part.is_error ||
+      (item.kind === "tool" && item.results.some((s) => s.part.is_error)),
   ).length;
   const status = messages.findLast((m) => m.status)?.status;
   const label = working
@@ -228,13 +237,15 @@ export function TurnView({ messages, working }: { messages: ChatMessage[]; worki
           : "Thought process";
   const anchored = new Set(answers.map((m) => m.key));
   const anchors = new Set<string>();
-  for (const item of activity)
-    for (const source of [item.source, ...item.results]) {
+  for (const item of activity) {
+    const sources = item.kind === "tool" ? [item.source, ...item.results] : [item.source];
+    for (const source of sources) {
       if (!anchored.has(source.message.key)) {
         anchors.add(source.key);
         anchored.add(source.message.key);
       }
     }
+  }
   const empty = messages.filter((m) => m.role !== "user" && !anchored.has(m.key));
   return (
     <>
@@ -321,7 +332,7 @@ export function TurnView({ messages, working }: { messages: ChatMessage[]; worki
           </summary>
           <div className={styles.timeline}>
             {activity.map((item) =>
-              ["tool_call", "tool_result"].includes(item.source.part.part_type) ? (
+              item.kind === "tool" ? (
                 <ToolActivity
                   item={item}
                   working={working}

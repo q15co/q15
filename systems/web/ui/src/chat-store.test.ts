@@ -1,12 +1,13 @@
-import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, describe, expect, expectTypeOf, it, vi } from "vite-plus/test";
 import streamed from "./fixtures/server/streamed.json";
 import resumed from "./fixtures/server/resumed.json";
 import history from "./fixtures/server/history.json";
 import failed from "./fixtures/server/failed.json";
 import aborted from "./fixtures/server/aborted.json";
 import { ChatStore } from "./chat-store";
+import type { Pending } from "./chat-store";
 import { frame, parseFrame, parsePage } from "./protocol";
-import type { Transport, TransportEvents } from "./transport";
+import type { Transport } from "./transport";
 type HistoryMock = (before: string, signal?: AbortSignal) => Promise<ReturnType<typeof parsePage>>;
 const empty = { turns: [], head_seq: "43", has_more: false };
 const stores: ChatStore[] = [];
@@ -32,6 +33,12 @@ const feed = (store: ChatStore, values: unknown[]) =>
 const event = (store: ChatStore, type: string, payload: unknown) =>
   store.consume(parseFrame(JSON.stringify(frame(type, payload))));
 describe("chat state", () => {
+  it("requires a turn for assigned sends and excludes it from waiting sends", () => {
+    type Assigned = Extract<Pending, { state: "running" | "finished" | "stopped" }>;
+    type Waiting = Extract<Pending, { state: "sending" | "accepted" | "queued" | "uncertain" }>;
+    expectTypeOf<Assigned["turn"]>().toEqualTypeOf<string>();
+    expectTypeOf<Waiting["turn"]>().toEqualTypeOf<undefined>();
+  });
   it("renders a streamed draft and replaces it with canonical history identities", async () => {
     const { store } = setup();
     feed(store, streamed);
@@ -134,7 +141,7 @@ describe("chat state", () => {
     event(store, "snapshot", { msg, seq: "10", kind: "model_start", text: "", loop_turn: 2 });
     event(store, "delta", { msg, seq: "11", kind: "text", text: "second loop" });
     // A reconnect replays model_start and snapshots from the retained run log.
-    const events = vi.mocked(transport.start).mock.calls[0]![0] as TransportEvents;
+    const events = vi.mocked(transport.start).mock.calls[0]![0];
     events.connection("reconnecting");
     feed(store, [streamed[2]!]);
     expect(store.getSnapshot().messages[0]?.parts).toEqual([]);
@@ -166,7 +173,7 @@ describe("chat state", () => {
     const { store, transport } = setup();
     store.start();
     store.send("hello");
-    const events = vi.mocked(transport.start).mock.calls[0]![0] as TransportEvents;
+    const events = vi.mocked(transport.start).mock.calls[0]![0];
     events.connection("reconnecting");
     expect(store.getSnapshot().pending[0]?.state).toBe("uncertain");
     store.stop();

@@ -23,7 +23,11 @@ import { useMotionPreference } from "./components/ui/motion";
 import { applyTheme, initialTheme, revealTheme } from "./theme";
 
 interface InstallEvent extends Event {
-  prompt(): Promise<void>;
+  prompt(): unknown;
+}
+
+function isInstallEvent(event: Event): event is InstallEvent {
+  return "prompt" in event && typeof event.prompt === "function";
 }
 
 export function App({ store, preview = false }: { store: ChatStore; preview?: boolean }) {
@@ -39,8 +43,9 @@ export function App({ store, preview = false }: { store: ChatStore; preview?: bo
     store.start();
     const presence = () => store.presence(!document.hidden);
     const onInstall = (event: Event) => {
+      if (!isInstallEvent(event)) return;
       event.preventDefault();
-      setInstall(event as InstallEvent);
+      setInstall(event);
     };
     document.addEventListener("visibilitychange", presence);
     window.addEventListener("beforeinstallprompt", onInstall);
@@ -153,7 +158,7 @@ export function App({ store, preview = false }: { store: ChatStore; preview?: bo
                 variant="ghost"
                 size="sm"
                 onClick={() => {
-                  void install.prompt().then(() => setInstall(null));
+                  void Promise.resolve(install.prompt()).then(() => setInstall(null));
                 }}
               >
                 <Download />

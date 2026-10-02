@@ -20,6 +20,15 @@ export default defineConfig({
   lint: {
     plugins: ["react", "typescript", "jsx-a11y", "vitest"],
     options: { typeAware: true, typeCheck: true },
+    rules: {
+      "typescript/no-explicit-any": "error",
+      "typescript/no-unsafe-assignment": "error",
+      "typescript/no-unsafe-argument": "error",
+      "typescript/no-unsafe-call": "error",
+      "typescript/no-unsafe-member-access": "error",
+      "typescript/no-unsafe-return": "error",
+      "typescript/no-unsafe-type-assertion": "error",
+    },
     ignorePatterns: ["src/generated/**"],
   },
   test: {

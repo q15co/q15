@@ -75,12 +75,11 @@ describe("turn activity", () => {
       ]),
     ];
     const { activity } = presentTurn(turns);
-    expect(activity.map((item) => item.results.map((r) => r.part.content))).toEqual([
-      ["first"],
-      ["second"],
-      [],
-      [],
-    ]);
+    expect(
+      activity
+        .filter((item) => item.kind === "tool")
+        .map((item) => item.results.map((r) => r.part.content)),
+    ).toEqual([["first"], ["second"], [], []]);
     render(<TurnView messages={turns} working={false} />);
     expect(screen.getByText("orphan")).toBeDefined();
     expect(screen.getByText("No result was recorded for this call.")).toBeDefined();

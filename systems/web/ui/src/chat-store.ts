@@ -12,21 +12,17 @@ export interface ChatMessage extends Message {
   loopTurn?: number;
   loopStart?: number;
 }
-export interface Pending {
+interface PendingInput {
   id: string;
   text: string;
-  state:
-    | "sending"
-    | "accepted"
-    | "queued"
-    | "running"
-    | "finished"
-    | "stopped"
-    | "uncertain"
-    | "failed";
   afterTurn: string;
-  turn?: string;
 }
+export type Pending = PendingInput &
+  (
+    | { state: "sending" | "accepted" | "queued" | "uncertain"; turn?: never }
+    | { state: "running" | "finished" | "stopped"; turn: string }
+    | { state: "failed"; turn?: string }
+  );
 export interface ChatState {
   connection: Connection;
   messages: ChatMessage[];
@@ -104,8 +100,8 @@ export class ChatStore {
           this.seenEvents.clear();
           const pending =
             connection === "reconnecting"
-              ? this.state.pending.map((p) =>
-                  p.state === "sending" ? { ...p, state: "uncertain" as const } : p,
+              ? this.state.pending.map((p): Pending =>
+                  p.state === "sending" ? { ...p, state: "uncertain" } : p,
                 )
               : this.state.pending;
           this.update({ connection, pending });
@@ -167,8 +163,10 @@ export class ChatStore {
     if (value.seq !== "0" && value.type !== "snapshot") {
       if (this.seenEvents.has(value.id)) return;
       this.seenEvents.add(value.id);
-      if (this.seenEvents.size > 4096)
-        this.seenEvents.delete(this.seenEvents.values().next().value!);
+      if (this.seenEvents.size > 4096) {
+        const oldest = this.seenEvents.values().next();
+        if (!oldest.done) this.seenEvents.delete(oldest.value);
+      }
     }
     switch (value.type) {
       case "ready":
@@ -184,7 +182,7 @@ export class ChatStore {
         this.update({
           active: value.payload.turn,
           notice: null,
-          pending: this.state.pending.map((p) =>
+          pending: this.state.pending.map((p): Pending =>
             p === next ? { ...p, state: "running", turn: value.payload.turn } : p,
           ),
         });
@@ -197,16 +195,15 @@ export class ChatStore {
       case "msg.status": {
         const p = value.payload;
         const local = this.state.pending.find((item) => item.id === p.client_msg_id);
-        const pending = this.state.pending.map((item) =>
-          item.id === p.client_msg_id
-            ? {
-                ...item,
-                state: item.turn
-                  ? item.state
-                  : ((p.queued ? "queued" : "accepted") as Pending["state"]),
-              }
-            : item,
-        );
+        const pending = this.state.pending.map((item): Pending => {
+          if (item.id !== p.client_msg_id || item.turn !== undefined) return item;
+          return {
+            id: item.id,
+            text: item.text,
+            afterTurn: item.afterTurn,
+            state: p.queued ? "queued" : "accepted",
+          };
+        });
         this.update({
           pending,
           ...(p.state === "running"
@@ -256,7 +253,7 @@ export class ChatStore {
               this.state.active === p.msg.turn || this.state.active === "0"
                 ? null
                 : this.state.active,
-            pending: this.state.pending.map((item) =>
+            pending: this.state.pending.map((item): Pending =>
               item.turn === p.msg.turn || item === starting
                 ? {
                     ...item,
@@ -301,12 +298,16 @@ export class ChatStore {
         };
         this.update({
           error: messages[p.code] ?? `Chat error: ${p.code}`,
-          pending: this.state.pending.map((item) =>
+          pending: this.state.pending.map((item): Pending =>
             item.id === p.ref ? { ...item, state: "failed" } : item,
           ),
         });
         break;
       }
+      case "pong":
+        break;
+      default:
+        throw new Error(`Unhandled chat event: ${String(value satisfies never)}`);
     }
   }
 
@@ -336,13 +337,11 @@ export class ChatStore {
       loopTurn = nextLoop;
     } else if (p.kind === "text" || p.kind === "reasoning") {
       const index = parts.findLastIndex((part, i) => i >= loopStart && part.part_type === p.kind);
+      const previousPart = parts[index];
       const entry = {
-        ordinal: index < 0 ? parts.length : parts[index]!.ordinal,
+        ordinal: previousPart?.ordinal ?? parts.length,
         part_type: p.kind,
-        text:
-          value.type === "snapshot"
-            ? p.text
-            : (index < 0 ? "" : (parts[index]!.text ?? "")) + p.text,
+        text: value.type === "snapshot" ? p.text : (previousPart?.text ?? "") + p.text,
       };
       if (index < 0) parts.push(entry);
       else parts[index] = entry;

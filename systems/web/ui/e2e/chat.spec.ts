@@ -3,7 +3,9 @@ import { readFileSync } from "node:fs";
 import { expect, test } from "@playwright/test";
 import type { Page as BrowserPage } from "@playwright/test";
 import type { Frame, Page } from "../src/generated/protocol";
-import { frame } from "../src/protocol";
+import { frame, parseClientFrame } from "../src/protocol";
+import type { ClientFrame } from "../src/protocol";
+import { parseShellManifest } from "../src/shell-manifest";
 
 function turn(seq: number) {
   return {
@@ -34,7 +36,7 @@ async function backend(
   history: Page = { turns: [], head_seq: "0", has_more: false },
   onSend?: (send: (value: Frame) => void) => void,
 ) {
-  const requests: Frame[] = [];
+  const requests: ClientFrame[] = [];
   await page.route("**/api/turns?**", (route) => {
     const before = new URL(route.request().url()).searchParams.get("after_seq");
     const response =
@@ -49,7 +51,7 @@ async function backend(
   });
   await page.routeWebSocket("**/ws", (socket) => {
     socket.onMessage((data) => {
-      const request = JSON.parse(String(data)) as Frame;
+      const request = parseClientFrame(String(data));
       requests.push(request);
       if (request.type === "hello")
         socket.send(
@@ -62,7 +64,7 @@ async function backend(
           ),
         );
       if (request.type === "msg.send") {
-        const p = request.payload as { client_msg_id: string };
+        const p = request.payload;
         const queued = requests.filter((r) => r.type === "msg.send").length > 1;
         socket.send(
           JSON.stringify(
@@ -121,6 +123,27 @@ test("send, queue, stop, themes, and narrow screens work in a browser", async ({
   expect(errors).toEqual([]);
 });
 
+test("installation only appears for an event with an available prompt", async ({ page }) => {
+  await backend(page);
+  await page.goto("/");
+  const install = page.getByRole("button", { name: "Install", exact: true });
+  await page.evaluate(() => window.dispatchEvent(new Event("beforeinstallprompt")));
+  await expect(install).toHaveCount(0);
+  await page.evaluate(() => {
+    const event = new Event("beforeinstallprompt", { cancelable: true });
+    Object.defineProperty(event, "prompt", {
+      value: () => {
+        document.documentElement.dataset.prompted = "true";
+      },
+    });
+    window.dispatchEvent(event);
+  });
+  await expect(install).toBeVisible();
+  await install.click();
+  await expect(page.locator("html")).toHaveAttribute("data-prompted", "true");
+  await expect(install).toHaveCount(0);
+});
+
 test("prepending history preserves the visible message position and deep links page backwards", async ({
   page,
 }) => {
@@ -149,10 +172,9 @@ test("prepending history preserves the visible message position and deep links p
 
 test("generated precache contains only shell files and preserves the embed sentinel", () => {
   const root = new URL("../../internal/assets/dist/", import.meta.url);
-  const manifest = JSON.parse(readFileSync(new URL("shell-manifest.json", root), "utf8")) as {
-    version: string;
-    paths: string[];
-  };
+  const manifest = parseShellManifest(
+    JSON.parse(readFileSync(new URL("shell-manifest.json", root), "utf8")),
+  );
   expect(manifest.version).toMatch(/^[a-f0-9]{16}$/);
   expect(manifest.paths).toContain("/index.html");
   expect(manifest.paths).toContain("/manifest.webmanifest");
@@ -190,9 +212,9 @@ test("the compiled worker loads the shell offline without caching chat data", as
       .getByLabel("Conversation", { exact: true })
       .getByText("Private history stays out of the shell cache", { exact: true }),
   ).toBeVisible();
-  const manifest: { version: string; paths: string[] } = await (
-    await page.request.get("/shell-manifest.json")
-  ).json();
+  const manifest = parseShellManifest(
+    await (await page.request.get("/shell-manifest.json")).json(),
+  );
   await page.evaluate(() => navigator.serviceWorker.ready);
   await page.reload();
   await expect

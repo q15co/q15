@@ -1,4 +1,5 @@
 import * as m from "motion/react-m";
+import type { MotionProps } from "motion/react";
 import { Sparkles, ArrowUpRight } from "lucide-react";
 import type { ChatStore } from "../chat-store";
 import { useMotionPreference } from "./ui/motion";
@@ -7,15 +8,16 @@ import styles from "./welcome.module.css";
 
 export function Welcome({ store, connected }: { store: ChatStore; connected: boolean }) {
   const reduced = useMotionPreference();
-  const reveal = (delay: number) => ({
-    initial: reduced ? (false as const) : { opacity: 0, y: 8 },
-    animate: { opacity: 1, y: 0 },
-    transition: {
-      duration: reduced ? 0 : 0.4,
-      delay: reduced ? 0 : delay,
-      ease: "easeOut" as const,
-    },
-  });
+  const reveal = (delay: number) =>
+    ({
+      initial: reduced ? false : { opacity: 0, y: 8 },
+      animate: { opacity: 1, y: 0 },
+      transition: {
+        duration: reduced ? 0 : 0.4,
+        delay: reduced ? 0 : delay,
+        ease: "easeOut",
+      },
+    }) satisfies MotionProps;
   return (
     <div className={styles.welcome}>
       <m.div className={styles.welcomeMark} {...reveal(0)} aria-hidden="true">

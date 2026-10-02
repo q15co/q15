@@ -121,8 +121,8 @@ export function Transcript({ state, store }: { state: ChatState; store: ChatStor
         className={styles.transcript}
         ref={scroller}
         aria-label="Conversation"
-        onScroll={() => {
-          const node = scroller.current!;
+        onScroll={(event) => {
+          const node = event.currentTarget;
           const atBottom = node.scrollHeight - node.scrollTop - node.clientHeight < 100;
           // A queued scroll event can arrive after content grows but before its
           // ResizeObserver callback. Keep following when our last scroll position

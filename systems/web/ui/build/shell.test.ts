@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { runInNewContext } from "node:vm";
 import { beforeAll, describe, expect, it, vi } from "vite-plus/test";
 import { buildWorker } from "./shell";
+import { parseShellManifest } from "../src/shell-manifest";
 
 const paths = ["/index.html", "/assets/app-abcdef12.js"];
 const cacheName = "q15-shell-abcdef12";
@@ -79,6 +80,18 @@ describe("shell-only PWA", () => {
     source = (await buildWorker(resolve("."), paths, "abcdef12")).code;
   });
 
+  it("validates decoded shell manifests before using their paths", () => {
+    const manifest = { version: "abcdef12", paths };
+    expect(parseShellManifest(manifest)).toBe(manifest);
+    for (const value of [
+      null,
+      { version: 42, paths },
+      { version: "abcdef12", paths: "/index.html" },
+      { version: "abcdef12", paths: ["/index.html", null] },
+    ])
+      expect(() => parseShellManifest(value)).toThrow(/unsupported/i);
+  });
+
   it("precaches only the injected shell and deletes only older q15 shell caches", async () => {
     const sw = worker();
     await sw.lifecycle("install");
@@ -135,13 +148,11 @@ describe("shell-only PWA", () => {
     expect(sw.cache.addAll).not.toHaveBeenCalled();
   });
   it("publishes installable paths with standalone icons", () => {
-    const manifest = JSON.parse(readFileSync("public/manifest.webmanifest", "utf8"));
-    expect(manifest.display).toBe("standalone");
-    expect(manifest.start_url).toBe("/");
-    expect(manifest.icons.map((icon: { sizes: string }) => icon.sizes)).toEqual([
-      "192x192",
-      "512x512",
-      "any",
-    ]);
+    const manifest: unknown = JSON.parse(readFileSync("public/manifest.webmanifest", "utf8"));
+    expect(manifest).toMatchObject({
+      display: "standalone",
+      start_url: "/",
+      icons: [{ sizes: "192x192" }, { sizes: "512x512" }, { sizes: "any" }],
+    });
   });
 });

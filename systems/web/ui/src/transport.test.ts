@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import { frame } from "./protocol";
-import type { Frame } from "./generated/protocol";
+import { frame, parseClientFrame } from "./protocol";
+import type { ClientFrame } from "./protocol";
 import { SocketTransport } from "./transport";
 import type { SocketLike, TransportEvents } from "./transport";
 
@@ -10,9 +10,9 @@ class FakeSocket implements SocketLike {
   onclose: SocketLike["onclose"] = null;
   onerror: SocketLike["onerror"] = null;
   onmessage: SocketLike["onmessage"] = null;
-  sent: Frame[] = [];
+  sent: ClientFrame[] = [];
   send(data: string) {
-    this.sent.push(JSON.parse(data));
+    this.sent.push(parseClientFrame(data));
   }
   close() {
     this.readyState = 3;
