@@ -1,11 +1,16 @@
+import type { Page as BrowserPage } from "@playwright/test";
+
+import { expect, test } from "@playwright/test";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { expect, test } from "@playwright/test";
-import type { Page as BrowserPage } from "@playwright/test";
+
+import type { ClientFrame } from "../src/domain/protocol";
 import type { Frame, Page } from "../src/generated/protocol";
-import { frame, parseClientFrame } from "../src/protocol";
-import type { ClientFrame } from "../src/protocol";
-import { parseShellManifest } from "../src/shell-manifest";
+
+import { parseClientFrame } from "../src/domain/protocol";
+import { frame } from "../src/infrastructure/envelope";
+import { parseShellManifest } from "../src/shared/shell-manifest";
+import { required } from "../src/testing/required";
 
 function turn(seq: number) {
   return {
@@ -31,9 +36,11 @@ function turn(seq: number) {
     ],
   };
 }
+const emptyHistory: Page = { turns: [], head_seq: "0", has_more: false };
+
 async function backend(
   page: BrowserPage,
-  history: Page = { turns: [], head_seq: "0", has_more: false },
+  history: Page = emptyHistory,
   onSend?: (send: (value: Frame) => void) => void,
 ) {
   const requests: ClientFrame[] = [];
@@ -113,7 +120,7 @@ test("send, queue, stop, themes, and narrow screens work in a browser", async ({
   await expect(page.getByText("Stopped safely.")).toBeVisible();
   expect(requests.filter((r) => r.type === "msg.send")).toHaveLength(2);
   expect(requests.find((r) => r.type === "msg.abort")?.payload).toEqual({ turn: "31" });
-  await page.getByRole("button", { name: /Switch to .* theme/ }).click();
+  await page.getByRole("button", { name: /Switch to .* theme/u }).click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "latte");
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByLabel("Open navigation").click();
@@ -156,7 +163,8 @@ test("prepending history preserves the visible message position and deep links p
   await expect(page.locator('[data-message-key="30:1"]')).toBeVisible();
   const scroller = page.getByLabel("Conversation", { exact: true });
   await scroller.evaluate((node) => {
-    node.scrollTop = 300;
+    const element = node;
+    element.scrollTop = 300;
   });
   const target = page.locator('[data-message-key="12:0"]');
   const before = await target.evaluate((node) => node.getBoundingClientRect().top);
@@ -175,7 +183,7 @@ test("generated precache contains only shell files and preserves the embed senti
   const manifest = parseShellManifest(
     JSON.parse(readFileSync(new URL("shell-manifest.json", root), "utf8")),
   );
-  expect(manifest.version).toMatch(/^[a-f0-9]{16}$/);
+  expect(manifest.version).toMatch(/^[a-f0-9]{16}$/u);
   expect(manifest.paths).toContain("/index.html");
   expect(manifest.paths).toContain("/manifest.webmanifest");
   expect(
@@ -187,7 +195,7 @@ test("generated precache contains only shell files and preserves the embed senti
           "/icon.svg",
           "/icon-192.png",
           "/icon-512.png",
-        ].includes(path) || /^\/assets\//.test(path),
+        ].includes(path) || path.startsWith("/assets/"),
     ),
   ).toBe(true);
   const digest = createHash("sha256");
@@ -204,7 +212,8 @@ test("the compiled worker loads the shell offline without caching chat data", as
   context,
 }) => {
   const history = turn(30);
-  history.messages[0]!.parts[0]!.text = "Private history stays out of the shell cache";
+  required(required(history.messages[0]).parts[0]).text =
+    "Private history stays out of the shell cache";
   await backend(page, { turns: [history], head_seq: "30", has_more: false });
   await page.goto("/");
   await expect(
@@ -219,7 +228,7 @@ test("the compiled worker loads the shell offline without caching chat data", as
   await page.reload();
   await expect
     .poll(() => page.evaluate(() => navigator.serviceWorker.controller?.scriptURL))
-    .toMatch(/\/sw\.js$/);
+    .toMatch(/\/sw\.js$/u);
   const cached = await page.evaluate(async () => {
     const names = await caches.keys();
     const entries = await Promise.all(names.map(async (name) => (await caches.open(name)).keys()));
@@ -228,7 +237,7 @@ test("the compiled worker loads the shell offline without caching chat data", as
       paths: entries
         .flat()
         .map((request) => new URL(request.url).pathname)
-        .sort(),
+        .toSorted(),
     };
   });
   expect(cached.names).toEqual([`q15-shell-${manifest.version}`]);
@@ -378,7 +387,7 @@ test("tool work is compact, paired, expandable, and separate from the final answ
   for (let ordinal = 0; ordinal < 6; ordinal++)
     await expect(page.locator(`[id="message-70:${ordinal}"]`)).toHaveCount(1);
   await page.screenshot({ path: "test-results/activity-desktop.png" });
-  await page.getByRole("button", { name: /Switch to .* theme/ }).click();
+  await page.getByRole("button", { name: /Switch to .* theme/u }).click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "latte");
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.getByRole("complementary", { name: "Chat navigation" })).not.toBeInViewport();
@@ -407,7 +416,7 @@ test("live work stays closed by default and tool updates preserve the reader's c
   await page.getByLabel("Send message", { exact: true }).click();
   await expect(page.getByLabel("Stop response")).toBeVisible();
   const call = { id: "live-command", name: "exec", arguments: '{"command":"pwd"}' };
-  deliver!(
+  required(deliver)(
     frame("snapshot", {
       msg: { turn: "31", ordinal: -1 },
       kind: "model_start",
@@ -418,7 +427,7 @@ test("live work stays closed by default and tool updates preserve the reader's c
   const activity = page.locator("[data-agent-activity]");
   await expect(page.getByText("Thinking…", { exact: true })).toBeVisible();
   await expect(activity).not.toHaveAttribute("open");
-  deliver!(
+  required(deliver)(
     frame("delta", {
       msg: { turn: "31", ordinal: -1 },
       kind: "tool_call",
@@ -440,7 +449,7 @@ test("live work stays closed by default and tool updates preserve the reader's c
     .evaluate((node) => node.getBoundingClientRect().top);
   expect(promptTop).toBeLessThan(workTop);
   await expect(page.locator("[data-agent-activity]")).toHaveAttribute("open", "");
-  deliver!(
+  required(deliver)(
     frame("delta", {
       msg: { turn: "31", ordinal: -1 },
       kind: "tool_result",
@@ -452,7 +461,7 @@ test("live work stays closed by default and tool updates preserve the reader's c
   );
   await expect(page.getByText("Completed", { exact: true })).toBeVisible();
   await expect(activity).toHaveAttribute("open", "");
-  deliver!(
+  required(deliver)(
     frame("snapshot", {
       msg: { turn: "31", ordinal: -1 },
       kind: "model_start",
@@ -463,7 +472,7 @@ test("live work stays closed by default and tool updates preserve the reader's c
   );
   await expect(page.getByText("Completed", { exact: true })).toBeVisible();
   await activity.locator(":scope > summary").press("Enter");
-  deliver!(
+  required(deliver)(
     frame("msg.final", {
       msg: { turn: "31", ordinal: -1 },
       status: "completed",
@@ -482,13 +491,15 @@ test("enlarged text preserves conversation space, navigation, and keyboard acces
   await page.goto("/");
   const answer = page.locator('[id="message-70:5"] p');
   await expect(answer).toBeVisible();
-  const originalSize = await answer.evaluate((node) => parseFloat(getComputedStyle(node).fontSize));
+  const originalSize = await answer.evaluate((node) =>
+    Number.parseFloat(getComputedStyle(node).fontSize),
+  );
   await page.evaluate(() => {
     document.documentElement.style.fontSize = "200%";
   });
-  expect(await answer.evaluate((node) => parseFloat(getComputedStyle(node).fontSize))).toBeCloseTo(
-    originalSize * 2,
-  );
+  expect(
+    await answer.evaluate((node) => Number.parseFloat(getComputedStyle(node).fontSize)),
+  ).toBeCloseTo(originalSize * 2);
   await expect(page.getByLabel("Open navigation")).toBeVisible();
   await expect(page.getByRole("complementary", { name: "Chat navigation" })).toBeHidden();
   const transcript = page.getByLabel("Conversation", { exact: true });
@@ -530,7 +541,7 @@ test("short and narrow screens keep long drafts and send controls usable", async
       0.25,
     );
     const form = await page.locator("form").boundingBox();
-    expect(form!.y + form!.height).toBeLessThanOrEqual(viewport.height);
+    expect(required(form).y + required(form).height).toBeLessThanOrEqual(viewport.height);
     expect(await input.evaluate((node) => node.scrollHeight > node.clientHeight)).toBe(true);
     await expect(page.getByLabel("Send message", { exact: true })).toBeInViewport();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
@@ -560,7 +571,7 @@ test("motion follows a changed accessibility preference and themes have a native
   await page.goto("/");
   const heading = page.getByRole("heading", { name: "Start a conversation" });
   await expect(heading).toBeVisible();
-  const afterRapidToggle = await page.getByRole("button", { name: /Switch to .* theme/ }).evaluate(
+  const afterRapidToggle = await page.getByRole("button", { name: /Switch to .* theme/u }).evaluate(
     (button: HTMLButtonElement) =>
       new Promise<string | undefined>((resolve) => {
         let changes = 0;
@@ -600,7 +611,7 @@ test("motion follows a changed accessibility preference and themes have a native
       },
     }),
   );
-  await page.getByRole("button", { name: /Switch to .* theme/ }).click();
+  await page.getByRole("button", { name: /Switch to .* theme/u }).click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "latte");
   await expect.poll(() => page.evaluate(() => document.getAnimations().length)).toBe(0);
   await page.setViewportSize({ width: 390, height: 844 });
@@ -625,7 +636,7 @@ test("motion follows a changed accessibility preference and themes have a native
     Object.defineProperty(document, "startViewTransition", { value: undefined }),
   );
   await page.setViewportSize({ width: 1280, height: 900 });
-  await page.getByRole("button", { name: /Switch to .* theme/ }).click();
+  await page.getByRole("button", { name: /Switch to .* theme/u }).click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "mocha");
   await expect(heading).toBeVisible();
   expect(errors).toEqual([]);
@@ -664,15 +675,15 @@ test("animated tool disclosures follow the latest message without moving a reade
   await page.getByLabel("Send message", { exact: true }).click();
   const msg = { turn: "31", ordinal: -1 };
   const call = { id: "motion-command", name: "exec", arguments: '{"command":"ls"}' };
-  deliver!(frame("snapshot", { msg, kind: "model_start", text: "", seq: "0" }));
-  deliver!(frame("delta", { msg, kind: "tool_call", text: "", call, seq: "1" }));
+  required(deliver)(frame("snapshot", { msg, kind: "model_start", text: "", seq: "0" }));
+  required(deliver)(frame("delta", { msg, kind: "tool_call", text: "", call, seq: "1" }));
   await page.locator("[data-agent-activity] > summary").click();
   const summary = page.locator('[data-tool-call-id="motion-command"] > summary');
   await expect(summary).toBeVisible();
   await summary.focus();
   await summary.press("Enter");
   await expect(page.getByText("Waiting for the tool result…")).toBeVisible();
-  deliver!(
+  required(deliver)(
     frame("delta", {
       msg,
       kind: "tool_result",
@@ -684,12 +695,15 @@ test("animated tool disclosures follow the latest message without moving a reade
   await expect(page.getByText("Completed", { exact: true })).toBeVisible();
   await expect.poll(gap).toBeLessThan(2);
   await scroller.evaluate((node) => {
-    node.scrollTop -= 400;
+    const element = node;
+    element.scrollTop -= 400;
   });
   await expect(page.getByRole("button", { name: "Back to latest" })).toBeVisible();
   const position = await scroller.evaluate((node) => node.scrollTop);
-  deliver!(frame("snapshot", { msg, kind: "model_start", text: "", seq: "3", loop_turn: 1 }));
-  deliver!(
+  required(deliver)(
+    frame("snapshot", { msg, kind: "model_start", text: "", seq: "3", loop_turn: 1 }),
+  );
+  required(deliver)(
     frame("delta", {
       msg,
       kind: "text",
@@ -697,7 +711,7 @@ test("animated tool disclosures follow the latest message without moving a reade
       seq: "4",
     }),
   );
-  await expect(page.getByText(/More detail about the workspace/).first()).toBeAttached();
+  await expect(page.getByText(/More detail about the workspace/u).first()).toBeAttached();
   expect(await scroller.evaluate((node) => node.scrollTop)).toBeCloseTo(position, 0);
   await page.getByRole("button", { name: "Back to latest" }).click();
   await expect.poll(gap).toBeLessThan(2);
@@ -739,7 +753,7 @@ test("working glow and font axes animate without moving text, and settle with re
     .poll(() => floating.evaluate((node) => getComputedStyle(node).transform))
     .not.toBe("none");
   expect(
-    await summary.evaluate((node) => parseFloat(getComputedStyle(node, "::before").opacity)),
+    await summary.evaluate((node) => Number(getComputedStyle(node, "::before").opacity)),
   ).toBeGreaterThan(0);
   await page.emulateMedia({ reducedMotion: "reduce" });
   await expect.poll(() => page.evaluate(() => document.getAnimations().length)).toBe(0);
@@ -749,7 +763,11 @@ test("working glow and font axes animate without moving text, and settle with re
   const stationary = await label.evaluate(async (node) => {
     const samples: string[] = [];
     for (let i = 0; i < 6; i++) {
-      await new Promise(requestAnimationFrame);
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => {
+          resolve();
+        });
+      });
       samples.push(getComputedStyle(node).fontVariationSettings);
     }
     return samples;
@@ -757,7 +775,7 @@ test("working glow and font axes animate without moving text, and settle with re
   expect(new Set(stationary).size).toBe(1);
   const msg = { turn: "31", ordinal: -1 };
   const call = { id: "glow-command", name: "exec", arguments: '{"command":"pwd"}' };
-  deliver!(frame("delta", { msg, kind: "tool_call", text: "", call, seq: "1" }));
+  required(deliver)(frame("delta", { msg, kind: "tool_call", text: "", call, seq: "1" }));
   await expect(activity).toHaveAttribute("data-phase", "tool");
   await expect(activity).not.toHaveAttribute("open");
   await expect(page.getByText("Using tools…", { exact: true })).toBeVisible();
@@ -773,7 +791,9 @@ test("working glow and font axes animate without moving text, and settle with re
     .toBeGreaterThan(0);
   await summary.press("Enter");
   await expect(page.getByText("Running command", { exact: true })).toBeVisible();
-  deliver!(frame("msg.final", { msg, status: "completed", full_text: "The workspace is ready." }));
+  required(deliver)(
+    frame("msg.final", { msg, status: "completed", full_text: "The workspace is ready." }),
+  );
   await expect(page.getByText("The workspace is ready.", { exact: true })).toBeVisible();
   await expect(activity).toHaveAttribute("open", "");
   await expect(activity).not.toHaveAttribute("data-working");

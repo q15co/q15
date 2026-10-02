@@ -1,4 +1,4 @@
-import type { ShellManifest } from "../src/shell-manifest";
+import type { ShellManifest } from "../src/shared/shell-manifest";
 
 declare const self: ServiceWorkerGlobalScope;
 // Vite injects the completed build's exact shell allow-list and content digest.
@@ -47,7 +47,7 @@ self.addEventListener("fetch", (event) => {
   if (
     request.method !== "GET" ||
     url.origin !== self.location.origin ||
-    url.search ||
+    url.search !== "" ||
     !shell.has(path)
   )
     return;

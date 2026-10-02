@@ -1,8 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import { frame, parseClientFrame } from "./protocol";
-import type { ClientFrame } from "./protocol";
+
+import type { TransportEvents } from "../application/ports";
+import type { ClientFrame } from "../domain/protocol";
+import type { SocketLike } from "./transport";
+
+import { parseClientFrame } from "../domain/protocol";
+import { frame } from "../infrastructure/envelope";
+import { required } from "../testing/required";
 import { SocketTransport } from "./transport";
-import type { SocketLike, TransportEvents } from "./transport";
 
 class FakeSocket implements SocketLike {
   readyState = 0;
@@ -41,7 +46,7 @@ function setup() {
   };
   let cursor = "41";
   transport.start(events, () => cursor);
-  const socket = sockets[0]!;
+  const socket = required(sockets[0]);
   socket.open();
   socket.receive("ready", { cursor: "42", head_seq: "43", device_id: "device-1" });
   return {
@@ -78,11 +83,11 @@ describe("socket transport", () => {
     transport.send("uncertain", "client-1");
     cursor("9007199254740992");
     socket.close();
-    expect(() => transport.send("offline", "client-2")).toThrow(/reconnect/);
+    expect(() => transport.send("offline", "client-2")).toThrow(/reconnect/u);
     vi.advanceTimersByTime(1000);
-    sockets[1]!.open();
-    expect(sockets[1]!.sent).toHaveLength(1);
-    expect(sockets[1]!.sent[0]).toMatchObject({
+    required(sockets[1]).open();
+    expect(required(sockets[1]).sent).toHaveLength(1);
+    expect(required(sockets[1]).sent[0]).toMatchObject({
       type: "hello",
       payload: { cursor: "9007199254740992" },
     });

@@ -1,11 +1,14 @@
-import { Sparkles, Check, Copy } from "lucide-react";
-import { useState } from "react";
 import { clsx } from "clsx";
-import * as m from "motion/react-m";
-import type { ChatMessage, Pending } from "../chat-store";
-import { Button } from "./ui/button";
-import { useMotionPreference } from "./ui/motion";
+import { Sparkles, Check, Copy } from "lucide-react";
+import * as motion from "motion/react-m";
+import { useState } from "react";
+
+import type { ChatMessage, Pending } from "../domain/chat";
+
 import { PartView } from "./parts";
+import { Button } from "./ui/button";
+import { useMotionPreference } from "./ui/motion-preference";
+
 import styles from "./message.module.css";
 
 export function MessageView({ message }: { message: ChatMessage }) {
@@ -17,8 +20,17 @@ export function MessageView({ message }: { message: ChatMessage }) {
     .filter((p) => p.part_type === "text")
     .map((p) => p.text ?? "")
     .join("");
+  const copyText = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setCopyError(false);
+    } catch {
+      setCopyError(true);
+    }
+  };
   return (
-    <m.article
+    <motion.article
       initial={!reduced && message.status === "streaming" ? { opacity: 0, y: 6 } : false}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: reduced ? 0 : 0.24 }}
@@ -33,7 +45,7 @@ export function MessageView({ message }: { message: ChatMessage }) {
         <span className={styles.messageAuthor}>
           {user ? "You" : message.role === "assistant" ? "q15" : message.role}
         </span>
-        {message.model && <span className={styles.modelTag}>{message.model}</span>}
+        {(message.model ?? "") !== "" && <span className={styles.modelTag}>{message.model}</span>}
         <a
           className={styles.messageTime}
           href={`#message-${message.key}`}
@@ -43,28 +55,25 @@ export function MessageView({ message }: { message: ChatMessage }) {
         </a>
       </div>
       <div className={styles.messageBody}>
-        {message.parts.map((part, i) => (
-          <PartView part={part} key={`${part.ordinal}:${i}`} />
+        {message.parts.map((part) => (
+          <PartView
+            part={part}
+            key={`${part.ordinal}:${part.part_type}:${part.tool_call?.id ?? part.tool_call_id ?? ""}`}
+          />
         ))}
       </div>
       {!user &&
         message.status !== "streaming" &&
-        (text || message.status === "aborted" || message.status === "failed") && (
+        (text !== "" || message.status === "aborted" || message.status === "failed") && (
           <div className={styles.messageActions}>
-            {text && (
+            {text !== "" && (
               <Button
                 variant="ghost"
                 size="sm"
                 aria-label="Copy response"
                 data-copied={copied || undefined}
                 onClick={() => {
-                  void navigator.clipboard.writeText(text).then(
-                    () => {
-                      setCopied(true);
-                      setCopyError(false);
-                    },
-                    () => setCopyError(true),
-                  );
+                  void copyText();
                 }}
               >
                 {copied ? <Check /> : <Copy />}
@@ -76,14 +85,14 @@ export function MessageView({ message }: { message: ChatMessage }) {
             {message.status === "failed" && <small className={styles.failed}>Failed</small>}
           </div>
         )}
-    </m.article>
+    </motion.article>
   );
 }
 
 export function PendingMessage({ pending: p }: { pending: Pending }) {
   const reduced = useMotionPreference();
   return (
-    <m.article
+    <motion.article
       className={clsx(styles.message, styles.userMessage)}
       initial={reduced ? false : { opacity: 0, y: 6 }}
       animate={{ opacity: 1, y: 0 }}
@@ -104,13 +113,13 @@ export function PendingMessage({ pending: p }: { pending: Pending }) {
                 : p.state === "stopped"
                   ? "Stopped"
                   : p.state === "failed"
-                    ? p.turn
-                      ? "Response failed"
-                      : "Not accepted"
+                    ? p.turn === undefined
+                      ? "Not accepted"
+                      : "Response failed"
                     : "Sending…"}
         </span>
       </div>
       <p className={clsx(styles.messageBody, styles.pendingText)}>{p.text}</p>
-    </m.article>
+    </motion.article>
   );
 }

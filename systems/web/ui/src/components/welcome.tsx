@@ -1,9 +1,13 @@
-import * as m from "motion/react-m";
 import type { MotionProps } from "motion/react";
+
 import { Sparkles, ArrowUpRight } from "lucide-react";
-import type { ChatStore } from "../chat-store";
-import { useMotionPreference } from "./ui/motion";
+import * as motion from "motion/react-m";
+
+import type { ChatStore } from "../application/chat-store";
+
 import { recursiveAxes } from "./ui/font-motion";
+import { useMotionPreference } from "./ui/motion-preference";
+
 import styles from "./welcome.module.css";
 
 export function Welcome({ store, connected }: { store: ChatStore; connected: boolean }) {
@@ -20,13 +24,13 @@ export function Welcome({ store, connected }: { store: ChatStore; connected: boo
     }) satisfies MotionProps;
   return (
     <div className={styles.welcome}>
-      <m.div className={styles.welcomeMark} {...reveal(0)} aria-hidden="true">
+      <motion.div className={styles.welcomeMark} {...reveal(0)} aria-hidden="true">
         <span className={styles.orbit}>
           <span className={styles.satellite} />
         </span>
         <Sparkles />
-      </m.div>
-      <m.h1
+      </motion.div>
+      <motion.h1
         {...reveal(0.08)}
         animate={{
           opacity: 1,
@@ -45,21 +49,25 @@ export function Welcome({ store, connected }: { store: ChatStore; connected: boo
         }}
       >
         Start a conversation
-      </m.h1>
+      </motion.h1>
       <div className={styles.suggestions}>
         {["Help me think through an idea", "Explore something new", "Let's get something done"].map(
           (text, i) => (
-            <m.button
+            <motion.button
               key={text}
               {...reveal(0.18 + i * 0.06)}
-              whileHover={!reduced && connected ? { x: 4 } : undefined}
-              whileTap={!reduced && connected ? { scale: 0.985 } : undefined}
-              onClick={() => store.send(text)}
+              {...(!reduced && connected
+                ? { whileHover: { x: 4 }, whileTap: { scale: 0.985 } }
+                : {})}
+              type="button"
+              onClick={() => {
+                store.send(text);
+              }}
               disabled={!connected}
             >
               <span>{text}</span>
               <ArrowUpRight size={16} />
-            </m.button>
+            </motion.button>
           ),
         )}
       </div>

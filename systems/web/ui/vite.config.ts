@@ -1,6 +1,8 @@
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite-plus";
+
 import { shell } from "./build/shell";
+import { lint } from "./lint/config";
 
 export default defineConfig({
   plugins: [react(), shell()],
@@ -16,24 +18,23 @@ export default defineConfig({
   fmt: {
     ignorePatterns: ["src/fixtures/**", "src/generated/**", "pnpm-lock.yaml", "**/*.md"],
     printWidth: 100,
-  },
-  lint: {
-    plugins: ["react", "typescript", "jsx-a11y", "vitest"],
-    options: { typeAware: true, typeCheck: true },
-    rules: {
-      "typescript/no-explicit-any": "error",
-      "typescript/no-unsafe-assignment": "error",
-      "typescript/no-unsafe-argument": "error",
-      "typescript/no-unsafe-call": "error",
-      "typescript/no-unsafe-member-access": "error",
-      "typescript/no-unsafe-return": "error",
-      "typescript/no-unsafe-type-assertion": "error",
+    sortImports: {
+      groups: [
+        "type-import",
+        ["value-builtin", "value-external"],
+        ["type-parent", "type-sibling", "type-index"],
+        ["value-parent", "value-sibling", "value-index"],
+        "style",
+        "unknown",
+      ],
+      newlinesBetween: true,
+      sortSideEffects: false,
     },
-    ignorePatterns: ["src/generated/**"],
   },
+  lint,
   test: {
     environment: "jsdom",
-    include: ["src/**/*.test.{ts,tsx}", "build/**/*.test.ts"],
+    include: ["src/**/*.test.{ts,tsx}", "build/**/*.test.ts", "lint/**/*.test.ts"],
     restoreMocks: true,
   },
 });

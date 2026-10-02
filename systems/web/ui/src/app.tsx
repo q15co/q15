@@ -1,9 +1,4 @@
 import { clsx } from "clsx";
-import styles from "./app.module.css";
-import { useEffect, useLayoutEffect, useState, useSyncExternalStore } from "react";
-import { flushSync } from "react-dom";
-import { AnimatePresence } from "motion/react";
-import * as m from "motion/react-m";
 import {
   Sparkles,
   MessageSquare,
@@ -15,12 +10,20 @@ import {
   WifiOff,
   CircleAlert,
 } from "lucide-react";
-import type { ChatStore } from "./chat-store";
+import { AnimatePresence } from "motion/react";
+import * as motion from "motion/react-m";
+import { useEffect, useLayoutEffect, useState, useSyncExternalStore } from "react";
+import { flushSync } from "react-dom";
+
+import type { ChatStore } from "./application/chat-store";
+
 import { Composer } from "./components/composer";
 import { Transcript } from "./components/transcript";
 import { Button } from "./components/ui/button";
-import { useMotionPreference } from "./components/ui/motion";
+import { useMotionPreference } from "./components/ui/motion-preference";
 import { applyTheme, initialTheme, revealTheme } from "./theme";
+
+import styles from "./app.module.css";
 
 interface InstallEvent extends Event {
   prompt(): unknown;
@@ -63,7 +66,7 @@ export function App({ store, preview = false }: { store: ChatStore; preview?: bo
       </a>
       <AnimatePresence initial={false}>
         {menu && (
-          <m.button
+          <motion.button
             initial={reduced ? false : { opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
@@ -122,7 +125,7 @@ export function App({ store, preview = false }: { store: ChatStore; preview?: bo
               });
             }}
           >
-            <m.span
+            <motion.span
               key={theme}
               aria-hidden="true"
               initial={reduced ? false : { opacity: 0, rotate: -90 }}
@@ -130,7 +133,7 @@ export function App({ store, preview = false }: { store: ChatStore; preview?: bo
               transition={{ duration: reduced ? 0 : 0.24 }}
             >
               {theme === "mocha" ? <Sun /> : <Moon />}
-            </m.span>
+            </motion.span>
           </Button>
         </div>
       </aside>
@@ -175,10 +178,10 @@ export function App({ store, preview = false }: { store: ChatStore; preview?: bo
               : "Reconnecting to q15…"}
           </output>
         )}
-        {(state.notice || state.error) && (
+        {(state.notice !== null || state.error !== null) && (
           <div
-            className={clsx(styles.noticeBanner, state.error && styles.errorBanner)}
-            role={state.error ? "alert" : "status"}
+            className={clsx(styles.noticeBanner, state.error !== null && styles.errorBanner)}
+            role={state.error === null ? "status" : "alert"}
           >
             <CircleAlert size={15} />
             <span>{state.error ?? state.notice}</span>

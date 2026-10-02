@@ -1,8 +1,10 @@
-import { createContext, useContext, useSyncExternalStore } from "react";
 import type { ReactNode } from "react";
-import { LazyMotion, MotionConfig } from "motion/react";
 
-const ReducedMotion = createContext(true);
+import { LazyMotion, MotionConfig } from "motion/react";
+import { useSyncExternalStore } from "react";
+
+import { ReducedMotion } from "./motion-preference";
+
 const query = "(prefers-reduced-motion: reduce)";
 const loadFeatures = () => import("./motion-features").then((module) => module.default);
 function subscribe(listener: () => void) {
@@ -10,7 +12,6 @@ function subscribe(listener: () => void) {
   preference.addEventListener("change", listener);
   return () => preference.removeEventListener("change", listener);
 }
-export const useMotionPreference = () => useContext(ReducedMotion);
 
 export function MotionProvider({ children }: { children: ReactNode }) {
   const reduced = useSyncExternalStore(

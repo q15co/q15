@@ -10,12 +10,19 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
     "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitReturns": true,
+    "noImplicitOverride": true,
+    "allowUnreachableCode": false,
+    "allowUnusedLabels": false,
+    "noUncheckedSideEffectImports": true,
+    "moduleDetection": "force",
     "noEmit": true,
     "allowImportingTsExtensions": true,
     "resolveJsonModule": true,
     "verbatimModuleSyntax": true,
-    "skipLibCheck": true,
+    "skipLibCheck": false,
     "types": ["vite-plus/client"]
   },
-  "include": ["src", "vite.config.ts", "build", "e2e", "playwright.config.ts"]
+  "include": ["src", "vite.config.ts", "build", "lint", "e2e", "playwright.config.ts"]
 }

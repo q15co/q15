@@ -1,27 +1,23 @@
-import styles from "./transcript.module.css";
 import { ArrowDown, History } from "lucide-react";
 import { AnimatePresence } from "motion/react";
-import * as m from "motion/react-m";
+import * as motion from "motion/react-m";
 import { Fragment, useLayoutEffect, useRef, useState } from "react";
-import type { ChatState, ChatStore } from "../chat-store";
-import { PendingMessage } from "./message";
+
+import type { ChatStore } from "../application/chat-store";
+import type { ChatState } from "../domain/chat";
+
+import { groupTurns } from "../domain/chat";
 import { TurnView } from "./activity";
+import { PendingMessage } from "./message";
 import { Button } from "./ui/button";
-import { useMotionPreference } from "./ui/motion";
+import { useMotionPreference } from "./ui/motion-preference";
 import { Welcome } from "./welcome";
+
+import styles from "./transcript.module.css";
 
 export function Transcript({ state, store }: { state: ChatState; store: ChatStore }) {
   const reduced = useMotionPreference();
-  const turns = new Map<string, typeof state.messages>();
-  for (const message of state.messages) {
-    const messages = turns.get(message.turn) ?? [];
-    messages.push(message);
-    turns.set(message.turn, messages);
-  }
-  // Show thinking as soon as a turn starts, before its first model snapshot.
-  // Keep the same turn subtree when that snapshot arrives so disclosures retain
-  // the reader's choice.
-  if (state.active && !turns.has(state.active)) turns.set(state.active, []);
+  const turns = groupTurns(state.messages, state.active);
   const scroller = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const anchor = useRef<{
@@ -41,9 +37,9 @@ export function Transcript({ state, store }: { state: ChatState; store: ChatStor
         item.getClientRects().length > 0 &&
         item.getBoundingClientRect().bottom >= node.getBoundingClientRect().top,
     );
-    if (first)
+    if (first?.dataset.messageKey !== undefined)
       anchor.current = {
-        key: first.dataset.messageKey!,
+        key: first.dataset.messageKey,
         top: first.getBoundingClientRect().top,
         scrollHeight: node.scrollHeight,
       };
@@ -57,7 +53,7 @@ export function Transcript({ state, store }: { state: ChatState; store: ChatStor
     if (anchor.current && !state.loadingHistory) {
       const saved = anchor.current;
       const item = [...node.querySelectorAll<HTMLElement>("[data-message-key]")].find(
-        (item) => item.dataset.messageKey === saved.key,
+        (candidate) => candidate.dataset.messageKey === saved.key,
       );
       node.scrollTop += item
         ? item.getBoundingClientRect().top - saved.top
@@ -67,34 +63,37 @@ export function Transcript({ state, store }: { state: ChatState; store: ChatStor
       node.scrollTop = node.scrollHeight;
       followedTop.current = node.scrollTop;
     }
-  }, [state.messages, state.pending, state.loadingHistory]);
+  });
 
   // Follow expanding disclosures as well as text deltas, without moving a reader
   // who has scrolled back or is paging history.
   useLayoutEffect(() => {
-    if (!content.current || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => {
-      const node = scroller.current;
-      if (node && following.current && !anchor.current) {
-        node.scrollTop = node.scrollHeight;
-        followedTop.current = node.scrollTop;
-      }
-    });
-    observer.observe(content.current);
-    return () => observer.disconnect();
+    const element = content.current;
+    const observer =
+      element && typeof ResizeObserver !== "undefined"
+        ? new ResizeObserver(() => {
+            const node = scroller.current;
+            if (node && following.current && !anchor.current) {
+              node.scrollTop = node.scrollHeight;
+              followedTop.current = node.scrollTop;
+            }
+          })
+        : undefined;
+    if (element) observer?.observe(element);
+    return () => observer?.disconnect();
   }, []);
 
   useLayoutEffect(() => {
     const jump = async () => {
-      const match = /^#message-(\d+):(-?\d+)$/.exec(location.hash);
-      if (!match || state.loadingHistory) return;
+      const match = /^#message-(\d+):(-?\d+)$/u.exec(location.hash);
+      if (match?.[1] === undefined || match[2] === undefined || state.loadingHistory) return;
       following.current = false;
       setJumping(true);
-      const key = await store.findMessage(match[1]!, Number(match[2]));
+      const key = await store.findMessage(match[1], Number(match[2]));
       setJumping(false);
-      if (key)
+      if (key !== null)
         requestAnimationFrame(() => {
-          const target = document.getElementById(`message-${key}`);
+          const target = document.querySelector(`#${CSS.escape(`message-${key}`)}`);
           const disclosures: HTMLDetailsElement[] = [];
           for (let parent = target; parent; parent = parent.parentElement)
             if (parent instanceof HTMLDetailsElement) {
@@ -103,17 +102,20 @@ export function Transcript({ state, store }: { state: ChatState; store: ChatStor
               disclosures.push(parent);
             }
           target?.scrollIntoView({ block: "center" });
-          requestAnimationFrame(() =>
+          requestAnimationFrame(() => {
             requestAnimationFrame(() => {
-              disclosures.forEach((details) => delete details.dataset.instant);
-            }),
-          );
+              for (const details of disclosures) delete details.dataset.instant;
+            });
+          });
         });
     };
-    void jump();
-    window.addEventListener("hashchange", jump);
-    return () => window.removeEventListener("hashchange", jump);
-  }, [store, state.hasMore, state.loadingHistory]);
+    const onHashChange = () => {
+      void jump();
+    };
+    onHashChange();
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, [store, state.loadingHistory]);
 
   return (
     <div className={styles.transcriptContainer}>
@@ -161,7 +163,7 @@ export function Transcript({ state, store }: { state: ChatState; store: ChatStor
             </Fragment>
           ))}
           {state.pending
-            .filter((p) => !p.turn || !turns.has(p.turn))
+            .filter((p) => p.turn === undefined || !turns.has(p.turn))
             .map((p) => (
               <PendingMessage key={p.id} pending={p} />
             ))}
@@ -171,7 +173,7 @@ export function Transcript({ state, store }: { state: ChatState; store: ChatStor
       <div className={styles.latestWrapper}>
         <AnimatePresence initial={false}>
           {showLatest && (
-            <m.div
+            <motion.div
               initial={reduced ? false : { opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: reduced ? 0 : 8 }}
@@ -192,7 +194,7 @@ export function Transcript({ state, store }: { state: ChatState; store: ChatStor
                 <ArrowDown />
                 Back to latest
               </Button>
-            </m.div>
+            </motion.div>
           )}
         </AnimatePresence>
       </div>

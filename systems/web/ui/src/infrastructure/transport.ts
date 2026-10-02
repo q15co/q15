@@ -1,20 +1,9 @@
-import { clientFrame, parseFrame } from "./protocol";
-import type { ClientFrame, ServerFrame } from "./protocol";
+import type { Transport, TransportEvents } from "../application/ports";
+import type { ClientFrame } from "../domain/protocol";
 
-export type Connection = "connecting" | "connected" | "reconnecting" | "offline";
-export interface TransportEvents {
-  frame: (value: ServerFrame) => void;
-  connection: (value: Connection) => void;
-  error: (message: string) => void;
-}
-export interface Transport {
-  start: (events: TransportEvents, cursor: () => string) => void;
-  stop: () => void;
-  send: (text: string, clientID: string) => void;
-  abort: (turn: string) => void;
-  sync: (cursor: string) => void;
-  presence: (foreground: boolean) => void;
-}
+import { parseFrame } from "../domain/protocol";
+import { clientFrame } from "./envelope";
+
 export interface SocketLike {
   readyState: number;
   onopen: ((event: Event) => void) | null;
@@ -37,7 +26,8 @@ export class SocketTransport implements Transport {
 
   constructor(
     private readonly url = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws`,
-    private readonly createSocket: (url: string) => SocketLike = (url) => new WebSocket(url),
+    private readonly createSocket: (url: string) => SocketLike = (address) =>
+      new WebSocket(address),
   ) {}
 
   start(events: TransportEvents, cursor: () => string) {
@@ -63,7 +53,7 @@ export class SocketTransport implements Transport {
   private connect() {
     if (this.stopped) return;
     this.ready = false;
-    this.events?.connection(this.attempts ? "reconnecting" : "connecting");
+    this.events?.connection(this.attempts > 0 ? "reconnecting" : "connecting");
     let socket: SocketLike;
     try {
       socket = this.createSocket(this.url);

@@ -7,11 +7,14 @@ export default defineConfig({
     colorScheme: "dark",
     baseURL: "http://127.0.0.1:4173",
     viewport: { width: 1280, height: 900 },
-    launchOptions: { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE },
+    launchOptions:
+      process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE === undefined
+        ? {}
+        : { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE },
   },
   webServer: {
     command: "pnpm preview --port 4173",
     url: "http://127.0.0.1:4173",
-    reuseExistingServer: !process.env.CI,
+    reuseExistingServer: process.env.CI === undefined,
   },
 });

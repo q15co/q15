@@ -1,11 +1,15 @@
-import styles from "./composer.module.css";
 import { ArrowUp, ListPlus, Square, CornerDownLeft } from "lucide-react";
 import { AnimatePresence } from "motion/react";
-import * as m from "motion/react-m";
+import * as motion from "motion/react-m";
 import { useRef, useState } from "react";
-import type { ChatStore, ChatState } from "../chat-store";
+
+import type { ChatStore } from "../application/chat-store";
+import type { ChatState } from "../domain/chat";
+
 import { Button } from "./ui/button";
-import { useMotionPreference } from "./ui/motion";
+import { useMotionPreference } from "./ui/motion-preference";
+
+import styles from "./composer.module.css";
 
 export function Composer({ store, state }: { store: ChatStore; state: ChatState }) {
   const reduced = useMotionPreference();
@@ -55,7 +59,7 @@ export function Composer({ store, state }: { store: ChatStore; state: ChatState 
           {busy && <span className={styles.composerHint}>Next message will be queued</span>}
           <div className={styles.composerButtons}>
             {busy && (
-              <m.span
+              <motion.span
                 className={styles.stopControl}
                 initial={reduced ? false : { opacity: 0 }}
                 animate={{ opacity: 1 }}
@@ -71,16 +75,16 @@ export function Composer({ store, state }: { store: ChatStore; state: ChatState 
                   <Square />
                   Stop
                 </Button>
-              </m.span>
+              </motion.span>
             )}
             <Button
               type="submit"
               size="icon"
-              disabled={!text.trim() || state.connection !== "connected"}
+              disabled={text.trim() === "" || state.connection !== "connected"}
               aria-label={busy ? "Queue message" : "Send message"}
             >
               <AnimatePresence initial={false} mode="wait">
-                <m.span
+                <motion.span
                   key={busy ? "queue" : "send"}
                   aria-hidden="true"
                   initial={reduced ? false : { opacity: 0, y: 4 }}
@@ -89,7 +93,7 @@ export function Composer({ store, state }: { store: ChatStore; state: ChatState 
                   transition={{ duration: reduced ? 0 : 0.12 }}
                 >
                   {busy ? <ListPlus /> : <ArrowUp />}
-                </m.span>
+                </motion.span>
               </AnimatePresence>
             </Button>
           </div>

@@ -1,20 +1,23 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+
+import { App } from "./app";
+
 import "@fontsource-variable/recursive/full.css";
 import "./styles.css";
-import { App } from "./app";
-import { ChatStore } from "./chat-store";
-import { SocketTransport } from "./transport";
+import { ChatStore } from "./application/chat-store";
 import { MotionProvider } from "./components/ui/motion";
+import { fetchHistory } from "./infrastructure/history";
+import { SocketTransport } from "./infrastructure/transport";
 
+async function previewStore() {
+  const { MockTransport } = await import("./infrastructure/mock-transport");
+  const transport = new MockTransport();
+  return new ChatStore(transport, transport.history);
+}
 const preview = import.meta.env.DEV && new URLSearchParams(location.search).has("preview");
-const store = preview
-  ? await import("./mock-transport").then(({ MockTransport }) => {
-      const transport = new MockTransport();
-      return new ChatStore(transport, transport.history);
-    })
-  : new ChatStore(new SocketTransport());
-const root = document.getElementById("root");
+const store = preview ? await previewStore() : new ChatStore(new SocketTransport(), fetchHistory);
+const root = document.querySelector("#root");
 if (!root) throw new Error("The chat shell is missing its root element.");
 createRoot(root).render(
   <StrictMode>
@@ -25,7 +28,9 @@ createRoot(root).render(
 );
 if (import.meta.env.PROD && "serviceWorker" in navigator) {
   // Registration only caches the compiled shell; transcripts never leave memory.
-  void navigator.serviceWorker.register("/sw.js").catch(() => {
+  try {
+    await navigator.serviceWorker.register("/sw.js");
+  } catch {
     /* Chat works without installation. */
-  });
+  }
 }

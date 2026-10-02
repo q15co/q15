@@ -1,5 +1,3 @@
-import { VERSION } from "./generated/protocol";
-import { isRecord } from "./type-guards";
 import type {
   AbortRequest,
   AckRequest,
@@ -20,10 +18,16 @@ import type {
   ToolCall,
   Turn,
   TurnStartPayload,
-} from "./generated/protocol";
+} from "../generated/protocol";
 
-type Envelope<T extends string, P> = Omit<Frame, "type" | "payload"> & { type: T; payload: P };
-type ClientPayloads = {
+import { VERSION } from "../generated/protocol";
+import { isRecord } from "../shared/type-guards";
+
+export type Envelope<T extends string, P> = Omit<Frame, "type" | "payload"> & {
+  type: T;
+  payload: P;
+};
+export type ClientPayloads = {
   hello: Cursor;
   sync: Cursor;
   "msg.send": SendRequest;
@@ -48,7 +52,7 @@ export type ServerFrame =
 
 export const decimal = (value: unknown): value is string =>
   typeof value === "string" &&
-  /^(0|[1-9]\d{0,18})$/.test(value) &&
+  /^(0|[1-9]\d{0,18})$/u.test(value) &&
   BigInt(value) <= 9223372036854775807n;
 const integer = (value: unknown): value is number => Number.isInteger(value);
 const optionalString = (value: unknown) => value === undefined || typeof value === "string";
@@ -72,7 +76,7 @@ function part(value: unknown): value is Part {
       value.disposition,
       value.media_kind,
       value.media_ref,
-    ].every(optionalString) &&
+    ].every((field) => optionalString(field)) &&
     optionalBool(value.is_error) &&
     (value.tool_call === undefined || call(value.tool_call))
   );
@@ -215,18 +219,6 @@ function isPage(value: unknown): value is Page {
 export function parsePage(value: unknown): Page {
   if (!isPage(value)) throw new Error("The server returned unsupported history.");
   return value;
-}
-
-export function frame(type: string, payload: unknown, id: string = crypto.randomUUID()): Frame {
-  return { v: VERSION, id, type, ts: new Date().toISOString(), seq: "0", payload };
-}
-
-export function clientFrame<T extends keyof ClientPayloads>(
-  type: T,
-  payload: ClientPayloads[T],
-  id: string = crypto.randomUUID(),
-): Envelope<T, ClientPayloads[T]> {
-  return { v: VERSION, id, type, ts: new Date().toISOString(), seq: "0", payload };
 }
 
 export const compareSeq = (a: string, b: string) =>

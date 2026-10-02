@@ -1,10 +1,14 @@
-import { afterEach, describe, expect, it } from "vite-plus/test";
 import { cleanup, render, screen } from "@testing-library/react";
-import type { ChatMessage } from "../chat-store";
+import { afterEach, describe, expect, it } from "vite-plus/test";
+
+import type { ChatMessage } from "../domain/chat";
 import type { Part } from "../generated/protocol";
-import { presentTurn, TurnView } from "./activity";
+
+import { presentTurn } from "../domain/activity";
+import { parsePage } from "../domain/protocol";
 import parts from "../fixtures/protocol/parts.json";
-import { parsePage } from "../protocol";
+import { required } from "../testing/required";
+import { TurnView } from "./activity";
 
 afterEach(cleanup);
 function message(ordinal: number, role: string, entries: Omit<Part, "ordinal">[]): ChatMessage {
@@ -52,7 +56,7 @@ describe("turn activity", () => {
       expect(container.querySelectorAll(`[id="message-${m.key}"]`)).toHaveLength(1);
   });
   it("handles the frozen mixed live message without repeating its canonical anchor", () => {
-    const original = parsePage(parts).turns[0]!.messages[0]!;
+    const original = required(required(parsePage(parts).turns[0]).messages[0]);
     const { container } = render(
       <TurnView
         messages={[{ ...original, key: "42:0", turn: "42", ts: "2026-10-01T12:00:00Z" }]}
@@ -96,8 +100,8 @@ describe("turn activity", () => {
     expect(presentation.activity[0]?.source.part.text).toBe("checking");
   });
   it("starts work closed and preserves the reader's disclosure choice across updates", () => {
-    const { container, rerender } = render(<TurnView messages={[history[1]!]} working />);
-    const activity = container.querySelector<HTMLDetailsElement>("[data-agent-activity]")!;
+    const { container, rerender } = render(<TurnView messages={[required(history[1])]} working />);
+    const activity = required(container.querySelector<HTMLDetailsElement>("[data-agent-activity]"));
     expect(activity.open).toBe(false);
     expect(screen.getByText("Using tools…")).toBeDefined();
     expect(screen.getByText("Running command")).toBeDefined();
@@ -106,7 +110,7 @@ describe("turn activity", () => {
     expect(activity.open).toBe(true);
     expect(screen.getByText("Completed")).toBeDefined();
     activity.open = false;
-    rerender(<TurnView messages={[history[1]!]} working />);
+    rerender(<TurnView messages={[required(history[1])]} working />);
     expect(activity.open).toBe(false);
   });
   it("preserves unknown parts visibly and does not invent a duration or successful result", () => {
@@ -120,8 +124,8 @@ describe("turn activity", () => {
       />,
     );
     expect(screen.getByText("Unsupported part: future_part")).toBeDefined();
-    expect(screen.getByText(/retained/)).toBeDefined();
+    expect(screen.getByText(/retained/u)).toBeDefined();
     expect(screen.getByText("No result")).toBeDefined();
-    expect(screen.queryByText(/Worked for/)).toBeNull();
+    expect(screen.queryByText(/Worked for/u)).toBeNull();
   });
 });

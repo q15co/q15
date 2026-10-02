@@ -1,19 +1,16 @@
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
-import type { SendRequest } from "./generated/protocol";
-import frames from "./fixtures/protocol/frames.json";
-import parts from "./fixtures/protocol/parts.json";
-import streamed from "./fixtures/server/streamed.json";
-import aborted from "./fixtures/server/aborted.json";
-import failed from "./fixtures/server/failed.json";
-import resumed from "./fixtures/server/resumed.json";
-import {
-  clientFrame,
-  compareSeq,
-  frame,
-  parseClientFrame,
-  parseFrame,
-  parsePage,
-} from "./protocol";
+
+import type { SendRequest } from "../generated/protocol";
+
+import frames from "../fixtures/protocol/frames.json";
+import parts from "../fixtures/protocol/parts.json";
+import aborted from "../fixtures/server/aborted.json";
+import failed from "../fixtures/server/failed.json";
+import resumed from "../fixtures/server/resumed.json";
+import streamed from "../fixtures/server/streamed.json";
+import { clientFrame, frame } from "../infrastructure/envelope";
+import { required } from "../testing/required";
+import { compareSeq, parseClientFrame, parseFrame, parsePage } from "./protocol";
 
 describe("frozen browser contract", () => {
   it("validates client fixtures and preserves typed outgoing requests", () => {
@@ -40,9 +37,9 @@ describe("frozen browser contract", () => {
       ["ping", { unexpected: true }],
       ["ready", { cursor: "0", head_seq: "0", device_id: "device-1" }],
     ] satisfies [string, unknown][]) {
-      expect(() => parseClientFrame(JSON.stringify(frame(type, payload)))).toThrow(/unsupported/i);
+      expect(() => parseClientFrame(JSON.stringify(frame(type, payload)))).toThrow(/unsupported/iu);
     }
-    expect(() => parseClientFrame(JSON.stringify({ ...request, v: 2 }))).toThrow(/unsupported/i);
+    expect(() => parseClientFrame(JSON.stringify({ ...request, v: 2 }))).toThrow(/unsupported/iu);
   });
   it("decodes every server frame without losing content", () => {
     const server = frames.filter((f) =>
@@ -76,19 +73,19 @@ describe("frozen browser contract", () => {
       "media",
       "text",
     ]);
-    expect(compareSeq(page.head_seq, page.turns[0]!.seq)).toBe(1);
+    expect(compareSeq(page.head_seq, required(page.turns[0]).seq)).toBe(1);
     expect(compareSeq("9007199254740992", "9007199254740993")).toBe(-1);
   });
   it("pins outgoing envelopes and rejects incompatible data", () => {
     expect(frame("hello", { cursor: "0" }).v).toBe(1);
-    expect(() => parseFrame(JSON.stringify({ ...streamed[0], v: 2 }))).toThrow(/unsupported/i);
+    expect(() => parseFrame(JSON.stringify({ ...streamed[0], v: 2 }))).toThrow(/unsupported/iu);
     expect(() => parseFrame(JSON.stringify({ ...streamed[4], seq: 9007199254740992 }))).toThrow(
-      /unsupported/i,
+      /unsupported/iu,
     );
     expect(() => parseFrame(JSON.stringify({ ...streamed[4], payload: { kind: "text" } }))).toThrow(
-      /unsupported/i,
+      /unsupported/iu,
     );
-    expect(() => parsePage({ ...parts, turns: [{ seq: 42 }] })).toThrow(/unsupported/i);
+    expect(() => parsePage({ ...parts, turns: [{ seq: 42 }] })).toThrow(/unsupported/iu);
   });
   it("validates optional model loop counters in progress events", () => {
     const progress = {
@@ -105,20 +102,20 @@ describe("frozen browser contract", () => {
       }
       for (const loop_turn of [null, "1", 1.5]) {
         expect(() => parseFrame(JSON.stringify(frame(type, { ...progress, loop_turn })))).toThrow(
-          /unsupported/i,
+          /unsupported/iu,
         );
       }
     }
   });
   it("rejects nonempty pong payloads and unknown server events", () => {
     expect(() => parseFrame(JSON.stringify(frame("pong", { unexpected: true })))).toThrow(
-      /unsupported/i,
+      /unsupported/iu,
     );
-    expect(() => parseFrame(JSON.stringify(frame("future.event", {})))).toThrow(/unsupported/i);
+    expect(() => parseFrame(JSON.stringify(frame("future.event", {})))).toThrow(/unsupported/iu);
   });
   it("rejects malformed nested parts in history and final events", () => {
-    const turn = parts.turns[0]!;
-    const original = turn.messages[0]!;
+    const turn = required(parts.turns[0]);
+    const original = required(turn.messages[0]);
     for (const invalid of [
       null,
       { ordinal: "0", part_type: "text", text: "answer" },
@@ -132,7 +129,7 @@ describe("frozen browser contract", () => {
     ]) {
       const message = { ...original, parts: [invalid] };
       expect(() => parsePage({ ...parts, turns: [{ ...turn, messages: [message] }] })).toThrow(
-        /unsupported/i,
+        /unsupported/iu,
       );
       expect(() =>
         parseFrame(
@@ -145,17 +142,19 @@ describe("frozen browser contract", () => {
             }),
           ),
         ),
-      ).toThrow(/unsupported/i);
+      ).toThrow(/unsupported/iu);
     }
   });
   it("preserves unfamiliar part types for the renderer fallback", () => {
-    const turn = parts.turns[0]!;
+    const turn = required(parts.turns[0]);
     const value = {
       ...parts,
       turns: [
         {
           ...turn,
-          messages: [{ ...turn.messages[0]!, parts: [{ ordinal: 0, part_type: "future_part" }] }],
+          messages: [
+            { ...required(turn.messages[0]), parts: [{ ordinal: 0, part_type: "future_part" }] },
+          ],
         },
       ],
     };

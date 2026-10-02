@@ -1,13 +1,16 @@
-import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+
+import type { Transport } from "../application/ports";
+import type { ChatState } from "../domain/chat";
+
+import { ChatStore } from "../application/chat-store";
+import { parsePage } from "../domain/protocol";
 import parts from "../fixtures/protocol/parts.json";
-import { ChatStore } from "../chat-store";
-import type { ChatState } from "../chat-store";
-import { parsePage } from "../protocol";
+import { required } from "../testing/required";
+import { Composer } from "./composer";
 import { MessageView } from "./message";
 import { PartView } from "./parts";
-import { Composer } from "./composer";
-import type { Transport } from "../transport";
 afterEach(cleanup);
 
 function messageInput() {
@@ -18,7 +21,7 @@ function messageInput() {
 
 describe("message rendering", () => {
   it("renders every frozen part including visible media and unknown-type fallbacks", () => {
-    const message = parsePage(parts).turns[0]!.messages[0]!;
+    const message = required(required(parsePage(parts).turns[0]).messages[0]);
     const { container } = render(
       <MessageView message={{ ...message, key: "42:1", turn: "42", ts: "2026-10-01T00:00:00Z" }} />,
     );
@@ -32,7 +35,7 @@ describe("message rendering", () => {
       <PartView part={{ ordinal: 9, part_type: "future_part", content: "do not discard me" }} />,
     );
     expect(screen.getByText("Unsupported part: future_part")).toBeDefined();
-    expect(screen.getByText(/do not discard me/)).toBeDefined();
+    expect(screen.getByText(/do not discard me/u)).toBeDefined();
   });
   it("renders reasoning and Markdown text from protocol parts", () => {
     render(
@@ -72,11 +75,13 @@ describe("composer", () => {
       sync: vi.fn<Transport["sync"]>(),
       presence: vi.fn<Transport["presence"]>(),
     };
-    const store = new ChatStore(transport, async () => ({
-      turns: [],
-      head_seq: "42",
-      has_more: false,
-    }));
+    const store = new ChatStore(transport, () =>
+      Promise.resolve({
+        turns: [],
+        head_seq: "42",
+        has_more: false,
+      }),
+    );
     const state = {
       ...store.getSnapshot(),
       connection: "connected",
@@ -127,7 +132,9 @@ describe("composer", () => {
       sync: vi.fn<Transport["sync"]>(),
       presence: vi.fn<Transport["presence"]>(),
     };
-    const store = new ChatStore(transport);
+    const store = new ChatStore(transport, () =>
+      Promise.resolve(parsePage({ turns: [], head_seq: "0", has_more: false })),
+    );
     render(<Composer store={store} state={{ ...store.getSnapshot(), connection: "connected" }} />);
     const input = messageInput();
     fireEvent.change(input, { target: { value: "my draft" } });

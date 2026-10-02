@@ -1,3 +1,4 @@
+import { clsx } from "clsx";
 import {
   Brain,
   ChevronDown,
@@ -7,91 +8,21 @@ import {
   Terminal,
   Wrench,
 } from "lucide-react";
-import { clsx } from "clsx";
-import * as m from "motion/react-m";
-import type { ChatMessage } from "../chat-store";
+import * as motion from "motion/react-m";
+
+import type { Source, ToolActivityItem } from "../domain/activity";
+import type { ChatMessage } from "../domain/chat";
 import type { Part } from "../generated/protocol";
-import { isRecord } from "../type-guards";
+
+import { presentTurn } from "../domain/activity";
+import { isRecord } from "../shared/type-guards";
+import { pretty } from "./format";
 import { MessageView } from "./message";
-import { PartView, pretty } from "./parts";
-import { useMotionPreference } from "./ui/motion";
+import { PartView } from "./parts";
 import { recursiveAxes } from "./ui/font-motion";
+import { useMotionPreference } from "./ui/motion-preference";
+
 import styles from "./activity.module.css";
-
-interface Source {
-  key: string;
-  message: ChatMessage;
-  part: Part;
-}
-interface ToolActivityItem {
-  kind: "tool";
-  source: Source;
-  results: Source[];
-}
-type ActivityItem = ToolActivityItem | { kind: "message"; source: Source };
-
-// History separates calls and results into messages; live drafts contain both.
-// Present either shape without changing canonical message or part identities.
-export function presentTurn(messages: ChatMessage[]) {
-  const sources = messages
-    .filter((m) => m.role !== "user")
-    .flatMap((message) =>
-      message.parts.map((part, i) => ({ key: `${message.key}/${i}`, message, part })),
-    );
-  const lastTool = sources.findLastIndex(
-    (s) => s.part.part_type === "tool_call" || s.part.part_type === "tool_result",
-  );
-  const lastAnswer = sources.findLast(
-    (s, i) =>
-      i > lastTool &&
-      s.message.role === "assistant" &&
-      s.part.part_type === "text" &&
-      !s.part.disposition,
-  );
-  const answerParts = new Map<string, Part[]>();
-  const activity: ActivityItem[] = [];
-  const calls = new Map<string, ToolActivityItem[]>();
-  sources.forEach((source, i) => {
-    const { part, message } = source;
-    const final =
-      part.part_type === "text" &&
-      message.role === "assistant" &&
-      (part.disposition === "final" ||
-        (!part.disposition && i > lastTool && message.key === lastAnswer?.message.key));
-    if (final || !["text", "reasoning", "tool_call", "tool_result"].includes(part.part_type)) {
-      const parts = answerParts.get(message.key) ?? [];
-      parts.push(part);
-      answerParts.set(message.key, parts);
-    } else {
-      // Match the nearest preceding unmatched call, even if a provider reuses IDs.
-      const paired =
-        part.part_type === "tool_result" && part.tool_call_id
-          ? calls.get(part.tool_call_id)?.pop()
-          : undefined;
-      if (paired) {
-        paired.results.push(source);
-        return;
-      }
-      const item: ActivityItem =
-        part.part_type === "tool_call" || part.part_type === "tool_result"
-          ? { kind: "tool", source, results: [] }
-          : { kind: "message", source };
-      activity.push(item);
-      if (item.kind === "tool" && part.part_type === "tool_call" && part.tool_call?.id) {
-        const pending = calls.get(part.tool_call.id) ?? [];
-        pending.push(item);
-        calls.set(part.tool_call.id, pending);
-      }
-    }
-  });
-  return {
-    activity,
-    answers: messages.flatMap((message) => {
-      const parts = answerParts.get(message.key);
-      return parts ? [{ ...message, parts }] : [];
-    }),
-  };
-}
 
 function context(part: Part) {
   try {
@@ -107,7 +38,8 @@ function context(part: Part) {
 
 function toolPresentation(item: ToolActivityItem, working: boolean) {
   const name = item.source.part.tool_call?.name ?? "";
-  const error = item.source.part.is_error || item.results.some((s) => s.part.is_error);
+  const error =
+    item.source.part.is_error === true || item.results.some((s) => s.part.is_error === true);
   const finished = item.source.part.part_type === "tool_result" || item.results.length > 0;
   const running = working && !finished;
   const command = ["exec", "bash", "exec_command"].includes(name);
@@ -124,9 +56,9 @@ function toolPresentation(item: ToolActivityItem, working: boolean) {
         ? running
           ? "Reading page"
           : "Read page"
-        : name
-          ? name.replaceAll("_", " ")
-          : "Tool result";
+        : name === ""
+          ? "Tool result"
+          : name.replaceAll("_", " ");
   return {
     name,
     title,
@@ -170,8 +102,8 @@ function ToolActivity({
         {anchors.has(item.source.key) && <MessageAnchor source={item.source} />}
         <Icon size={16} className={running ? styles.spinning : undefined} aria-hidden="true" />
         <span className={styles.toolTitle}>{title}</span>
-        {context(part) && <span className={styles.context}>{context(part)}</span>}
-        <m.span
+        {context(part) !== "" && <span className={styles.context}>{context(part)}</span>}
+        <motion.span
           key={status}
           className={styles.status}
           data-status={status}
@@ -180,7 +112,7 @@ function ToolActivity({
           transition={{ duration: reduced ? 0 : 0.18 }}
         >
           {status}
-        </m.span>
+        </motion.span>
         <ChevronDown size={13} className={styles.chevron} aria-hidden="true" />
       </summary>
       <div className={styles.toolBody}>
@@ -191,13 +123,16 @@ function ToolActivity({
           </section>
         )}
         {results.map((result) => (
-          <section key={result.key} className={result.part.is_error ? styles.error : undefined}>
+          <section
+            key={result.key}
+            className={result.part.is_error === true ? styles.error : undefined}
+          >
             {result !== item.source && anchors.has(result.key) && <MessageAnchor source={result} />}
-            <h3>{result.part.is_error ? "Error" : "Output"}</h3>
+            <h3>{result.part.is_error === true ? "Error" : "Output"}</h3>
             <pre>{result.part.content ?? ""}</pre>
           </section>
         ))}
-        {!results.length && (
+        {results.length === 0 && (
           <p className={styles.noResult}>
             {working ? "Waiting for the tool result…" : "No result was recorded for this call."}
           </p>
@@ -207,7 +142,13 @@ function ToolActivity({
   );
 }
 
-export function TurnView({ messages, working }: { messages: ChatMessage[]; working: boolean }) {
+export function TurnView({
+  messages,
+  working,
+}: {
+  messages: readonly ChatMessage[];
+  working: boolean;
+}) {
   const reduced = useMotionPreference();
   const { activity, answers } = presentTurn(messages);
   const usingTool = activity.some(
@@ -220,10 +161,10 @@ export function TurnView({ messages, working }: { messages: ChatMessage[]; worki
   const toolCount = activity.filter((item) => item.kind === "tool").length;
   const errors = activity.filter(
     (item) =>
-      item.source.part.is_error ||
-      (item.kind === "tool" && item.results.some((s) => s.part.is_error)),
+      item.source.part.is_error === true ||
+      (item.kind === "tool" && item.results.some((s) => s.part.is_error === true)),
   ).length;
-  const status = messages.findLast((m) => m.status)?.status;
+  const status = messages.findLast((m) => (m.status ?? "") !== "")?.status;
   const label = working
     ? usingTool
       ? "Using tools…"
@@ -232,7 +173,7 @@ export function TurnView({ messages, working }: { messages: ChatMessage[]; worki
       ? "Work stopped"
       : status === "failed"
         ? "Work failed"
-        : toolCount
+        : toolCount > 0
           ? `Used ${toolCount} ${toolCount === 1 ? "tool" : "tools"}`
           : "Thought process";
   const anchored = new Set(answers.map((m) => m.key));
@@ -270,7 +211,7 @@ export function TurnView({ messages, working }: { messages: ChatMessage[]; worki
                 data-message-key={m.key}
               />
             ))}
-            <m.span
+            <motion.span
               className={styles.summaryContent}
               initial={reduced ? false : { y: 0 }}
               animate={{ y: working && !reduced ? [0, -3, 0] : 0 }}
@@ -289,7 +230,7 @@ export function TurnView({ messages, working }: { messages: ChatMessage[]; worki
                   aria-hidden="true"
                 />
               )}
-              <m.span
+              <motion.span
                 className={styles.activityLabel}
                 initial={reduced ? false : { fontVariationSettings: recursiveAxes(0.2, 500) }}
                 animate={{
@@ -309,7 +250,7 @@ export function TurnView({ messages, working }: { messages: ChatMessage[]; worki
                 }}
               >
                 {label}
-              </m.span>
+              </motion.span>
               {working && (
                 <span className={styles.workingDots} aria-hidden="true">
                   <i />
@@ -328,7 +269,7 @@ export function TurnView({ messages, working }: { messages: ChatMessage[]; worki
                 </span>
               )}
               <ChevronDown size={14} className={styles.chevron} aria-hidden="true" />
-            </m.span>
+            </motion.span>
           </summary>
           <div className={styles.timeline}>
             {activity.map((item) =>

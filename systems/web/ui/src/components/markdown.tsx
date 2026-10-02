@@ -1,5 +1,6 @@
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+
 import styles from "./markdown.module.css";
 
 export function MarkdownView({ text }: { text: string }) {

@@ -1,16 +1,13 @@
-import { Brain, ChevronDown, CircleAlert, File, Terminal, Check } from "lucide-react";
 import { clsx } from "clsx";
+import { Brain, ChevronDown, CircleAlert, File, Terminal, Check } from "lucide-react";
+
 import type { Part } from "../generated/protocol";
+
+import { pretty } from "./format";
 import { MarkdownView } from "./markdown";
+
 import styles from "./parts.module.css";
 
-export function pretty(value: string) {
-  try {
-    return JSON.stringify(JSON.parse(value), null, 2);
-  } catch {
-    return value;
-  }
-}
 export function PartView({ part }: { part: Part }) {
   switch (part.part_type) {
     case "text":
@@ -41,10 +38,10 @@ export function PartView({ part }: { part: Part }) {
       );
     case "tool_result":
       return (
-        <details className={clsx(styles.partCard, part.is_error && styles.partError)}>
+        <details className={clsx(styles.partCard, part.is_error === true && styles.partError)}>
           <summary>
-            {part.is_error ? <CircleAlert size={15} /> : <Check size={15} />}
-            <span>{part.is_error ? "Tool error" : "Tool result"}</span>
+            {part.is_error === true ? <CircleAlert size={15} /> : <Check size={15} />}
+            <span>{part.is_error === true ? "Tool error" : "Tool result"}</span>
             <ChevronDown size={14} />
           </summary>
           <pre className={styles.partContent}>{part.content ?? ""}</pre>

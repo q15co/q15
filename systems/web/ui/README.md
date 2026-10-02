@@ -40,6 +40,55 @@ built bundle; `make build-web` builds it first. Build output and dependencies st
 workflow without installing UI dependencies. The latter still checks all UI file hygiene. Use
 `make lint-changed FILES='...'` for TypeScript changes and `make ui-lint` for the full UI gate.
 
+## Architecture and linting
+
+`src/main.tsx` is the composition root: it creates concrete adapters and injects them into the
+application. Keep dependencies pointing inward:
+
+| Directory            | Responsibility                                                                                | Allowed dependencies                                                         |
+| -------------------- | --------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `src/domain`         | Protocol validation, immutable state transitions, history reconciliation and activity pairing | Domain, shared helpers, generated contract types                             |
+| `src/application`    | Connection lifecycle, subscriptions, sending and history recovery through ports               | Application, domain, shared helpers, generated types                         |
+| `src/infrastructure` | WebSocket/HTTP adapters and effectful envelope creation                                       | Infrastructure, application ports, domain, shared helpers, generated types   |
+| `src/components`     | React rendering, interaction and colocated styles                                             | Presentation, application, domain, shared helpers and approved UI packages   |
+| `src/shared`         | Small platform-independent codecs and predicates                                              | Shared helpers and generated types                                           |
+| `worker` / `build`   | Shell caching / bundle generation                                                             | Own modules and shared helpers; build also allows explicit Node/Vite modules |
+
+Native Oxlint `import` rules reject cycles, self imports, duplicates, mutable exports and CommonJS.
+Native `no-restricted-imports` allowlists enforce the table, including type imports, re-exports and
+literal dynamic imports. A small local TypeScript plugin rejects computed imports and noncanonical
+paths that could evade those allowlists. Use explicit `import type` declarations instead of inline
+`import()` types. Aliases, parent traversal within paths and importing test modules into production
+are rejected. The fixture adapter is the only production-source module allowed to import fixtures;
+Vite excludes that adapter from the production bundle.
+
+Domain/shared modules compile separately with only ES2023 types and no browser or Node globals. Lint
+also forbids clocks, randomness, timers, browser I/O and parameter mutation there. Application
+orchestration may schedule retries and create IDs, but browser I/O must pass through injected ports.
+Public state, message collections and pending inputs are readonly. Frozen-input replay tests verify
+that reducers and history/activity transformations preserve their inputs.
+
+`lint/config.ts` enables correctness, suspicious, pedantic and performance rules as errors, with
+type-aware TypeScript, React hooks/compiler, accessibility, promises, Unicorn and Vitest checks.
+Warnings fail the gate. Unsafe assertions, `any`, non-null assertions, unhandled promises,
+nonexhaustive switches and accidental implicit truthiness are rejected. The compiler also checks
+exact optional properties, indexed access, returns, overrides, unreachable code, side-effect imports
+and dependency declarations. Framework/counting-rule exceptions are documented beside their
+settings; test-only overrides permit fixtures and mocks while retaining type-safety rules.
+Architecture tests run the actual pinned Oxlint against forbidden and permitted dependency probes,
+so changing an override cannot silently weaken these boundaries.
+
+Oxfmt automatically sorts imports into external, relative type, relative value and stylesheet
+groups. CSS side-effect imports keep their original execution order. Sorting runs through the
+existing Make workflow and is checked by CI:
+
+```bash
+make fmt FILES='systems/web/ui/src/components/message.tsx'
+make lint-changed FILES='systems/web/ui/src/components/message.tsx'
+make ui-fix # Format the whole UI and apply safe lint fixes, then type-check
+make ui-lint
+```
+
 ## Contract and behavior
 
 Fixture copies under `src/fixtures` must be byte-identical to the source JSON in

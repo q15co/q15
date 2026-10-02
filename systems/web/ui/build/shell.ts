@@ -1,9 +1,11 @@
+import type { Plugin, ResolvedConfig } from "vite-plus";
+
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { build } from "vite-plus";
-import type { Plugin, ResolvedConfig } from "vite-plus";
-import type { ShellManifest } from "../src/shell-manifest";
+
+import type { ShellManifest } from "../src/shared/shell-manifest";
 
 export async function buildWorker(root: string, paths: string[], version: string) {
   const manifest = { paths, version } satisfies ShellManifest;
@@ -24,7 +26,7 @@ export async function buildWorker(root: string, paths: string[], version: string
   if (Array.isArray(result) || !("output" in result))
     throw new Error("Expected one service worker bundle");
   const worker = result.output[0];
-  if (worker?.type !== "chunk" || result.output.length !== 1)
+  if (result.output.length !== 1)
     throw new Error("The service worker must compile to one self-contained script");
   return worker;
 }
@@ -51,7 +53,7 @@ export function shell(): Plugin {
           ...Object.keys(bundle)
             .filter((path) => path.startsWith("assets/"))
             .map((path) => `/${path}`),
-        ].sort();
+        ].toSorted();
         const digest = createHash("sha256");
         for (const path of paths) {
           digest.update(path);

@@ -3,8 +3,10 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { runInNewContext } from "node:vm";
 import { beforeAll, describe, expect, it, vi } from "vite-plus/test";
+
+import { parseShellManifest } from "../src/shared/shell-manifest";
+import { required } from "../src/testing/required";
 import { buildWorker } from "./shell";
-import { parseShellManifest } from "../src/shell-manifest";
 
 const paths = ["/index.html", "/assets/app-abcdef12.js"];
 const cacheName = "q15-shell-abcdef12";
@@ -16,12 +18,15 @@ interface WorkerEvent {
   respondWith: (promise: Promise<Response>) => void;
 }
 
+const cacheMiss: Response | undefined = undefined;
+
 function worker() {
   const handlers = new Map<string, (event: WorkerEvent) => void>();
   const cache = {
-    addAll: vi.fn<(paths: string[]) => Promise<void>>().mockResolvedValue(undefined),
+    addAll: vi.fn<(paths: string[]) => Promise<void>>().mockResolvedValue(),
     match: vi.fn<(path: string) => Promise<Response | undefined>>(
-      async (path: string): Promise<Response | undefined> => new Response(`cached ${path}`),
+      (path: string): Promise<Response | undefined> =>
+        Promise.resolve(new Response(`cached ${path}`)),
     ),
     put: vi.fn<Cache["put"]>(),
   };
@@ -52,9 +57,11 @@ function worker() {
     fetch,
     async lifecycle(type: "install" | "activate") {
       const pending: Promise<unknown>[] = [];
-      handlers.get(type)!({
+      required(handlers.get(type))({
         request: new Request("https://chat.example/"),
-        waitUntil: (promise) => pending.push(promise),
+        waitUntil: (promise) => {
+          pending.push(promise);
+        },
         respondWith: () => {
           throw new Error("Lifecycle events cannot respond to requests");
         },
@@ -63,7 +70,7 @@ function worker() {
     },
     request(request: Request) {
       let response: Promise<Response> | undefined;
-      handlers.get("fetch")!({
+      required(handlers.get("fetch"))({
         request,
         waitUntil: () => {},
         respondWith: (promise) => {
@@ -89,7 +96,7 @@ describe("shell-only PWA", () => {
       { version: "abcdef12", paths: "/index.html" },
       { version: "abcdef12", paths: ["/index.html", null] },
     ])
-      expect(() => parseShellManifest(value)).toThrow(/unsupported/i);
+      expect(() => parseShellManifest(value)).toThrow(/unsupported/iu);
   });
 
   it("precaches only the injected shell and deletes only older q15 shell caches", async () => {
@@ -123,27 +130,29 @@ describe("shell-only PWA", () => {
     const sw = worker();
     const request = new Request("https://chat.example/");
     Object.defineProperty(request, "mode", { value: "navigate" });
-    expect(await (await sw.request(request))!.text()).toBe("network");
+    expect(await required(await sw.request(request)).text()).toBe("network");
     expect(sw.cache.match).not.toHaveBeenCalled();
     sw.fetch.mockRejectedValue(new Error("offline"));
-    expect(await (await sw.request(request))!.text()).toBe("cached /index.html");
+    expect(await required(await sw.request(request)).text()).toBe("cached /index.html");
     expect(sw.cache.put).not.toHaveBeenCalled();
   });
 
   it("returns a network error when both navigation and the cached HTML are unavailable", async () => {
     const sw = worker();
     sw.fetch.mockRejectedValue(new Error("offline"));
-    sw.cache.match.mockResolvedValue(undefined);
-    expect((await sw.request(new Request("https://chat.example/index.html")))!.type).toBe("error");
+    sw.cache.match.mockResolvedValue(cacheMiss);
+    expect(required(await sw.request(new Request("https://chat.example/index.html"))).type).toBe(
+      "error",
+    );
   });
 
   it("serves cached assets and fetches cache misses without storing runtime responses", async () => {
     const sw = worker();
     const request = new Request("https://chat.example/assets/app-abcdef12.js");
-    expect(await (await sw.request(request))!.text()).toBe("cached /assets/app-abcdef12.js");
+    expect(await required(await sw.request(request)).text()).toBe("cached /assets/app-abcdef12.js");
     expect(sw.fetch).not.toHaveBeenCalled();
-    sw.cache.match.mockResolvedValue(undefined);
-    expect(await (await sw.request(request))!.text()).toBe("network");
+    sw.cache.match.mockResolvedValue(cacheMiss);
+    expect(await required(await sw.request(request)).text()).toBe("network");
     expect(sw.cache.put).not.toHaveBeenCalled();
     expect(sw.cache.addAll).not.toHaveBeenCalled();
   });

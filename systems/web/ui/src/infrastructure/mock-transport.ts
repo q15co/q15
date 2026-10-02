@@ -1,15 +1,17 @@
-import streamed from "./fixtures/server/streamed.json";
-import resumed from "./fixtures/server/resumed.json";
-import aborted from "./fixtures/server/aborted.json";
-import historyFixture from "./fixtures/server/history.json";
-import { frame, parseFrame, parsePage } from "./protocol";
-import type { ServerFrame } from "./protocol";
-import type { Transport, TransportEvents } from "./transport";
-import type { Page, Turn } from "./generated/protocol";
+import type { Transport, TransportEvents } from "../application/ports";
+import type { ServerFrame } from "../domain/protocol";
+import type { Page, Turn } from "../generated/protocol";
+
+import { parseFrame, parsePage } from "../domain/protocol";
+import aborted from "../fixtures/server/aborted.json";
+import historyFixture from "../fixtures/server/history.json";
+import resumed from "../fixtures/server/resumed.json";
+import streamed from "../fixtures/server/streamed.json";
+import { frame } from "./envelope";
 
 // The offline preview replays frozen frames with fresh run/event identities.
 export class MockTransport implements Transport {
-  private events?: TransportEvents;
+  private events: TransportEvents | undefined;
   private timers: ReturnType<typeof setTimeout>[] = [];
   private running = false;
   private turn = 42;
@@ -17,11 +19,12 @@ export class MockTransport implements Transport {
   private text = "";
   private queued: { text: string; id: string }[] = [];
   private turns: Turn[] = parsePage(historyFixture).turns;
-  history = async (before: string): Promise<Page> => ({
-    turns: this.turns.filter((t) => before === "0" || BigInt(t.seq) < BigInt(before)),
-    head_seq: String(this.turn),
-    has_more: false,
-  });
+  history = (before: string): Promise<Page> =>
+    Promise.resolve({
+      turns: this.turns.filter((t) => before === "0" || BigInt(t.seq) < BigInt(before)),
+      head_seq: String(this.turn),
+      has_more: false,
+    });
   start(events: TransportEvents) {
     this.events = events;
     events.connection("connected");
@@ -58,7 +61,7 @@ export class MockTransport implements Transport {
     this.running = true;
     this.turn++;
     this.text = text;
-    streamed.slice(1).forEach((value, i) =>
+    streamed.slice(1).forEach((value, i) => {
       this.timers.push(
         setTimeout(
           () => {
@@ -68,8 +71,8 @@ export class MockTransport implements Transport {
           },
           (i + 1) * 400,
         ),
-      ),
-    );
+      );
+    });
   }
   private remap(value: ServerFrame): ServerFrame {
     const event = structuredClone(value);

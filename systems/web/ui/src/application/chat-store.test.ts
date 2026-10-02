@@ -1,13 +1,17 @@
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vite-plus/test";
-import streamed from "./fixtures/server/streamed.json";
-import resumed from "./fixtures/server/resumed.json";
-import history from "./fixtures/server/history.json";
-import failed from "./fixtures/server/failed.json";
-import aborted from "./fixtures/server/aborted.json";
+
+import type { Transport } from "../application/ports";
+import type { Pending } from "../domain/chat";
+
+import { parseFrame, parsePage } from "../domain/protocol";
+import aborted from "../fixtures/server/aborted.json";
+import failed from "../fixtures/server/failed.json";
+import history from "../fixtures/server/history.json";
+import resumed from "../fixtures/server/resumed.json";
+import streamed from "../fixtures/server/streamed.json";
+import { frame } from "../infrastructure/envelope";
+import { required } from "../testing/required";
 import { ChatStore } from "./chat-store";
-import type { Pending } from "./chat-store";
-import { frame, parseFrame, parsePage } from "./protocol";
-import type { Transport } from "./transport";
 type HistoryMock = (before: string, signal?: AbortSignal) => Promise<ReturnType<typeof parsePage>>;
 const empty = { turns: [], head_seq: "43", has_more: false };
 const stores: ChatStore[] = [];
@@ -15,7 +19,9 @@ afterEach(() => {
   for (const store of stores.splice(0)) store.stop();
   vi.useRealTimers();
 });
-function setup(historyFn = vi.fn<HistoryMock>(async (_before: string) => parsePage(empty))) {
+function setup(
+  historyFn = vi.fn<HistoryMock>((_before: string) => Promise.resolve(parsePage(empty))),
+) {
   const transport: Transport = {
     start: vi.fn<Transport["start"]>(),
     stop: vi.fn<Transport["stop"]>(),
@@ -39,7 +45,7 @@ describe("chat state", () => {
     expectTypeOf<Assigned["turn"]>().toEqualTypeOf<string>();
     expectTypeOf<Waiting["turn"]>().toEqualTypeOf<undefined>();
   });
-  it("renders a streamed draft and replaces it with canonical history identities", async () => {
+  it("renders a streamed draft and replaces it with canonical history identities", () => {
     const { store } = setup();
     feed(store, streamed);
     expect(store.getSnapshot().messages[0]?.parts.map((p) => p.part_type)).toEqual([
@@ -64,11 +70,11 @@ describe("chat state", () => {
   it("resets a model attempt and consumes reconnect snapshots without duplicating deltas", () => {
     const { store } = setup();
     feed(store, streamed.slice(0, 7));
-    feed(store, [streamed[4]!]);
+    feed(store, [required(streamed[4])]);
     expect(store.getSnapshot().messages[0]?.parts.find((p) => p.part_type === "text")?.text).toBe(
       "answer",
     );
-    feed(store, [streamed[2]!]);
+    feed(store, [required(streamed[2])]);
     expect(store.getSnapshot().messages[0]?.parts).toEqual([]);
     event(store, "snapshot", {
       msg: { turn: "42", ordinal: -1 },
@@ -85,12 +91,12 @@ describe("chat state", () => {
   it("correlates queue acceptance, allows stop before a turn starts, and preserves a failed draft", () => {
     const { store, transport } = setup();
     expect(store.send("hello")).toBe(true);
-    const id = store.getSnapshot().pending[0]!.id;
+    const id = required(store.getSnapshot().pending[0]).id;
     event(store, "msg.status", { turn: "0", state: "accepted", queued: false, client_msg_id: id });
     store.abort();
     expect(transport.abort).toHaveBeenCalledWith("0");
     store.send("next");
-    const next = store.getSnapshot().pending[1]!.id;
+    const next = required(store.getSnapshot().pending[1]).id;
     event(store, "msg.status", { turn: "42", state: "queued", queued: true, client_msg_id: next });
     expect(store.getSnapshot().pending[1]?.state).toBe("queued");
     vi.mocked(transport.send).mockImplementationOnce(() => {
@@ -102,11 +108,9 @@ describe("chat state", () => {
   it("retains completed tool activity across model loops while replacing retries of the current loop", () => {
     const { store } = setup();
     feed(store, streamed.slice(0, 8));
-    const completed = store
-      .getSnapshot()
-      .messages[0]!.parts.map((p) =>
-        p.part_type === "text" ? { ...p, disposition: "commentary" } : p,
-      );
+    const completed = required(store.getSnapshot().messages[0]).parts.map((p) =>
+      p.part_type === "text" ? { ...p, disposition: "commentary" } : p,
+    );
     const msg = { turn: "42", ordinal: -1 };
     event(store, "snapshot", { msg, seq: "10", kind: "model_start", text: "", loop_turn: 2 });
     expect(store.getSnapshot().messages[0]?.parts).toEqual(completed);
@@ -141,9 +145,9 @@ describe("chat state", () => {
     event(store, "snapshot", { msg, seq: "10", kind: "model_start", text: "", loop_turn: 2 });
     event(store, "delta", { msg, seq: "11", kind: "text", text: "second loop" });
     // A reconnect replays model_start and snapshots from the retained run log.
-    const events = vi.mocked(transport.start).mock.calls[0]![0];
+    const events = required(vi.mocked(transport.start).mock.calls[0])[0];
     events.connection("reconnecting");
-    feed(store, [streamed[2]!]);
+    feed(store, [required(streamed[2])]);
     expect(store.getSnapshot().messages[0]?.parts).toEqual([]);
     feed(store, streamed.slice(3, 8));
     expect(
@@ -173,7 +177,7 @@ describe("chat state", () => {
     const { store, transport } = setup();
     store.start();
     store.send("hello");
-    const events = vi.mocked(transport.start).mock.calls[0]![0];
+    const events = required(vi.mocked(transport.start).mock.calls[0])[0];
     events.connection("reconnecting");
     expect(store.getSnapshot().pending[0]?.state).toBe("uncertain");
     store.stop();
@@ -185,7 +189,7 @@ describe("chat state", () => {
       turn: "0",
       state: "accepted",
       queued: false,
-      client_msg_id: store.getSnapshot().pending[0]!.id,
+      client_msg_id: required(store.getSnapshot().pending[0]).id,
     });
     store.abort();
     expect(transport.abort).toHaveBeenCalledWith("0");
@@ -196,7 +200,7 @@ describe("chat state", () => {
   it("settles an aborted local send even when the backend never persists its turn", async () => {
     const { store } = setup();
     store.send("cancel me");
-    const first = store.getSnapshot().pending[0]!.id;
+    const first = required(store.getSnapshot().pending[0]).id;
     event(store, "turn.start", { turn: "42", msg: { turn: "42", ordinal: -1 } });
     // Acceptance can arrive after the first streaming event.
     event(store, "msg.status", {
@@ -206,7 +210,7 @@ describe("chat state", () => {
       client_msg_id: first,
     });
     store.send("next");
-    const next = store.getSnapshot().pending[1]!.id;
+    const next = required(store.getSnapshot().pending[1]).id;
     event(store, "msg.status", { turn: "42", state: "queued", queued: true, client_msg_id: next });
     feed(store, [aborted]);
     await store.loadHistory(false);
@@ -230,7 +234,7 @@ describe("chat state", () => {
     const { store } = setup(fetch);
     store.send("hello");
     event(store, "turn.start", { turn: "42", msg: { turn: "42", ordinal: -1 } });
-    feed(store, [streamed.at(-1)!]);
+    feed(store, [required(streamed.at(-1))]);
     await vi.advanceTimersByTimeAsync(0);
     expect(store.getSnapshot().pending[0]?.state).toBe("finished");
     expect(store.getSnapshot().messages[0]?.key).toBe("42:-1");
@@ -239,9 +243,13 @@ describe("chat state", () => {
     expect(store.getSnapshot().messages.map((m) => m.key)).toEqual(["42:0", "42:1"]);
   });
   it("prepends older pages, deduplicates history, and finds a message beyond the live window", async () => {
-    const older = { ...history, turns: [{ ...history.turns[0]!, seq: "40" }], has_more: false };
-    const fetch = vi.fn<HistoryMock>(async (before: string) =>
-      parsePage(before === "0" ? history : older),
+    const older = {
+      ...history,
+      turns: [{ ...required(history.turns[0]), seq: "40" }],
+      has_more: false,
+    };
+    const fetch = vi.fn<HistoryMock>((before: string) =>
+      Promise.resolve(parsePage(before === "0" ? history : older)),
     );
     const { store } = setup(fetch);
     await store.loadHistory(false);
@@ -258,7 +266,9 @@ describe("chat state", () => {
     expect(store.getSnapshot().hasMore).toBe(false);
   });
   it("resyncs from completed history rather than an allocated live head", async () => {
-    const { store, transport } = setup(vi.fn<HistoryMock>(async () => parsePage(history)));
+    const { store, transport } = setup(
+      vi.fn<HistoryMock>(() => Promise.resolve(parsePage(history))),
+    );
     event(store, "error", { code: "resync_from_head", ref: "", head_seq: "43" });
     await vi.waitFor(() => expect(transport.sync).toHaveBeenCalledWith("42"));
     expect(store.getSnapshot().cursor).toBe("42");

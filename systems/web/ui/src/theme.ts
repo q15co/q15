@@ -21,7 +21,7 @@ export function applyTheme(theme: Theme) {
 }
 
 export function revealTheme(button: HTMLElement, reduced: boolean, update: () => void) {
-  if (reduced || !document.startViewTransition) {
+  if (reduced || typeof document.startViewTransition !== "function") {
     update();
     return;
   }
@@ -33,8 +33,9 @@ export function revealTheme(button: HTMLElement, reduced: boolean, update: () =>
     Math.max(centerY, innerHeight - centerY),
   );
   const transition = document.startViewTransition(update);
-  void transition.ready
-    .then(() => {
+  const animateReveal = async () => {
+    try {
+      await transition.ready;
       // Honor a preference changed while the browser was taking its snapshots.
       if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
         transition.skipTransition();
@@ -53,8 +54,9 @@ export function revealTheme(button: HTMLElement, reduced: boolean, update: () =>
           pseudoElement: "::view-transition-new(root)",
         },
       );
-    })
-    .catch(() => {
+    } catch {
       /* Overlapping theme changes may skip a snapshot; the palette still updates. */
-    });
+    }
+  };
+  void animateReveal();
 }
