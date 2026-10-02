@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { createChat } from "@shadcn/helpers/ai-sdk";
 import parts from "../fixtures/protocol/parts.json";
 import { ChatStore } from "../chat-store";
 import { parsePage } from "../protocol";
@@ -28,20 +27,13 @@ describe("message rendering", () => {
     expect(screen.getByText("Unsupported part: future_part")).toBeDefined();
     expect(screen.getByText(/do not discard me/)).toBeDefined();
   });
-  it("builds deterministic text and reasoning previews with the shadcn AI SDK helper", () => {
-    const chat = createChat().assistant(({ writer }) => {
-      writer.reasoning("Let me think this through.");
-      writer.text("A **clear** answer.");
-    });
-    const message = chat.get()[0]!;
+  it("renders reasoning and Markdown text from protocol parts", () => {
     render(
       <>
-        {message.parts.map(
-          (part, ordinal) =>
-            (part.type === "text" || part.type === "reasoning") && (
-              <PartView key={ordinal} part={{ ordinal, part_type: part.type, text: part.text }} />
-            ),
-        )}
+        <PartView
+          part={{ ordinal: 0, part_type: "reasoning", text: "Let me think this through." }}
+        />
+        <PartView part={{ ordinal: 1, part_type: "text", text: "A **clear** answer." }} />
       </>,
     );
     expect(screen.getByText("Thinking")).toBeDefined();

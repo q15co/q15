@@ -19,7 +19,6 @@ export function Button({
   const reduced = useMotionPreference();
   return (
     <m.button
-      data-slot="button"
       type={type}
       className={clsx(styles.button, styles[variant], styles[`size${size}`], className)}
       initial={false}

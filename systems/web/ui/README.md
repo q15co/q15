@@ -14,8 +14,8 @@ make ui-dev
 
 Open `http://127.0.0.1:5173/?preview` for an offline fixture preview. The mock transport replays the
 frozen server frames, supports queueing and Stop, and supplies canonical history. It is excluded
-from production builds. Component tests also use the shadcn AI SDK helper to author deterministic
-text/reasoning scenarios. Production speaks q15's versioned WebSocket contract directly.
+from production builds. Component tests use q15 protocol parts directly. Production speaks q15's
+versioned WebSocket contract directly.
 
 For a real backend, set `Q15_WEB_ORIGIN=http://127.0.0.1:5173` on q15-web and open the dev server
 without `?preview`. Its `/ws` and `/api` proxies preserve the browser origin. Authenticate with the
@@ -106,8 +106,9 @@ below 48rem, including when a larger browser font preference increases that thre
 viewports hide decorative copy and the composer footer to preserve room for messages. Browser tests
 cover doubled text, keyboard access, narrow screens and long drafts alongside chat behavior.
 
-The official [Catppuccin palette](https://github.com/catppuccin/palette) supplies Mocha and Latte
-theme tokens. The app follows the system's initial preference and remembers the user's choice. The
+Theme tokens in `src/styles.css` use the official
+[Catppuccin palette](https://github.com/catppuccin/palette) values for Mocha and Latte. The app
+follows the system's initial preference and remembers the user's choice. The
 [Catppuccin style guide](https://github.com/catppuccin/catppuccin/blob/main/docs/style-guide.md)
 defines their roles: Base for the canvas, Mantle for secondary panes, Surface 0 for controls, Text
 for body copy, Subtext for labels, Blue for links and pills, and Green/Yellow/Red for status.
