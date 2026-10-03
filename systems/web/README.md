@@ -80,14 +80,19 @@ Podman, use `podman exec -it CONTAINER /usr/local/bin/q15-web auth ...`.
 Successful sign-in mints a random 256-bit `__Host-q15s` cookie: Secure, HttpOnly, SameSite=Strict,
 Path=/, no Domain. Only its SHA-256 digest persists. The cookie identifies a session but cannot
 authorize any request alone. Before the one WebAuthn sign-in gesture, the browser generates a
-separate ECDSA P-256 key with WebCrypto `extractable: false`. The login challenge records its public
-key, so the assertion authorizes that session key. The server returns a random public binding ID;
-the browser persists that ID and the opaque, non-exportable private `CryptoKey` in IndexedDB. This
-is the only credential-storage exception: cookies remain HttpOnly, and no raw private key, session
-token or transcript enters JavaScript storage, URLs, referrers or application logs. Clearing site
-storage requires another sign-in. Sign out removes the stored key. A passkey assertion is a signed,
-single-use challenge response, not a reusable bearer credential. Login challenges are bound to a
-separate HttpOnly cookie, expire after two minutes and are consumed even on failed verification.
+separate ECDSA P-256 key with WebCrypto `extractable: false`. The WebAuthn challenge is SHA-256 over
+the UTF-8 tag `q15-session-key-v1\n`, 32 fresh random bytes and that key's SPKI DER bytes, in order.
+The server returns the randomness as unpadded base64url `session_key_nonce` alongside `publicKey`
+options. Before invoking the authenticator, the browser verifies the challenge against its own
+public key and refuses missing, malformed or mismatched commitments. With trusted client code, this
+makes the passkey assertion endorse the session key and prevents its substitution in transit. The
+server returns a random public binding ID; the browser persists that ID and the opaque,
+non-exportable private `CryptoKey` in IndexedDB. This is the only credential-storage exception:
+cookies remain HttpOnly, and no raw private key, session token or transcript enters JavaScript
+storage, URLs, referrers or application logs. Clearing site storage requires another sign-in. Sign
+out removes the stored key. A passkey assertion is a signed, single-use challenge response, not a
+reusable bearer credential. Login challenges are bound to a separate HttpOnly cookie, expire after
+two minutes and are consumed even on failed verification.
 
 Every protected HTTP request carries a `Q15-Proof` header, containing Unix seconds, a random 128-bit
 nonce and a raw 64-byte ECDSA/SHA-256 signature, encoded with unpadded base64url. The signed input
@@ -162,10 +167,13 @@ or protection from copying a browser profile. A stolen cookie alone cannot imper
 captured unused proof plus its cookie can race the legitimate request for that exact target within
 its short validity window; nonce checks prevent a second acceptance. Browser/OS/authenticator
 compromise, malicious updates and a malicious TLS terminator are outside this access-control
-guarantee. **Cloudflare terminates TLS and can read chat traffic and cookies. This is not end-to-end
-encryption from Cloudflare.** Model providers also receive prompts by design. Cloudflare Access is
-optional defense in depth, not required by this gate. Tunnel only the public loopback port, never
-the admin socket or bridge; do not configure caching of authenticated responses.
+guarantee. An active edge serving modified JavaScript can remove the commitment check or use the
+session key as a signing oracle; the check does not authenticate application delivery. **Cloudflare
+terminates TLS and can read chat traffic and cookies. This is not end-to-end encryption from
+Cloudflare.** Model providers also receive prompts by design. Cloudflare Access is optional defense
+in depth, not required by this gate. Payload sealing is separate work in
+[#201](https://github.com/q15co/q15/issues/201). Tunnel only the public loopback port, never the
+admin socket or bridge; do not configure caching of authenticated responses.
 
 Active agent stream interruptions retry after one second with the last received **event index**. An
 agent restart invalidates its ephemeral logical session, sends `resync_from_head`, and the next send

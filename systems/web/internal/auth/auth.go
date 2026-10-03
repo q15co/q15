@@ -288,7 +288,11 @@ func (a *Authenticator) signIn(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "sign in refused", http.StatusUnauthorized)
 			return
 		}
+		nonce := randomBytes(32)
+		challenge := append([]byte("q15-session-key-v1\n"), nonce...)
+		commitment := sha256.Sum256(append(challenge, publicKey...))
 		options, data, err := a.webAuthn.BeginDiscoverableLogin(
+			webauthn.WithChallenge(commitment[:]),
 			webauthn.WithUserVerification(protocol.VerificationRequired),
 		)
 		if err != nil {
@@ -304,7 +308,10 @@ func (a *Authenticator) signIn(w http.ResponseWriter, r *http.Request) {
 		cookie(w, challengeCookie, token, ceremonyLifetime)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnauthorized)
-		_ = json.NewEncoder(w).Encode(options)
+		_ = json.NewEncoder(w).Encode(struct {
+			*protocol.CredentialAssertion
+			SessionKeyNonce string `json:"session_key_nonce"`
+		}{options, credentialID(nonce)})
 		return
 	}
 	key := digest(requestToken(r, challengeCookie))

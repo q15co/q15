@@ -152,12 +152,15 @@ The app keeps transcript content and drafts in memory. It never stores messages,
 session cookies in localStorage, IndexedDB, or worker caches. The explicit exception is the
 non-exportable session `CryptoKey` and its public binding ID in IndexedDB, shared by the HTTP/socket
 adapters and the service worker. WebCrypto generates a new ECDSA P-256 key before the single passkey
-sign-in gesture; that challenge binds its public key. Subsequent requests and reconnects sign
-silently. Reloads keep the key; logout deletes it. Injected scripts may use it to sign but cannot
-export private key bytes. Only the theme preference uses localStorage. Resume uses `ready.cursor`
-after replay has been consumed, independently of live event acknowledgements or the allocated
-`head_seq`. An uncertain send is shown explicitly and never resubmitted automatically. Retention
-gaps refresh completed history and send `sync` from a readable turn.
+sign-in gesture. The adapter verifies the WebAuthn challenge's session-key commitment against its
+own public key before invoking the authenticator; malformed or substituted commitments refuse
+sign-in without a gesture. See [the tier README](../README.md#sessions-and-http-policy) for the
+exact hash input and the trusted-client boundary. Subsequent requests and reconnects sign silently.
+Reloads keep the key; logout deletes it. Injected scripts may use it to sign but cannot export
+private key bytes. Only the theme preference uses localStorage. Resume uses `ready.cursor` after
+replay has been consumed, independently of live event acknowledgements or the allocated `head_seq`.
+An uncertain send is shown explicitly and never resubmitted automatically. Retention gaps refresh
+completed history and send `sync` from a readable turn.
 
 Text uses safe Markdown. Each turn groups commentary, reasoning and paired tool calls/results in an
 activity disclosure above the final answer. Disclosures start closed, including during active work,

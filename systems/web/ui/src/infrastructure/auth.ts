@@ -1,7 +1,7 @@
 import type { OwnerAuthentication } from "../application/auth";
 
 import { isRecord } from "../shared/type-guards";
-import { authenticatedFetch, createSessionKey, saveSessionKey } from "./proof";
+import { authenticatedFetch, createSessionKey, encode, saveSessionKey } from "./proof";
 
 export async function hasSession() {
   try {
@@ -41,6 +41,31 @@ function requestOptions(value: unknown): PublicKeyCredentialRequestOptionsJSON {
     userVerification: "required",
     timeout: 120_000,
   };
+}
+
+function decode(value: string) {
+  return Uint8Array.from(atob(value.replaceAll("-", "+").replaceAll("_", "/")), (char) =>
+    Number(char.codePointAt(0)),
+  );
+}
+
+async function committedRequestOptions(value: unknown, publicKey: string) {
+  if (!isRecord(value)) throw new Error("Invalid sign-in options.");
+  const options = requestOptions(value);
+  if (typeof value.session_key_nonce !== "string" || !/^[\w-]{43}$/u.test(value.session_key_nonce))
+    throw new Error("Invalid session key commitment.");
+  const nonce = decode(value.session_key_nonce);
+  if (encode(nonce) !== value.session_key_nonce) throw new Error("Invalid session key commitment.");
+  const prefix = new TextEncoder().encode("q15-session-key-v1\n");
+  const key = decode(publicKey);
+  const message = new Uint8Array(prefix.length + nonce.length + key.length);
+  message.set(prefix);
+  message.set(nonce, prefix.length);
+  message.set(key, prefix.length + nonce.length);
+  const commitment = await crypto.subtle.digest("SHA-256", message);
+  if (options.challenge !== encode(new Uint8Array(commitment)))
+    throw new Error("Session key commitment mismatch. Sign-in was refused.");
+  return options;
 }
 
 function creationOptions(value: unknown): PublicKeyCredentialCreationOptionsJSON {
@@ -93,8 +118,9 @@ export const ownerAuthentication: OwnerAuthentication = {
     )
       throw new Error("Sign-in is unavailable. Try again shortly.");
     const options: unknown = await begin.json();
+    const committedOptions = await committedRequestOptions(options, sessionKey.publicKey);
     const credential = await navigator.credentials.get({
-      publicKey: PublicKeyCredential.parseRequestOptionsFromJSON(requestOptions(options)),
+      publicKey: PublicKeyCredential.parseRequestOptionsFromJSON(committedOptions),
     });
     if (!(credential instanceof PublicKeyCredential)) throw new Error("Sign-in was cancelled.");
     const finish = await post("/auth/login/finish", credential.toJSON());

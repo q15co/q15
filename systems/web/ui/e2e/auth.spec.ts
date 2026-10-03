@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { generateKeyPairSync } from "node:crypto";
 import { request } from "node:http";
 import { join } from "node:path";
 
@@ -81,6 +82,33 @@ test("host enrollment, passkey sign-in, protected data and logout use the real g
     await page.getByLabel("Response to paste into Hermes").inputValue(),
   );
   await admin("/enroll/finish", { id: options.id, response: attestation });
+  const substitutedKey = generateKeyPairSync("ec", { namedCurve: "prime256v1" })
+    .publicKey.export({ type: "spki", format: "der" })
+    .toString("base64url");
+  let finishes = 0;
+  page.on("request", (call) => {
+    if (new URL(call.url()).pathname === "/auth/login/finish") finishes++;
+  });
+  await page.route("**/auth/login", async (route) => {
+    const rewritten = await route.fetch({
+      headers: {
+        ...(await route.request().allHeaders()),
+        Origin: origin,
+        "Sec-Fetch-Site": "same-origin",
+      },
+      postData: JSON.stringify({ public_key: substitutedKey }),
+    });
+    expect(rewritten.status()).toBe(401);
+    expect(rewritten.headers()["content-type"]).toContain("application/json");
+    await route.fulfill({ response: rewritten });
+  });
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(
+    page.getByText("Session key commitment mismatch. Sign-in was refused."),
+  ).toBeVisible();
+  expect(gestures).toBe(0);
+  expect(finishes).toBe(0);
+  await page.unroute("**/auth/login");
   const historyResponse = page.waitForResponse(
     (historyResult) =>
       new URL(historyResult.url()).pathname === "/api/turns" && historyResult.status() === 200,

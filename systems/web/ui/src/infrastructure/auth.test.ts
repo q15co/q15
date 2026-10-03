@@ -1,7 +1,11 @@
+import { createHash } from "node:crypto";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
+import { isRecord } from "../shared/type-guards";
+import { required } from "../testing/required";
 import { sessionKey } from "../testing/session-key";
 import { hasSession, ownerAuthentication } from "./auth";
+import { createSessionKey } from "./proof";
 
 const creation = {
   publicKey: {
@@ -38,8 +42,31 @@ class DeviceCredential implements Credential {
   }
 }
 
-function challengeResponse(value: unknown = assertion) {
-  return Response.json(value, { status: 401 });
+function submittedSessionKey() {
+  const body = required(fetch.mock.calls.at(-1)?.[1]?.body);
+  if (typeof body !== "string") throw new Error("Missing login body.");
+  const input: unknown = JSON.parse(body);
+  if (!isRecord(input) || typeof input.public_key !== "string")
+    throw new Error("Missing session public key.");
+  return input.public_key;
+}
+
+function challengeOptions(publicKey: string) {
+  const nonce = Buffer.alloc(32, 7);
+  const commitment = createHash("sha256")
+    .update("q15-session-key-v1\n")
+    .update(nonce)
+    .update(Buffer.from(publicKey, "base64url"))
+    .digest("base64url");
+  return {
+    ...assertion,
+    publicKey: { ...assertion.publicKey, challenge: commitment },
+    session_key_nonce: nonce.toString("base64url"),
+  };
+}
+
+function challengeResponse(publicKey = submittedSessionKey()) {
+  return Promise.resolve(Response.json(challengeOptions(publicKey), { status: 401 }));
 }
 
 beforeEach(async () => {
@@ -62,7 +89,7 @@ afterEach(() => {
 
 it("signs in using one-time proof, with cookie credentials handled only by the browser", async () => {
   fetch
-    .mockResolvedValueOnce(challengeResponse())
+    .mockImplementationOnce(() => challengeResponse())
     .mockResolvedValueOnce(
       new Response(null, { status: 204, headers: { "Q15-Session": "a".repeat(43) } }),
     );
@@ -74,6 +101,41 @@ it("signs in using one-time proof, with cookie credentials handled only by the b
     body: JSON.stringify({ id: "public-id", type: "public-key" }),
   });
   expect(replace).toHaveBeenCalledWith("/");
+});
+
+it("refuses a challenge committed to a substituted key before the passkey gesture", async () => {
+  const substituted = await createSessionKey();
+  fetch.mockImplementationOnce(() => challengeResponse(substituted.publicKey));
+  await expect(ownerAuthentication.signIn()).rejects.toThrow("commitment mismatch");
+  expect(get).not.toHaveBeenCalled();
+  expect(fetch).toHaveBeenCalledOnce();
+  expect(replace).not.toHaveBeenCalled();
+});
+
+it("refuses missing, malformed and noncanonical commitment nonces before the passkey gesture", async () => {
+  for (const nonce of [
+    undefined,
+    null,
+    32,
+    "",
+    "!",
+    "a".repeat(42),
+    "a".repeat(44),
+    "_".repeat(43),
+  ]) {
+    fetch.mockImplementationOnce(() =>
+      Promise.resolve(
+        Response.json(
+          { ...challengeOptions(submittedSessionKey()), session_key_nonce: nonce },
+          { status: 401 },
+        ),
+      ),
+    );
+    await expect(ownerAuthentication.signIn()).rejects.toThrow("Invalid session key commitment");
+  }
+  expect(get).not.toHaveBeenCalled();
+  expect(fetch.mock.calls.every((call) => call[0] === "/auth/login")).toBe(true);
+  expect(replace).not.toHaveBeenCalled();
 });
 
 it("creates enrollment attestation without making a network request", async () => {
@@ -97,10 +159,10 @@ it("surfaces unavailable, cancelled and refused sign-in without redirecting", as
     await expect(ownerAuthentication.signIn()).rejects.toThrow("unavailable");
   }
   get.mockResolvedValueOnce(null);
-  fetch.mockResolvedValueOnce(challengeResponse());
+  fetch.mockImplementationOnce(() => challengeResponse());
   await expect(ownerAuthentication.signIn()).rejects.toThrow("cancelled");
   fetch
-    .mockResolvedValueOnce(challengeResponse())
+    .mockImplementationOnce(() => challengeResponse())
     .mockResolvedValueOnce(new Response(null, { status: 401 }));
   await expect(ownerAuthentication.signIn()).rejects.toThrow("refused");
   expect(replace).not.toHaveBeenCalled();
@@ -114,7 +176,7 @@ it("rejects malformed sign-in options before invoking the authenticator", async 
     { publicKey: { challenge: "x" } },
     { publicKey: { challenge: "x", rpId: "chat.example" } },
   ]) {
-    fetch.mockResolvedValueOnce(challengeResponse(value));
+    fetch.mockResolvedValueOnce(Response.json(value, { status: 401 }));
     await expect(ownerAuthentication.signIn()).rejects.toThrow("options");
   }
   expect(get).not.toHaveBeenCalled();

@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"io"
@@ -292,6 +293,51 @@ func loginTest(t *testing.T, a *Authenticator, d *authenticator) *http.Cookie {
 		t.Fatalf("finish status %d: %s", w.Code, w.Body)
 	}
 	return findCookie(t, w, sessionCookie)
+}
+
+func TestLoginChallengeCommitsSessionKey(t *testing.T) {
+	a := openTest(t)
+	d := newAuthenticator(t)
+	enrollTest(t, a, d)
+	var previousNonce string
+	for range 2 {
+		w := request(a, "POST", "/auth/login", []byte("{}"))
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("begin status %d", w.Code)
+		}
+		var response struct {
+			SessionKeyNonce string `json:"session_key_nonce"`
+			PublicKey       struct {
+				Challenge string `json:"challenge"`
+			} `json:"publicKey"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+			t.Fatal(err)
+		}
+		nonce, err := base64.RawURLEncoding.DecodeString(response.SessionKeyNonce)
+		if err != nil || len(nonce) != 32 || credentialID(nonce) != response.SessionKeyNonce ||
+			response.SessionKeyNonce == previousNonce {
+			t.Fatal("invalid or reused session key nonce")
+		}
+		previousNonce = response.SessionKeyNonce
+		ceremonyCookie := findCookie(t, w, challengeCookie)
+		c := a.login[digest(ceremonyCookie.Value)]
+		message := append([]byte("q15-session-key-v1\n"), nonce...)
+		commitment := sha256.Sum256(append(message, c.PublicKey...))
+		if response.PublicKey.Challenge != credentialID(commitment[:]) ||
+			c.Data.Challenge != response.PublicKey.Challenge {
+			t.Fatal("login challenge does not commit to the session public key")
+		}
+		w = request(a, "POST", "/auth/login/finish",
+			d.assertion(t, c.Data.Challenge, testOrigin, a.state.Owner, 0x05), ceremonyCookie)
+		if w.Code != http.StatusNoContent {
+			t.Fatalf("finish status %d: %s", w.Code, w.Body)
+		}
+		s := a.state.Sessions[digest(findCookie(t, w, sessionCookie).Value)]
+		if !bytes.Equal(s.PublicKey, c.PublicKey) {
+			t.Fatal("session key changed after its commitment was asserted")
+		}
+	}
 }
 
 func TestOwnerLifecycleAndPersistence(t *testing.T) {
