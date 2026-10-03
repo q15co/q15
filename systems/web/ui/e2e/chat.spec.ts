@@ -12,6 +12,10 @@ import { frame } from "../src/infrastructure/envelope";
 import { parseShellManifest } from "../src/shared/shell-manifest";
 import { required } from "../src/testing/required";
 
+test.beforeEach(async ({ page }) => {
+  await page.route("http://127.0.0.1:4173/auth/session", (route) => route.fulfill({ status: 204 }));
+});
+
 function turn(seq: number) {
   return {
     seq: String(seq),

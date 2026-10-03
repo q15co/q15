@@ -37,6 +37,14 @@ export function shell(): Plugin {
     name: "q15-shell",
     apply: "build",
     enforce: "post",
+    config() {
+      return {
+        build: {
+          assetsInlineLimit: Number.MAX_SAFE_INTEGER,
+          rolldownOptions: { output: { codeSplitting: false } },
+        },
+      };
+    },
     configResolved(resolved) {
       config = resolved;
     },
@@ -44,6 +52,39 @@ export function shell(): Plugin {
       // Vite finishes HTML and dynamic-import preload rewriting in this hook.
       order: "post",
       async handler(_, bundle) {
+        const html = bundle["index.html"];
+        const scripts = Object.values(bundle).filter((entry) => entry.type === "chunk");
+        const styles = Object.values(bundle).filter(
+          (entry) => entry.type === "asset" && entry.fileName.endsWith(".css"),
+        );
+        const script = scripts[0];
+        const style = styles[0];
+        if (
+          !html ||
+          html.type !== "asset" ||
+          typeof html.source !== "string" ||
+          !script ||
+          scripts.length !== 1 ||
+          !style ||
+          style.type !== "asset" ||
+          typeof style.source !== "string" ||
+          styles.length !== 1
+        )
+          throw new Error("Expected a self-contained UI shell");
+        const inlineCSS = style.source;
+        html.source = html.source
+          .replaceAll(
+            /<script[^>]*src="[^"]*"[^>]*><\/script>/gu,
+            () =>
+              `<script type="module" nonce="__Q15_NONCE__">${script.code.replaceAll(/<\/script/giu, "\\u003c/script")}</script>`,
+          )
+          .replaceAll(
+            /<link[^>]*rel="stylesheet"[^>]*>/gu,
+            () =>
+              `<style nonce="__Q15_NONCE__">${inlineCSS.replaceAll(/<\/style/giu, "\\3c /style")}</style>`,
+          );
+        delete bundle[script.fileName];
+        delete bundle[style.fileName];
         const paths = [
           "/index.html",
           "/manifest.webmanifest",
@@ -58,7 +99,7 @@ export function shell(): Plugin {
         for (const path of paths) {
           digest.update(path);
           const entry = bundle[path.slice(1)];
-          if (entry) digest.update(entry.type === "chunk" ? entry.code : entry.source);
+          if (entry?.type === "asset") digest.update(entry.source);
           else digest.update(readFileSync(resolve(config.publicDir, path.slice(1))));
         }
         const version = digest.digest("hex").slice(0, 16);

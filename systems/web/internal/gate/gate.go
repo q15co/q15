@@ -3,7 +3,7 @@ package gate
 
 import (
 	"context"
-	"crypto/subtle"
+	"crypto/rand"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -26,49 +26,30 @@ func PrincipalFrom(ctx context.Context) Principal {
 	return value
 }
 
-// Authorizer is the middleware seam replaced by the later authentication slice.
+// Authorizer supplies identity and scope before a handler can reach the bridge.
 type Authorizer interface {
 	RequireScope(string, http.Handler) http.Handler
 }
 
-// TemporaryToken grants only the single owner's chat scope.
-type TemporaryToken struct{ token string }
-
-// NewTemporaryToken refuses an empty gate rather than starting an open server.
-func NewTemporaryToken(token string) (*TemporaryToken, error) {
-	if strings.TrimSpace(token) == "" {
-		return nil, fmt.Errorf("Q15_WEB_TOKEN is required")
-	}
-	return &TemporaryToken{token: token}, nil
+// SessionChecker revalidates authorization after a WebSocket upgrade.
+type SessionChecker interface {
+	SessionValid(context.Context) bool
 }
 
-// RequireScope accepts a bearer token or browser-native Basic auth (q15/token).
-// No query parameter, WebSocket subprotocol or JS-readable cookie holds a token.
-func (g *TemporaryToken) RequireScope(scope string, next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store")
-		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if token == r.Header.Get("Authorization") {
-			token = ""
-		}
-		if username, password, ok := r.BasicAuth(); ok && username == "q15" {
-			token = password
-		}
-		// This temporary gate compares the environment token itself; it is not
-		// a password database or a password-hashing scheme. Equal-length tokens
-		// are compared in constant time without revealing matching prefixes.
-		if token == "" || subtle.ConstantTimeCompare([]byte(token), []byte(g.token)) != 1 {
-			w.Header().Set("WWW-Authenticate", `Basic realm="q15-web", charset="UTF-8"`)
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		if scope != "chat" {
-			http.Error(w, "forbidden", http.StatusForbidden)
-			return
-		}
-		r = r.WithContext(WithPrincipal(r.Context(), Principal{ID: "owner"}))
-		next.ServeHTTP(w, r)
-	})
+// ServeShell uses the same compiled UI for locked and authenticated navigation.
+// Inlining its bootstrap allows a 401 response without exposing static routes.
+func ServeShell(w http.ResponseWriter, shell []byte, status int) {
+	nonce := rand.Text()
+	csp := w.Header().Get("Content-Security-Policy")
+	csp = strings.Replace(csp, "script-src 'self'", "script-src 'nonce-"+nonce+"'", 1)
+	csp = strings.Replace(csp, "style-src 'self'", "style-src 'nonce-"+nonce+"'", 1)
+	csp = strings.Replace(csp, "font-src 'self'", "font-src 'self' data:", 1)
+	csp += "; worker-src 'self'"
+	w.Header().Set("Content-Security-Policy", csp)
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	_, _ = w.Write([]byte(strings.ReplaceAll(string(shell), "__Q15_NONCE__", nonce)))
 }
 
 // ValidateOrigin validates an exact origin; Host and forwarded headers cannot

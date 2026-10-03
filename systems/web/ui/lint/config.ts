@@ -60,6 +60,7 @@ const browser = [
   "../shared/**",
   "../generated/**",
   "../components/**",
+  "../theme",
   "react",
   "react-dom",
   "react-dom/**",

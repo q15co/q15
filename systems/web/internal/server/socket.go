@@ -32,11 +32,12 @@ type socketConn struct {
 	cancel      context.CancelFunc
 	queue       chan []byte
 	queuedBytes atomic.Int64
+	valid       func() bool
 }
 
 func (c *socketConn) enqueue(frame protocol.Frame) bool {
 	data, err := json.Marshal(frame)
-	if err != nil || c.ctx.Err() != nil {
+	if err != nil || c.ctx.Err() != nil || (c.valid != nil && !c.valid()) {
 		return false
 	}
 	if c.queuedBytes.Add(int64(len(data))) > maxQueueBytes {
@@ -59,11 +60,23 @@ func (c *socketConn) write() {
 	defer func() { _ = c.conn.CloseNow() }()
 	ticker := time.NewTicker(HeartbeatInterval)
 	defer ticker.Stop()
+	authTicker := time.NewTicker(time.Second)
+	defer authTicker.Stop()
 	for {
+		if c.valid != nil && !c.valid() {
+			_ = c.conn.Close(websocket.StatusCode(4401), "session expired or revoked")
+			return
+		}
 		select {
 		case <-c.ctx.Done():
 			return
+		case <-authTicker.C:
+			continue
 		case data := <-c.queue:
+			if c.valid != nil && !c.valid() {
+				_ = c.conn.Close(websocket.StatusCode(4401), "session expired or revoked")
+				return
+			}
 			c.queuedBytes.Add(-int64(len(data)))
 			ctx, cancel := context.WithTimeout(c.ctx, writeTimeout)
 			err := c.conn.Write(ctx, websocket.MessageText, data)
@@ -107,6 +120,9 @@ func (s *Server) socket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c := &socketConn{conn: conn, ctx: ctx, cancel: cancel, queue: make(chan []byte, maxQueueFrames)}
+	if checker, ok := s.config.Authorizer.(gate.SessionChecker); ok {
+		c.valid = func() bool { return checker.SessionValid(r.Context()) }
+	}
 	done := make(chan struct{})
 	go func() { defer close(done); c.write() }()
 	defer func() { cancel(); <-done }()
@@ -125,6 +141,10 @@ func (s *Server) socket(w http.ResponseWriter, r *http.Request) {
 		}
 		kind, data, err := conn.Read(readCtx)
 		if err != nil {
+			return
+		}
+		if c.valid != nil && !c.valid() {
+			_ = conn.Close(websocket.StatusCode(4401), "session expired or revoked")
 			return
 		}
 		var frame protocol.Frame

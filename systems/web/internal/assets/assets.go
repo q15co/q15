@@ -11,6 +11,8 @@ import (
 	"path"
 	"regexp"
 	"strings"
+
+	"github.com/q15co/q15/systems/web/internal/gate"
 )
 
 //go:embed all:dist
@@ -63,6 +65,15 @@ func (h *Handler) Close() error {
 	return nil
 }
 
+// Shell returns the compiled UI used for authenticated and 401 navigations.
+func (h *Handler) Shell() ([]byte, error) {
+	data, err := fs.ReadFile(h.files, "index.html")
+	if err != nil || !bytes.Contains(data, []byte("__Q15_NONCE__")) {
+		return nil, fmt.Errorf("web bundle must contain a compiled inline UI shell")
+	}
+	return data, nil
+}
+
 // ServeHTTP serves files, with SPA fallback only for non-API routes in a real bundle.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -102,6 +113,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	data, err := fs.ReadFile(h.files, name)
 	if err != nil {
 		http.NotFound(w, r)
+		return
+	}
+	if name == "index.html" && bytes.Contains(data, []byte("__Q15_NONCE__")) {
+		gate.ServeShell(w, data, http.StatusOK)
 		return
 	}
 	info, err = fs.Stat(h.files, name)

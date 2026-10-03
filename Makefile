@@ -56,6 +56,10 @@ build-web-image:
 test-web: project-setup
 	cd $(WEB_MOD_DIR) && CGO_ENABLED=0 $(GO) test $(TEST_FLAGS) ./...
 
+.PHONY: ui-auth-test-server
+ui-auth-test-server:
+	cd $(WEB_MOD_DIR) && $(GO) run ./internal/auth/testserver
+
 project-setup:
 	./scripts/project-setup.sh
 

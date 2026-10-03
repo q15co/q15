@@ -54,6 +54,10 @@ jobs:
           node-version: ${{ steps.versions.outputs.node }}
           cache: pnpm
           cache-dependency-path: systems/web/ui/pnpm-lock.yaml
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+          cache: true
       - name: Check package pins
         run: |
           source scripts/tool-versions.sh
