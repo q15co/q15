@@ -93,7 +93,7 @@ async function worker(mode: "source" | "compiled") {
 
 afterEach(() => vi.unstubAllGlobals());
 
-async function shellBundle(content: string) {
+async function shellBundle(content: string, scriptEndTag = "</script>") {
   const result = await build({
     root: resolve("."),
     configFile: false,
@@ -102,7 +102,11 @@ async function shellBundle(content: string) {
       shell(),
       {
         name: "test-html",
-        transformIndexHtml: (html) => html.replace("</head>", `${content}</head>`),
+        transformIndexHtml: {
+          order: "post",
+          handler: (html) =>
+            html.replace("</head>", `${content}</head>`).replace("</script>", scriptEndTag),
+        },
       },
     ],
     build: { write: false },
@@ -136,6 +140,19 @@ it("builds an exact shell manifest and changes its cache version when HTML chang
   expect(changed.manifest.paths).toEqual(original.manifest.paths);
   expect(changed.manifest.version).not.toBe(original.manifest.version);
 });
+
+it.each(["</script >", "</SCRIPT >", '</script foo="bar">'])(
+  "inlines the module when HTML uses the browser-accepted end tag %s",
+  async (endTag) => {
+    const bundle = await shellBundle("", endTag);
+    const html = required(bundle.output.find((entry) => entry.fileName === "index.html"));
+    if (html.type !== "asset" || typeof html.source !== "string")
+      throw new Error("Expected a shell HTML asset");
+    expect(html.source).toContain('<script type="module" nonce="__Q15_NONCE__">');
+    expect(html.source).not.toContain(endTag);
+    expect(html.source).not.toContain('src="/assets/');
+  },
+);
 
 describe.each(["source", "compiled"] satisfies ("source" | "compiled")[])(
   "%s shell-only PWA",

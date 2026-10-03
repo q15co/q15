@@ -74,7 +74,7 @@ export function shell(): Plugin {
         const inlineCSS = style.source;
         html.source = html.source
           .replaceAll(
-            /<script[^>]*src="[^"]*"[^>]*><\/script>/gu,
+            /<script\b[^>]*src="[^"]*"[^>]*>\s*<\/script\b[^>]*>/giu,
             () =>
               `<script type="module" nonce="__Q15_NONCE__">${script.code.replaceAll(/<\/script/giu, "\\u003c/script")}</script>`,
           )
