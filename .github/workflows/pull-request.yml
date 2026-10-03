@@ -137,6 +137,9 @@ jobs:
       - name: Run repo verification
         run: make verify
 
+      - name: Check reachable Go vulnerabilities
+        run: make vulncheck
+
       - name: Validate GoReleaser config
         uses: goreleaser/goreleaser-action@v7
         with:
