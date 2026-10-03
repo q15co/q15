@@ -173,7 +173,11 @@ Open `http://localhost:8080`, then follow the host CLI enrollment instructions i
 [the web README](/systems/web/README.md#enroll-sign-in-and-revoke). Set `Q15_WEB_ORIGIN` to your
 exact HTTPS origin before enrolling production credentials. The local default is
 `http://localhost:8080`; remote HTTP origins fail startup. Credentials and sessions are bound to the
-configured origin.
+configured origin. A session cookie alone grants no access: each HTTP request and socket upgrade
+requires a fresh proof from a separate, non-exportable browser session key. Reloads reuse that key
+without a passkey gesture. See [session policy](/systems/web/README.md#sessions-and-http-policy) for
+proof binding, freshness, replay limits and the IndexedDB exception. Upgrading a version 1 auth
+store preserves devices but invalidates old bearer sessions; users sign in again.
 
 The `q15_web_state` named volume mounts at `/var/lib/q15-web` in **q15-web only**. The image seeds
 it with UID 65532, GID 1000 and mode 0700. It holds the 0600 auth state and admin socket. Preserve

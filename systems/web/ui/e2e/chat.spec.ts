@@ -13,6 +13,36 @@ import { parseShellManifest } from "../src/shared/shell-manifest";
 import { required } from "../src/testing/required";
 
 test.beforeEach(async ({ page }) => {
+  await page.route("**/session-key-setup", (route) =>
+    route.fulfill({ contentType: "text/html", body: "<!doctype html><title>Setup</title>" }),
+  );
+  await page.goto("/session-key-setup");
+  await page.evaluate(async () => {
+    const pair = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, false, [
+      "sign",
+      "verify",
+    ]);
+    await new Promise<void>((resolve, reject) => {
+      const request = indexedDB.open("q15-session-key", 1);
+      request.addEventListener("upgradeneeded", () => {
+        request.result.createObjectStore("signer");
+      });
+      request.addEventListener("error", () => reject(new Error("Session setup failed")));
+      request.addEventListener("success", () => {
+        const db = request.result;
+        const transaction = db.transaction("signer", "readwrite");
+        transaction
+          .objectStore("signer")
+          .put({ key: pair.privateKey, binding: "a".repeat(43) }, "current");
+        transaction.addEventListener("complete", () => {
+          db.close();
+          resolve();
+        });
+        transaction.addEventListener("error", () => reject(new Error("Session setup failed")));
+      });
+    });
+  });
+  await page.route("**/auth/worker", (route) => route.fulfill({ status: 204 }));
   await page.route("http://127.0.0.1:4173/auth/session", (route) => route.fulfill({ status: 204 }));
 });
 

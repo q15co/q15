@@ -1,5 +1,7 @@
 import type { ShellManifest } from "../src/shared/shell-manifest";
 
+import { requestProof } from "../src/infrastructure/proof";
+
 declare const self: ServiceWorkerGlobalScope;
 // Vite injects the completed build's exact shell allow-list and content digest.
 declare const __SHELL__: ShellManifest;
@@ -9,7 +11,17 @@ const shell = new Set(manifest.paths);
 const cacheName = `q15-shell-${manifest.version}`;
 
 self.addEventListener("install", (event) => {
-  event.waitUntil(caches.open(cacheName).then((cache) => cache.addAll(manifest.paths)));
+  event.waitUntil(
+    caches.open(cacheName).then((cache) =>
+      Promise.all(
+        manifest.paths.map(async (path) => {
+          const response = await signedFetch(new Request(new URL(path, self.location.origin)));
+          if (!response.ok) throw new Error("Shell authentication failed.");
+          await cache.put(path, response);
+        }),
+      ),
+    ),
+  );
 });
 
 self.addEventListener("activate", (event) => {
@@ -22,13 +34,31 @@ self.addEventListener("activate", (event) => {
             .filter((key) => key.startsWith("q15-shell-") && key !== cacheName)
             .map((key) => caches.delete(key)),
         ),
-      ),
+      )
+      .then(() => self.clients.claim()),
   );
 });
 
+async function signedFetch(request: Request) {
+  const url = new URL(request.url);
+  const headers = new Headers(request.headers);
+  headers.set(
+    "Q15-Proof",
+    await requestProof(request.method, `${url.pathname}${url.search}`, url.origin),
+  );
+  return fetch(
+    new Request(request, {
+      headers,
+      cache: "no-store",
+      credentials: "same-origin",
+      mode: "same-origin",
+    }),
+  );
+}
+
 async function navigation(request: Request) {
   try {
-    return await fetch(request);
+    return await signedFetch(request);
   } catch {
     const cache = await caches.open(cacheName);
     return (await cache.match("/index.html")) ?? Response.error();
@@ -37,7 +67,7 @@ async function navigation(request: Request) {
 
 async function asset(request: Request, path: string) {
   const cache = await caches.open(cacheName);
-  return (await cache.match(path)) ?? fetch(request);
+  return (await cache.match(path)) ?? signedFetch(request);
 }
 
 self.addEventListener("fetch", (event) => {

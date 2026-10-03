@@ -7,6 +7,8 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"io"
@@ -15,7 +17,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -142,17 +146,38 @@ func enrollTest(t *testing.T, a *Authenticator, d *authenticator) string {
 	return credentialID(d.id)
 }
 
+var testSessionKeys sync.Map
+
 func request(
 	a *Authenticator,
 	method, path string,
 	body []byte,
 	cookies ...*http.Cookie,
 ) *httptest.ResponseRecorder {
+	var sessionPrivate *ecdsa.PrivateKey
+	if path == "/auth/login" && string(body) == "{}" {
+		var err error
+		sessionPrivate, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			panic(err)
+		}
+		public, err := x509.MarshalPKIXPublicKey(&sessionPrivate.PublicKey)
+		if err != nil {
+			panic(err)
+		}
+		body, err = json.Marshal(map[string]string{"public_key": credentialID(public)})
+		if err != nil {
+			panic(err)
+		}
+	}
 	r := httptest.NewRequest(method, path, bytes.NewReader(body))
 	r.Header.Set("Origin", testOrigin)
 	r.Header.Set("Sec-Fetch-Site", "same-origin")
 	for _, cookie := range cookies {
 		r.AddCookie(cookie)
+		if cookie.Name == sessionCookie {
+			signTestRequest(a, r, cookie)
+		}
 	}
 	w := httptest.NewRecorder()
 	gate.Headers(testOrigin, a.RequireScope("chat", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -162,7 +187,48 @@ func request(
 		w.WriteHeader(http.StatusNoContent)
 	}))).
 		ServeHTTP(w, r)
+	if sessionPrivate != nil {
+		for _, c := range w.Result().Cookies() {
+			if c.Name == challengeCookie {
+				testSessionKeys.Store(c.Value, sessionPrivate)
+			}
+		}
+	}
+	if path == "/auth/login/finish" && w.Code == 204 {
+		for _, challenge := range cookies {
+			if challenge.Name != challengeCookie {
+				continue
+			}
+			key, ok := testSessionKeys.Load(challenge.Value)
+			if !ok {
+				panic("missing test session key")
+			}
+			for _, c := range w.Result().Cookies() {
+				if c.Name == sessionCookie {
+					testSessionKeys.Store(c.Value, key)
+				}
+			}
+		}
+	}
 	return w
+}
+
+func signTestRequest(a *Authenticator, r *http.Request, cookie *http.Cookie) {
+	value, ok := testSessionKeys.Load(cookie.Value)
+	if !ok {
+		return
+	}
+	key := value.(*ecdsa.PrivateKey)
+	stamp := strconv.FormatInt(a.now().Unix(), 10)
+	nonce := credentialID(randomBytes(16))
+	s := a.state.Sessions[digest(cookie.Value)]
+	hash := sha256.Sum256([]byte(proofMessage(a.origin, s.Binding, r, stamp, nonce)))
+	x, y, err := ecdsa.Sign(rand.Reader, key, hash[:])
+	if err != nil {
+		panic(err)
+	}
+	signature := append(x.FillBytes(make([]byte, 32)), y.FillBytes(make([]byte, 32))...)
+	r.Header.Set(proofHeader, stamp+"."+nonce+"."+credentialID(signature))
 }
 
 func findCookie(t *testing.T, w *httptest.ResponseRecorder, name string) *http.Cookie {
@@ -227,6 +293,51 @@ func loginTest(t *testing.T, a *Authenticator, d *authenticator) *http.Cookie {
 		t.Fatalf("finish status %d: %s", w.Code, w.Body)
 	}
 	return findCookie(t, w, sessionCookie)
+}
+
+func TestLoginChallengeCommitsSessionKey(t *testing.T) {
+	a := openTest(t)
+	d := newAuthenticator(t)
+	enrollTest(t, a, d)
+	var previousNonce string
+	for range 2 {
+		w := request(a, "POST", "/auth/login", []byte("{}"))
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("begin status %d", w.Code)
+		}
+		var response struct {
+			SessionKeyNonce string `json:"session_key_nonce"`
+			PublicKey       struct {
+				Challenge string `json:"challenge"`
+			} `json:"publicKey"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+			t.Fatal(err)
+		}
+		nonce, err := base64.RawURLEncoding.DecodeString(response.SessionKeyNonce)
+		if err != nil || len(nonce) != 32 || credentialID(nonce) != response.SessionKeyNonce ||
+			response.SessionKeyNonce == previousNonce {
+			t.Fatal("invalid or reused session key nonce")
+		}
+		previousNonce = response.SessionKeyNonce
+		ceremonyCookie := findCookie(t, w, challengeCookie)
+		c := a.login[digest(ceremonyCookie.Value)]
+		message := append([]byte("q15-session-key-v1\n"), nonce...)
+		commitment := sha256.Sum256(append(message, c.PublicKey...))
+		if response.PublicKey.Challenge != credentialID(commitment[:]) ||
+			c.Data.Challenge != response.PublicKey.Challenge {
+			t.Fatal("login challenge does not commit to the session public key")
+		}
+		w = request(a, "POST", "/auth/login/finish",
+			d.assertion(t, c.Data.Challenge, testOrigin, a.state.Owner, 0x05), ceremonyCookie)
+		if w.Code != http.StatusNoContent {
+			t.Fatalf("finish status %d: %s", w.Code, w.Body)
+		}
+		s := a.state.Sessions[digest(findCookie(t, w, sessionCookie).Value)]
+		if !bytes.Equal(s.PublicKey, c.PublicKey) {
+			t.Fatal("session key changed after its commitment was asserted")
+		}
+	}
 }
 
 func TestOwnerLifecycleAndPersistence(t *testing.T) {
@@ -295,6 +406,7 @@ func TestPublicRouteAndMutationBoundary(t *testing.T) {
 		for _, path := range []string{"/auth/login", "/auth/login/finish", "/auth/logout", "/api/mutation"} {
 			r := httptest.NewRequest("POST", path, strings.NewReader("{}"))
 			r.AddCookie(cookie)
+			signTestRequest(a, r, cookie)
 			if test.origin != "" {
 				r.Header.Set("Origin", test.origin)
 			}
@@ -311,6 +423,7 @@ func TestPublicRouteAndMutationBoundary(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("GET", "/", nil)
 	r.AddCookie(cookie)
+	signTestRequest(a, r, cookie)
 	a.RequireScope("console", http.NotFoundHandler()).ServeHTTP(w, r)
 	if w.Code != 403 {
 		t.Fatal("chat gained console")
@@ -408,7 +521,7 @@ func TestEnrollmentRestrictionsAndFailClosed(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(a.directory, "auth.json"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	if request(a, "POST", "/auth/logout", nil, cookie).Code != 503 ||
+	if request(a, "POST", "/auth/logout", nil, cookie).Code != 401 ||
 		request(a, "GET", "/", nil, cookie).Code != 401 {
 		t.Fatal("failed persistence did not close authorization")
 	}
