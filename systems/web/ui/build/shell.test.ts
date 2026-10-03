@@ -1,3 +1,4 @@
+import { webcrypto } from "node:crypto";
 // @vitest-environment node
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -7,6 +8,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vite-plus/test";
 
 import { parseShellManifest } from "../src/shared/shell-manifest";
 import { required } from "../src/testing/required";
+import { sessionKey } from "../src/testing/session-key";
 import { buildWorker, shell } from "./shell";
 
 const paths = ["/index.html", "/assets/app-abcdef12.js"];
@@ -22,6 +24,7 @@ interface WorkerEvent {
 const cacheMiss: Response | undefined = undefined;
 
 async function worker(mode: "source" | "compiled") {
+  const signer = await sessionKey();
   const handlers = new Map<string, (event: WorkerEvent) => void>();
   const cache = {
     addAll: vi.fn<(paths: string[]) => Promise<void>>().mockResolvedValue(),
@@ -51,6 +54,13 @@ async function worker(mode: "source" | "compiled") {
     fetch,
     URL,
     Response,
+    Request,
+    Headers,
+    indexedDB: signer.indexedDB,
+    crypto: webcrypto,
+    CryptoKey: signer.key.constructor,
+    TextEncoder,
+    btoa,
   };
   if (mode === "compiled") runInNewContext(source, environment);
   else {
@@ -177,9 +187,25 @@ describe.each(["source", "compiled"] satisfies ("source" | "compiled")[])(
       const sw = await worker(mode);
       await sw.lifecycle("install");
       expect(sw.caches.open).toHaveBeenCalledWith(cacheName);
-      expect(sw.cache.addAll).toHaveBeenCalledWith(paths);
+      expect(
+        sw.cache.put.mock.calls
+          .map((call) =>
+            typeof call[0] === "string"
+              ? call[0]
+              : new URL(call[0] instanceof Request ? call[0].url : call[0]).pathname,
+          )
+          .toSorted(),
+      ).toEqual(paths.toSorted());
+      expect(sw.fetch).toHaveBeenCalledTimes(paths.length);
       await sw.lifecycle("activate");
       expect(sw.caches.delete.mock.calls).toEqual([["q15-shell-old"]]);
+    });
+
+    it("refuses to cache unauthenticated installation responses", async () => {
+      const sw = await worker(mode);
+      sw.fetch.mockResolvedValue(new Response("unauthorized", { status: 401 }));
+      await expect(sw.lifecycle("install")).rejects.toThrow("Shell authentication failed");
+      expect(sw.cache.put).not.toHaveBeenCalled();
     });
 
     it("does not intercept API, sockets, media, query strings, other origins or writes", async () => {

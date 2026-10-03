@@ -78,10 +78,37 @@ Podman, use `podman exec -it CONTAINER /usr/local/bin/q15-web auth ...`.
 ## Sessions and HTTP policy
 
 Successful sign-in mints a random 256-bit `__Host-q15s` cookie: Secure, HttpOnly, SameSite=Strict,
-Path=/, no Domain. Only its SHA-256 digest persists. No private key or session token is exposed to
-JavaScript, browser storage, URLs, referrers or application logs. A passkey assertion is a signed,
+Path=/, no Domain. Only its SHA-256 digest persists. The cookie identifies a session but cannot
+authorize any request alone. Before the one WebAuthn sign-in gesture, the browser generates a
+separate ECDSA P-256 key with WebCrypto `extractable: false`. The login challenge records its public
+key, so the assertion authorizes that session key. The server returns a random public binding ID;
+the browser persists that ID and the opaque, non-exportable private `CryptoKey` in IndexedDB. This
+is the only credential-storage exception: cookies remain HttpOnly, and no raw private key, session
+token or transcript enters JavaScript storage, URLs, referrers or application logs. Clearing site
+storage requires another sign-in. Sign out removes the stored key. A passkey assertion is a signed,
 single-use challenge response, not a reusable bearer credential. Login challenges are bound to a
 separate HttpOnly cookie, expire after two minutes and are consumed even on failed verification.
+
+Every protected HTTP request carries a `Q15-Proof` header, containing Unix seconds, a random 128-bit
+nonce and a raw 64-byte ECDSA/SHA-256 signature, encoded with unpadded base64url. The signed input
+is the newline-separated version tag `q15-proof-v1`, configured origin, public session binding ID,
+transport (`http` or `ws`), method, escaped path plus exact query, timestamp and nonce. Proofs
+expire 60 seconds after their timestamp; timestamps may be at most five seconds ahead of the server.
+The server atomically persists each consumed nonce before dispatch and rejects reuse, including
+after restart. Each session retains at most 256 unexpired nonces; a full table refuses new proofs
+until entries expire. Expired entries are removed on the next successful write. Invalid proofs
+return 401 without changing session state. This binds the method and request target, not the body.
+
+Native WebSocket upgrades offer `q15-auth` plus `q15-proof.<proof>` in `Sec-WebSocket-Protocol`,
+because the browser socket API cannot set custom headers. The server selects only `q15-auth`; proofs
+never enter URLs or the versioned frame contract. Reconnects generate fresh proofs without another
+authenticator gesture. The service worker signs online navigation and shell-cache fetches. Its
+initial script fetch cannot set headers either: an authenticated `POST /auth/worker` places an
+independently signed, single-use `GET /sw.js` proof in a short-lived HttpOnly `__Host-q15w` cookie.
+That cookie is accepted only for that exact GET and is cleared on use. No public worker route is
+added. Before a worker controls the page, navigation still returns the locked shell with 401; its
+script proves `/auth/session` before rendering chat. If worker installation is unavailable, chat
+continues and reloads use the same proof bootstrap.
 
 Sessions expire server-side after **12 hours**, with no sliding renewal. Sign out deletes the server
 record and cookie. Sessions grant `chat` only; `console` is refused, including for the owner. A
@@ -108,13 +135,16 @@ Basic, bearer-token, query-token or proxy-identity fallback.
 
 ## State, limits and trust
 
-`auth.json` (0600) stores the random owner handle, WebAuthn public credentials/counters and hashed
-sessions. Atomic writes and directory sync precede acknowledgment; a persistence error closes the
-running authorizer. An exclusive file lock prevents multiple writers. Restart retains credentials
-and unexpired sessions, and drops pending ceremonies. The format is versioned; unsupported formats
-fail startup. Persist the directory across image updates; back it up privately. Restoring an old
-backup can restore previously revoked devices/sessions: revoke them again before exposing service.
-Deleting the store removes all access and requires host enrollment again.
+`auth.json` (0600) stores the random owner handle, WebAuthn public credentials/counters, hashed
+sessions, session public keys/binding IDs and bounded nonce reuse records. Atomic writes and
+directory sync precede acknowledgment; a persistence error closes the running authorizer. An
+exclusive file lock prevents multiple writers. Restart retains credentials and unexpired sessions,
+and drops pending ceremonies. The format is versioned; unsupported formats fail startup. Version 1
+stores migrate to version 2 while preserving enrolled devices and discarding all bearer sessions;
+users sign in once after the upgrade. Persist the directory across image updates; back it up
+privately. Restoring an old backup can restore previously revoked devices/sessions: revoke them
+again before exposing service. Deleting the store removes all access and requires host enrollment
+again.
 
 The limits are 32 devices, 128 sessions, 64 pending login challenges, five-minute enrollment
 ceremonies, 64 KiB ceremony input and a 4 MiB state file. Expired sessions are pruned on writes.
@@ -125,13 +155,17 @@ Logs do not contain cookies, assertions, bodies or transcript data. Configure ho
 separately.
 
 Host administrators and the web process remain trusted: access to the admin socket or writable store
-can enroll an identity. The agent has neither mount. An authenticated XSS can act through the
-HttpOnly cookie; it cannot read it. Browser/OS/authenticator compromise, malicious updates and a
-malicious TLS terminator are outside this access-control guarantee. **Cloudflare terminates TLS and
-can read chat traffic and cookies. This is not end-to-end encryption from Cloudflare.** Model
-providers also receive prompts by design. Cloudflare Access is optional defense in depth, not
-required by this gate. Tunnel only the public loopback port, never the admin socket or bridge; do
-not configure caching of authenticated responses.
+can enroll an identity. The agent has neither mount. An authenticated XSS can use the session key as
+a signing oracle and act as the user, but cannot read/export its private material through WebCrypto
+or read the HttpOnly cookie. Non-exportability is a browser API guarantee, not hardware attestation
+or protection from copying a browser profile. A stolen cookie alone cannot impersonate the device. A
+captured unused proof plus its cookie can race the legitimate request for that exact target within
+its short validity window; nonce checks prevent a second acceptance. Browser/OS/authenticator
+compromise, malicious updates and a malicious TLS terminator are outside this access-control
+guarantee. **Cloudflare terminates TLS and can read chat traffic and cookies. This is not end-to-end
+encryption from Cloudflare.** Model providers also receive prompts by design. Cloudflare Access is
+optional defense in depth, not required by this gate. Tunnel only the public loopback port, never
+the admin socket or bridge; do not configure caching of authenticated responses.
 
 Active agent stream interruptions retry after one second with the last received **event index**. An
 agent restart invalidates its ephemeral logical session, sends `resync_from_head`, and the next send

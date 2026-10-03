@@ -53,6 +53,10 @@ test("host enrollment, passkey sign-in, protected data and logout use the real g
       automaticPresenceSimulation: true,
     },
   });
+  let gestures = 0;
+  cdp.on("WebAuthn.credentialAsserted", () => {
+    gestures++;
+  });
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   const origin = "http://localhost:4184";
@@ -77,9 +81,57 @@ test("host enrollment, passkey sign-in, protected data and logout use the real g
     await page.getByLabel("Response to paste into Hermes").inputValue(),
   );
   await admin("/enroll/finish", { id: options.id, response: attestation });
+  const historyResponse = page.waitForResponse(
+    (historyResult) =>
+      new URL(historyResult.url()).pathname === "/api/turns" && historyResult.status() === 200,
+  );
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(page.getByRole("button", { name: "Sign out", exact: true })).toBeVisible();
-  expect((await context.request.get(origin + "/api/turns")).status()).toBe(200);
+  const history = await historyResponse;
+  const capturedProof = required(history.request().headers()["q15-proof"]);
+  for (const path of ["/", "/api/turns", "/ws"])
+    expect((await context.request.get(origin + path)).status()).toBe(401);
+  expect(
+    (
+      await context.request.get(history.url(), { headers: { "Q15-Proof": capturedProof } })
+    ).status(),
+  ).toBe(401);
+  await page.evaluate(() => navigator.serviceWorker.ready);
+  expect((await page.reload())?.status()).toBe(200);
+  await expect(page.getByRole("button", { name: "Sign out", exact: true })).toBeVisible();
+  expect(gestures).toBe(1);
+  expect(
+    await page.evaluate(async () => {
+      const key = await new Promise<unknown>((resolve, reject) => {
+        const openStore = indexedDB.open("q15-session-key", 1);
+        openStore.addEventListener("error", () => reject(new Error("Key store unavailable")));
+        openStore.addEventListener("success", () => {
+          const db = openStore.result;
+          const transaction = db.transaction("signer", "readonly");
+          const get = transaction.objectStore("signer").get("current");
+          get.addEventListener("success", () => {
+            const value: unknown = get.result;
+            resolve(value);
+          });
+          transaction.addEventListener("complete", () => db.close());
+        });
+      });
+      if (
+        typeof key !== "object" ||
+        key === null ||
+        !("key" in key) ||
+        !(key.key instanceof CryptoKey) ||
+        key.key.extractable
+      )
+        return false;
+      try {
+        await crypto.subtle.exportKey("pkcs8", key.key);
+        return false;
+      } catch {
+        return true;
+      }
+    }),
+  ).toBe(true);
   const cookies = await context.cookies();
   const cookie = required(cookies.find((value) => value.name === "__Host-q15s"));
   expect(cookie).toMatchObject({ httpOnly: true, secure: true, sameSite: "Strict", path: "/" });
@@ -89,9 +141,17 @@ test("host enrollment, passkey sign-in, protected data and logout use the real g
       Object.keys(localStorage).filter((key) => /auth|session|token|credential/iu.test(key)),
     ),
   ).toEqual([]);
-  expect((await context.request.post(origin + "/auth/logout")).status()).toBe(403);
+  expect((await context.request.post(origin + "/auth/logout")).status()).toBe(401);
   await page.getByRole("button", { name: "Sign out", exact: true }).click();
   await expect(page.getByRole("button", { name: "Sign in", exact: true })).toBeVisible();
   expect((await context.request.get(origin + "/api/turns")).status()).toBe(401);
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Sign out", exact: true })).toBeVisible();
+  if (typeof attestation !== "object" || attestation === null || !("id" in attestation))
+    throw new Error("Invalid attestation");
+  await admin("/revoke", { id: attestation.id });
+  await page.reload();
+  await expect(page.getByRole("button", { name: "Sign in", exact: true })).toBeVisible();
+  expect(gestures).toBe(2);
   expect(errors).toEqual([]);
 });

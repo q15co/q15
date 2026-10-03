@@ -1,13 +1,11 @@
 import type { OwnerAuthentication } from "../application/auth";
 
 import { isRecord } from "../shared/type-guards";
+import { authenticatedFetch, createSessionKey, saveSessionKey } from "./proof";
 
 export async function hasSession() {
   try {
-    return (
-      (await fetch("/auth/session", { credentials: "same-origin", cache: "no-store" })).status ===
-      204
-    );
+    return (await authenticatedFetch("/auth/session")).status === 204;
   } catch {
     return false;
   }
@@ -87,7 +85,8 @@ function creationOptions(value: unknown): PublicKeyCredentialCreationOptionsJSON
 
 export const ownerAuthentication: OwnerAuthentication = {
   async signIn() {
-    const begin = await post("/auth/login", {});
+    const sessionKey = await createSessionKey();
+    const begin = await post("/auth/login", { public_key: sessionKey.publicKey });
     if (
       begin.status !== 401 ||
       begin.headers.get("Content-Type")?.includes("application/json") !== true
@@ -101,6 +100,7 @@ export const ownerAuthentication: OwnerAuthentication = {
     const finish = await post("/auth/login/finish", credential.toJSON());
     if (finish.status !== 204)
       throw new Error("Sign-in was refused. Use an enrolled device and try again.");
+    await saveSessionKey(sessionKey.key, finish.headers.get("Q15-Session") ?? "");
     location.replace("/");
   },
   async createCredential(options) {

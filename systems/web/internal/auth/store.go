@@ -2,6 +2,7 @@
 package auth
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,9 +28,12 @@ type device struct {
 }
 
 type session struct {
-	Device  string    `json:"device"`
-	Expires time.Time `json:"expires"`
-	Scope   string    `json:"scope"`
+	Device    string               `json:"device"`
+	Expires   time.Time            `json:"expires"`
+	Scope     string               `json:"scope"`
+	PublicKey []byte               `json:"public_key"`
+	Binding   string               `json:"binding"`
+	Used      map[string]time.Time `json:"used"`
 }
 
 type state struct {
@@ -85,7 +89,7 @@ func openStore(directory string) (*os.File, error) {
 
 func loadState(path, origin string) (state, error) {
 	s := state{
-		Version:  1,
+		Version:  2,
 		Origin:   origin,
 		Devices:  make(map[string]device),
 		Sessions: make(map[string]session),
@@ -114,7 +118,8 @@ func loadState(path, origin string) (state, error) {
 	if decoder.Decode(new(any)) != io.EOF {
 		return state{}, errors.New("trailing auth state")
 	}
-	if s.Version != 1 || s.Origin != origin || len(s.Owner) != 32 || s.Devices == nil ||
+	if (s.Version != 1 && s.Version != 2) || s.Origin != origin || len(s.Owner) != 32 ||
+		s.Devices == nil ||
 		s.Sessions == nil ||
 		len(s.Devices) > maxDevices ||
 		len(s.Sessions) > maxSessions {
@@ -129,9 +134,26 @@ func loadState(path, origin string) (state, error) {
 			return state{}, errors.New("invalid device in auth state")
 		}
 	}
+	// Version 1 sessions were bearer credentials; preserve devices but require sign-in.
+	if s.Version == 1 {
+		s.Version = 2
+		s.Sessions = make(map[string]session)
+	}
 	for key, session := range s.Sessions {
 		if len(key) != 64 || session.Scope != "chat" || session.Expires.IsZero() {
 			return state{}, errors.New("invalid session in auth state")
+		}
+		if _, err := parseSessionPublicKey(credentialID(session.PublicKey)); err != nil ||
+			len(session.Binding) != 43 ||
+			len(session.Used) > maxProofs {
+			return state{}, errors.New("invalid session proof state")
+		}
+		for nonce, expires := range session.Used {
+			decoded, err := base64.RawURLEncoding.DecodeString(nonce)
+			if err != nil || len(decoded) != 16 || credentialID(decoded) != nonce ||
+				expires.IsZero() {
+				return state{}, errors.New("invalid session reuse state")
+			}
 		}
 		if _, ok := s.Devices[session.Device]; !ok {
 			return state{}, errors.New("session refers to missing device")
@@ -192,6 +214,13 @@ func (a *Authenticator) nextState() state {
 	}
 	for key, value := range a.state.Sessions {
 		if a.now().Before(value.Expires) {
+			used := make(map[string]time.Time)
+			for nonce, expires := range value.Used {
+				if a.now().Before(expires) {
+					used[nonce] = expires
+				}
+			}
+			value.Used = used
 			s.Sessions[key] = value
 		}
 	}

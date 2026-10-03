@@ -7,6 +7,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/binary"
 	"encoding/json"
 	"io"
@@ -15,7 +16,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -142,17 +145,38 @@ func enrollTest(t *testing.T, a *Authenticator, d *authenticator) string {
 	return credentialID(d.id)
 }
 
+var testSessionKeys sync.Map
+
 func request(
 	a *Authenticator,
 	method, path string,
 	body []byte,
 	cookies ...*http.Cookie,
 ) *httptest.ResponseRecorder {
+	var sessionPrivate *ecdsa.PrivateKey
+	if path == "/auth/login" && string(body) == "{}" {
+		var err error
+		sessionPrivate, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			panic(err)
+		}
+		public, err := x509.MarshalPKIXPublicKey(&sessionPrivate.PublicKey)
+		if err != nil {
+			panic(err)
+		}
+		body, err = json.Marshal(map[string]string{"public_key": credentialID(public)})
+		if err != nil {
+			panic(err)
+		}
+	}
 	r := httptest.NewRequest(method, path, bytes.NewReader(body))
 	r.Header.Set("Origin", testOrigin)
 	r.Header.Set("Sec-Fetch-Site", "same-origin")
 	for _, cookie := range cookies {
 		r.AddCookie(cookie)
+		if cookie.Name == sessionCookie {
+			signTestRequest(a, r, cookie)
+		}
 	}
 	w := httptest.NewRecorder()
 	gate.Headers(testOrigin, a.RequireScope("chat", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -162,7 +186,48 @@ func request(
 		w.WriteHeader(http.StatusNoContent)
 	}))).
 		ServeHTTP(w, r)
+	if sessionPrivate != nil {
+		for _, c := range w.Result().Cookies() {
+			if c.Name == challengeCookie {
+				testSessionKeys.Store(c.Value, sessionPrivate)
+			}
+		}
+	}
+	if path == "/auth/login/finish" && w.Code == 204 {
+		for _, challenge := range cookies {
+			if challenge.Name != challengeCookie {
+				continue
+			}
+			key, ok := testSessionKeys.Load(challenge.Value)
+			if !ok {
+				panic("missing test session key")
+			}
+			for _, c := range w.Result().Cookies() {
+				if c.Name == sessionCookie {
+					testSessionKeys.Store(c.Value, key)
+				}
+			}
+		}
+	}
 	return w
+}
+
+func signTestRequest(a *Authenticator, r *http.Request, cookie *http.Cookie) {
+	value, ok := testSessionKeys.Load(cookie.Value)
+	if !ok {
+		return
+	}
+	key := value.(*ecdsa.PrivateKey)
+	stamp := strconv.FormatInt(a.now().Unix(), 10)
+	nonce := credentialID(randomBytes(16))
+	s := a.state.Sessions[digest(cookie.Value)]
+	hash := sha256.Sum256([]byte(proofMessage(a.origin, s.Binding, r, stamp, nonce)))
+	x, y, err := ecdsa.Sign(rand.Reader, key, hash[:])
+	if err != nil {
+		panic(err)
+	}
+	signature := append(x.FillBytes(make([]byte, 32)), y.FillBytes(make([]byte, 32))...)
+	r.Header.Set(proofHeader, stamp+"."+nonce+"."+credentialID(signature))
 }
 
 func findCookie(t *testing.T, w *httptest.ResponseRecorder, name string) *http.Cookie {
@@ -295,6 +360,7 @@ func TestPublicRouteAndMutationBoundary(t *testing.T) {
 		for _, path := range []string{"/auth/login", "/auth/login/finish", "/auth/logout", "/api/mutation"} {
 			r := httptest.NewRequest("POST", path, strings.NewReader("{}"))
 			r.AddCookie(cookie)
+			signTestRequest(a, r, cookie)
 			if test.origin != "" {
 				r.Header.Set("Origin", test.origin)
 			}
@@ -311,6 +377,7 @@ func TestPublicRouteAndMutationBoundary(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("GET", "/", nil)
 	r.AddCookie(cookie)
+	signTestRequest(a, r, cookie)
 	a.RequireScope("console", http.NotFoundHandler()).ServeHTTP(w, r)
 	if w.Code != 403 {
 		t.Fatal("chat gained console")
@@ -408,7 +475,7 @@ func TestEnrollmentRestrictionsAndFailClosed(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(a.directory, "auth.json"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	if request(a, "POST", "/auth/logout", nil, cookie).Code != 503 ||
+	if request(a, "POST", "/auth/logout", nil, cookie).Code != 401 ||
 		request(a, "GET", "/", nil, cookie).Code != 401 {
 		t.Fatal("failed persistence did not close authorization")
 	}

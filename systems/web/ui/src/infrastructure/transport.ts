@@ -3,6 +3,7 @@ import type { ClientFrame } from "../domain/protocol";
 
 import { parseFrame } from "../domain/protocol";
 import { clientFrame } from "./envelope";
+import { authenticatedFetch, requestProof } from "./proof";
 
 export interface SocketLike {
   readyState: number;
@@ -22,14 +23,20 @@ export class SocketTransport implements Transport {
   private ready = false;
   private attempts = 0;
   private timer?: ReturnType<typeof setTimeout>;
+  private generation = 0;
   private handshake?: ReturnType<typeof setTimeout>;
 
   constructor(
     private readonly url = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws`,
-    private readonly createSocket: (url: string) => SocketLike = (address) =>
-      new WebSocket(address),
-    private readonly sessionStatus = async () =>
-      (await fetch("/auth/session", { credentials: "same-origin", cache: "no-store" })).status,
+    private readonly createSocket: (url: string) => SocketLike | Promise<SocketLike> = async (
+      address,
+    ) => {
+      const target = new URL(address);
+      const origin = `${target.protocol === "wss:" ? "https:" : "http:"}//${target.host}`;
+      const proof = await requestProof("GET", `${target.pathname}${target.search}`, origin, "ws");
+      return new WebSocket(address, ["q15-auth", `q15-proof.${proof}`]);
+    },
+    private readonly sessionStatus = async () => (await authenticatedFetch("/auth/session")).status,
   ) {}
 
   start(events: TransportEvents, cursor: () => string) {
@@ -43,6 +50,7 @@ export class SocketTransport implements Transport {
 
   stop() {
     this.stopped = true;
+    this.generation++;
     this.ready = false;
     clearTimeout(this.timer);
     clearTimeout(this.handshake);
@@ -58,11 +66,34 @@ export class SocketTransport implements Transport {
     this.events?.connection(this.attempts > 0 ? "reconnecting" : "connecting");
     let socket: SocketLike;
     try {
-      socket = this.createSocket(this.url);
+      const generation = this.generation;
+      const created = this.createSocket(this.url);
+      if (created instanceof Promise) {
+        void this.accept(created, generation);
+        return;
+      }
+      socket = created;
     } catch {
       this.retry();
       return;
     }
+    this.attach(socket);
+  }
+
+  private async accept(created: Promise<SocketLike>, generation: number) {
+    try {
+      const socket = await created;
+      if (this.stopped || generation !== this.generation) {
+        socket.close();
+        return;
+      }
+      this.attach(socket);
+    } catch {
+      if (!this.stopped && generation === this.generation) this.expired();
+    }
+  }
+
+  private attach(socket: SocketLike) {
     this.socket = socket;
     // A stalled handshake must not leave the composer waiting indefinitely.
     this.handshake = setTimeout(() => socket.close(), 15_000);

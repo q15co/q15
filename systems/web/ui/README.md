@@ -41,10 +41,10 @@ logout with a Chromium virtual authenticator. Go from `go.work` is required for 
 `src/main.tsx` is the sole browser entry. It checks the server session before constructing chat
 adapters and renders either `Login` or `App`. The Vite shell plugin inlines compiled script, style
 and font assets into one `index.html`; the Go tier adds fresh CSP nonces and returns it with 401
-when locked, or 200 when authenticated. API and static routes keep their session gate. This avoids a
-separate login app and unauthenticated asset exceptions. Build output contains no identity, session
-credential or transcript. Login/enrollment I/O lives in an infrastructure adapter behind the
-`OwnerAuthentication` application port.
+when no request proof is supplied, or 200 when authenticated with a fresh proof. API and static
+routes keep their session gate. This avoids a separate login app and unauthenticated asset
+exceptions. Build output contains no identity, session credential or transcript. Login/enrollment
+I/O lives in an infrastructure adapter behind the `OwnerAuthentication` application port.
 
 `make ui-clean` restores `.gitkeep` and Go packages remain buildable. A runnable web binary needs a
 built bundle; `make build-web` builds it first. Build output and dependencies stay ignored, and only
@@ -72,14 +72,14 @@ native scrolling, layout, keyboard access and compiled PWA behavior.
 `src/main.tsx` is the composition root: it creates concrete adapters and injects them into the
 application. Keep dependencies pointing inward:
 
-| Directory            | Responsibility                                                                                | Allowed dependencies                                                         |
-| -------------------- | --------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| `src/domain`         | Protocol validation, immutable state transitions, history reconciliation and activity pairing | Domain, shared helpers, generated contract types                             |
-| `src/application`    | Connection lifecycle, subscriptions, sending and history recovery through ports               | Application, domain, shared helpers, generated types                         |
-| `src/infrastructure` | WebSocket/HTTP adapters and effectful envelope creation                                       | Infrastructure, application ports, domain, shared helpers, generated types   |
-| `src/components`     | React rendering, interaction and colocated styles                                             | Presentation, application, domain, shared helpers and approved UI packages   |
-| `src/shared`         | Small platform-independent codecs and predicates                                              | Shared helpers and generated types                                           |
-| `worker` / `build`   | Shell caching / bundle generation                                                             | Own modules and shared helpers; build also allows explicit Node/Vite modules |
+| Directory            | Responsibility                                                                                | Allowed dependencies                                                                                   |
+| -------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `src/domain`         | Protocol validation, immutable state transitions, history reconciliation and activity pairing | Domain, shared helpers, generated contract types                                                       |
+| `src/application`    | Connection lifecycle, subscriptions, sending and history recovery through ports               | Application, domain, shared helpers, generated types                                                   |
+| `src/infrastructure` | WebSocket/HTTP adapters and effectful envelope creation                                       | Infrastructure, application ports, domain, shared helpers, generated types                             |
+| `src/components`     | React rendering, interaction and colocated styles                                             | Presentation, application, domain, shared helpers and approved UI packages                             |
+| `src/shared`         | Small platform-independent codecs and predicates                                              | Shared helpers and generated types                                                                     |
+| `worker` / `build`   | Shell caching / bundle generation                                                             | Own modules and shared helpers; worker also allows the proof adapter, build explicit Node/Vite modules |
 
 Native Oxlint `import` rules reject cycles, self imports, duplicates, mutable exports and CommonJS.
 Native `no-restricted-imports` allowlists enforce the table, including type imports, re-exports and
@@ -148,11 +148,16 @@ unknown wire part types remain available to the visible renderer fallback. Shell
 install events are also checked before use. Type-aware Oxc rules reject unsafe assertions and unsafe
 uses of `any`, while `satisfies` checks configuration without widening literal values.
 
-The app keeps transcript content and drafts in memory. It does not store messages or credentials in
-localStorage, IndexedDB, or the service worker. Only the theme preference uses localStorage. Resume
-uses `ready.cursor` after replay has been consumed, independently of live event acknowledgements or
-the allocated `head_seq`. An uncertain send is shown explicitly and never resubmitted automatically.
-Retention gaps refresh completed history and send `sync` from a readable turn.
+The app keeps transcript content and drafts in memory. It never stores messages, raw private keys or
+session cookies in localStorage, IndexedDB, or worker caches. The explicit exception is the
+non-exportable session `CryptoKey` and its public binding ID in IndexedDB, shared by the HTTP/socket
+adapters and the service worker. WebCrypto generates a new ECDSA P-256 key before the single passkey
+sign-in gesture; that challenge binds its public key. Subsequent requests and reconnects sign
+silently. Reloads keep the key; logout deletes it. Injected scripts may use it to sign but cannot
+export private key bytes. Only the theme preference uses localStorage. Resume uses `ready.cursor`
+after replay has been consumed, independently of live event acknowledgements or the allocated
+`head_seq`. An uncertain send is shown explicitly and never resubmitted automatically. Retention
+gaps refresh completed history and send `sync` from a readable turn.
 
 Text uses safe Markdown. Each turn groups commentary, reasoning and paired tool calls/results in an
 activity disclosure above the final answer. Disclosures start closed, including during active work,
@@ -171,8 +176,13 @@ The manifest is `/manifest.webmanifest` and the service worker is `/sw.js`. Edit
 shell build plugin uses Vite's build API through Vite+ to compile and bundle the worker, including
 imports, as a standalone script. It injects an explicit shell precache manifest and a
 content-derived cache name after the HTML and assets have been generated. The worker only handles
-exact shell paths, ignores queries, and never handles API, socket or media requests. Existing pages
-retain their active worker until they close, avoiding a forced reload during a response.
+exact shell paths, ignores queries, and never handles API, socket or media requests. It reads the
+opaque session key to sign network requests, including navigation and precache fetches, and caches
+only shell responses. Worker registration uses the authenticated `/auth/worker` handshake described
+in [the tier README](../README.md#sessions-and-http-policy); no proof enters a URL. Adapter tests
+use fake-indexeddb with real WebCrypto; end-to-end tests exercise Chromium's real key storage,
+passkey ceremony, proof replay rejection and navigation across reloads. Existing pages retain their
+active worker until they close, avoiding a forced reload during a response.
 
 ## Appearance
 

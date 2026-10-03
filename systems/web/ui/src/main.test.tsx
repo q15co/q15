@@ -8,6 +8,7 @@ import type { SocketLike } from "./infrastructure/transport";
 import { parseClientFrame } from "./domain/protocol";
 import { frame } from "./infrastructure/envelope";
 import { required } from "./testing/required";
+import { sessionKey } from "./testing/session-key";
 
 const roots = vi.hoisted((): { mounted: ReactDOMClient.Root[] } => ({ mounted: [] }));
 vi.mock("react-dom/client", async (getOriginal) => {
@@ -31,10 +32,10 @@ class ReadySocket implements SocketLike {
   onerror: SocketLike["onerror"] = null;
   constructor(readonly address: string) {
     ReadySocket.created.push(this);
-    queueMicrotask(() => {
+    setTimeout(() => {
       this.readyState = 1;
       this.onopen?.(new Event("open"));
-    });
+    }, 20);
   }
   send(data: string) {
     if (parseClientFrame(data).type === "hello")
@@ -52,7 +53,8 @@ class ReadySocket implements SocketLike {
   }
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  await sessionKey();
   vi.resetModules();
   ReadySocket.created = [];
   localStorage.clear();
@@ -70,7 +72,7 @@ beforeEach(() => {
     "fetch",
     vi.fn<typeof fetch>((path) =>
       Promise.resolve(
-        path === "/auth/session"
+        path === "/auth/session" || path === "/auth/worker"
           ? new Response(null, { status: 204 })
           : Response.json({ turns: [], head_seq: "0", has_more: false }),
       ),

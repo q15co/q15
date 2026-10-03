@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
+import { sessionKey } from "../testing/session-key";
 import { hasSession, ownerAuthentication } from "./auth";
 
 const creation = {
@@ -41,10 +42,11 @@ function challengeResponse(value: unknown = assertion) {
   return Response.json(value, { status: 401 });
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  await sessionKey();
   vi.stubGlobal("PublicKeyCredential", DeviceCredential);
   Object.defineProperty(navigator, "credentials", { configurable: true, value: { get, create } });
-  vi.stubGlobal("location", { replace });
+  vi.stubGlobal("location", { replace, origin: "https://chat.example" });
   vi.stubGlobal("fetch", fetch);
   fetch.mockReset();
   get.mockReset();
@@ -61,7 +63,9 @@ afterEach(() => {
 it("signs in using one-time proof, with cookie credentials handled only by the browser", async () => {
   fetch
     .mockResolvedValueOnce(challengeResponse())
-    .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    .mockResolvedValueOnce(
+      new Response(null, { status: 204, headers: { "Q15-Session": "a".repeat(43) } }),
+    );
   await ownerAuthentication.signIn();
   expect(fetch.mock.calls.map((call) => call[0])).toEqual(["/auth/login", "/auth/login/finish"]);
   expect(fetch.mock.calls[1]?.[1]).toMatchObject({
@@ -145,7 +149,9 @@ it("validates enrollment identity and algorithms before invoking the authenticat
 });
 
 it("checks sessions without exposing the HttpOnly cookie", async () => {
-  fetch.mockResolvedValueOnce(new Response(null, { status: 204 }));
+  fetch.mockResolvedValueOnce(
+    new Response(null, { status: 204, headers: { "Q15-Session": "a".repeat(43) } }),
+  );
   expect(await hasSession()).toBe(true);
   fetch.mockResolvedValueOnce(new Response(null, { status: 401 }));
   expect(await hasSession()).toBe(false);
