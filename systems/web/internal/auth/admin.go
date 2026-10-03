@@ -202,11 +202,23 @@ func adminOutput(w http.ResponseWriter, result any, err error) {
 // RunAdmin pairs a browser ceremony with a host-authorized enrollment. Only the
 // host CLI submits the response; the public browser never posts registration.
 func RunAdmin(directory string, args []string, input io.Reader, output, prompt io.Writer) error {
-	if len(args) < 1 || (args[0] != "list" && args[0] != "enroll" && args[0] != "revoke") {
+	if len(args) == 0 {
 		return errors.New("usage: q15-web auth list | enroll DEVICE_NAME | revoke DEVICE_ID")
 	}
-	if (args[0] == "list" && len(args) != 1) || (args[0] != "list" && len(args) != 2) {
-		return errors.New("invalid auth arguments")
+	action := args[0]
+	var argument string
+	switch action {
+	case "list":
+		if len(args) != 1 {
+			return errors.New("invalid auth arguments")
+		}
+	case "enroll", "revoke":
+		if len(args) != 2 {
+			return errors.New("invalid auth arguments")
+		}
+		argument = args[1]
+	default:
+		return errors.New("usage: q15-web auth list | enroll DEVICE_NAME | revoke DEVICE_ID")
 	}
 	if !filepath.IsAbs(directory) {
 		return errors.New("Q15_WEB_STATE_DIR must be absolute")
@@ -218,7 +230,7 @@ func RunAdmin(directory string, args []string, input io.Reader, output, prompt i
 	}
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport, Timeout: 10 * time.Second}
-	switch args[0] {
+	switch action {
 	case "list":
 		var devices []deviceInfo
 		if err := adminCall(client, "GET", "/devices", nil, &devices); err != nil {
@@ -226,10 +238,10 @@ func RunAdmin(directory string, args []string, input io.Reader, output, prompt i
 		}
 		return json.NewEncoder(output).Encode(devices)
 	case "revoke":
-		return adminCall(client, "POST", "/revoke", map[string]string{"id": args[1]}, nil)
+		return adminCall(client, "POST", "/revoke", map[string]string{"id": argument}, nil)
 	case "enroll":
 		var result enrollmentOptions
-		if err := adminCall(client, "POST", "/enroll/begin", map[string]string{"name": args[1]}, &result); err != nil {
+		if err := adminCall(client, "POST", "/enroll/begin", map[string]string{"name": argument}, &result); err != nil {
 			return err
 		}
 		if err := json.NewEncoder(output).Encode(result.Options); err != nil {

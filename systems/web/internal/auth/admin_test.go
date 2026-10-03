@@ -40,7 +40,10 @@ func TestHostCLIAndPrivateSocket(t *testing.T) {
 	if len(a.state.Devices) != 0 {
 		t.Fatal("CLI did not revoke")
 	}
-	for _, args := range [][]string{{}, {"setup"}, {"list", "extra"}, {"enroll"}, {"revoke", "unknown"}} {
+	for _, args := range [][]string{
+		{}, {"setup"}, {"list", "extra"}, {"enroll"}, {"enroll", "device", "extra"},
+		{"revoke"}, {"revoke", "device", "extra"}, {"revoke", "unknown"},
+	} {
 		if RunAdmin(a.directory, args, strings.NewReader(""), &output, &output) == nil {
 			t.Fatalf("invalid CLI %v accepted", args)
 		}
