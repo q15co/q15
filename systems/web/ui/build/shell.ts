@@ -1,11 +1,48 @@
+import type { DefaultTreeAdapterMap } from "parse5";
 import type { Plugin, ResolvedConfig } from "vite-plus";
 
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { parse, serialize } from "parse5";
 import { build } from "vite-plus";
 
 import type { ShellManifest } from "../src/shared/shell-manifest";
+
+function inlineShell(source: string, script: string, style: string) {
+  const tree = parse(source);
+  const nodes: DefaultTreeAdapterMap["node"][] = [tree];
+  let scripts = 0;
+  let styles = 0;
+  for (const node of nodes) {
+    if (!("childNodes" in node)) continue;
+    nodes.push(...node.childNodes);
+    if (!("tagName" in node)) continue;
+    const isScript = node.tagName === "script" && node.attrs.some((attr) => attr.name === "src");
+    const isStyle =
+      node.tagName === "link" &&
+      node.attrs.some((attr) => attr.name === "rel" && attr.value === "stylesheet");
+    if (!isScript && !isStyle) continue;
+    node.nodeName = node.tagName = isScript ? "script" : "style";
+    node.attrs = [{ name: "nonce", value: "__Q15_NONCE__" }];
+    if (isScript) {
+      node.attrs.push({ name: "type", value: "module" });
+      scripts++;
+    } else styles++;
+    node.childNodes = [
+      {
+        nodeName: "#text",
+        parentNode: node,
+        value: isScript
+          ? script.replaceAll(/<\/script/giu, "\\u003c/script")
+          : style.replaceAll(/<\/style/giu, "\\3c /style"),
+      },
+    ];
+  }
+  if (scripts !== 1 || styles !== 1)
+    throw new Error("Expected one module and stylesheet in the UI shell");
+  return serialize(tree);
+}
 
 export async function buildWorker(root: string, paths: string[], version: string) {
   const manifest = { paths, version } satisfies ShellManifest;
@@ -71,18 +108,7 @@ export function shell(): Plugin {
           styles.length !== 1
         )
           throw new Error("Expected a self-contained UI shell");
-        const inlineCSS = style.source;
-        html.source = html.source
-          .replaceAll(
-            /<script\b[^>]*src="[^"]*"[^>]*>\s*<\/script\b[^>]*>/giu,
-            () =>
-              `<script type="module" nonce="__Q15_NONCE__">${script.code.replaceAll(/<\/script/giu, "\\u003c/script")}</script>`,
-          )
-          .replaceAll(
-            /<link[^>]*rel="stylesheet"[^>]*>/gu,
-            () =>
-              `<style nonce="__Q15_NONCE__">${inlineCSS.replaceAll(/<\/style/giu, "\\3c /style")}</style>`,
-          );
+        html.source = inlineShell(html.source, script.code, style.source);
         delete bundle[script.fileName];
         delete bundle[style.fileName];
         const paths = [

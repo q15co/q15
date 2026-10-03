@@ -148,7 +148,7 @@ it.each(["</script >", "</SCRIPT >", '</script foo="bar">'])(
     const html = required(bundle.output.find((entry) => entry.fileName === "index.html"));
     if (html.type !== "asset" || typeof html.source !== "string")
       throw new Error("Expected a shell HTML asset");
-    expect(html.source).toContain('<script type="module" nonce="__Q15_NONCE__">');
+    expect(html.source).toContain('<script nonce="__Q15_NONCE__" type="module">');
     expect(html.source).not.toContain(endTag);
     expect(html.source).not.toContain('src="/assets/');
   },

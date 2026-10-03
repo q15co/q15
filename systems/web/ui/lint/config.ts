@@ -276,6 +276,7 @@ export const lint = {
           "node:crypto",
           "node:fs",
           "node:path",
+          "parse5",
           "vite-plus",
         ]),
       },
