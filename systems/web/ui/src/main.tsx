@@ -19,6 +19,14 @@ async function previewStore() {
   const transport = new MockTransport();
   return new ChatStore(transport, transport.history);
 }
+
+function publishManifest() {
+  const link = document.createElement("link");
+  link.rel = "manifest";
+  link.href = "/manifest.webmanifest";
+  link.crossOrigin = "use-credentials";
+  document.head.append(link);
+}
 const preview = import.meta.env.DEV && new URLSearchParams(location.search).has("preview");
 const signedIn = preview || (await hasSession());
 const store = signedIn
@@ -48,7 +56,14 @@ if (signedIn && import.meta.env.PROD && "serviceWorker" in navigator) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ proof }),
     });
-    if (response.status === 204) await navigator.serviceWorker.register("/sw.js");
+    if (response.status === 204) {
+      await navigator.serviceWorker.register("/sw.js");
+      if (navigator.serviceWorker.controller) publishManifest();
+      else
+        navigator.serviceWorker.addEventListener("controllerchange", publishManifest, {
+          once: true,
+        });
+    }
   } catch {
     /* Chat works without installation. */
   }

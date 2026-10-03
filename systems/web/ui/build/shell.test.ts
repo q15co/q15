@@ -47,6 +47,7 @@ async function worker(mode: "source" | "compiled") {
   const environment = {
     self: {
       location: { origin: "https://chat.example" },
+      clients: { claim: vi.fn<() => Promise<void>>().mockResolvedValue() },
       addEventListener: (type: string, handler: (event: WorkerEvent) => void) =>
         handlers.set(type, handler),
     },
@@ -71,6 +72,7 @@ async function worker(mode: "source" | "compiled") {
     await vi.importActual("../worker/sw.ts");
   }
   return {
+    clients: environment.self.clients,
     cache,
     caches,
     fetch,
@@ -146,6 +148,13 @@ it("builds an exact shell manifest and changes its cache version when HTML chang
     ].toSorted(),
   );
   expect(original.output.map((entry) => entry.fileName)).toContain("sw.js");
+  const html = required(original.output.find((entry) => entry.fileName === "index.html"));
+  if (html.type !== "asset" || typeof html.source !== "string")
+    throw new Error("Expected shell HTML");
+  expect(html.source).toContain(
+    `href="data:image/svg+xml,${encodeURIComponent(readFileSync("public/icon.svg", "utf8"))}"`,
+  );
+  expect(html.source).not.toContain('rel="manifest"');
   const changed = await shellBundle('<meta name="test-content" content="changed">');
   expect(changed.manifest.paths).toEqual(original.manifest.paths);
   expect(changed.manifest.version).not.toBe(original.manifest.version);
@@ -199,6 +208,7 @@ describe.each(["source", "compiled"] satisfies ("source" | "compiled")[])(
       expect(sw.fetch).toHaveBeenCalledTimes(paths.length);
       await sw.lifecycle("activate");
       expect(sw.caches.delete.mock.calls).toEqual([["q15-shell-old"]]);
+      expect(sw.clients.claim).toHaveBeenCalledOnce();
     });
 
     it("refuses to cache unauthenticated installation responses", async () => {
@@ -248,13 +258,17 @@ describe.each(["source", "compiled"] satisfies ("source" | "compiled")[])(
 
     it("serves cached assets and fetches cache misses without storing runtime responses", async () => {
       const sw = await worker(mode);
-      const request = new Request("https://chat.example/assets/app-abcdef12.js");
+      const request = new Request("https://chat.example/assets/app-abcdef12.js", {
+        credentials: "omit",
+      });
       expect(await required(await sw.request(request)).text()).toBe(
         "cached /assets/app-abcdef12.js",
       );
       expect(sw.fetch).not.toHaveBeenCalled();
       sw.cache.match.mockResolvedValue(cacheMiss);
       expect(await required(await sw.request(request)).text()).toBe("network");
+      expect(sw.fetch.mock.calls[0]?.[0].credentials).toBe("same-origin");
+      expect(sw.fetch.mock.calls[0]?.[0].headers.has("Q15-Proof")).toBe(true);
       expect(sw.cache.put).not.toHaveBeenCalled();
       expect(sw.cache.addAll).not.toHaveBeenCalled();
     });

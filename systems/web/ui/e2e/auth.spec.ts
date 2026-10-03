@@ -63,6 +63,10 @@ test("host enrollment, passkey sign-in, protected data and logout use the real g
   const origin = "http://localhost:4184";
   const response = await page.goto(origin);
   expect(response?.status()).toBe(401);
+  expect(await page.locator('link[rel="icon"]').getAttribute("href")).toMatch(
+    /^data:image\/svg\+xml,/u,
+  );
+  expect(await page.locator('link[rel="manifest"]').count()).toBe(0);
   for (const path of ["/ws", "/api/turns", "/enroll/begin", "/auth/enroll", "/devices"]) {
     expect((await context.request.get(origin + path)).status()).toBe(401);
   }
@@ -115,9 +119,19 @@ test("host enrollment, passkey sign-in, protected data and logout use the real g
   );
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(page.getByRole("button", { name: "Sign out", exact: true })).toBeVisible();
+  await expect(page.locator('link[rel="manifest"]')).toHaveAttribute(
+    "href",
+    "/manifest.webmanifest",
+  );
+  expect(await page.evaluate(() => navigator.serviceWorker.controller !== null)).toBe(true);
+  const appManifest = await cdp.send("Page.getAppManifest");
+  expect(appManifest.url).toBe(origin + "/manifest.webmanifest");
+  expect(appManifest.errors).toEqual([]);
+  const manifest: unknown = JSON.parse(required(appManifest.data));
+  expect(manifest).toMatchObject({ name: "q15 · Chat", start_url: "/" });
   const history = await historyResponse;
   const capturedProof = required(history.request().headers()["q15-proof"]);
-  for (const path of ["/", "/api/turns", "/ws"])
+  for (const path of ["/", "/api/turns", "/ws", "/manifest.webmanifest", "/icon.svg"])
     expect((await context.request.get(origin + path)).status()).toBe(401);
   expect(
     (

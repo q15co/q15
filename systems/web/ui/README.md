@@ -174,18 +174,22 @@ links. User bubbles and avatars sit on the right, with left-aligned text and an 
 messages. Pending and queued messages use the same layout. The sidebar contains Chat navigation,
 connection status and the theme toggle; it does not list individual recent messages.
 
-The manifest is `/manifest.webmanifest` and the service worker is `/sw.js`. Edit the worker in
-`worker/sw.ts`, which has its own WebWorker TypeScript environment in `worker/tsconfig.json`. The
-shell build plugin uses Vite's build API through Vite+ to compile and bundle the worker, including
-imports, as a standalone script. It injects an explicit shell precache manifest and a
-content-derived cache name after the HTML and assets have been generated. The worker only handles
-exact shell paths, ignores queries, and never handles API, socket or media requests. It reads the
-opaque session key to sign network requests, including navigation and precache fetches, and caches
-only shell responses. Worker registration uses the authenticated `/auth/worker` handshake described
-in [the tier README](../README.md#sessions-and-http-policy); no proof enters a URL. Adapter tests
-use fake-indexeddb with real WebCrypto; end-to-end tests exercise Chromium's real key storage,
-passkey ceremony, proof replay rejection and navigation across reloads. Existing pages retain their
-active worker until they close, avoiding a forced reload during a response.
+The manifest is `/manifest.webmanifest` and the service worker is `/sw.js`. The composition root
+publishes the manifest link only for a signed-in, controlled page, with
+`crossorigin="use-credentials"`. The compiled HTML inlines its favicon to avoid an unsigned initial
+fetch. First worker activation claims uncontrolled pages after precaching; updates still wait for
+the previous worker's clients to close. Edit the worker in `worker/sw.ts`, which has its own
+WebWorker TypeScript environment in `worker/tsconfig.json`. The shell build plugin uses Vite's build
+API through Vite+ to compile and bundle the worker, including imports, as a standalone script. It
+injects an explicit shell precache manifest and a content-derived cache name after the HTML and
+assets have been generated. The worker only handles exact shell paths, ignores queries, and never
+handles API, socket or media requests. It reads the opaque session key to sign network requests,
+including navigation and precache fetches, and caches only shell responses. Worker registration uses
+the authenticated `/auth/worker` handshake described in
+[the tier README](../README.md#sessions-and-http-policy); no proof enters a URL. Adapter tests use
+fake-indexeddb with real WebCrypto; end-to-end tests exercise Chromium's real key storage, passkey
+ceremony, proof replay rejection and navigation across reloads. Existing pages retain their active
+worker until they close, avoiding a forced reload during a response.
 
 ## Appearance
 

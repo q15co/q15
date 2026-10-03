@@ -115,6 +115,12 @@ added. Before a worker controls the page, navigation still returns the locked sh
 script proves `/auth/session` before rendering chat. If worker installation is unavailable, chat
 continues and reloads use the same proof bootstrap.
 
+The compiled shell inlines its favicon so the initial page needs no unsigned icon fetch. A signed-in
+page advertises the PWA manifest only after a service worker controls it. First activation claims
+uncontrolled pages after authenticated precaching; the worker supplies cached shell assets and signs
+cache misses with the session cookie. Initial navigation can still return 401 as described above;
+subsequent controlled navigation carries a proof and succeeds with 200.
+
 Sessions expire server-side after **12 hours**, with no sliding renewal. Sign out deletes the server
 record and cookie. Sessions grant `chat` only; `console` is refused, including for the owner. A
 future console must implement a fresh, time-boxed assertion before adding that scope. Open sockets
