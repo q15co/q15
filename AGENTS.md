@@ -3,6 +3,15 @@
 This repository uses `make` as the public workflow contract. Agents should use the repo-managed
 tooling and targets here instead of ad hoc commands.
 
+## Code Quality
+
+- Keep functions focused, names precise, and ownership and error paths explicit.
+- Prefer idiomatic Go, narrow interfaces at boundaries, and simple code over speculative
+  abstractions.
+- Make code self-explanatory through names, types and structure.
+- Use comments only to explain surprising behavior, workarounds or temporary solutions. Never
+  narrate obvious code or substitute comments for clearer code.
+
 ## Environment
 
 - Optional on NixOS or other Nix setups:
