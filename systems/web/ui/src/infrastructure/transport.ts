@@ -28,6 +28,8 @@ export class SocketTransport implements Transport {
     private readonly url = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws`,
     private readonly createSocket: (url: string) => SocketLike = (address) =>
       new WebSocket(address),
+    private readonly sessionStatus = async () =>
+      (await fetch("/auth/session", { credentials: "same-origin", cache: "no-store" })).status,
   ) {}
 
   start(events: TransportEvents, cursor: () => string) {
@@ -88,11 +90,31 @@ export class SocketTransport implements Transport {
       }
     };
     socket.onerror = () => socket.close();
-    socket.onclose = () => {
+    socket.onclose = (event) => {
       clearTimeout(this.handshake);
       this.ready = false;
+      if (event.code === 4401) {
+        this.expired();
+        return;
+      }
       this.retry();
+      void this.checkSession(socket);
     };
+  }
+
+  private expired() {
+    this.stop();
+    this.events?.connection("unauthorized");
+    this.events?.error("Your session expired or was revoked. Sign in again to continue.");
+  }
+
+  private async checkSession(socket: SocketLike) {
+    try {
+      const status = await this.sessionStatus();
+      if (!this.stopped && socket === this.socket && status === 401) this.expired();
+    } catch {
+      // An unavailable network follows the existing reconnect backoff.
+    }
   }
 
   private retry() {

@@ -22,3 +22,5 @@ deploy/compose/secrets/*
 !deploy/compose/secrets/README.md
 deploy/compose/auth/*
 !deploy/compose/auth/*.example
+
+.local/web-state/

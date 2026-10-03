@@ -2,10 +2,15 @@
 
 Follow the root `AGENTS.md`; run Make targets from the repository root.
 
-- The agent owns durable transcripts and agent credentials. Keep this tier's state ephemeral and use
-  an absolute `unix://` bridge target with the startup protocol handshake.
+- The agent owns durable transcripts and agent credentials. This tier owns only its private durable
+  WebAuthn/session store; never mount it in the agent. Use an absolute `unix://` bridge target with
+  the startup protocol handshake.
 - Keep authorization behind `gate.Authorizer.RequireScope` and `gate.WithPrincipal`. Identity comes
-  from authorization; the owner-token gate is temporary. Protect every route except `/healthz`.
+  from authorization. Protect every route except `/healthz`; only the bounded WebAuthn proof
+  exchange may run before a session. No public route can enroll a credential or bypass scope checks.
+- Enrollment and revocation use only the private admin Unix socket. Keep credentials and cookies out
+  of JavaScript storage, URLs and logs; revalidate long-lived sockets on input, output and idle
+  expiry.
 - Require the exact configured Origin. Native WebSocket handshakes can omit Fetch Metadata; reject
   conflicting metadata when supplied.
 - Encode int64 values as decimal JSON strings. Transcript cursors and session event indexes are

@@ -24,7 +24,7 @@ COMPOSE_ENV := COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT_NAME)
 
 .DEFAULT_GOAL := build
 
-.PHONY: all build build-agent build-auth build-exec build-proxy build-web build-web-image test-web project-setup fmt lint lint-changed test verify verify-ci hooks-install hooks-uninstall compose-secrets-init compose-up compose-down compose-logs compose-ps clean help protos protos-check ui-install ui-dev ui-build ui-lint ui-fix ui-test ui-test-coverage ui-e2e ui-clean ui-fixtures-check compose-check
+.PHONY: all build build-agent build-auth build-exec build-proxy build-web build-web-image test-web project-setup fmt lint lint-changed vulncheck test verify verify-ci hooks-install hooks-uninstall compose-secrets-init compose-up compose-down compose-logs compose-ps clean help protos protos-check ui-install ui-dev ui-build ui-lint ui-fix ui-test ui-test-coverage ui-e2e ui-clean ui-fixtures-check compose-check
 
 all: build
 
@@ -55,6 +55,10 @@ build-web-image:
 
 test-web: project-setup
 	cd $(WEB_MOD_DIR) && CGO_ENABLED=0 $(GO) test $(TEST_FLAGS) ./...
+
+.PHONY: ui-auth-test-server
+ui-auth-test-server:
+	cd $(WEB_MOD_DIR) && $(GO) run ./internal/auth/testserver
 
 project-setup:
 	./scripts/project-setup.sh
@@ -126,6 +130,9 @@ compose-check: project-setup
 lint-changed: project-setup
 	FILES="$(FILES)" ./scripts/lint-changed.sh
 
+vulncheck: project-setup
+	./scripts/go-vulncheck.sh
+
 verify: project-setup
 	$(MAKE) protos-check
 	$(MAKE) lint
@@ -195,6 +202,7 @@ help:
 	@echo "  fmt           Format tracked files (or FILES='a b' for an explicit subset)"
 	@echo "  lint          Run full-repo file checks plus repo-wide Go static analysis"
 	@echo "  lint-changed  Run fast changed-file checks (or FILES='a b' for an explicit subset)"
+	@echo "  vulncheck     Check reachable Go code against the Go vulnerability database"
 	@echo "  test          Run Go tests for exec/proxy/chat contracts + agent + exec + proxy + web"
 	@echo "  protos        Regenerate protobuf stubs under libs/ from proto sources"
 	@echo "  protos-check  Regenerate protobuf stubs and fail if they differ from tracked files"

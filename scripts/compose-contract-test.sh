@@ -8,6 +8,11 @@ use_repo_tools
 for file in docker-compose.yml deploy/compose/docker-compose.image-first.yml; do
 	yq -o=json '.' "${file}" | jq -e '
 		([.services | to_entries[] | select(any(.value.volumes[]?; .source == "q15_bridge")) | .key] | sort) == ["q15-agent", "q15-web"] and
+		([.services | to_entries[] | select(any(.value.volumes[]?; .source == "q15_web_state")) | .key] | sort) == ["q15-web"] and
+		.services["q15-web"].environment.Q15_WEB_STATE_DIR == "/var/lib/q15-web" and
+		(.services["q15-web"].environment | has("Q15_WEB_TOKEN") | not) and
+		([.services["q15-web"].volumes[] | select(.source == "q15_web_state") | .target]) == ["/var/lib/q15-web"] and
+		(.volumes | has("q15_web_state")) and
 		([.services | to_entries[] | select(any(.value.volumes[]?; .source == "q15_memory")) | .key] | sort) == ["q15-agent", "q15-exec"] and
 		([.services["q15-agent"].volumes[], .services["q15-web"].volumes[] | select(.source == "q15_bridge") | .target] | unique) == ["/run/q15"] and
 		.services["q15-web"].environment.Q15_WEB_BRIDGE == "unix:///run/q15/bridge.sock" and

@@ -3,7 +3,7 @@ import type { ServerFrame } from "./protocol";
 
 import { compareSeq } from "./protocol";
 
-export type Connection = "connecting" | "connected" | "reconnecting" | "offline";
+export type Connection = "connecting" | "connected" | "reconnecting" | "offline" | "unauthorized";
 export interface ChatMessage extends Readonly<Omit<Message, "parts">> {
   readonly parts: readonly Readonly<Part>[];
   readonly key: string;

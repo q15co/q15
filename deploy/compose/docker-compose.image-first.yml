@@ -214,8 +214,11 @@ services:
       Q15_WEB_LISTEN: 0.0.0.0:8080
       Q15_WEB_BRIDGE: unix:///run/q15/bridge.sock
       Q15_WEB_ORIGIN: ${Q15_WEB_ORIGIN:-http://localhost:8080}
-      Q15_WEB_TOKEN: ${Q15_WEB_TOKEN:-}
+      Q15_WEB_STATE_DIR: /var/lib/q15-web
     volumes:
+      - type: volume
+        source: q15_web_state
+        target: /var/lib/q15-web
       - type: volume
         source: q15_bridge
         target: /run/q15
@@ -228,6 +231,7 @@ services:
       start_period: 20s
 
 volumes:
+  q15_web_state:
   q15_bridge:
   q15_agent_state:
   q15_exec_nix_store:

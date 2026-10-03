@@ -29,8 +29,11 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     cd systems/web && CGO_ENABLED=0 go build -o /out/q15-web .
 
+RUN mkdir /out/state && mkdir -m 0700 /out/state/q15-web
+
 FROM gcr.io/distroless/static-debian12:nonroot
 USER 65532:1000
+COPY --from=build --chown=65532:1000 /out/state/ /var/lib/
 COPY --from=build /out/q15-web /usr/local/bin/q15-web
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/q15-web"]

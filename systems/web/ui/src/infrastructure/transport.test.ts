@@ -59,8 +59,67 @@ function setup() {
     },
   };
 }
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
 describe("socket transport", () => {
+  it("stops reconnecting when an open session is revoked or expires", () => {
+    vi.useFakeTimers();
+    const { transport, socket, sockets, events } = setup();
+    socket.onclose?.(new CloseEvent("close", { code: 4401 }));
+    expect(events.connection).toHaveBeenLastCalledWith("unauthorized");
+    expect(events.error).toHaveBeenCalledWith(expect.stringContaining("Sign in again"));
+    vi.advanceTimersByTime(60_000);
+    expect(sockets).toHaveLength(1);
+    transport.stop();
+  });
+
+  it("checks HTTP session status when a handshake hides the 401", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 401 })),
+    );
+    const socket = new FakeSocket();
+    const events = {
+      frame: vi.fn<TransportEvents["frame"]>(),
+      connection: vi.fn<TransportEvents["connection"]>(),
+      error: vi.fn<TransportEvents["error"]>(),
+    };
+    const transport = new SocketTransport("ws://localhost/ws", () => socket);
+    transport.start(events, () => "0");
+    socket.close();
+    await vi.waitFor(() => expect(events.connection).toHaveBeenLastCalledWith("unauthorized"));
+    expect(fetch).toHaveBeenCalledWith("/auth/session", {
+      credentials: "same-origin",
+      cache: "no-store",
+    });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("keeps network failures retryable and ignores a stale session probe", async () => {
+    vi.useFakeTimers();
+    const socket = new FakeSocket();
+    const status = vi
+      .fn<() => Promise<number>>()
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValue(401);
+    const events = {
+      frame: vi.fn<TransportEvents["frame"]>(),
+      connection: vi.fn<TransportEvents["connection"]>(),
+      error: vi.fn<TransportEvents["error"]>(),
+    };
+    const transport = new SocketTransport("ws://localhost/ws", () => socket, status);
+    transport.start(events, () => "0");
+    socket.close();
+    await Promise.resolve();
+    expect(events.connection).toHaveBeenLastCalledWith("reconnecting");
+    socket.close();
+    transport.stop();
+    await Promise.resolve();
+    expect(events.connection).not.toHaveBeenCalledWith("unauthorized");
+  });
   it("connects with hello then sends, queues through the server, aborts and syncs", () => {
     const { transport, socket, events } = setup();
     expect(socket.sent[0]).toMatchObject({ v: 1, type: "hello", payload: { cursor: "41" } });

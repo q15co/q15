@@ -1,0 +1,89 @@
+.screen {
+  min-height: 100dvh;
+  background: radial-gradient(
+    ellipse at 50% 30%,
+    color-mix(in srgb, var(--primary) 6%, transparent),
+    transparent 65%
+  );
+  padding: var(--space-6);
+}
+.header {
+  max-width: 72rem;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-xl);
+  font-weight: 650;
+}
+.brand svg,
+.brand span {
+  color: var(--primary);
+}
+.card {
+  width: min(100%, 30rem);
+  margin: clamp(2rem, 12vh, 8rem) auto var(--space-8);
+}
+.icon {
+  display: inline-flex;
+  padding: var(--space-4);
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 9%, transparent);
+  border: 1px solid color-mix(in srgb, var(--primary) 20%, transparent);
+  border-radius: 1rem;
+}
+.card h1 {
+  font-size: var(--font-2xl);
+  line-height: var(--leading-heading);
+  margin: var(--space-6) 0 var(--space-3);
+}
+.card p {
+  color: var(--subtext);
+  line-height: var(--leading-body);
+}
+.signin {
+  width: 100%;
+  margin: var(--space-6) 0 var(--space-3);
+}
+.card .hint {
+  color: var(--muted-foreground);
+  font-size: var(--font-sm);
+}
+.status {
+  display: block;
+  margin: var(--space-4) 0;
+  color: var(--primary);
+}
+.enrollment {
+  margin-top: var(--space-8);
+  padding-top: var(--space-6);
+  border-top: 1px solid var(--border);
+}
+.enrollment summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--subtext);
+  font-size: var(--font-sm);
+}
+.enrollment label {
+  display: block;
+  margin-top: var(--space-4);
+  font-size: var(--font-sm);
+}
+.enrollment textarea {
+  width: 100%;
+  min-height: 6rem;
+  margin: var(--space-2) 0 var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  color: var(--foreground);
+  background: var(--sidebar);
+  resize: vertical;
+}

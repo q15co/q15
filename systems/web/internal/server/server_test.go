@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -209,10 +210,9 @@ func setup(t *testing.T, fake *fakeChat) (*Server, *httptest.Server) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = client.Close() })
-	authorizer, err := gate.NewTemporaryToken("test-secret")
-	if err != nil {
-		t.Fatal(err)
-	}
+	valid := &atomic.Bool{}
+	valid.Store(true)
+	authorizer := testAuthorizer{valid: valid}
 	content, err := assets.New(fstest.MapFS{"index.html": {Data: []byte("<html>chat</html>")}})
 	if err != nil {
 		t.Fatal(err)
@@ -240,8 +240,8 @@ func dial(t *testing.T, server *httptest.Server) *websocket.Conn {
 		ctx,
 		"ws"+strings.TrimPrefix(server.URL, "http")+"/ws",
 		&websocket.DialOptions{HTTPHeader: http.Header{
-			"Authorization": {
-				"Bearer test-secret",
+			"Cookie": {
+				"test-session=owner",
 			}, "Origin": {"https://chat.example"}, "Sec-Fetch-Site": {"same-origin"},
 		}},
 	)
@@ -490,7 +490,7 @@ func TestHistoryAndResumeExcludeLiveTurn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r.Header.Set("Authorization", "Bearer test-secret")
+	r.Header.Set("Cookie", "test-session=owner")
 	response, err := http.DefaultClient.Do(r)
 	if err != nil {
 		t.Fatal(err)
@@ -556,7 +556,7 @@ func TestBadHistoryQueriesAndSocketOrigin(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		r.Header.Set("Authorization", "Bearer test-secret")
+		r.Header.Set("Cookie", "test-session=owner")
 		response, err := http.DefaultClient.Do(r)
 		if err != nil {
 			t.Fatal(err)
@@ -571,7 +571,7 @@ func TestBadHistoryQueriesAndSocketOrigin(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		r.Header.Set("Authorization", "Bearer test-secret")
+		r.Header.Set("Cookie", "test-session=owner")
 		r.Header.Set("Origin", origin)
 		r.Header.Set("Sec-Fetch-Site", "same-origin")
 		response, err := http.DefaultClient.Do(r)
@@ -586,5 +586,59 @@ func TestBadHistoryQueriesAndSocketOrigin(t *testing.T) {
 		if response.StatusCode != want {
 			t.Errorf("origin %q = %d, want %d", origin, response.StatusCode, want)
 		}
+	}
+}
+
+// Transport tests use an isolated fake authorizer; auth's tests verify WebAuthn.
+type testAuthorizer struct{ valid *atomic.Bool }
+
+func (a testAuthorizer) SessionValid(context.Context) bool { return a.valid.Load() }
+
+func (a testAuthorizer) RequireScope(scope string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cookie, err := r.Cookie("test-session")
+		if err != nil || cookie.Value != "owner" || !a.valid.Load() {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if scope != "chat" {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(
+			w,
+			r.WithContext(gate.WithPrincipal(r.Context(), gate.Principal{ID: "owner"})),
+		)
+	})
+}
+
+func TestSocketRevalidatesSession(t *testing.T) {
+	for _, input := range []bool{false, true} {
+		t.Run(fmt.Sprint(input), func(t *testing.T) {
+			fake := newFakeChat()
+			s, httpServer := setup(t, fake)
+			conn := dial(t, httpServer)
+			hello(t, conn, 0)
+			s.config.Authorizer.(testAuthorizer).valid.Store(false)
+			if input {
+				send(
+					t,
+					conn,
+					"msg.send",
+					map[string]string{"text": "refused", "client_msg_id": "revoked"},
+				)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			_, _, err := conn.Read(ctx)
+			if websocket.CloseStatus(err) != websocket.StatusCode(4401) {
+				t.Fatalf("revoked socket: %v", err)
+			}
+			select {
+			case request := <-fake.sends:
+				t.Fatalf("revoked input reached bridge: %v", request)
+			default:
+			}
+		})
 	}
 }

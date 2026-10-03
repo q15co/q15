@@ -1,46 +1,141 @@
 # q15-web
 
-The web tier serves the browser socket, transcript API and app from one origin. It dials the agent's
-Unix bridge without an agent credential, never mounts memory, and stores no transcript or auth
-state. Only connection handles and active progress exist in memory. The temporary gate will be
-replaced by the authentication slice through `gate.Authorizer.RequireScope` and
-`gate.WithPrincipal`.
+The web tier serves the browser socket, transcript API and app from one origin. It authenticates one
+owner with WebAuthn and keeps its credential/session store separate from the agent. It dials the
+Unix bridge without an agent credential, never mounts memory, and stores no transcript.
+Authorization stays behind `gate.Authorizer.RequireScope` and `gate.WithPrincipal`.
 
 ## Build and run
 
 ```bash
 make project-setup
 make build-web
-Q15_WEB_ORIGIN=http://localhost:8080 Q15_WEB_TOKEN=local-development \
+Q15_WEB_ORIGIN=http://localhost:8080 Q15_WEB_STATE_DIR="$PWD/.local/web-state" \
   Q15_WEB_BRIDGE=unix:///run/q15/bridge.sock ./bin/q15-web
 ```
 
-The agent must have `agent.bridge.listen_target: unix:///run/q15/bridge.sock` and provision that
-socket. The web process needs permission to connect to it. Startup checks the bridge within five
-seconds and fails on any protocol mismatch. A supervisor can restart it while the agent starts up;
-startup never serves requests with an unchecked bridge. Active stream interruptions retry after one
-second with the last received **event index**. An agent restart invalidates the ephemeral session,
-sends `resync_from_head`, and the next send allocates a fresh handle.
+The agent must provision `agent.bridge.listen_target: unix:///run/q15/bridge.sock`. The web process
+needs permission to connect. Startup checks the bridge within five seconds and fails on protocol
+mismatch. It also refuses invalid, incompatible or unwritable auth state. An empty store starts
+locked, with no enrolled devices; it never enables a public first-run setup route.
 
-| Variable                              | Default                       | Purpose                                       |
-| ------------------------------------- | ----------------------------- | --------------------------------------------- |
-| `Q15_WEB_LISTEN`                      | `127.0.0.1:8080`              | HTTP listen address                           |
-| `Q15_WEB_BRIDGE`                      | `unix:///run/q15/bridge.sock` | Credential-free bridge socket                 |
-| `Q15_WEB_ORIGIN`                      | Required                      | Exact public origin, without a trailing slash |
-| `Q15_WEB_TOKEN`                       | Required                      | Temporary owner token                         |
-| `Q15_WEB_DIR`                         | Embedded assets               | Confined development bundle directory         |
-| `Q15_WEB_TLS_CERT`, `Q15_WEB_TLS_KEY` | Unset                         | Optional direct TLS; both must be supplied    |
+| Variable                              | Default                       | Purpose                                             |
+| ------------------------------------- | ----------------------------- | --------------------------------------------------- |
+| `Q15_WEB_LISTEN`                      | `127.0.0.1:8080`              | HTTP listen address                                 |
+| `Q15_WEB_BRIDGE`                      | `unix:///run/q15/bridge.sock` | Credential-free bridge socket                       |
+| `Q15_WEB_ORIGIN`                      | Required                      | Exact HTTPS public origin, without a trailing slash |
+| `Q15_WEB_STATE_DIR`                   | `/var/lib/q15-web`            | Absolute private directory for owner authentication |
+| `Q15_WEB_DIR`                         | Embedded assets               | Confined development bundle directory               |
+| `Q15_WEB_TLS_CERT`, `Q15_WEB_TLS_KEY` | Unset                         | Optional direct TLS; both must be supplied          |
 
-HTTP on the loopback listener supports local development or an ingress that terminates TLS. Use the
-TLS pair for direct HTTPS. The temporary gate accepts `Authorization: Bearer <token>` for tooling or
-browser Basic authentication with username `q15` and the token as password. Tokens in query strings,
-cookies and socket subprotocols are ignored. A browser's native Basic challenge lets the app and
-socket share credentials without storing the token in JavaScript.
+The public origin must use HTTPS. Only `http://localhost` is allowed for local browser development
+(Secure cookies are supported on localhost). The HTTP listener can sit behind host cloudflared,
+which terminates TLS. Host and forwarded headers cannot change the configured origin or identity.
+Changing the configured origin while retaining a store fails startup; use the original origin or
+explicitly reset and re-enroll. Credentials are tied to that origin's hostname as the RP ID.
 
-All paths except the exact `/healthz` require the `chat` scope. The header policy covers errors,
-assets and upgrades. Socket upgrades require the exact configured `Origin`. Fetch metadata must be
-`same-origin` when present; native browser WebSocket handshakes can omit it. Request Host and
-forwarded headers do not redefine the allowed origin.
+## Enroll, sign in and revoke
+
+Use a current browser supporting `PublicKeyCredential.parseCreationOptionsFromJSON`,
+`parseRequestOptionsFromJSON` and `toJSON`. Every credential requires user verification (PIN or
+biometrics) and must be discoverable and device-bound. **Synced/backup-eligible passkeys are
+refused**, because revoking a synchronized key cannot revoke one physical device independently. Use
+a compatible security key with PIN verification or a device-bound platform authenticator. The
+service does not certify hardware provenance: no manufacturer attestation is requested.
+
+Enrollment is a host operation, including for the first device. There is no public enrollment API.
+The process exposes `admin.sock` (0600) inside its state directory (0700), never on TCP and never in
+the bridge volume. On Hermes, execute the CLI inside the web container:
+
+```bash
+docker compose exec q15-web /usr/local/bin/q15-web auth enroll 'Laptop'
+```
+
+1. Open the configured public origin on the device to enroll. Its locked page answers **401** and
+   shows Sign in plus an **Enroll from Hermes** panel.
+1. Paste the options printed by the command into that panel and click Create device credential.
+1. Copy the resulting one-line response into the waiting host command within five minutes. Only that
+   command submits the registration to the private Unix socket.
+1. Click Sign in and complete the authenticator's PIN/biometric check.
+
+The copied JSON contains a challenge and public attestation data, never a private key or session
+credential. The public origin can perform a browser ceremony, but cannot register its result: no
+forwarded request, first-run race, existing session, or public registration response authorizes
+enrollment. The host operator decides which response to accept. Do not accept a response supplied by
+someone else. The CLI can be run through an SSH session to Hermes from the device being enrolled.
+
+```bash
+docker compose exec q15-web /usr/local/bin/q15-web auth list
+docker compose exec q15-web /usr/local/bin/q15-web auth revoke DEVICE_ID
+```
+
+Revocation deletes that credential and all its sessions. Other enrolled credentials stay valid. A
+lost authenticator cannot sign in again. Host access is the recovery path: enroll a replacement and
+revoke the lost device; there is no recovery password. Enroll a spare security key in advance. For
+an image-first deployment, add its `--env-file` and `-f` flags to these Compose commands. With
+Podman, use `podman exec -it CONTAINER /usr/local/bin/q15-web auth ...`.
+
+## Sessions and HTTP policy
+
+Successful sign-in mints a random 256-bit `__Host-q15s` cookie: Secure, HttpOnly, SameSite=Strict,
+Path=/, no Domain. Only its SHA-256 digest persists. No private key or session token is exposed to
+JavaScript, browser storage, URLs, referrers or application logs. A passkey assertion is a signed,
+single-use challenge response, not a reusable bearer credential. Login challenges are bound to a
+separate HttpOnly cookie, expire after two minutes and are consumed even on failed verification.
+
+Sessions expire server-side after **12 hours**, with no sliding renewal. Sign out deletes the server
+record and cookie. Sessions grant `chat` only; `console` is refused, including for the owner. A
+future console must implement a fresh, time-boxed assertion before adding that scope. Open sockets
+recheck sessions before dispatch and output, and at least once per second while idle.
+Expiry/revocation closes them with code 4401. The UI stops reconnecting and shows a sign-in link; a
+failed upgrade checks `/auth/session` to distinguish authentication loss from a network failure.
+
+Without a valid session, `/`, `/ws`, `/api/turns`, assets and unknown paths answer 401. `/` serves
+the same compiled React shell with per-response CSP nonces, rendering sign-in before any chat
+adapters are created. Its script, style and fonts are inlined so locked navigation needs no public
+asset exceptions. The shell contains no application data, and this trades separate asset caching for
+one browser entry and consistent presentation. `/healthz` remains the only unauthenticated
+successful resource. The unavoidable proof exchange is `POST /auth/login` (401 plus non-secret
+challenge options) and `POST /auth/login/finish` (204 **only after** a valid enrolled WebAuthn
+assertion). They do not reach the bridge. `GET /auth/session` and `POST /auth/logout` require a
+valid chat session.
+
+All HTTP mutations, including login and logout, require both the exact configured Origin and
+`Sec-Fetch-Site: same-origin`. Native WebSocket upgrades require the exact Origin and reject
+conflicting Fetch Metadata when present. The security header policy covers errors, assets and
+upgrades. The login page uses nonce scripts/styles, without unsafe-inline. There is no password,
+Basic, bearer-token, query-token or proxy-identity fallback.
+
+## State, limits and trust
+
+`auth.json` (0600) stores the random owner handle, WebAuthn public credentials/counters and hashed
+sessions. Atomic writes and directory sync precede acknowledgment; a persistence error closes the
+running authorizer. An exclusive file lock prevents multiple writers. Restart retains credentials
+and unexpired sessions, and drops pending ceremonies. The format is versioned; unsupported formats
+fail startup. Persist the directory across image updates; back it up privately. Restoring an old
+backup can restore previously revoked devices/sessions: revoke them again before exposing service.
+Deleting the store removes all access and requires host enrollment again.
+
+The limits are 32 devices, 128 sessions, 64 pending login challenges, five-minute enrollment
+ceremonies, 64 KiB ceremony input and a 4 MiB state file. Expired sessions are pruned on writes.
+Authentication attempts share a bounded 120-request/minute budget; no forwarded IP headers are
+trusted. This bounds work/state rather than promising availability against a distributed attack.
+Structured audit events record enrollment, login/refusal, logout and revocation with device IDs.
+Logs do not contain cookies, assertions, bodies or transcript data. Configure host log retention
+separately.
+
+Host administrators and the web process remain trusted: access to the admin socket or writable store
+can enroll an identity. The agent has neither mount. An authenticated XSS can act through the
+HttpOnly cookie; it cannot read it. Browser/OS/authenticator compromise, malicious updates and a
+malicious TLS terminator are outside this access-control guarantee. **Cloudflare terminates TLS and
+can read chat traffic and cookies. This is not end-to-end encryption from Cloudflare.** Model
+providers also receive prompts by design. Cloudflare Access is optional defense in depth, not
+required by this gate. Tunnel only the public loopback port, never the admin socket or bridge; do
+not configure caching of authenticated responses.
+
+Active agent stream interruptions retry after one second with the last received **event index**. An
+agent restart invalidates its ephemeral logical session, sends `resync_from_head`, and the next send
+allocates a fresh handle; it does not invalidate the independent browser auth store.
 
 ## Browser contract
 

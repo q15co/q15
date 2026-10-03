@@ -1,11 +1,48 @@
+import type { DefaultTreeAdapterMap } from "parse5";
 import type { Plugin, ResolvedConfig } from "vite-plus";
 
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { parse, serialize } from "parse5";
 import { build } from "vite-plus";
 
 import type { ShellManifest } from "../src/shared/shell-manifest";
+
+function inlineShell(source: string, script: string, style: string) {
+  const tree = parse(source);
+  const nodes: DefaultTreeAdapterMap["node"][] = [tree];
+  let scripts = 0;
+  let styles = 0;
+  for (const node of nodes) {
+    if (!("childNodes" in node)) continue;
+    nodes.push(...node.childNodes);
+    if (!("tagName" in node)) continue;
+    const isScript = node.tagName === "script" && node.attrs.some((attr) => attr.name === "src");
+    const isStyle =
+      node.tagName === "link" &&
+      node.attrs.some((attr) => attr.name === "rel" && attr.value === "stylesheet");
+    if (!isScript && !isStyle) continue;
+    node.nodeName = node.tagName = isScript ? "script" : "style";
+    node.attrs = [{ name: "nonce", value: "__Q15_NONCE__" }];
+    if (isScript) {
+      node.attrs.push({ name: "type", value: "module" });
+      scripts++;
+    } else styles++;
+    node.childNodes = [
+      {
+        nodeName: "#text",
+        parentNode: node,
+        value: isScript
+          ? script.replaceAll(/<\/script/giu, "\\u003c/script")
+          : style.replaceAll(/<\/style/giu, "\\3c /style"),
+      },
+    ];
+  }
+  if (scripts !== 1 || styles !== 1)
+    throw new Error("Expected one module and stylesheet in the UI shell");
+  return serialize(tree);
+}
 
 export async function buildWorker(root: string, paths: string[], version: string) {
   const manifest = { paths, version } satisfies ShellManifest;
@@ -37,6 +74,14 @@ export function shell(): Plugin {
     name: "q15-shell",
     apply: "build",
     enforce: "post",
+    config() {
+      return {
+        build: {
+          assetsInlineLimit: Number.MAX_SAFE_INTEGER,
+          rolldownOptions: { output: { codeSplitting: false } },
+        },
+      };
+    },
     configResolved(resolved) {
       config = resolved;
     },
@@ -44,6 +89,28 @@ export function shell(): Plugin {
       // Vite finishes HTML and dynamic-import preload rewriting in this hook.
       order: "post",
       async handler(_, bundle) {
+        const html = bundle["index.html"];
+        const scripts = Object.values(bundle).filter((entry) => entry.type === "chunk");
+        const styles = Object.values(bundle).filter(
+          (entry) => entry.type === "asset" && entry.fileName.endsWith(".css"),
+        );
+        const script = scripts[0];
+        const style = styles[0];
+        if (
+          !html ||
+          html.type !== "asset" ||
+          typeof html.source !== "string" ||
+          !script ||
+          scripts.length !== 1 ||
+          !style ||
+          style.type !== "asset" ||
+          typeof style.source !== "string" ||
+          styles.length !== 1
+        )
+          throw new Error("Expected a self-contained UI shell");
+        html.source = inlineShell(html.source, script.code, style.source);
+        delete bundle[script.fileName];
+        delete bundle[style.fileName];
         const paths = [
           "/index.html",
           "/manifest.webmanifest",
@@ -58,7 +125,7 @@ export function shell(): Plugin {
         for (const path of paths) {
           digest.update(path);
           const entry = bundle[path.slice(1)];
-          if (entry) digest.update(entry.type === "chunk" ? entry.code : entry.source);
+          if (entry?.type === "asset") digest.update(entry.source);
           else digest.update(readFileSync(resolve(config.publicDir, path.slice(1))));
         }
         const version = digest.digest("hex").slice(0, 16);

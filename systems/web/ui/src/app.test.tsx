@@ -66,6 +66,29 @@ function MotionReadout() {
 }
 
 describe("app lifecycle and interaction", () => {
+  it("shows expired sessions and a sign-in link, and reports a failed logout", async () => {
+    const { store, events } = setup();
+    const onLogout = vi.fn<() => Promise<void>>().mockRejectedValue(new Error("offline"));
+    render(
+      <MotionProvider>
+        <App store={store} onLogout={onLogout} />
+      </MotionProvider>,
+    );
+    await waitFor(() => expect(store.getSnapshot().loadingHistory).toBe(false));
+    act(() => required(events[0]).connection("unauthorized"));
+    expect(screen.getByText("Sign-in required")).toBeDefined();
+    expect(
+      screen
+        .getByRole("link", { name: "Session expired or revoked. Sign in again." })
+        .getAttribute("href"),
+    ).toBe("/");
+    fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+    expect(await screen.findByRole("alert")).toHaveProperty(
+      "textContent",
+      "Sign-out failed. Try again.",
+    );
+    expect(onLogout).toHaveBeenCalledOnce();
+  });
   it("sends welcome suggestions, toggles navigation/theme, reports presence and cleans up subscriptions", async () => {
     const { store, transport } = setup();
     const { unmount } = render(

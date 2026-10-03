@@ -20,6 +20,7 @@ required_tools=(
 	pnpm
 	golangci-lint
 	staticcheck
+	govulncheck
 	revive
 	golines
 	actionlint
@@ -328,6 +329,7 @@ fi
 
 install_go_tool "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${GOLANGCI_LINT_VERSION}"
 install_go_tool "honnef.co/go/tools/cmd/staticcheck@${STATICCHECK_VERSION}"
+install_go_tool "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"
 install_go_tool "github.com/mgechev/revive@${REVIVE_VERSION}"
 install_go_tool "github.com/segmentio/golines@${GOLINES_VERSION}"
 install_go_tool "github.com/rhysd/actionlint/cmd/actionlint@${ACTIONLINT_VERSION}"

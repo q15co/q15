@@ -27,7 +27,7 @@ For a long-running image-first deployment:
 ```bash
 make compose-secrets-init
 cp deploy/compose/release.env.example deploy/compose/release.env
-export Q15_WEB_TOKEN="$(openssl rand -hex 32)"
+export Q15_WEB_ORIGIN=https://chat.example.com
 docker compose --env-file deploy/compose/release.env \
   -f deploy/compose/docker-compose.image-first.yml up -d --wait
 ```
@@ -162,22 +162,35 @@ same stamp invalidation plus automatic collection recreation applies in reverse.
 
 ## Browser chat and the bridge socket
 
-Both Compose files include `q15-web`. Set a nonempty `Q15_WEB_TOKEN` before starting the stack:
+Both Compose files include `q15-web`, with owner WebAuthn authentication and individually revocable
+credentials. No shared password is needed. For local development:
 
 ```bash
-export Q15_WEB_TOKEN="$(openssl rand -hex 32)"
 make compose-up
 ```
 
-Open `http://localhost:8080` and use username `q15` with that token as the password in the browser's
-native Basic prompt. The token is temporary owner authentication; login and enrolment screens are a
-later slice. Persist your chosen token in your deployment environment if chat should survive a
-restart without a new challenge. `Q15_WEB_ORIGIN` defaults to exactly `http://localhost:8080`; an
-alternate hostname must be configured explicitly on the web tier.
+Open `http://localhost:8080`, then follow the host CLI enrollment instructions in
+[the web README](/systems/web/README.md#enroll-sign-in-and-revoke). Set `Q15_WEB_ORIGIN` to your
+exact HTTPS origin before enrolling production credentials. The local default is
+`http://localhost:8080`; remote HTTP origins fail startup. Credentials and sessions are bound to the
+configured origin.
 
-Only `127.0.0.1:8080` is published. Tunnel ingress is deliberately unchanged, and no external
-ingress is provisioned in this slice. **Kubernetes is out of scope**: `deploy/kubernetes/base/`
-remains untouched. Its TCP model does not implement this Unix-socket bridge deployment.
+The `q15_web_state` named volume mounts at `/var/lib/q15-web` in **q15-web only**. The image seeds
+it with UID 65532, GID 1000 and mode 0700. It holds the 0600 auth state and admin socket. Preserve
+it across updates; deleting it forces host enrollment again. Never share this volume with the agent,
+executor or cloudflared. For a bind mount or Podman volume that masks image permissions, provision
+the directory with the mapped container UID/GID and mode 0700 before starting; incorrect permissions
+fail startup. Do not use `down -v` on a persistent deployment.
+
+Only `127.0.0.1:8080` is published. On Hermes the existing host cloudflared tunnel can add an
+ingress for the configured chat hostname with `service = "http://127.0.0.1:8080"`. Keep its default
+404 fallback and forward only this public port. Host tunnel configuration and live activation belong
+to the dots deployment and are not changed here. The tunnel is transport, not owner identity;
+Cloudflare Access is optional additional protection. Cloudflare terminates TLS and can read traffic;
+chat is not end-to-end encrypted from the edge. Do not enable edge caching of authenticated data.
+
+**Kubernetes is out of scope**: `deploy/kubernetes/base/` remains untouched. Its TCP model does not
+implement this Unix-socket bridge deployment or the new auth-state volume.
 
 The new `q15_bridge` named volume mounts at `/run/q15` in exactly the agent and the web tier. The
 agent's `bridge.listen_target`, the web's `Q15_WEB_BRIDGE` and the agent's documented default all

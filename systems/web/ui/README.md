@@ -17,9 +17,10 @@ frozen server frames, supports queueing and Stop, and supplies canonical history
 from production builds. Component tests use q15 protocol parts directly. Production speaks q15's
 versioned WebSocket contract directly.
 
-For a real backend, set `Q15_WEB_ORIGIN=http://127.0.0.1:5173` on q15-web and open the dev server
-without `?preview`. Its `/ws` and `/api` proxies preserve the browser origin. Authenticate with the
-native Basic challenge before using chat; production and the embedded bundle share one origin.
+For a real backend, set `Q15_WEB_ORIGIN=http://localhost:5173` on q15-web with a separate private
+development state directory, then open `http://localhost:5173` without `?preview`. Its `/auth`,
+`/ws` and `/api` proxies preserve the browser origin. Enroll through the host CLI and sign in with
+the device credential; production and the embedded bundle share one origin.
 
 ```bash
 make ui-lint
@@ -33,7 +34,17 @@ make verify
 
 On NixOS, set `PLAYWRIGHT_CHROMIUM_EXECUTABLE` to a host Chromium or Chrome executable if the
 downloaded browser cannot run. `ui-e2e` tests the compiled production app with fake HTTP/socket
-endpoints, including native scroll anchoring and narrow screens.
+endpoints, including native scroll anchoring and narrow screens. It also starts a local Go fixture
+with the real owner gate and private admin socket to verify host enrollment, passkey sign-in and
+logout with a Chromium virtual authenticator. Go from `go.work` is required for this gate.
+
+`src/main.tsx` is the sole browser entry. It checks the server session before constructing chat
+adapters and renders either `Login` or `App`. The Vite shell plugin inlines compiled script, style
+and font assets into one `index.html`; the Go tier adds fresh CSP nonces and returns it with 401
+when locked, or 200 when authenticated. API and static routes keep their session gate. This avoids a
+separate login app and unauthenticated asset exceptions. Build output contains no identity, session
+credential or transcript. Login/enrollment I/O lives in an infrastructure adapter behind the
+`OwnerAuthentication` application port.
 
 `make ui-clean` restores `.gitkeep` and Go packages remain buildable. A runnable web binary needs a
 built bundle; `make build-web` builds it first. Build output and dependencies stay ignored, and only

@@ -68,8 +68,12 @@ beforeEach(() => {
   vi.stubGlobal("WebSocket", ReadySocket);
   vi.stubGlobal(
     "fetch",
-    vi.fn<typeof fetch>(() =>
-      Promise.resolve(Response.json({ turns: [], head_seq: "0", has_more: false })),
+    vi.fn<typeof fetch>((path) =>
+      Promise.resolve(
+        path === "/auth/session"
+          ? new Response(null, { status: 204 })
+          : Response.json({ turns: [], head_seq: "0", has_more: false }),
+      ),
     ),
   );
 });
@@ -84,6 +88,18 @@ afterEach(() => {
 });
 
 describe("browser composition root", () => {
+  it("renders sign-in in the same application without opening chat adapters", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 401 })),
+    );
+    await act(async () => {
+      await vi.importActual("./main.tsx");
+    });
+    expect(screen.getByRole("button", { name: "Sign in" })).toBeDefined();
+    expect(ReadySocket.created).toEqual([]);
+  });
+
   it("starts real adapters and keeps chat usable when production worker registration fails", async () => {
     vi.stubEnv("DEV", false);
     vi.stubEnv("PROD", true);

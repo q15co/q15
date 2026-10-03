@@ -32,55 +32,6 @@ func TestHeaderGolden(t *testing.T) {
 	}
 }
 
-func TestTemporaryToken(t *testing.T) {
-	if _, err := NewTemporaryToken(" "); err == nil {
-		t.Fatal("empty gate accepted")
-	}
-	gate, err := NewTemporaryToken("secret")
-	if err != nil {
-		t.Fatal(err)
-	}
-	handler := gate.RequireScope(
-		"chat",
-		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if PrincipalFrom(r.Context()).ID != "owner" {
-				t.Error("missing principal")
-			}
-			w.WriteHeader(204)
-		}),
-	)
-	for _, test := range []struct {
-		name, header, username, password string
-		want                             int
-	}{
-		{name: "missing", want: 401}, {name: "wrong", header: "Bearer wrong", want: 401},
-		{name: "bearer", header: "Bearer secret", want: 204}, {name: "raw", header: "secret", want: 401},
-		{name: "basic", username: "q15", password: "secret", want: 204},
-		{name: "wrong basic user", username: "owner", password: "secret", want: 401},
-		{name: "wrong basic password", username: "q15", password: "wrong", want: 401},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			r := httptest.NewRequest("GET", "/?token=secret", nil)
-			r.Header.Set("Authorization", test.header)
-			if test.username != "" {
-				r.SetBasicAuth(test.username, test.password)
-			}
-			w := httptest.NewRecorder()
-			handler.ServeHTTP(w, r)
-			if w.Code != test.want {
-				t.Fatalf("status %d, want %d", w.Code, test.want)
-			}
-		})
-	}
-	r := httptest.NewRequest("GET", "/", nil)
-	r.Header.Set("Authorization", "Bearer secret")
-	w := httptest.NewRecorder()
-	gate.RequireScope("console", handler).ServeHTTP(w, r)
-	if w.Code != 403 {
-		t.Fatalf("console scope status %d", w.Code)
-	}
-}
-
 func TestOrigin(t *testing.T) {
 	for _, test := range []struct {
 		origin, site string

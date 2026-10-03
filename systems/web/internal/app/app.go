@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/q15co/q15/systems/web/internal/assets"
+	"github.com/q15co/q15/systems/web/internal/auth"
 	"github.com/q15co/q15/systems/web/internal/bridge"
 	"github.com/q15co/q15/systems/web/internal/gate"
 	"github.com/q15co/q15/systems/web/internal/server"
@@ -20,12 +21,12 @@ import (
 
 const bridgeConnectTimeout = 5 * time.Second
 
-// Config is deliberately environment-only until the authentication slice lands.
+// Config supplies process paths and the fixed public origin.
 type Config struct {
 	Listen    string
 	Bridge    string
 	Origin    string
-	Token     string
+	StateDir  string
 	Directory string
 	TLSCert   string
 	TLSKey    string
@@ -37,16 +38,27 @@ func Run(args []string) error {
 	if len(args) == 1 && args[0] == "--healthcheck" {
 		return healthcheck(os.Getenv("Q15_WEB_LISTEN"))
 	}
+	stateDir := os.Getenv("Q15_WEB_STATE_DIR")
+	if stateDir == "" {
+		stateDir = "/var/lib/q15-web"
+	}
+	if len(args) > 0 && args[0] == "auth" {
+		return auth.RunAdmin(stateDir, args[1:], os.Stdin, os.Stdout, os.Stderr)
+	}
 	if len(args) != 0 {
 		return errors.New("q15-web accepts no arguments")
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	config := Config{Listen: os.Getenv("Q15_WEB_LISTEN"), Bridge: os.Getenv("Q15_WEB_BRIDGE"),
-		Origin: os.Getenv(
-			"Q15_WEB_ORIGIN",
-		), Token: os.Getenv("Q15_WEB_TOKEN"), Directory: os.Getenv("Q15_WEB_DIR"),
-		TLSCert: os.Getenv("Q15_WEB_TLS_CERT"), TLSKey: os.Getenv("Q15_WEB_TLS_KEY")}
+	config := Config{
+		Listen:    os.Getenv("Q15_WEB_LISTEN"),
+		Bridge:    os.Getenv("Q15_WEB_BRIDGE"),
+		Origin:    os.Getenv("Q15_WEB_ORIGIN"),
+		StateDir:  stateDir,
+		Directory: os.Getenv("Q15_WEB_DIR"),
+		TLSCert:   os.Getenv("Q15_WEB_TLS_CERT"),
+		TLSKey:    os.Getenv("Q15_WEB_TLS_KEY"),
+	}
 	if config.Listen == "" {
 		config.Listen = "127.0.0.1:8080"
 	}
@@ -93,15 +105,20 @@ func Serve(ctx context.Context, config Config) error {
 	if (config.TLSCert == "") != (config.TLSKey == "") {
 		return errors.New("both TLS certificate and key are required")
 	}
-	authorizer, err := gate.NewTemporaryToken(config.Token)
-	if err != nil {
-		return err
-	}
 	content, err := assets.Load(config.Directory)
 	if err != nil {
 		return err
 	}
 	defer content.Close()
+	shell, err := content.Shell()
+	if err != nil {
+		return err
+	}
+	authorizer, err := auth.Open(config.StateDir, config.Origin, shell, nil)
+	if err != nil {
+		return err
+	}
+	defer authorizer.Close()
 	client, err := connectBridge(ctx, config.Bridge)
 	if err != nil {
 		return err
@@ -116,6 +133,14 @@ func Serve(ctx context.Context, config Config) error {
 		return err
 	}
 	defer web.Close()
+	adminListener, adminHandler, err := authorizer.ListenAdmin()
+	if err != nil {
+		return err
+	}
+	defer adminListener.Close()
+	adminServer := &http.Server{Handler: adminHandler, ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: time.Minute, MaxHeaderBytes: 8192}
+	defer adminServer.Close()
 	listener, err := net.Listen("tcp", config.Listen)
 	if err != nil {
 		return err
@@ -124,11 +149,14 @@ func Serve(ctx context.Context, config Config) error {
 	httpServer := &http.Server{
 		Handler:           web,
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      15 * time.Second,
 		IdleTimeout:       time.Minute,
 		MaxHeaderBytes:    32 << 10,
 	}
 	defer httpServer.Close()
-	errCh := make(chan error, 1)
+	errCh := make(chan error, 2)
+	go func() { errCh <- adminServer.Serve(adminListener) }()
 	go func() {
 		if config.TLSCert != "" {
 			errCh <- httpServer.ServeTLS(listener, config.TLSCert, config.TLSKey)

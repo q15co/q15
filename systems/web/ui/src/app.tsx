@@ -33,11 +33,20 @@ function isInstallEvent(event: Event): event is InstallEvent {
   return "prompt" in event && typeof event.prompt === "function";
 }
 
-export function App({ store, preview = false }: { store: ChatStore; preview?: boolean }) {
+export function App({
+  store,
+  preview = false,
+  onLogout,
+}: {
+  store: ChatStore;
+  preview?: boolean;
+  onLogout?: () => Promise<void>;
+}) {
   const reduced = useMotionPreference();
   const state = useSyncExternalStore(store.subscribe, store.getSnapshot);
   const [theme, setTheme] = useState(initialTheme);
   const [menu, setMenu] = useState(false);
+  const [logoutError, setLogoutError] = useState<string | null>(null);
   const [install, setInstall] = useState<InstallEvent | null>(null);
   const promptInstall = async (event: InstallEvent) => {
     try {
@@ -68,6 +77,7 @@ export function App({ store, preview = false }: { store: ChatStore; preview?: bo
     };
   }, [store]);
   const connected = state.connection === "connected";
+  const unauthorized = state.connection === "unauthorized";
   return (
     <div className={styles.appShell}>
       <a className={styles.skipLink} href="#message-input">
@@ -122,7 +132,13 @@ export function App({ store, preview = false }: { store: ChatStore; preview?: bo
         <div className={styles.sidebarFooter}>
           <span className={styles.connectionStatus}>
             <i className={clsx(styles.statusDot, !connected && styles.disconnected)} />
-            {preview ? "Offline preview" : connected ? "Connected" : "Reconnecting…"}
+            {preview
+              ? "Offline preview"
+              : unauthorized
+                ? "Sign-in required"
+                : connected
+                  ? "Connected"
+                  : "Reconnecting…"}
           </span>
           <Button
             variant="ghost"
@@ -164,6 +180,18 @@ export function App({ store, preview = false }: { store: ChatStore; preview?: bo
             <span>Chat</span>
           </div>
           <div className={styles.topbarRight}>
+            {logoutError !== null && <span role="alert">{logoutError}</span>}
+            {onLogout && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  void onLogout().catch(() => setLogoutError("Sign-out failed. Try again."));
+                }}
+              >
+                Sign out
+              </Button>
+            )}
             {preview && <span className={styles.previewBadge}>Preview</span>}
             {install && (
               <Button
@@ -182,9 +210,13 @@ export function App({ store, preview = false }: { store: ChatStore; preview?: bo
         {!connected && (
           <output className={styles.connectionBanner}>
             <WifiOff size={15} />
-            {state.connection === "offline"
-              ? "Disconnected. Refresh to reconnect."
-              : "Reconnecting to q15…"}
+            {unauthorized ? (
+              <a href="/">Session expired or revoked. Sign in again.</a>
+            ) : state.connection === "offline" ? (
+              "Disconnected. Refresh to reconnect."
+            ) : (
+              "Reconnecting to q15…"
+            )}
           </output>
         )}
         {(state.notice !== null || state.error !== null) && (
