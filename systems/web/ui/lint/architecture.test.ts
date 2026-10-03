@@ -121,6 +121,42 @@ describe("Oxlint architecture guards", () => {
     expect(result.stdout).toContain("no-restricted-globals");
   });
 
+  it.each(["ts", "test.ts"])("retains type-safety rules in %s files", (extension) => {
+    const cases = {
+      assertion: {
+        source: "export const text = (value: unknown) => value as string;",
+        rule: "consistent-type-assertions",
+      },
+      any: {
+        source: "export const echo = (value: any) => value;",
+        rule: "no-explicit-any",
+      },
+      nonnull: {
+        source: "export const text = (value: string | undefined) => value!;",
+        rule: "no-non-null-assertion",
+      },
+      unsafe: {
+        source: "export const text: string = JSON.parse('\"value\"');",
+        rule: "no-unsafe-assignment",
+      },
+      promise: {
+        source: 'export function run() { Promise.resolve("ready"); }',
+        rule: "no-floating-promises",
+      },
+    };
+    const path = (name: string) => `src/domain/architecture-probe-${name}.${extension}`;
+    const result = probe(
+      Object.fromEntries(Object.entries(cases).map(([name, value]) => [path(name), value.source])),
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(1);
+    const output = result.stdout + result.stderr;
+    for (const [name, value] of Object.entries(cases)) {
+      const diagnostics = output.split("\n").filter((line) => line.startsWith(`${path(name)}:`));
+      expect(diagnostics.join("\n")).toContain(value.rule);
+    }
+  });
+
   it("rejects cycles using the native import plugin", () => {
     const paths = [
       "src/domain/architecture-probe-first.ts",

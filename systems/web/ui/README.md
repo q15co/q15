@@ -92,7 +92,8 @@ exact optional properties, indexed access, returns, overrides, unreachable code,
 and dependency declarations. Framework/counting-rule exceptions are documented beside their
 settings; test-only overrides permit fixtures and mocks while retaining type-safety rules.
 Architecture tests run the actual pinned Oxlint against forbidden and permitted dependency probes,
-so changing an override cannot silently weaken these boundaries.
+and verify that assertion, `any`, non-null, unsafe assignment and floating-promise rules remain
+active in both production and test files. Changing an override cannot silently weaken these guards.
 
 Oxfmt automatically sorts imports into external, relative type, relative value and stylesheet
 groups. CSS side-effect imports keep their original execution order. Sorting runs through the
