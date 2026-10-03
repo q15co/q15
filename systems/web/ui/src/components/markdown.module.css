@@ -1,0 +1,104 @@
+.markdown > :first-child {
+  margin-top: 0;
+}
+.markdown > :last-child {
+  margin-bottom: 0;
+}
+.markdown p {
+  margin: 0 0 var(--space-4);
+}
+.markdown h1,
+.markdown h2,
+.markdown h3,
+.markdown h4,
+.markdown h5,
+.markdown h6 {
+  font-weight: 600;
+  line-height: var(--leading-heading);
+  margin: var(--space-6) 0 var(--space-3);
+  letter-spacing: -0.015em;
+}
+.markdown h1 {
+  font-size: var(--font-xl);
+}
+.markdown h2 {
+  font-size: var(--font-lg);
+}
+.markdown h3,
+.markdown h4,
+.markdown h5,
+.markdown h6 {
+  font-size: 1em;
+  color: var(--subtext);
+}
+.markdown a {
+  color: var(--blue);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.markdown ul,
+.markdown ol {
+  padding-left: var(--space-6);
+  margin: var(--space-4) 0;
+}
+.markdown li + li {
+  margin-top: var(--space-2);
+}
+.markdown li > p {
+  margin-bottom: var(--space-2);
+}
+.markdown ul {
+  list-style: disc;
+}
+.markdown ol {
+  list-style: decimal;
+}
+.markdown blockquote {
+  border-left: 2px solid var(--primary);
+  padding-left: var(--space-4);
+  color: var(--foreground);
+  margin: var(--space-5) 0;
+}
+.markdown code {
+  font-size: 0.875em;
+  background: var(--surface);
+  padding: 0.125em 0.35em;
+  border-radius: var(--space-1);
+  color: var(--foreground);
+}
+.markdown pre {
+  background: var(--sidebar);
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: 0.625rem;
+  overflow: auto;
+  margin: var(--space-5) 0;
+  line-height: var(--leading-ui);
+}
+.markdown pre code {
+  color: var(--foreground);
+  padding: 0;
+  background: none;
+  font-size: inherit;
+}
+.markdown table {
+  display: block;
+  max-width: 100%;
+  overflow: auto;
+  border-collapse: collapse;
+  margin: var(--space-5) 0;
+  font-size: var(--font-sm);
+}
+.markdown th,
+.markdown td {
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+}
+.markdown th {
+  background: var(--surface);
+}
+.markdown img {
+  max-width: 100%;
+  border-radius: var(--space-2);
+}

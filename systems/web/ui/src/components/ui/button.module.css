@@ -1,0 +1,64 @@
+:where(.button) {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  border-radius: 12px;
+  font-size: var(--font-sm);
+  font-weight: 500;
+  white-space: nowrap;
+  transition:
+    background-color var(--motion-fast),
+    color var(--motion-fast);
+}
+:where(.button:disabled) {
+  pointer-events: none;
+  opacity: 0.4;
+}
+:where(.button) svg {
+  pointer-events: none;
+  width: 1.125em;
+  height: 1.125em;
+  flex-shrink: 0;
+}
+:where(.default) {
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+:where(.default:hover) {
+  background: color-mix(in srgb, var(--primary) 85%, transparent);
+}
+:where(.ghost) {
+  color: var(--muted-foreground);
+}
+:where(.ghost:hover) {
+  background: var(--accent);
+  color: var(--foreground);
+}
+:where(.outline) {
+  border: 1px solid var(--border);
+  background: var(--background);
+}
+:where(.outline:hover) {
+  background: var(--accent);
+}
+:where(.sizedefault) {
+  min-height: 44px;
+  padding: var(--space-2) var(--space-4);
+}
+:where(.sizesm) {
+  min-height: 36px;
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--font-sm);
+}
+:where(.sizeicon) {
+  width: 44px;
+  min-height: 44px;
+}
+
+@media (pointer: coarse) {
+  :where(.sizesm) {
+    min-height: 44px;
+  }
+}

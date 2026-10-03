@@ -1,0 +1,3 @@
+# The browser tree includes its toolchain, PWA, and the Go serving/auth policy.
+/systems/web/ @avanderbergh
+/docker/web.Dockerfile @avanderbergh

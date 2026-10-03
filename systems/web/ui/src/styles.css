@@ -1,0 +1,171 @@
+/* Official Catppuccin Mocha and Latte: https://github.com/catppuccin/palette */
+/* Text follows browser font preferences; spacing stays compact as text grows. */
+:root {
+  --font-xs: 0.75rem;
+  --font-sm: 0.875rem;
+  --font-md: 1rem;
+  --font-lg: 1.25rem;
+  --font-xl: 1.5rem;
+  --font-2xl: 2rem;
+  --font-3xl: 2.5rem;
+  --leading-body: 1.65;
+  --leading-ui: 1.5;
+  --leading-heading: 1.25;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --conversation-width: 48rem;
+  --message-inset: 44px;
+  --motion-fast: 150ms;
+  --motion-normal: 240ms;
+  --motion-slow: 420ms;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --background: #1e1e2e;
+  --crust: #11111b;
+  --foreground: #cdd6f4;
+  --sidebar: #181825;
+  --surface: #313244;
+  --muted: #45475a;
+  --muted-foreground: #a6adc8;
+  --subtext: #bac2de;
+  --overlay: #9399b2;
+  --primary: #cba6f7;
+  --primary-foreground: #1e1e2e;
+  --accent: #313244;
+  --border: #313244;
+  --ring: #cba6f7;
+  --green: #a6e3a1;
+  --destructive: #f38ba8;
+  --blue: #89b4fa;
+  --warning: #f9e2af;
+  --rosewater: #f5e0dc;
+  color-scheme: dark;
+}
+:root[data-theme="latte"] {
+  --background: #eff1f5;
+  --crust: #dce0e8;
+  --foreground: #4c4f69;
+  --sidebar: #e6e9ef;
+  --surface: #ccd0da;
+  --muted: #bcc0cc;
+  /* Subtext 1 keeps small labels legible in the light palette. */
+  --muted-foreground: #5c5f77;
+  --subtext: #5c5f77;
+  --overlay: #7c7f93;
+  --primary: #8839ef;
+  --primary-foreground: #eff1f5;
+  --accent: #dce0e8;
+  --border: #ccd0da;
+  --ring: #8839ef;
+  --green: #40a02b;
+  --destructive: #d20f39;
+  --blue: #1e66f5;
+  --warning: #df8e1d;
+  --rosewater: #dc8a78;
+  color-scheme: light;
+}
+/* Base rules yield to component modules regardless of import order. */
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+  body {
+    margin: 0;
+    font-family: "Recursive Variable", sans-serif;
+    font-variation-settings:
+      "CASL" 0.2,
+      "MONO" 0;
+    font-size: var(--font-md);
+    line-height: var(--leading-ui);
+    color: var(--foreground);
+    caret-color: var(--rosewater);
+    background: var(--background);
+    -webkit-font-smoothing: antialiased;
+  }
+  button,
+  textarea,
+  input {
+    font: inherit;
+  }
+  button,
+  a,
+  summary {
+    -webkit-tap-highlight-color: transparent;
+  }
+  button,
+  summary {
+    cursor: pointer;
+  }
+  button:disabled {
+    cursor: default;
+  }
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 4px;
+  }
+  ::selection {
+    background: color-mix(in srgb, var(--overlay) 25%, transparent);
+  }
+  code,
+  pre {
+    font-family: "Recursive Variable", monospace;
+    font-variation-settings:
+      "MONO" 1,
+      "CASL" 0;
+    font-size: var(--font-sm);
+  }
+  h1,
+  h2,
+  h3,
+  p,
+  pre {
+    margin: 0;
+  }
+  :where(button) {
+    border: 0;
+    background: transparent;
+    color: inherit;
+  }
+  svg {
+    display: block;
+  }
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
+  }
+}
+/* Theme changes reveal the new palette without blending its text colors. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after,
+  *::details-content,
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}

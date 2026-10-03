@@ -1,0 +1,38 @@
+.transcriptContainer {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  display: flex;
+}
+.transcript {
+  overflow-y: auto;
+  width: 100%;
+  scrollbar-width: thin;
+  scrollbar-color: var(--muted) transparent;
+  overflow-anchor: none;
+}
+.transcriptInner {
+  max-width: var(--conversation-width);
+  margin: 0 auto;
+  padding: var(--space-2) var(--space-6) var(--space-8);
+}
+.historyControl {
+  text-align: center;
+  margin-bottom: var(--space-4);
+}
+.latestWrapper {
+  position: absolute;
+  bottom: var(--space-4);
+  left: 50%;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+.latestButton {
+  pointer-events: auto;
+  box-shadow: 0 3px 15px var(--crust);
+}
+@container app (max-width: 48rem) {
+  .transcriptInner {
+    padding: var(--space-1) var(--space-5) var(--space-6);
+  }
+}

@@ -1,19 +1,23 @@
 # syntax=docker/dockerfile:1.7
 
-FROM node:24-bookworm-slim AS ui
-WORKDIR /src/systems/web
-COPY systems/web ./
-# Before #184 introduces the UI, retain only the placeholder. Once a UI exists,
-# its pinned build must write internal/assets/dist; failures are never hidden.
+ARG NODE_VERSION=24.21.0
+FROM node:${NODE_VERSION}-bookworm-slim AS ui
+WORKDIR /src/systems/web/ui
+COPY scripts/tool-versions.sh /src/scripts/tool-versions.sh
 RUN set -eu; \
-    corepack enable; \
-    if [ -f ui/package.json ]; then \
-      cd ui; \
-      node -e 'if (!/^pnpm@[0-9]+\.[0-9]+\.[0-9]+/.test(require("./package.json").packageManager)) throw new Error("ui/package.json must pin pnpm");'; \
-      pnpm install --frozen-lockfile; \
-      pnpm build; \
-      test -s /src/systems/web/internal/assets/dist/index.html; \
-    fi
+    . /src/scripts/tool-versions.sh; \
+    test "$(node --version)" = "v${NODE_VERSION}"; \
+    npm install --global "pnpm@${PNPM_VERSION}"
+COPY systems/web/ui/package.json systems/web/ui/pnpm-lock.yaml systems/web/ui/pnpm-workspace.yaml ./
+RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
+    set -eu; \
+    . /src/scripts/tool-versions.sh; \
+    test "$(node -p 'JSON.parse(require("fs").readFileSync("package.json")).packageManager')" = "pnpm@${PNPM_VERSION}"; \
+    pnpm install --frozen-lockfile
+COPY systems/web/ui ./
+RUN set -eu; \
+    pnpm build; \
+    test -s /src/systems/web/internal/assets/dist/index.html
 
 FROM golang:1.26-bookworm AS build
 WORKDIR /src

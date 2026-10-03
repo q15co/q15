@@ -38,9 +38,9 @@ cookies and socket subprotocols are ignored. A browser's native Basic challenge 
 socket share credentials without storing the token in JavaScript.
 
 All paths except the exact `/healthz` require the `chat` scope. The header policy covers errors,
-assets and upgrades. Socket upgrades require both the exact configured `Origin` and
-`Sec-Fetch-Site: same-origin`; request Host and forwarded headers do not redefine the allowed
-origin.
+assets and upgrades. Socket upgrades require the exact configured `Origin`. Fetch metadata must be
+`same-origin` when present; native browser WebSocket handshakes can omit it. Request Host and
+forwarded headers do not redefine the allowed origin.
 
 ## Browser contract
 
@@ -92,17 +92,17 @@ response is `{turns,head_seq,has_more}`. `turns` includes only immutable complet
 `ListTurns`; the web tier never reads files or manufactures the allocated live turn.
 
 Fixtures in `internal/protocol/testdata` and `internal/server/testdata` freeze the frame table,
-message identities, parts, streamed/aborted/failed/resumed turns and history API. The future UI in
-`systems/web/ui` should consume these shared fixtures and check its codec against them in CI.
+message identities, parts, streamed/aborted/failed/resumed turns and history API. The UI in
+`systems/web/ui` consumes byte-identical copies of these fixtures and checks its codec in CI.
 Changes to message identity or part semantics require a browser `v` bump.
 
 ## Assets
 
 `internal/assets/dist/` is the shared artifact owned by the serving tier. Only `.gitkeep` is
-tracked. The Go binary embeds it with `//go:embed all:dist`. With only that placeholder, `/` serves
-a small static stub, `/assets/*` returns 404 and deep-link fallback is inactive. Any actual bundle
-must have a nonempty `index.html`, otherwise startup fails. A `Q15_WEB_DIR` override always requires
-that index. The override uses a confined filesystem root so symlinks cannot escape it.
+tracked. The Go binary embeds it with `//go:embed all:dist`. The React PWA in `ui/` produces this
+bundle. A missing, empty or partial bundle fails startup; there is no placeholder route. A
+`Q15_WEB_DIR` override also requires a nonempty index and uses a confined filesystem root so
+symlinks cannot escape it.
 
 A real bundle serves its files and falls back to `index.html` for unknown non-API paths. Unknown
 `/api` and `/ws` routes return JSON 404s; missing assets and `/sw.js` never return the SPA. Hidden
@@ -114,13 +114,15 @@ paths and directory listings are not served. Hashed files use
 make build-web-image
 ```
 
-The image's first build stage is Node 24. When the UI exists, Corepack selects its pinned pnpm from
-`ui/package.json`'s `packageManager`; `pnpm install --frozen-lockfile` and `pnpm build` must produce
-`internal/assets/dist/index.html`. Until issue #184 creates that UI, the stage carries the
-placeholder. The second build stage embeds the output in Go, followed by a minimal nonroot runtime
+The image's Node stage reads the shared tool manifest, installs the pinned pnpm and builds the React
+PWA with a frozen lockfile. The Go stage embeds the output, followed by a minimal nonroot runtime
 image. Its UID is 65532 and its GID is 1000, matching the bridge socket's group. Built bundles and
-`node_modules` are excluded from Git and Docker input. Main publishes `q15-web` with the existing
-synchronized `stable` and DateVer release workflow.
+`node_modules` are excluded from Git and Docker input. Main publishes `q15-web` with the
+synchronized `stable` and DateVer release workflow. `q15-web --healthcheck` probes `/healthz`
+without adding a shell or HTTP utility to the runtime image.
+
+See [ui/README.md](ui/README.md) for app development, offline fixtures, PWA caching and browser
+tests, and [Compose deployment](../../deploy/compose/README.md) for the shared socket volume.
 
 ## Validation
 

@@ -5,6 +5,7 @@ agent=false
 exec_service=false
 proxy=false
 web=false
+ui=false
 
 matches_any() {
 	local file="$1"
@@ -61,9 +62,28 @@ while IFS= read -r file; do
 		".dockerignore" \
 		"go.work" \
 		"go.work.sum" \
+		"scripts/tool-versions.sh" \
 		"docker/web.Dockerfile"; then
 		web=true
 	fi
+
+	if matches_any "${file}" \
+		"systems/web/ui/**" \
+		"scripts/tool-versions.sh" \
+		"scripts/project-setup.sh" \
+		"scripts/check-ui-*" \
+		"scripts/generate-ui-protocol.py" \
+		"scripts/lib/common.sh" \
+		"scripts/fmt.sh" \
+		"scripts/lint-changed.sh" \
+		"scripts/image-build-impact*" \
+		"Makefile" \
+		"flake.nix" \
+		".github/workflows/pull-request.yml" \
+		".dockerignore" \
+		"docker/web.Dockerfile"; then
+		ui=true
+	fi
 done
 
-printf '{"agent":%s,"exec":%s,"proxy":%s,"web":%s}\n' "${agent}" "${exec_service}" "${proxy}" "${web}"
+printf '{"agent":%s,"exec":%s,"proxy":%s,"web":%s,"ui":%s}\n' "${agent}" "${exec_service}" "${proxy}" "${web}" "${ui}"

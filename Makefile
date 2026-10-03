@@ -10,6 +10,8 @@ AGENT_MOD_DIR ?= systems/agent
 EXEC_MOD_DIR ?= systems/exec
 PROXY_MOD_DIR ?= systems/proxy
 WEB_MOD_DIR ?= systems/web
+UI_DIR := $(WEB_MOD_DIR)/ui
+PNPM = $(TOOLS_BIN_DIR)/pnpm
 EXEC_CONTRACT_MOD_DIR ?= libs/exec-contract
 PROXY_CONTRACT_MOD_DIR ?= libs/proxy-contract
 CHAT_CONTRACT_MOD_DIR ?= libs/chat-contract
@@ -22,7 +24,7 @@ COMPOSE_ENV := COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT_NAME)
 
 .DEFAULT_GOAL := build
 
-.PHONY: all build build-agent build-auth build-exec build-proxy build-web build-web-image test-web project-setup fmt lint lint-changed test verify verify-ci hooks-install hooks-uninstall compose-secrets-init compose-up compose-down compose-logs compose-ps clean help protos protos-check
+.PHONY: all build build-agent build-auth build-exec build-proxy build-web build-web-image test-web project-setup fmt lint lint-changed test verify verify-ci hooks-install hooks-uninstall compose-secrets-init compose-up compose-down compose-logs compose-ps clean help protos protos-check ui-install ui-dev ui-build ui-lint ui-fix ui-test ui-test-coverage ui-e2e ui-clean ui-fixtures-check compose-check
 
 all: build
 
@@ -44,7 +46,7 @@ build-proxy:
 	@mkdir -p $(BIN_DIR)
 	cd $(PROXY_MOD_DIR) && $(GO) build -o ../../$(BIN_DIR)/q15-proxy .
 
-build-web:
+build-web: ui-build
 	@mkdir -p $(BIN_DIR)
 	cd $(WEB_MOD_DIR) && $(GO) build -o ../../$(BIN_DIR)/q15-web .
 
@@ -62,6 +64,8 @@ fmt: project-setup
 
 test:
 	./scripts/image-build-impact-test.sh
+	./scripts/check-ui-fixtures.sh
+	./scripts/compose-contract-test.sh
 	cd $(EXEC_CONTRACT_MOD_DIR) && CGO_ENABLED=0 $(GO) test ./...
 	cd $(PROXY_CONTRACT_MOD_DIR) && CGO_ENABLED=0 $(GO) test ./...
 	cd $(CHAT_CONTRACT_MOD_DIR) && CGO_ENABLED=0 $(GO) test ./...
@@ -78,8 +82,46 @@ protos-check: project-setup
 	git diff --exit-code -- libs/
 
 lint: project-setup
-	./scripts/lint-changed.sh --tracked
+	SKIP_TYPESCRIPT=1 ./scripts/lint-changed.sh --tracked
 	./scripts/go-static-checks.sh
+	./scripts/check-ui-fixtures.sh
+
+ui-install: project-setup
+	./scripts/check-ui-tool-versions.sh
+	cd $(UI_DIR) && $(PNPM) install --frozen-lockfile
+
+ui-dev: ui-install
+	cd $(UI_DIR) && $(PNPM) dev
+
+ui-build: ui-install
+	cd $(UI_DIR) && $(PNPM) build
+
+ui-lint: ui-install
+	cd $(UI_DIR) && $(PNPM) check
+
+ui-fix: ui-install
+	cd $(UI_DIR) && $(PNPM) exec vp check --fix
+	cd $(UI_DIR) && $(PNPM) typecheck
+
+ui-test: ui-install
+	cd $(UI_DIR) && $(PNPM) test
+
+ui-test-coverage: ui-install
+	cd $(UI_DIR) && $(PNPM) test:coverage $(UI_TEST_ARGS)
+
+ui-e2e: ui-build
+	cd $(UI_DIR) && $(PNPM) test:e2e
+
+ui-fixtures-check:
+	./scripts/check-ui-fixtures.sh
+
+ui-clean:
+	rm -rf $(WEB_MOD_DIR)/internal/assets/dist
+	mkdir -p $(WEB_MOD_DIR)/internal/assets/dist
+	touch $(WEB_MOD_DIR)/internal/assets/dist/.gitkeep
+
+compose-check: project-setup
+	./scripts/compose-contract-test.sh
 
 lint-changed: project-setup
 	FILES="$(FILES)" ./scripts/lint-changed.sh
@@ -138,6 +180,17 @@ help:
 	@echo "  build-web     Build ./bin/q15-web from $(WEB_MOD_DIR)"
 	@echo "  build-web-image  Build the local q15-web image (Corepack/pnpm UI, Go embedding)"
 	@echo "  test-web      Test the browser tier (optional TEST_FLAGS)"
+	@echo "  ui-install    Install the pinned browser dependencies with the frozen lockfile"
+	@echo "  ui-dev        Start the Vite+ React development server"
+	@echo "  ui-build      Build the PWA into the Go embedded bundle directory"
+	@echo "  ui-lint       Check browser formatting, lint, and TypeScript with Oxc"
+	@echo "  ui-fix        Apply safe browser format and lint fixes, then type-check"
+	@echo "  ui-test       Run browser contract and UI tests"
+	@echo "  ui-test-coverage  Measure browser test coverage and enforce thresholds"
+	@echo "  ui-e2e        Run real browser tests against the compiled PWA"
+	@echo "  ui-clean      Remove the bundle and restore dist/.gitkeep"
+	@echo "  ui-fixtures-check  Check vendored browser fixtures and generated contract types"
+	@echo "  compose-check Validate Compose rendering and the bridge volume boundary"
 	@echo "  project-setup Install or refresh the pinned repo-local tooling under ./.tools"
 	@echo "  fmt           Format tracked files (or FILES='a b' for an explicit subset)"
 	@echo "  lint          Run full-repo file checks plus repo-wide Go static analysis"

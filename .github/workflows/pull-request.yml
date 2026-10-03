@@ -8,10 +8,87 @@ permissions:
   contents: read
 
 concurrency:
-  group: pull-request-${{ github.event.pull_request.number }}
+  group: pull-request-${{ github.head_ref }}
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: Browser impact and fixture contract
+    runs-on: ubuntu-24.04
+    outputs:
+      ui: ${{ steps.impact.outputs.ui }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Check browser fixture copies unconditionally
+        run: make ui-fixtures-check
+      - name: Detect UI changes
+        id: impact
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          impact="$(git diff --name-only "${BASE_SHA}" "${HEAD_SHA}" | scripts/image-build-impact.sh)"
+          echo "ui=$(jq -r '.ui' <<< "${impact}")" >> "${GITHUB_OUTPUT}"
+
+  ui:
+    name: Browser Verify
+    needs: changes
+    if: needs.changes.outputs.ui == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - name: Read shared tool pins
+        id: versions
+        run: |
+          source scripts/tool-versions.sh
+          echo "node=${NODE_VERSION}" >> "${GITHUB_OUTPUT}"
+          echo "pnpm=${PNPM_VERSION}" >> "${GITHUB_OUTPUT}"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ steps.versions.outputs.pnpm }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ steps.versions.outputs.node }}
+          cache: pnpm
+          cache-dependency-path: systems/web/ui/pnpm-lock.yaml
+      - name: Check package pins
+        run: |
+          source scripts/tool-versions.sh
+          jq -e --arg manager "pnpm@${PNPM_VERSION}" --arg node "${NODE_VERSION}" '.packageManager == $manager and .engines.node == $node' systems/web/ui/package.json
+      - name: Frozen dependency install
+        working-directory: systems/web/ui
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck, lint and formatting
+        working-directory: systems/web/ui
+        run: pnpm check
+      - name: Contract and component tests with coverage
+        working-directory: systems/web/ui
+        run: pnpm test:coverage
+      - name: Upload browser coverage report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: browser-coverage
+          path: systems/web/ui/coverage/
+          retention-days: 7
+          if-no-files-found: warn
+      - name: Build embedded PWA
+        working-directory: systems/web/ui
+        run: pnpm build
+      - name: Install browser
+        working-directory: systems/web/ui
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Browser behavior tests
+        working-directory: systems/web/ui
+        run: pnpm test:e2e
+      - name: Confirm build artifacts stay ignored
+        run: |
+          test "$(git ls-files systems/web/internal/assets/dist)" = systems/web/internal/assets/dist/.gitkeep
+          git diff --exit-code
+          test -z "$(git ls-files --others --exclude-standard systems/web/internal/assets/dist systems/web/ui)"
   verify:
     name: Pull Request Verify
     runs-on: ubuntu-24.04
@@ -21,6 +98,12 @@ jobs:
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
+
+      - name: Read shared Node pin
+        id: versions
+        run: |
+          source scripts/tool-versions.sh
+          echo "node=${NODE_VERSION}" >> "${GITHUB_OUTPUT}"
 
       - name: Setup Go
         uses: actions/setup-go@v6
@@ -36,7 +119,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version: ${{ steps.versions.outputs.node }}
 
       - name: Cache repo-local tools
         uses: actions/cache@v4

@@ -82,11 +82,15 @@ func ValidateOrigin(origin string) error {
 	return nil
 }
 
-// CheckOrigin requires the configured origin, plus browser fetch metadata.
+// CheckOrigin requires exactly the configured origin. Fetch metadata adds a
+// second check when supplied; native browser WebSocket handshakes may omit it.
 func CheckOrigin(r *http.Request, origin string) bool {
 	values := r.Header.Values("Origin")
-	return len(values) == 1 && values[0] == origin &&
-		r.Header.Get("Sec-Fetch-Site") == "same-origin"
+	if len(values) != 1 || values[0] != origin {
+		return false
+	}
+	sites := r.Header.Values("Sec-Fetch-Site")
+	return len(sites) == 0 || (len(sites) == 1 && sites[0] == "same-origin")
 }
 
 // Headers applies policy to successes, failures, assets and upgrades alike.

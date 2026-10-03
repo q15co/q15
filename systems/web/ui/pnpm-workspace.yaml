@@ -1,0 +1,14 @@
+overrides:
+  vite: npm:@voidzero-dev/vite-plus-core@1.0.0
+  vitest: 5.0.1
+
+# Vite+ bundles Vite 8 under its own package version.
+peerDependencyRules:
+  allowedVersions:
+    vite: 1.0.0
+
+minimumReleaseAgeExclude:
+  - framer-motion@13.5.0
+  - motion-dom@13.5.0
+  - motion-utils@13.5.0
+  - motion@13.5.0

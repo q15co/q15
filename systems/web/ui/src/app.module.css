@@ -1,0 +1,255 @@
+.appShell {
+  display: flex;
+  height: 100dvh;
+  min-height: 384px;
+  container: app / size;
+  overflow: hidden;
+}
+.sidebar {
+  width: 272px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  background: var(--sidebar);
+  border-right: 1px solid var(--border);
+  padding: var(--space-6) var(--space-4) var(--space-5);
+  min-height: 0;
+  overflow-y: auto;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: var(--font-xl);
+  font-weight: 700;
+  font-variation-settings: "CASL" 0.7;
+  flex-wrap: wrap;
+  margin: 0 var(--space-3) var(--space-8);
+}
+.brandIcon {
+  width: 36px;
+  height: 36px;
+  color: var(--primary);
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--primary) 20%, transparent);
+  border-radius: 0.75rem;
+}
+.brandDot {
+  color: var(--primary);
+}
+.sidebarLabel {
+  font-size: var(--font-xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--muted-foreground);
+}
+.sidebarLabel {
+  display: block;
+  padding: 0 var(--space-3);
+  margin-bottom: var(--space-3);
+}
+.sidebarSection {
+  margin-bottom: var(--space-6);
+}
+.navItem {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  border-radius: 10px;
+  padding: var(--space-3);
+  min-height: 44px;
+  font-size: var(--font-sm);
+  font-weight: 500;
+}
+.navItem > svg {
+  flex: none;
+}
+.navItem > span:first-of-type {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.navActive {
+  background: color-mix(in srgb, var(--primary) 9%, transparent);
+  color: var(--primary);
+  border: 1px solid color-mix(in srgb, var(--primary) 13%, transparent);
+}
+.navDot {
+  flex: none;
+  margin-left: auto;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--primary);
+}
+.sidebarFooter {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: auto;
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
+}
+.connectionStatus {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--font-xs);
+  color: var(--muted-foreground);
+}
+.sidebarFooter button {
+  margin-left: auto;
+}
+.statusDot {
+  background: var(--green);
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  display: inline-block;
+  flex: none;
+}
+.statusDot.disconnected {
+  background: var(--warning);
+}
+.mainPanel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+.topbar {
+  min-height: 64px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-3) var(--space-8);
+  gap: var(--space-4);
+  flex: none;
+}
+.topbarTitle,
+.topbarRight {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: var(--font-sm);
+}
+.topbarIcon {
+  color: var(--muted-foreground);
+}
+.previewBadge {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--blue) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--blue) 35%, var(--border));
+  border-radius: 5px;
+  padding: 3px 7px;
+  font-size: var(--font-xs);
+}
+.connectionBanner,
+.noticeBanner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-8);
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+  color: var(--foreground);
+  font-size: var(--font-sm);
+}
+.noticeBanner {
+  color: var(--muted-foreground);
+  background: var(--sidebar);
+}
+.connectionBanner > svg {
+  color: var(--warning);
+  flex: none;
+}
+.noticeBanner button {
+  margin-left: auto;
+}
+.errorBanner {
+  color: var(--destructive);
+}
+.skipLink {
+  position: fixed;
+  left: 20px;
+  top: 0;
+  transform: translateY(-100%);
+  z-index: 100;
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--font-sm);
+  background: var(--primary);
+  color: var(--primary-foreground);
+  border-radius: 8px;
+}
+.skipLink:focus {
+  top: var(--space-5);
+  transform: translateY(0);
+}
+.mobileMenu,
+.mobileClose,
+.sidebarBackdrop {
+  display: none;
+}
+@media (max-width: 900px) {
+  .sidebar {
+    width: 256px;
+    padding-inline: var(--space-4);
+  }
+  .topbar {
+    padding-inline: var(--space-6);
+  }
+}
+@container app (max-width: 48rem) {
+  .sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 30;
+    width: min(20rem, calc(100vw - var(--space-4)));
+    visibility: hidden;
+    transform: translateX(-100%);
+    pointer-events: none;
+    transition:
+      transform var(--motion-slow) var(--ease-out),
+      visibility var(--motion-slow);
+  }
+  .sidebarOpen {
+    visibility: visible;
+    transform: translateX(0);
+    pointer-events: auto;
+    transition-delay: 0s;
+  }
+  .sidebarBackdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 20;
+    border: 0;
+    background: color-mix(in srgb, var(--crust) 65%, transparent);
+  }
+  .mobileClose {
+    display: inline-flex;
+    position: absolute;
+    top: var(--space-5);
+    right: var(--space-3);
+  }
+  .mobileMenu {
+    display: inline-flex;
+  }
+  .topbar {
+    min-height: 56px;
+    padding-inline: var(--space-3);
+  }
+  .topbarTitle {
+    gap: var(--space-3);
+  }
+  .topbarIcon {
+    display: none;
+  }
+  .connectionBanner,
+  .noticeBanner {
+    padding-inline: var(--space-5);
+  }
+}

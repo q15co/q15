@@ -29,6 +29,8 @@ json_files=()
 nix_files=()
 shell_files=()
 workflow_files=()
+typescript_files=()
+ui_format_files=()
 
 for rel_path in "${files[@]}"; do
 	is_go_file "${rel_path}" && append_file go_files "${rel_path}"
@@ -38,7 +40,17 @@ for rel_path in "${files[@]}"; do
 	is_nix_file "${rel_path}" && append_file nix_files "${rel_path}"
 	is_shell_file "${rel_path}" && append_file shell_files "${rel_path}"
 	is_workflow_file "${rel_path}" && append_file workflow_files "${rel_path}"
+	is_typescript_file "${rel_path}" && append_file typescript_files "${REPO_ROOT}/${rel_path}"
+	is_ui_format_file "${rel_path}" && append_file ui_format_files "${REPO_ROOT}/${rel_path}"
 done
+
+if [[ ${#ui_format_files[@]} -gt 0 && ${SKIP_TYPESCRIPT:-0} != 1 ]]; then
+	ui_tool fmt --check "${ui_format_files[@]}"
+fi
+
+if [[ ${#typescript_files[@]} -gt 0 && ${SKIP_TYPESCRIPT:-0} != 1 ]]; then
+	ui_tool lint "${typescript_files[@]}"
+fi
 
 "${SCRIPT_DIR}/check-added-large-files.sh" "${files[@]}"
 "${SCRIPT_DIR}/check-merge-conflicts.sh" "${files[@]}"

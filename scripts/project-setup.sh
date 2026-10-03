@@ -16,6 +16,8 @@ fi
 ensure_repo_root
 
 required_tools=(
+	node
+	pnpm
 	golangci-lint
 	staticcheck
 	revive
@@ -43,6 +45,8 @@ have_expected_tools() {
 	done
 	[[ -x "${TOOLS_PYTHON_DIR}/bin/python" ]] || return 1
 	[[ -d "${TOOLS_NODE_DIR}/node_modules/markdownlint-cli" ]] || return 1
+	[[ $("${TOOLS_BIN_DIR}/node" --version) == "v${NODE_VERSION}" ]] || return 1
+	[[ $("${TOOLS_BIN_DIR}/pnpm" --version) == "${PNPM_VERSION}" ]] || return 1
 }
 
 assert_runtime_prereqs() {
@@ -273,7 +277,10 @@ install_node_env() {
 EOF
 	fi
 
-	npm --prefix "${TOOLS_NODE_DIR}" install --no-save --loglevel=error "markdownlint-cli@${MARKDOWNLINT_CLI_VERSION}" >/dev/null
+	npm --prefix "${TOOLS_NODE_DIR}" install --no-save --loglevel=error \
+		"node@${NODE_VERSION}" "pnpm@${PNPM_VERSION}" "markdownlint-cli@${MARKDOWNLINT_CLI_VERSION}" >/dev/null
+	ln -snf ../node/node_modules/node/bin/node "${TOOLS_BIN_DIR}/node"
+	ln -snf ../node/node_modules/.bin/pnpm "${TOOLS_BIN_DIR}/pnpm"
 
 	cat >"${TOOLS_BIN_DIR}/markdownlint" <<'EOF'
 #!/usr/bin/env bash
@@ -303,6 +310,21 @@ if manifest_is_current && have_expected_tools; then
 fi
 
 log "installing repo-local tools into ${TOOLS_DIR}"
+
+# Adding browser tooling does not require rebuilding unchanged Go/Rust tools.
+if [[ -f ${TOOLS_MANIFEST_STAMP} ]] && diff -q \
+	<(sed -E '/^(TOOLS_MANIFEST_VERSION|NODE_VERSION|PNPM_VERSION)=/d; /^export (NODE_VERSION|PNPM_VERSION)$/d; /^[[:space:]]*$/d' "${TOOLS_MANIFEST_STAMP}") \
+	<({
+		printf 'GO_REQUIRED_SERIES=%s\n' "$(go_required_series)"
+		cat "${VERSIONS_FILE}"
+	} | sed -E '/^(TOOLS_MANIFEST_VERSION|NODE_VERSION|PNPM_VERSION)=/d; /^export (NODE_VERSION|PNPM_VERSION)$/d; /^[[:space:]]*$/d') >/dev/null; then
+	install_node_env
+	if have_expected_tools; then
+		write_manifest_stamp
+		log "repo-local toolchain is ready"
+		exit 0
+	fi
+fi
 
 install_go_tool "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${GOLANGCI_LINT_VERSION}"
 install_go_tool "honnef.co/go/tools/cmd/staticcheck@${STATICCHECK_VERSION}"

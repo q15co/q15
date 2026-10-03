@@ -1,4 +1,4 @@
-// Package assets serves the embedded SPA or the pre-UI placeholder.
+// Package assets serves the embedded SPA.
 package assets
 
 import (
@@ -16,15 +16,12 @@ import (
 //go:embed all:dist
 var bundle embed.FS
 
-const stub = "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>q15</title><body><h1>q15-web</h1><p>The chat service is ready. The app bundle will arrive with the UI.</p></body></html>\n"
-
 var hashedFile = regexp.MustCompile(`[-.][A-Za-z0-9_-]{8,}\.[A-Za-z0-9]+$`)
 
-// Handler serves a validated bundle. Only the embedded .gitkeep allows stub mode.
+// Handler serves a validated bundle.
 type Handler struct {
-	files       fs.FS
-	placeholder bool
-	root        *os.Root
+	files fs.FS
+	root  *os.Root
 }
 
 // Load selects the embedded bundle or a confined development directory.
@@ -34,7 +31,7 @@ func Load(directory string) (*Handler, error) {
 		if err != nil {
 			return nil, fmt.Errorf("Q15_WEB_DIR: %w", err)
 		}
-		handler, err := New(root.FS(), false)
+		handler, err := New(root.FS())
 		if err != nil {
 			_ = root.Close()
 			return nil, err
@@ -46,20 +43,11 @@ func Load(directory string) (*Handler, error) {
 	if err != nil {
 		return nil, err
 	}
-	return New(files, true)
+	return New(files)
 }
 
-// New asserts that a real bundle contains index.html. A lone .gitkeep is the
-// explicit pre-UI lifecycle, not a fallback for an incomplete built bundle.
-func New(files fs.FS, allowPlaceholder bool) (*Handler, error) {
-	entries, err := fs.ReadDir(files, ".")
-	if err != nil {
-		return nil, fmt.Errorf("read web bundle: %w", err)
-	}
-	if allowPlaceholder && len(entries) == 1 && entries[0].Name() == ".gitkeep" &&
-		!entries[0].IsDir() {
-		return &Handler{files: files, placeholder: true}, nil
-	}
+// New rejects a missing or incomplete build rather than serving a placeholder.
+func New(files fs.FS) (*Handler, error) {
 	info, err := fs.Stat(files, "index.html")
 	if err != nil || !info.Mode().IsRegular() || info.Size() == 0 {
 		return nil, fmt.Errorf("web bundle must contain a nonempty dist/index.html")
@@ -95,18 +83,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
-	}
-	if h.placeholder {
-		if name != "" && name != "index.html" {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Header().Set("Cache-Control", "no-cache")
-		if r.Method != http.MethodHead {
-			_, _ = w.Write([]byte(stub))
-		}
-		return
 	}
 	if name == "" {
 		name = "index.html"
