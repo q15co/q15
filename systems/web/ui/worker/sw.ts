@@ -46,7 +46,14 @@ async function signedFetch(request: Request) {
     "Q15-Proof",
     await requestProof(request.method, `${url.pathname}${url.search}`, url.origin),
   );
-  return fetch(new Request(request, { headers, cache: "no-store", credentials: "same-origin" }));
+  return fetch(
+    new Request(request, {
+      headers,
+      cache: "no-store",
+      credentials: "same-origin",
+      mode: "same-origin",
+    }),
+  );
 }
 
 async function navigation(request: Request) {

@@ -260,6 +260,7 @@ describe.each(["source", "compiled"] satisfies ("source" | "compiled")[])(
       const sw = await worker(mode);
       const request = new Request("https://chat.example/assets/app-abcdef12.js", {
         credentials: "omit",
+        mode: "no-cors",
       });
       expect(await required(await sw.request(request)).text()).toBe(
         "cached /assets/app-abcdef12.js",
@@ -268,6 +269,7 @@ describe.each(["source", "compiled"] satisfies ("source" | "compiled")[])(
       sw.cache.match.mockResolvedValue(cacheMiss);
       expect(await required(await sw.request(request)).text()).toBe("network");
       expect(sw.fetch.mock.calls[0]?.[0].credentials).toBe("same-origin");
+      expect(sw.fetch.mock.calls[0]?.[0].mode).toBe("same-origin");
       expect(sw.fetch.mock.calls[0]?.[0].headers.has("Q15-Proof")).toBe(true);
       expect(sw.cache.put).not.toHaveBeenCalled();
       expect(sw.cache.addAll).not.toHaveBeenCalled();

@@ -129,6 +129,30 @@ test("host enrollment, passkey sign-in, protected data and logout use the real g
   expect(appManifest.errors).toEqual([]);
   const manifest: unknown = JSON.parse(required(appManifest.data));
   expect(manifest).toMatchObject({ name: "q15 · Chat", start_url: "/" });
+  await page.evaluate(async () => {
+    for (const name of await caches.keys()) {
+      if (name.startsWith("q15-shell-")) await (await caches.open(name)).delete("/icon.svg");
+    }
+    await new Promise<void>((resolve, reject) => {
+      const image = document.createElement("img");
+      image.addEventListener(
+        "load",
+        () => {
+          image.remove();
+          resolve();
+        },
+        { once: true },
+      );
+      image.addEventListener(
+        "error",
+        () => reject(new Error("Native icon cache miss failed authentication.")),
+        { once: true },
+      );
+      image.hidden = true;
+      image.src = "/icon.svg";
+      document.body.append(image);
+    });
+  });
   const history = await historyResponse;
   const capturedProof = required(history.request().headers()["q15-proof"]);
   for (const path of ["/", "/api/turns", "/ws", "/manifest.webmanifest", "/icon.svg"])
