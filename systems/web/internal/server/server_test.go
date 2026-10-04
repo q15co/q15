@@ -258,7 +258,7 @@ func dial(t *testing.T, server *httptest.Server) *sealedSocket {
 		}
 		t.Fatal(err)
 	}
-	conn.SetReadLimit(16 << 20)
+	conn.SetReadLimit(protocol.MaxServerFrameBytes)
 	t.Cleanup(func() { _ = conn.CloseNow() })
 	return &sealedSocket{Conn: conn}
 }
@@ -590,6 +590,129 @@ func TestHistoryAndResumeExcludeLiveTurn(t *testing.T) {
 	}
 	if payload.HeadSeq != 43 || payload.Cursor != 42 {
 		t.Fatalf("allocated head became readable cursor: %v", payload)
+	}
+}
+
+func TestEscapedMessageFitsDerivedSocketLimit(t *testing.T) {
+	fake := newFakeChat()
+	_, httpServer := setup(t, fake)
+	conn := dial(t, httpServer)
+	hello(t, conn, 0)
+	text := strings.Repeat("\x00", protocol.MaxMessageBytes-1) + "x"
+	send(t, conn, protocol.Send, protocol.SendRequest{ClientMsgID: "escaped", Text: text})
+	if got := take(t, fake.sends); got.GetText() != text {
+		t.Fatal("valid escaped message was changed or rejected")
+	}
+}
+
+func TestReplayByteBudgetHasNoPartialFrames(t *testing.T) {
+	fake := newFakeChat()
+	fake.head = 3
+	for seq := int64(2); seq > 0; seq-- {
+		fake.turns = append(fake.turns, &chatpb.Turn{Seq: seq, Messages: []*chatpb.Message{
+			{
+				Role:  "assistant",
+				Parts: []*chatpb.MessagePart{{PartType: "text", Text: strings.Repeat("x", 3<<20)}},
+			},
+		}})
+	}
+	_, httpServer := setup(t, fake)
+	conn := dial(t, httpServer)
+	send(t, conn, protocol.Hello, protocol.Cursor{})
+	first := read(t, conn)
+	var problem protocol.ErrorPayload
+	if err := json.Unmarshal(first.Payload, &problem); err != nil || first.Type != protocol.Error ||
+		problem.Code != "resync_from_head" {
+		t.Fatal("replay overflow delivered a partial prefix", err)
+	}
+	send(t, conn, protocol.Sync, protocol.Cursor{Cursor: 2})
+	if frame := read(t, conn); frame.Type != protocol.Ready {
+		t.Fatal("replay recovery closed channel or left partial frames")
+	}
+}
+
+func TestLargeHistoryUsesBytePagesAndKeepsSocketAlive(t *testing.T) {
+	fake := newFakeChat()
+	text := strings.Repeat("x", 13<<20)
+	turn := func(seq int64, text string) *chatpb.Turn {
+		return &chatpb.Turn{
+			Seq:       seq,
+			CreatedAt: timestamppb.New(fixtureTime),
+			Messages: []*chatpb.Message{
+				{Role: "assistant", Parts: []*chatpb.MessagePart{{PartType: "text", Text: text}}},
+			},
+		}
+	}
+	fake.head = 3
+	fake.turns = []*chatpb.Turn{turn(2, text), turn(1, text)}
+	_, httpServer := setup(t, fake)
+	conn := dial(t, httpServer)
+	send(t, conn, protocol.Hello, protocol.Cursor{})
+	resync := read(t, conn)
+	var problem protocol.ErrorPayload
+	if err := json.Unmarshal(resync.Payload, &problem); err != nil ||
+		problem.Code != "resync_from_head" {
+		t.Fatal("large replay did not request history recovery", err)
+	}
+	load := func(after int64, wantStatus int) protocol.Page {
+		t.Helper()
+		req, err := http.NewRequest(
+			"GET",
+			fmt.Sprintf("%s/api/turns?after_seq=%d", httpServer.URL, after),
+			nil,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Cookie", "test-session=owner")
+		req.Header.Set("Q15-Channel", conn.channel)
+		response, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		if response.StatusCode != wantStatus {
+			t.Fatalf("history status %d, want %d", response.StatusCode, wantStatus)
+		}
+		if wantStatus != http.StatusOK {
+			return protocol.Page{}
+		}
+		var wire protocol.Frame
+		var sealed protocol.Sealed
+		if err := json.NewDecoder(response.Body).Decode(&wire); err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(wire.Payload, &sealed); err != nil {
+			t.Fatal(err)
+		}
+		var plain bytes.Buffer
+		if _, err := conn.keys.Open(sealed, seal.Context(wire), &plain); err != nil {
+			t.Fatal(err)
+		}
+		var page protocol.Page
+		if err := json.Unmarshal(plain.Bytes(), &page); err != nil {
+			t.Fatal(err)
+		}
+		return page
+	}
+	for _, seq := range []int64{2, 1} {
+		after := int64(0)
+		if seq == 1 {
+			after = 2
+		}
+		page := load(after, http.StatusOK)
+		if len(page.Turns) != 1 || page.Turns[0].Seq != seq || page.HasMore != (seq == 2) ||
+			page.Turns[0].Messages[0].Parts[0].Text != text {
+			t.Fatal("large history page lost its record or cursor")
+		}
+	}
+	fake.mu.Lock()
+	fake.turns = []*chatpb.Turn{turn(2, strings.Repeat("x", protocol.MaxEnvelopeBytes))}
+	fake.mu.Unlock()
+	load(0, http.StatusRequestEntityTooLarge)
+	send(t, conn, protocol.Sync, protocol.Cursor{Cursor: 2})
+	if frame := read(t, conn); frame.Type != protocol.Ready {
+		t.Fatal("history failure closed the content channel")
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/q15co/q15/libs/chat-contract/browser/protocol"
 	"github.com/q15co/q15/libs/chat-contract/chatpb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -38,7 +39,7 @@ func NewClient(ctx context.Context, target string, options ...grpc.DialOption) (
 		return nil, err
 	}
 	options = append(options, grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(16<<20)))
+		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(protocol.MaxServerFrameBytes+1024)))
 	conn, err := grpc.NewClient(target, options...)
 	if err != nil {
 		return nil, err

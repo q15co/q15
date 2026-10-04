@@ -20,7 +20,9 @@ export async function fetchHistory(
     throw new Error(
       response.status === 401
         ? "Sign in again to load your history."
-        : "History could not be loaded. Try again.",
+        : response.status === 413
+          ? "A history turn is too large to load."
+          : "History could not be loaded. Try again.",
     );
   const wire = parseWireFrame(await response.text());
   if (wire.type !== "history" || wire.id !== channel)

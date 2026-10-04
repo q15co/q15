@@ -1,11 +1,20 @@
 import type { Chunk, Frame, HelloPayload, Sealed } from "../generated/protocol";
 
 import { parseSealed } from "../domain/protocol";
+import {
+  ChunkBytes,
+  MaxEnvelopeBytes,
+  MaxContentTypeBytes,
+  MaxChunkDataChars,
+  MaxContentStreams,
+  RekeyAfter,
+  PLAINTEXT_FRAME_TYPES,
+} from "../generated/protocol";
 import { isRecord } from "../shared/type-guards";
 import { encode, sessionSigner } from "./proof";
 
-const chunkSize = 32 * 1024;
-const maxBytes = 16 * 1024 * 1024;
+const chunkSize = ChunkBytes;
+const maxBytes = MaxEnvelopeBytes;
 const jsonType = "application/json";
 const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true });
@@ -62,7 +71,7 @@ async function derive(
 }
 
 export function hasContent(type: string): boolean {
-  return ["msg.send", "delta", "snapshot", "msg.final", "notice", "history"].includes(type);
+  return !PLAINTEXT_FRAME_TYPES.some((control) => control === type);
 }
 
 // Only opaque non-exportable CryptoKeys exist in memory. Reconnect establishes
@@ -75,9 +84,14 @@ export class ContentSession {
   private salt: ArrayBuffer | undefined;
   private channelID = "";
   private seen = new Set<string>();
+  private sent = 0;
   private signalReady?: (value: boolean) => void;
   private ready = this.waiter();
   private generation = 0;
+
+  get needsRefresh(): boolean {
+    return this.seen.size >= RekeyAfter || this.sent >= RekeyAfter;
+  }
 
   private waiter() {
     return new Promise<boolean>((resolve) => {
@@ -91,6 +105,7 @@ export class ContentSession {
     this.salt = undefined;
     this.channelID = "";
     this.seen.clear();
+    this.sent = 0;
     this.signalReady?.(false);
     this.ready = this.waiter();
   }
@@ -191,8 +206,16 @@ export class ContentSession {
     source: Iterable<Uint8Array> | AsyncIterable<Uint8Array>,
     emit: (stream: string, chunk: Chunk) => Promise<void>,
   ): Promise<string> {
+    const generation = this.generation;
     const type = encoder.encode(contentType);
-    if (!this.source || !this.salt || type.length === 0 || type.length > 1024) throw failure();
+    if (
+      !this.source ||
+      !this.salt ||
+      type.length === 0 ||
+      type.length > MaxContentTypeBytes ||
+      this.sent >= MaxContentStreams
+    )
+      throw failure();
     const stream = encode(crypto.getRandomValues(new Uint8Array(16)));
     const key = await derive(this.source, this.salt, stream, "browser-to-agent", "encrypt");
     const header = new Uint8Array(2 + type.length);
@@ -233,6 +256,8 @@ export class ContentSession {
       }
     }
     await send(true);
+    if (generation !== this.generation) throw failure();
+    this.sent++;
     return stream;
   }
 
@@ -263,17 +288,20 @@ export class ContentSession {
     chunks: Iterable<Chunk> | AsyncIterable<Chunk>,
     write: (bytes: Uint8Array<ArrayBuffer>) => Promise<void>,
   ): Promise<string> {
+    const generation = this.generation;
     if (!this.source || !this.salt) throw failure();
     const value = { stream };
     const id = decode(stream);
-    if (id.length !== 16 || this.seen.has(stream) || this.seen.size >= 65536) throw failure();
+    if (id.length !== 16 || this.seen.has(stream) || this.seen.size >= MaxContentStreams)
+      throw failure();
     const key = await derive(this.source, this.salt, stream, "agent-to-browser", "decrypt");
     let total = 0;
     let index = 0;
     let finished = false;
     let contentType = "";
     for await (const chunk of chunks) {
-      if (chunk.index !== index || finished || chunk.data.length > 43712) throw failure();
+      if (chunk.index !== index || finished || chunk.data.length > MaxChunkDataChars)
+        throw failure();
       let plain = new Uint8Array(
         await crypto.subtle.decrypt(
           {
@@ -290,7 +318,8 @@ export class ContentSession {
       if (index === 0) {
         if (plain.length < 2) throw failure();
         const length = new DataView(plain.buffer).getUint16(0);
-        if (length === 0 || length > 1024 || length + 2 > plain.length) throw failure();
+        if (length === 0 || length > MaxContentTypeBytes || length + 2 > plain.length)
+          throw failure();
         contentType = decoder.decode(plain.slice(2, 2 + length));
         plain = plain.slice(2 + length);
       }
@@ -300,7 +329,7 @@ export class ContentSession {
       index++;
       finished = chunk.final;
     }
-    if (!finished) throw failure();
+    if (!finished || generation !== this.generation) throw failure();
     this.seen.add(value.stream);
     return contentType;
   }

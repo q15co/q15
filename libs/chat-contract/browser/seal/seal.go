@@ -20,10 +20,10 @@ import (
 )
 
 // ChunkSize fixes the bounded plaintext chunk framing for both implementations.
-const ChunkSize = 32 << 10
+const ChunkSize = protocol.ChunkBytes
 
 // MaxBytes bounds collectors and prevents unbounded provisional plaintext output.
-const MaxBytes = 16 << 20
+const MaxBytes = protocol.MaxEnvelopeBytes
 
 // JSONType is authenticated inside the envelope, never advertised to the relay.
 const JSONType = "application/json"
@@ -110,7 +110,7 @@ func (k *Keys) Seal(
 	reader io.Reader,
 	emit func(string, protocol.Chunk) error,
 ) (string, error) {
-	if len(contentType) == 0 || len(contentType) > 1024 {
+	if len(contentType) == 0 || len(contentType) > protocol.MaxContentTypeBytes {
 		return "", ErrInvalid
 	}
 	id := make([]byte, 16)
@@ -164,7 +164,8 @@ func (k *Keys) Wrap(contentType, context string, data []byte) (protocol.Sealed, 
 // Open writes authenticated chunks in order. Consumers must wait for success
 // before committing data: a truncated stream never becomes a valid payload.
 func (k *Keys) Open(value protocol.Sealed, context string, writer io.Writer) (string, error) {
-	if value.Version != 1 || len(value.Chunks) == 0 || len(value.Chunks) > (MaxBytes/ChunkSize)+2 {
+	if value.Version != 1 || len(value.Chunks) == 0 ||
+		len(value.Chunks) > protocol.MaxEnvelopeChunks {
 		return "", ErrInvalid
 	}
 	index := 0
@@ -205,7 +206,7 @@ func (k *Keys) OpenStream(
 			return "", err
 		}
 		if chunk.Index != index || finished ||
-			len(chunk.Data) > ((ChunkSize+16)*4+2)/3 {
+			len(chunk.Data) > protocol.MaxChunkDataChars {
 			return "", ErrInvalid
 		}
 		data, err := base64.RawURLEncoding.Strict().DecodeString(chunk.Data)
@@ -229,7 +230,7 @@ func (k *Keys) OpenStream(
 				return "", ErrInvalid
 			}
 			size := int(binary.BigEndian.Uint16(plain))
-			if size == 0 || size > 1024 || size+2 > len(plain) {
+			if size == 0 || size > protocol.MaxContentTypeBytes || size+2 > len(plain) {
 				return "", ErrInvalid
 			}
 			contentType, plain = string(plain[2:2+size]), plain[2+size:]
@@ -261,15 +262,5 @@ func Context(frame protocol.Frame) string {
 
 // Content covers every frame payload that can describe or contain chat content.
 func Content(kind string) bool {
-	switch kind {
-	case protocol.Send,
-		protocol.Delta,
-		protocol.Snapshot,
-		protocol.Final,
-		protocol.Notice,
-		"history":
-		return true
-	default:
-		return false
-	}
+	return protocol.Content(kind)
 }

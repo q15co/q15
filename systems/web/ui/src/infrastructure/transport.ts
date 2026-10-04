@@ -2,6 +2,7 @@ import type { Transport, TransportEvents } from "../application/ports";
 import type { Frame } from "../generated/protocol";
 
 import { parseFrame, parseWireFrame } from "../domain/protocol";
+import { MaxClientFrameBytes } from "../generated/protocol";
 import { clientFrame, frame } from "./envelope";
 import { authenticatedFetch, requestProof } from "./proof";
 import { ContentSession, hasContent } from "./seal";
@@ -22,6 +23,7 @@ export class SocketTransport implements Transport {
   private cursor = () => "0";
   private stopped = true;
   private ready = false;
+  private refreshing = false;
   private attempts = 0;
   private timer?: ReturnType<typeof setTimeout>;
   private generation = 0;
@@ -56,6 +58,7 @@ export class SocketTransport implements Transport {
     this.stopped = true;
     this.generation++;
     this.ready = false;
+    this.refreshing = false;
     this.content.reset();
     clearTimeout(this.timer);
     clearTimeout(this.handshake);
@@ -100,6 +103,7 @@ export class SocketTransport implements Transport {
 
   private attach(socket: SocketLike) {
     this.socket = socket;
+    this.refreshing = false;
     // A stalled handshake must not leave the composer waiting indefinitely.
     this.handshake = setTimeout(() => socket.close(), 15_000);
     socket.onopen = () => {
@@ -157,7 +161,14 @@ export class SocketTransport implements Transport {
   private write(value: Frame) {
     if (this.socket?.readyState !== 1)
       throw new Error("Chat is disconnected. Your draft is still here.");
-    this.socket.send(JSON.stringify(value));
+    const data = JSON.stringify(value);
+    if (new TextEncoder().encode(data).length > MaxClientFrameBytes) {
+      this.events?.frame(
+        parseFrame(JSON.stringify(frame("error", { code: "message_too_large", ref: value.id }))),
+      );
+      return;
+    }
+    this.socket.send(data);
   }
 
   send(text: string, clientID: string) {
@@ -187,6 +198,22 @@ export class SocketTransport implements Transport {
     if (generation !== this.generation || socket !== this.socket || this.stopped)
       throw new Error("Chat disconnected before the message was sent.");
     this.write(sealed);
+    this.refreshContent();
+  }
+
+  private refreshContent() {
+    if (!this.ready || !this.content.needsRefresh) return;
+    this.ready = false;
+    this.refreshing = true;
+    this.events?.connection("reconnecting");
+    const socket = this.socket;
+    const generation = this.generation;
+    // Drain accepted sends before retiring the key; uncertain sends are never replayed.
+    void this.outgoing.then(() =>
+      !this.stopped && generation === this.generation && socket === this.socket
+        ? socket?.close()
+        : undefined,
+    );
   }
 
   private async offer(socket: SocketLike, generation: number) {
@@ -219,7 +246,7 @@ export class SocketTransport implements Transport {
     }
     if (!current()) return;
     const value = parseFrame(JSON.stringify(wire));
-    if (value.type === "ready") {
+    if (value.type === "ready" && !this.refreshing) {
       this.ready = true;
       this.attempts = 0;
       clearTimeout(this.handshake);
@@ -229,6 +256,7 @@ export class SocketTransport implements Transport {
     if (value.type === "ready") this.write(clientFrame("msg.status", {}));
     if (value.seq !== "0" && value.type !== "error")
       this.write(clientFrame("msg.ack", { seq: value.seq }));
+    this.refreshContent();
   }
 
   abort(turn: string) {

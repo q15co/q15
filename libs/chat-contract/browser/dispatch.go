@@ -44,7 +44,7 @@ func (s *Endpoint) dispatch(c *socketConn, principal, device string, frame proto
 		if !decode(frame.Payload, &request) || request.ClientMsgID == "" ||
 			len(request.ClientMsgID) > 128 ||
 			strings.TrimSpace(request.Text) == "" ||
-			len(request.Text) > 64<<10 {
+			len(request.Text) > protocol.MaxMessageBytes {
 			s.socketError(c, "invalid_message", frame.ID)
 			return
 		}

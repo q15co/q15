@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/q15co/q15/libs/chat-contract/browser/protocol"
 	"github.com/q15co/q15/libs/chat-contract/chatpb"
 	"github.com/q15co/q15/systems/web/internal/gate"
 )
@@ -18,8 +19,8 @@ const HeartbeatInterval = 25 * time.Second
 const (
 	helloTimeout   = 10 * time.Second
 	writeTimeout   = 10 * time.Second
-	maxInputBytes  = 128 << 10
-	maxQueueBytes  = 8 << 20
+	maxInputBytes  = protocol.MaxClientFrameBytes
+	maxQueueBytes  = protocol.MaxServerFrameBytes
 	maxQueueFrames = 2048 // replay can carry 500 complete turns with several messages
 )
 

@@ -150,6 +150,10 @@ uses of `any`, while `satisfies` checks configuration without widening literal v
 
 The socket and history adapters open the version 2 sealed byte envelope before domain validation.
 Fresh non-exportable ECDH/content keys remain in memory; reconnects re-wrap history in the agent.
+The Go protocol generates both byte limits and the plaintext-control whitelist; unknown content
+types default to sealing. Before either directional stream count reaches its 65,536-entry replay
+budget, the transport drains accepted sends and reconnects with fresh keys. This recovery never
+resubmits an uncertain send. History paging is bounded by encoded plaintext bytes as well as turns.
 Failed decryption is visible and does not close the socket. See
 [content sealing](../README.md#content-sealing) for the byte framing, passive-carrier guarantee and
 trusted-delivery limits.
@@ -162,11 +166,13 @@ sign-in gesture. The adapter verifies the WebAuthn challenge's session-key commi
 own public key before invoking the authenticator; malformed or substituted commitments refuse
 sign-in without a gesture. See [the tier README](../README.md#sessions-and-http-policy) for the
 exact hash input and the trusted-client boundary. Subsequent requests and reconnects sign silently.
-Reloads keep the key; logout deletes it. Injected scripts may use it to sign but cannot export
-private key bytes. Only the theme preference uses localStorage. Resume uses `ready.cursor` after
-replay has been consumed, independently of live event acknowledgements or the allocated `head_seq`.
-An uncertain send is shown explicitly and never resubmitted automatically. Retention gaps refresh
-completed history and send `sync` from a readable turn.
+Proof callers must pass the already escaped same-origin path and query verbatim: the server signs
+`RequestURI()`, so a later URL-encoding change causes a 401. Reloads keep the key; logout deletes
+it. Injected scripts may use it to sign but cannot export private key bytes. Only the theme
+preference uses localStorage. Resume uses `ready.cursor` after replay has been consumed,
+independently of live event acknowledgements or the allocated `head_seq`. An uncertain send is shown
+explicitly and never resubmitted automatically. Retention gaps refresh completed history and send
+`sync` from a readable turn.
 
 Text uses safe Markdown. Each turn groups commentary, reasoning and paired tool calls/results in an
 activity disclosure above the final answer. Disclosures start closed, including during active work,

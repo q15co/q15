@@ -13,6 +13,8 @@ import (
 	"github.com/q15co/q15/libs/chat-contract/chatpb"
 	"github.com/q15co/q15/systems/web/internal/bridge"
 	"github.com/q15co/q15/systems/web/internal/gate"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const rpcTimeout = 5 * time.Second
@@ -123,6 +125,10 @@ func (s *Server) history(w http.ResponseWriter, r *http.Request) {
 		},
 	)
 	if err != nil {
+		if status.Code(err) == codes.ResourceExhausted {
+			writeError(w, http.StatusRequestEntityTooLarge, "history_too_large")
+			return
+		}
 		writeError(w, http.StatusBadGateway, "bridge_unavailable")
 		return
 	}

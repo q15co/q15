@@ -6,6 +6,7 @@ import type { Frame } from "../generated/protocol";
 import type { SocketLike } from "./transport";
 
 import { parseClientFrame } from "../domain/protocol";
+import { MaxClientFrameBytes } from "../generated/protocol";
 import { frame } from "../infrastructure/envelope";
 import { required } from "../testing/required";
 import { proofHeaders, sessionKey } from "../testing/session-key";
@@ -70,6 +71,61 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 describe("socket transport", () => {
+  it("reports the encoded wire limit without sending or dropping the socket", async () => {
+    const { transport, socket, events } = await setup();
+    const before = socket.sent.length;
+    transport.send("x".repeat(MaxClientFrameBytes), "large");
+    await vi.waitFor(() =>
+      expect(events.frame).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          type: "error",
+          payload: { code: "message_too_large", ref: "large" },
+        }),
+      ),
+    );
+    expect(socket.sent).toHaveLength(before);
+    expect(socket.readyState).toBe(1);
+    transport.send("small", "next");
+    await vi.waitFor(() => expect(socket.sent.at(-1)?.id).toBe("next"));
+    transport.stop();
+  });
+
+  it("refreshes exhausted content keys after accepted sends drain", async () => {
+    vi.useFakeTimers();
+    const { transport, socket, events, sockets } = await setup();
+    let release: ((value: Frame) => void) | undefined;
+    let pending: Frame | undefined;
+    vi.spyOn(transport.content, "wrap").mockImplementationOnce((value) => {
+      pending = value;
+      return new Promise((resolve) => {
+        release = resolve;
+      });
+    });
+    transport.send("accepted", "pending");
+    await vi.waitFor(() => expect(pending).toBeDefined());
+    const refresh = vi.spyOn(transport.content, "needsRefresh", "get").mockReturnValue(true);
+    socket.receive("notice", { code: "info", text: "last frame" });
+    await vi.waitFor(() => expect(events.connection).toHaveBeenLastCalledWith("reconnecting"));
+    expect(socket.readyState).toBe(1);
+    expect(() => transport.send("later", "later")).toThrow("reconnect");
+    socket.receive("ready", { cursor: "42", head_seq: "43", device_id: "old" });
+    await vi.waitFor(() =>
+      expect(events.frame).toHaveBeenLastCalledWith(expect.objectContaining({ type: "ready" })),
+    );
+    expect(events.connection).toHaveBeenLastCalledWith("reconnecting");
+    expect(() => transport.send("later", "later")).toThrow("reconnect");
+    required(release)(required(pending));
+    await vi.waitFor(() => expect(socket.readyState).toBe(3));
+    expect(socket.sent.filter((value) => value.type === "msg.send")).toHaveLength(1);
+    refresh.mockReturnValue(false);
+    vi.advanceTimersByTime(1000);
+    const next = required(sockets[1]);
+    next.open();
+    next.receive("ready", { cursor: "42", head_seq: "43", device_id: "new" });
+    await vi.waitFor(() => expect(events.connection).toHaveBeenLastCalledWith("connected"));
+    expect(next.sent.filter((value) => value.type === "msg.send")).toHaveLength(0);
+    transport.stop();
+  });
   it("stops reconnecting when an open session is revoked or expires", async () => {
     vi.useFakeTimers();
     const { transport, socket, sockets, events } = await setup();

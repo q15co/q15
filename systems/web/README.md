@@ -206,8 +206,9 @@ the same replay later. Replay emits complete canonical messages oldest first, fo
 `ready{head_seq,cursor,device_id}`. `ready.cursor` is the newest readable record, while `head_seq`
 may include a still unwritten live turn. Persist the completed replay cursor after consuming replay;
 never advance it merely from the allocated head. More than 500 missed readable turns (counting
-records, not numeric gaps) produces `error{code:"resync_from_head",ref,head_seq}`. Fetch history and
-resume from a completed turn. Unknown or mismatched frame versions produce explicit errors.
+records, not numeric gaps), or replay exceeding half the outgoing byte/frame budget, produces
+`error{code:"resync_from_head",ref,head_seq}` before any partial replay. Fetch history and resume
+from a completed turn. Unknown or mismatched frame versions produce explicit errors.
 
 The agent owns the shared logical session, drafts, replay and one `WatchEvents` subscription per
 principal. The web client exposes only `BrowserChannel`, `BrowserHistory` and the version handshake.
@@ -219,7 +220,9 @@ clients must not automatically resubmit an uncertain send. `msg.abort{turn}` tar
 targets the current run, including startup. `msg.ack{seq}` acknowledges a session event index,
 independently of the transcript cursor. `presence{fg}` is accepted without persistence, and `ping`
 receives `pong`. A transport ping runs every 25 seconds. Slow devices are disconnected once their
-outgoing queue exceeds 2,048 frames or 8 MiB, so they cannot block another device or the agent.
+outgoing queue exceeds 2,048 frames or `protocol.MaxServerFrameBytes` (about 21.4 MiB), so they
+cannot block another device or the agent. This byte budget accommodates one full sealed envelope;
+replay reserves half the budget for control frames and concurrent live traffic.
 
 Live frames reference `msg:{turn,ordinal:-1}`, an ephemeral run draft. `delta.kind` distinguishes
 `text`, `reasoning`, `tool_call` and `tool_result`. Tool calls retain raw JSON arguments. A
@@ -240,7 +243,10 @@ is a later slice.
 `Q15-Channel` with the active channel handle as well as the usual HTTP proof. The response is a
 `history` frame whose sealed payload opens to `{turns,head_seq,has_more}`. `turns` includes only
 immutable completed records from `ListTurns`; the web tier never reads files or manufactures the
-allocated live turn.
+allocated live turn. Pages stop at a complete turn before their serialized plaintext exceeds 16 MiB,
+even if fewer than `limit` records fit. `has_more` remains true; use the oldest returned sequence
+for the next request. A single turn larger than this budget returns HTTP 413 `history_too_large`,
+without closing the socket.
 
 Canonical fixtures in `libs/chat-contract/browser/protocol/testdata`, the seal package testdata, and
 `systems/web/internal/server/testdata` freeze the decoded frame table and a captured sealed
@@ -278,22 +284,33 @@ uint32 chunk index. A full chunk has `final:false`; the terminal chunk is shorte
 AAD binds the envelope version tag, outer frame version/ID/type/UTC millisecond timestamp/sequence,
 stream ID, chunk index and final flag. Reordering, truncation, reflection, tampering and reuse of an
 accepted stream are rejected. Content type starts the first encrypted chunk as a big-endian uint16
-UTF-8 byte length and the type bytes. Additional content metadata belongs in encrypted bytes.
+UTF-8 byte length and the type bytes. Additional content metadata belongs in encrypted bytes. Replay
+state is capped at 65,536 accepted streams per direction and connection. The browser starts key
+refresh 256 streams before that cap, drains already accepted sends, and reconnects with fresh keys.
+Invalid ciphertext still leaves the socket open; a failed decrypt is not a refresh trigger.
 
 The byte primitives read/write bounded chunks; current JSON chat adapters collect only their bounded
-text payloads for decoding. Payloads are capped at 16 MiB, with the tighter existing send/queue
-limits still applied. Attachments are not implemented. Future file transport can use these same byte
-chunks and put name, type, dimensions and other descriptors inside the envelope. The carrier must
-relay bytes without sniffing, transcoding or resizing them.
+text payloads for decoding. `protocol/transport.go` defines the shared byte limits, generated into
+TypeScript. Decoded message text is capped at 64 KiB; the derived client wire cap is 528 KiB,
+allowing six-byte JSON escapes plus base64 and framing. The browser checks the encoded frame before
+sending. Plaintext envelopes are capped at 16 MiB; tags, base64 and framing determine the server
+wire/queue cap and bridge receive limit. Oversized live content emits `content_too_large` rather
+than silently disconnecting. Only the Go-defined control whitelist travels in plaintext; new or
+unknown content frame types are sealed by default. Attachments are not implemented. Future file
+transport can use these same byte chunks and put name, type, dimensions and other descriptors inside
+the envelope. The carrier must relay bytes without sniffing, transcoding or resizing them.
 
 Invalid ciphertext produces a visible decryption error and leaves the socket open; a later valid
 snapshot or history request can recover. Invalid incoming ciphertext produces `unseal_failed`
 without accepting or publishing a message. The envelope hides content from passive carriers, not
 traffic size/timing or control metadata. It does not encrypt host storage or provider calls, cover
 the console, protect compromised browsers/hosts, or resist an actively compromised origin/relay
-changing application code or substituting public keys. Independent agent identity pinning and
-attachment transfer remain unaddressed. The trusted Unix bridge retains plaintext console RPCs;
-restricting the web client interface does not isolate those RPCs from a compromised web process.
+changing application code or substituting public keys. A future agent identity pin would detect key
+substitution only with trusted client code and a trusted initial pin; TOFU would leave the first
+exchange exposed. JavaScript served by an active relay could bypass a browser pin check. Independent
+agent identity pinning and attachment transfer remain unaddressed. The trusted Unix bridge retains
+plaintext console RPCs; restricting the web client interface does not isolate those RPCs from a
+compromised web process.
 
 ## Assets
 

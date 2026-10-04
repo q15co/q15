@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -17,8 +18,10 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-const maxQueueBytes = 8 << 20
+const maxQueueBytes = protocol.MaxServerFrameBytes
 const maxQueueFrames = 2048
+
+var errContentTooLarge = errors.New("content exceeds envelope budget")
 
 type socketConn struct {
 	ctx         context.Context
@@ -32,18 +35,33 @@ type socketConn struct {
 }
 
 func (c *socketConn) enqueue(frame protocol.Frame) bool {
+	data, err := c.encode(frame)
+	if errors.Is(err, errContentTooLarge) {
+		data, err = c.encode(protocol.New(protocol.Error, frame.ID, 0, time.Now(),
+			protocol.ErrorPayload{Code: "content_too_large", Ref: frame.ID}))
+	}
+	return err == nil && c.enqueueBytes(data)
+}
+
+func (c *socketConn) encode(frame protocol.Frame) ([]byte, error) {
 	if seal.Content(frame.Type) {
+		if len(frame.Payload) > protocol.MaxEnvelopeBytes {
+			return nil, errContentTooLarge
+		}
 		value, err := c.keys.Wrap(seal.JSONType, seal.Context(frame), frame.Payload)
 		if err != nil {
-			return false
+			return nil, err
 		}
 		frame.Payload, err = json.Marshal(value)
 		if err != nil {
-			return false
+			return nil, err
 		}
 	}
-	data, err := json.Marshal(frame)
-	if err != nil || c.ctx.Err() != nil {
+	return json.Marshal(frame)
+}
+
+func (c *socketConn) enqueueBytes(data []byte) bool {
+	if c.ctx.Err() != nil {
 		return false
 	}
 	if c.queuedBytes.Add(int64(len(data))) > maxQueueBytes {
@@ -68,7 +86,7 @@ func (c *socketConn) unseal(frame *protocol.Frame) bool {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if _, replay := c.seen[value.Stream]; replay || len(c.seen) >= 65536 {
+	if _, replay := c.seen[value.Stream]; replay || len(c.seen) >= protocol.MaxContentStreams {
 		return false
 	}
 	var data bytes.Buffer
@@ -128,7 +146,8 @@ func (s *Endpoint) Channel(
 			packet = next.packet
 		}
 		var frame protocol.Frame
-		if len(packet.GetFrame()) > 128<<10 || json.Unmarshal(packet.GetFrame(), &frame) != nil {
+		if len(packet.GetFrame()) > protocol.MaxClientFrameBytes ||
+			json.Unmarshal(packet.GetFrame(), &frame) != nil {
 			s.socketError(c, "invalid_frame", "")
 			continue
 		}
@@ -269,15 +288,15 @@ func (s *Endpoint) History(
 	if err != nil {
 		return nil, status.Error(codes.Unavailable, "history unavailable")
 	}
-	frame := protocol.New("history", req.GetChannelId(), 0, time.Now(), protocol.FromPage(page))
-	value, err := c.keys.Wrap(seal.JSONType, seal.Context(frame), frame.Payload)
-	if err != nil {
-		return nil, status.Error(codes.Internal, "content sealing failed")
-	}
-	frame.Payload, err = json.Marshal(value)
+	payload, err := historyPayload(page, protocol.MaxEnvelopeBytes)
 	if err != nil {
 		return nil, err
 	}
-	data, err := json.Marshal(frame)
-	return &chatpb.BrowserPacket{Frame: data}, err
+	frame := protocol.New(protocol.History, req.GetChannelId(), 0, time.Now(), nil)
+	frame.Payload = payload
+	data, err := c.encode(frame)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "content sealing failed")
+	}
+	return &chatpb.BrowserPacket{Frame: data}, nil
 }

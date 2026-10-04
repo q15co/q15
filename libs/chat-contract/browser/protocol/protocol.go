@@ -31,6 +31,8 @@ const (
 	Notice    = "notice"
 	Pong      = "pong"
 	Error     = "error"
+	Key       = "key"
+	History   = "history"
 )
 
 // Frame is the common envelope. Int64 cursors are decimal strings so JavaScript

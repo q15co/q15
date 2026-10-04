@@ -39,6 +39,7 @@ describe("HTTP history adapter", () => {
 
   it.each([
     { status: 401, message: "Sign in again" },
+    { status: 413, message: "A history turn is too large to load" },
     { status: 503, message: "History could not be loaded" },
   ])("surfaces HTTP $status without trusting its response body", async ({ status, message }) => {
     vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(new Response("", { status })));

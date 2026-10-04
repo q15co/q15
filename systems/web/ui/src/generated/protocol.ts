@@ -2,6 +2,21 @@
 
 export const VERSION = 2 as const;
 
+export const MaxMessageBytes = 65536 as const;
+export const ChunkBytes = 32768 as const;
+export const MaxEnvelopeBytes = 16777216 as const;
+export const MaxContentTypeBytes = 1024 as const;
+export const MaxEnvelopeChunks = 513 as const;
+export const MaxChunkDataChars = 43712 as const;
+export const MaxClientFrameBytes = 540672 as const;
+export const MaxEnvelopeCipherBytes = 16786450 as const;
+export const MaxServerFrameBytes = 22418861 as const;
+export const MaxContentStreams = 65536 as const;
+export const RekeyAfter = 65280 as const;
+
+export const PLAINTEXT_FRAME_TYPES = ["hello", "sync", "msg.abort", "msg.ack", "msg.status", "presence", "ping", "ready", "turn.start", "pong", "error", "key"] as const;
+export const FRAME_TYPES = ["hello", "sync", "msg.send", "msg.abort", "msg.ack", "msg.status", "presence", "ping", "ready", "turn.start", "delta", "snapshot", "msg.final", "notice", "pong", "error", "key", "history"] as const;
+
 export interface Frame {
   v: number;
   id: string;

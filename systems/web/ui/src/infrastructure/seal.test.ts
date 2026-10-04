@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
+import type * as Protocol from "../generated/protocol";
+
 import vector from "../fixtures/protocol/sealed.json";
+import { MaxContentStreams, RekeyAfter } from "../generated/protocol";
 import { required } from "../testing/required";
 import { sessionKey } from "../testing/session-key";
 import { frame } from "./envelope";
@@ -46,6 +49,49 @@ async function setup() {
 }
 
 describe("sealed browser content", () => {
+  it("seals unrecognised future content and requests refresh before exhausting replay state", async () => {
+    const content = await setup();
+    expect(hasContent("future.content")).toBe(true);
+    const sealed = await content.wrap(frame("future.content", { text: "future private content" }));
+    expect(JSON.stringify(sealed)).not.toContain("future private content");
+    expect(content.needsRefresh).toBe(false);
+    for (let sent = 1; sent < MaxContentStreams; sent++) {
+      expect(content.needsRefresh).toBe(sent >= RekeyAfter);
+      await content.wrap(frame("msg.send", {}));
+    }
+    expect(content.needsRefresh).toBe(true);
+    await expect(content.wrap(frame("msg.send", {}))).rejects.toThrow(/.+/u);
+    content.reset();
+    expect(content.needsRefresh).toBe(false);
+  });
+
+  it("bounds received replay state and ignores work that completes after key reset", async () => {
+    const content = await setup();
+    const count = vi.spyOn(Set.prototype, "size", "get").mockReturnValueOnce(RekeyAfter);
+    expect(content.needsRefresh).toBe(true);
+    count.mockReturnValueOnce(MaxContentStreams);
+    await expect(content.open(vector.frame)).rejects.toThrow(/.+/u);
+    count.mockRestore();
+    await expect(
+      content.sealStream(frame("msg.send", {}), "application/json", [new Uint8Array()], () => {
+        content.reset();
+        return Promise.resolve();
+      }),
+    ).rejects.toThrow(/.+/u);
+    const receiving = await setup();
+    await expect(
+      receiving.openStream(
+        vector.frame,
+        vector.frame.payload.stream,
+        vector.frame.payload.chunks,
+        () => {
+          receiving.reset();
+          return Promise.resolve();
+        },
+      ),
+    ).rejects.toThrow(/.+/u);
+    expect(receiving.needsRefresh).toBe(false);
+  });
   it("decrypts the agent's Go fixture and keeps metadata inside the envelope", async () => {
     const bits = vi.spyOn(crypto.subtle, "deriveBits");
     const keys = vi.spyOn(crypto.subtle, "deriveKey");
@@ -167,4 +213,9 @@ describe("sealed browser content", () => {
     content.reset();
     await expect(offering).rejects.toThrow(/.+/u);
   });
+});
+
+vi.mock("../generated/protocol", async (importOriginal) => {
+  const actual = await importOriginal<typeof Protocol>();
+  return { ...actual, MaxContentStreams: 16, RekeyAfter: 8 };
 });

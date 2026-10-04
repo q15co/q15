@@ -1,6 +1,11 @@
 import type { Frame } from "../generated/protocol";
 
+import { PLAINTEXT_FRAME_TYPES } from "../generated/protocol";
+
 export class PlainContent {
+  get needsRefresh() {
+    return false;
+  }
   reset() {}
   offer(cursor: string) {
     return Promise.resolve({ cursor, public_key: "test", binding: "test" });
@@ -19,4 +24,4 @@ export class PlainContent {
   }
 }
 export const hasContent = (type: string) =>
-  ["msg.send", "notice", "delta", "snapshot", "msg.final", "history"].includes(type);
+  !PLAINTEXT_FRAME_TYPES.some((control) => control === type);

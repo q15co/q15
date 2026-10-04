@@ -24,7 +24,7 @@ import type {
   TurnStartPayload,
 } from "../generated/protocol";
 
-import { VERSION } from "../generated/protocol";
+import { VERSION, FRAME_TYPES, MaxChunkDataChars, MaxEnvelopeChunks } from "../generated/protocol";
 import { isRecord } from "../shared/type-guards";
 
 export type Envelope<T extends string, P> = Omit<Frame, "type" | "payload"> & {
@@ -232,7 +232,7 @@ export const compareSeq = (a: string, b: string) =>
 export type WireFrame = Frame | Envelope<"key", KeyPayload>;
 export function parseWireFrame(data: string): WireFrame {
   const value: unknown = JSON.parse(data);
-  if (!isEnvelope(value))
+  if (!isEnvelope(value) || !FRAME_TYPES.some((kind) => kind === value.type))
     throw new Error("The server sent an unsupported chat frame. Refresh after updating q15.");
   if (value.type === "key") {
     const p = value.payload;
@@ -259,7 +259,7 @@ function sealedChunk(value: unknown): value is Chunk {
     Number.isInteger(value.index) &&
     typeof value.final === "boolean" &&
     typeof value.data === "string" &&
-    value.data.length <= 43712
+    value.data.length <= MaxChunkDataChars
   );
 }
 export function parseSealed(value: unknown): Sealed {
@@ -269,7 +269,7 @@ export function parseSealed(value: unknown): Sealed {
     typeof value.stream !== "string" ||
     !Array.isArray(value.chunks) ||
     value.chunks.length === 0 ||
-    value.chunks.length > 514
+    value.chunks.length > MaxEnvelopeChunks
   )
     throw new Error("Unsupported sealed envelope.");
   const chunks: unknown[] = value.chunks;
