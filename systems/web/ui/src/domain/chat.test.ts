@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import type { ChatState } from "./chat";
+import type { ChatMessage, ChatState } from "./chat";
 
 import history from "../fixtures/server/history.json";
 import streamed from "../fixtures/server/streamed.json";
@@ -18,6 +18,7 @@ function initial(): ChatState {
   return {
     connection: "connected",
     messages: [],
+    live: null,
     pending: [],
     active: null,
     cursor: "0",
@@ -35,6 +36,36 @@ function packet(type: string, payload: unknown) {
 }
 
 describe("pure chat domain", () => {
+  it.each([100, 1000])(
+    "never reads the historical collection during live updates with %s rows",
+    (size) => {
+      const messages = new Proxy(
+        Array.from({ length: size }, (): ChatMessage => ({
+          key: "1:0",
+          turn: "1",
+          ts: "",
+          ordinal: 0,
+          role: "assistant",
+          parts: [],
+        })),
+        {
+          get: () => {
+            throw new Error("A live frame accessed completed history");
+          },
+        },
+      );
+      let state: ChatState = { ...initial(), messages };
+      const msg = { turn: "42", ordinal: -1 };
+      const call = { id: "call", name: "exec", arguments: "{}" };
+      for (const type of ["delta", "snapshot"]) {
+        for (const kind of ["model_start", "text", "reasoning", "tool_call", "tool_result"]) {
+          state = reduceFrame(state, packet(type, { msg, seq: "0", kind, text: "content", call }));
+          expect(state.messages).toBe(messages);
+        }
+      }
+      expect(state.live?.turn).toBe("42");
+    },
+  );
   it("replays deterministically without modifying frozen state or wire frames", () => {
     let state = freeze(initial());
     for (const fixture of streamed) {
@@ -56,6 +87,7 @@ describe("pure chat domain", () => {
     expect(presentTurn(state.messages)).toEqual(first);
     expect(state).toEqual(before);
     expect(first.answers).toHaveLength(1);
+    expect(reconcileHistory(state.messages, [], parsePage(history)).messages).toBe(state.messages);
   });
 
   it("correlates repeated sends in FIFO order and keeps failed and stale sends", () => {
@@ -138,8 +170,8 @@ describe("pure chat domain", () => {
       freeze(state),
       packet("delta", { msg, seq: "4", kind: "future_part", text: "keep this data" }),
     );
-    expect(state.messages[0]?.model).toBe("model-a");
-    expect(state.messages[0]?.parts).toEqual([
+    expect(state.live?.model).toBe("model-a");
+    expect(state.live?.parts).toEqual([
       { ordinal: 0, part_type: "text", text: "answer" },
       { ordinal: 1, part_type: "future_part", text: "keep this data" },
     ]);

@@ -9,6 +9,7 @@ import {
   Wrench,
 } from "lucide-react";
 import * as motion from "motion/react-m";
+import { memo } from "react";
 
 import type { Source, ToolActivityItem } from "../domain/activity";
 import type { ChatMessage } from "../domain/chat";
@@ -79,68 +80,85 @@ function MessageAnchor({ source }: { source: Source }) {
   );
 }
 
-function ToolActivity({
-  item,
-  working,
-  anchors,
-}: {
-  item: ToolActivityItem;
-  working: boolean;
-  anchors: Set<string>;
-}) {
-  const reduced = useMotionPreference();
-  const { name, title, status, error, running, Icon } = toolPresentation(item, working);
-  const part = item.source.part;
-  const results = part.part_type === "tool_result" ? [item.source] : item.results;
-  return (
-    <details
-      className={clsx(styles.tool, error && styles.error)}
-      data-tool-call-id={part.tool_call?.id ?? part.tool_call_id}
-      data-running={running || undefined}
-    >
-      <summary>
-        {anchors.has(item.source.key) && <MessageAnchor source={item.source} />}
-        <Icon size={16} className={running ? styles.spinning : undefined} aria-hidden="true" />
-        <span className={styles.toolTitle}>{title}</span>
-        {context(part) !== "" && <span className={styles.context}>{context(part)}</span>}
-        <motion.span
-          key={status}
-          className={styles.status}
-          data-status={status}
-          initial={reduced ? false : { opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ duration: reduced ? 0 : 0.18 }}
-        >
-          {status}
-        </motion.span>
-        <ChevronDown size={13} className={styles.chevron} aria-hidden="true" />
-      </summary>
-      <div className={styles.toolBody}>
-        {part.tool_call && (
-          <section>
-            <h3>{name} · Input</h3>
-            <pre>{pretty(part.tool_call.arguments)}</pre>
-          </section>
-        )}
-        {results.map((result) => (
-          <section
-            key={result.key}
-            className={result.part.is_error === true ? styles.error : undefined}
+const ToolActivity = memo(
+  function ToolActivity({
+    item,
+    working,
+    anchors,
+  }: {
+    item: ToolActivityItem;
+    working: boolean;
+    anchors: Set<string>;
+  }) {
+    const reduced = useMotionPreference();
+    const { name, title, status, error, running, Icon } = toolPresentation(item, working);
+    const part = item.source.part;
+    const description = context(part);
+    const results = part.part_type === "tool_result" ? [item.source] : item.results;
+    return (
+      <details
+        className={clsx(styles.tool, error && styles.error)}
+        data-tool-call-id={part.tool_call?.id ?? part.tool_call_id}
+        data-running={running || undefined}
+      >
+        <summary>
+          {anchors.has(item.source.key) && <MessageAnchor source={item.source} />}
+          <Icon size={16} className={running ? styles.spinning : undefined} aria-hidden="true" />
+          <span className={styles.toolTitle}>{title}</span>
+          {description !== "" && <span className={styles.context}>{description}</span>}
+          <motion.span
+            key={status}
+            className={styles.status}
+            data-status={status}
+            initial={reduced ? false : { opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ duration: reduced ? 0 : 0.18 }}
           >
-            {result !== item.source && anchors.has(result.key) && <MessageAnchor source={result} />}
-            <h3>{result.part.is_error === true ? "Error" : "Output"}</h3>
-            <pre>{result.part.content ?? ""}</pre>
-          </section>
-        ))}
-        {results.length === 0 && (
-          <p className={styles.noResult}>
-            {working ? "Waiting for the tool result…" : "No result was recorded for this call."}
-          </p>
-        )}
-      </div>
-    </details>
-  );
-}
+            {status}
+          </motion.span>
+          <ChevronDown size={13} className={styles.chevron} aria-hidden="true" />
+        </summary>
+        <div className={styles.toolBody}>
+          {part.tool_call && (
+            <section>
+              <h3>{name} · Input</h3>
+              <pre>{pretty(part.tool_call.arguments)}</pre>
+            </section>
+          )}
+          {results.map((result) => (
+            <section
+              key={result.key}
+              className={result.part.is_error === true ? styles.error : undefined}
+            >
+              {result !== item.source && anchors.has(result.key) && (
+                <MessageAnchor source={result} />
+              )}
+              <h3>{result.part.is_error === true ? "Error" : "Output"}</h3>
+              <pre>{result.part.content ?? ""}</pre>
+            </section>
+          ))}
+          {results.length === 0 && (
+            <p className={styles.noResult}>
+              {working ? "Waiting for the tool result…" : "No result was recorded for this call."}
+            </p>
+          )}
+        </div>
+      </details>
+    );
+  },
+  (previous, next) =>
+    previous.working === next.working &&
+    previous.item.source.key === next.item.source.key &&
+    previous.item.source.part === next.item.source.part &&
+    previous.anchors.has(previous.item.source.key) === next.anchors.has(next.item.source.key) &&
+    previous.item.results.length === next.item.results.length &&
+    previous.item.results.every(
+      (result, index) =>
+        result.part === next.item.results[index]?.part &&
+        result.key === next.item.results[index].key &&
+        previous.anchors.has(result.key) === next.anchors.has(result.key),
+    ),
+);
 
 export function TurnView({
   messages,
@@ -274,16 +292,14 @@ export function TurnView({
           <div className={styles.timeline}>
             {activity.map((item) =>
               item.kind === "tool" ? (
-                <ToolActivity
-                  item={item}
-                  working={working}
-                  anchors={anchors}
-                  key={item.source.key}
-                />
+                <ToolActivity item={item} working={working} anchors={anchors} key={item.key} />
               ) : (
-                <div className={styles.commentary} key={item.source.key}>
+                <div className={styles.commentary} key={item.key}>
                   {anchors.has(item.source.key) && <MessageAnchor source={item.source} />}
-                  <PartView part={item.source.part} />
+                  <PartView
+                    part={item.source.part}
+                    streaming={item.source.message.status === "streaming"}
+                  />
                 </div>
               ),
             )}

@@ -29,6 +29,7 @@ make ui-test-coverage
 make ui-build
 pnpm --dir systems/web/ui exec playwright install chromium
 make ui-e2e
+make ui-benchmark
 make verify
 ```
 
@@ -66,6 +67,18 @@ Reports stay ignored under `systems/web/ui/coverage/`: open `index.html` for unc
 the LCOV/JSON reports for tooling. The Browser Verify job runs this gate and uploads its reports as
 the `browser-coverage` artifact, including on failure. Browser tests remain a separate gate for
 native scrolling, layout, keyboard access and compiled PWA behavior.
+
+React Compiler runs in development, tests and production through the React 19 compiler preset.
+Streaming drafts live separately from completed history; only the matching turn subscribes to draft
+changes. Unchanged parts retain their identities. Markdown updates use a 40ms window and parse the
+complete latest source, so closing fences and late reference definitions remain correct; terminal
+updates render immediately. Content resize notifications batch bottom-follow work once per animation
+frame. Activity row identities survive draft-to-history replacement and resync.
+
+The streaming regression tests compare 100 and 1,000 loaded messages with identical frames, count
+Markdown/tool work and grouping visits, and reject any historical collection access by the live
+reducer. See [the benchmark](benchmark/README.md) for repeatable browser timing and latency
+evidence.
 
 ## Architecture and linting
 

@@ -35,13 +35,14 @@ function isInstallEvent(event: Event): event is InstallEvent {
 
 export function App({
   store,
-  preview = false,
+  preview: offlinePreview,
   onLogout,
 }: {
   store: ChatStore;
   preview?: boolean;
   onLogout?: () => Promise<void>;
 }) {
+  const preview = offlinePreview ?? false;
   const reduced = useMotionPreference();
   const state = useSyncExternalStore(store.subscribe, store.getSnapshot);
   const [theme, setTheme] = useState(initialTheme);

@@ -39,6 +39,40 @@ const feed = (store: ChatStore, values: unknown[]) =>
 const event = (store: ChatStore, type: string, payload: unknown) =>
   store.consume(parseFrame(JSON.stringify(frame(type, payload))));
 describe("chat state", () => {
+  it("notifies only the changed live turn, retains unrelated subscriptions, and removes empty listener sets", () => {
+    const { store } = setup();
+    const changed = vi.fn<() => void>();
+    const historical = vi.fn<() => void>();
+    const first = store.subscribeTurn("42", changed);
+    const second = store.subscribeTurn("42", historical);
+    const other = store.subscribeTurn("41", historical);
+    event(store, "delta", {
+      msg: { turn: "42", ordinal: -1 },
+      seq: "1",
+      kind: "text",
+      text: "hello",
+    });
+    expect(changed).toHaveBeenCalledOnce();
+    expect(historical).toHaveBeenCalledOnce();
+    expect(store.getLive("41")).toBeNull();
+    expect(store.getLive("42")?.parts[0]?.text).toBe("hello");
+    store.send("queued after the live draft");
+    expect(store.getSnapshot().pending[0]?.afterTurn).toBe("42");
+    first();
+    event(store, "delta", {
+      msg: { turn: "43", ordinal: -1 },
+      seq: "2",
+      kind: "text",
+      text: "next",
+    });
+    expect(changed).toHaveBeenCalledOnce();
+    expect(historical).toHaveBeenCalledTimes(2);
+    second();
+    other();
+    event(store, "notice", { code: "status", text: "still here" });
+    expect(historical).toHaveBeenCalledTimes(2);
+    expect(store.getLive("42")).toBeNull();
+  });
   it("requires a turn for assigned sends and excludes it from waiting sends", () => {
     type Assigned = Extract<Pending, { state: "running" | "finished" | "stopped" }>;
     type Waiting = Extract<Pending, { state: "sending" | "accepted" | "queued" | "uncertain" }>;
@@ -71,11 +105,11 @@ describe("chat state", () => {
     const { store } = setup();
     feed(store, streamed.slice(0, 7));
     feed(store, [required(streamed[4])]);
-    expect(store.getSnapshot().messages[0]?.parts.find((p) => p.part_type === "text")?.text).toBe(
+    expect(store.getSnapshot().live?.parts.find((p) => p.part_type === "text")?.text).toBe(
       "answer",
     );
     feed(store, [required(streamed[2])]);
-    expect(store.getSnapshot().messages[0]?.parts).toEqual([]);
+    expect(store.getSnapshot().live?.parts).toEqual([]);
     event(store, "snapshot", {
       msg: { turn: "42", ordinal: -1 },
       seq: "8",
@@ -83,7 +117,7 @@ describe("chat state", () => {
       text: "resumed answer",
       reasoning: "resumed thinking",
     });
-    expect(store.getSnapshot().messages[0]?.parts.map((p) => p.text)).toEqual([
+    expect(store.getSnapshot().live?.parts.map((p) => p.text)).toEqual([
       "resumed thinking",
       "resumed answer",
     ]);
@@ -108,15 +142,15 @@ describe("chat state", () => {
   it("retains completed tool activity across model loops while replacing retries of the current loop", () => {
     const { store } = setup();
     feed(store, streamed.slice(0, 8));
-    const completed = required(store.getSnapshot().messages[0]).parts.map((p) =>
+    const completed = required(store.getSnapshot().live).parts.map((p) =>
       p.part_type === "text" ? { ...p, disposition: "commentary" } : p,
     );
     const msg = { turn: "42", ordinal: -1 };
     event(store, "snapshot", { msg, seq: "10", kind: "model_start", text: "", loop_turn: 2 });
-    expect(store.getSnapshot().messages[0]?.parts).toEqual(completed);
+    expect(store.getSnapshot().live?.parts).toEqual(completed);
     event(store, "delta", { msg, seq: "11", kind: "text", text: "partial attempt" });
     event(store, "snapshot", { msg, seq: "12", kind: "model_start", text: "", loop_turn: 2 });
-    expect(store.getSnapshot().messages[0]?.parts).toEqual(completed);
+    expect(store.getSnapshot().live?.parts).toEqual(completed);
     event(store, "snapshot", {
       msg,
       seq: "13",
@@ -124,7 +158,7 @@ describe("chat state", () => {
       text: "final answer",
       reasoning: "new reasoning",
     });
-    expect(store.getSnapshot().messages[0]?.parts.slice(0, completed.length)).toEqual(completed);
+    expect(store.getSnapshot().live?.parts.slice(0, completed.length)).toEqual(completed);
     event(store, "msg.final", { msg, status: "completed", full_text: "final answer" });
     expect(
       store.getSnapshot().messages[0]?.parts.filter((p) => p.part_type === "tool_call"),
@@ -148,13 +182,13 @@ describe("chat state", () => {
     const events = required(vi.mocked(transport.start).mock.calls[0])[0];
     events.connection("reconnecting");
     feed(store, [required(streamed[2])]);
-    expect(store.getSnapshot().messages[0]?.parts).toEqual([]);
+    expect(store.getSnapshot().live?.parts).toEqual([]);
     feed(store, streamed.slice(3, 8));
+    expect(store.getSnapshot().live?.parts.filter((p) => p.part_type === "tool_call")).toHaveLength(
+      1,
+    );
     expect(
-      store.getSnapshot().messages[0]?.parts.filter((p) => p.part_type === "tool_call"),
-    ).toHaveLength(1);
-    expect(
-      store.getSnapshot().messages[0]?.parts.filter((p) => p.part_type === "tool_result"),
+      store.getSnapshot().live?.parts.filter((p) => p.part_type === "tool_result"),
     ).toHaveLength(1);
   });
   it("treats an omitted loop counter as zero and retains its tools when loop one starts", () => {
@@ -165,13 +199,13 @@ describe("chat state", () => {
     event(store, "delta", { msg, seq: "2", kind: "tool_call", text: "", call });
     event(store, "delta", { msg, seq: "3", kind: "tool_result", text: "/workspace", call });
     event(store, "snapshot", { msg, seq: "4", kind: "model_start", text: "", loop_turn: 1 });
-    expect(store.getSnapshot().messages[0]?.parts.map((p) => p.part_type)).toEqual([
+    expect(store.getSnapshot().live?.parts.map((p) => p.part_type)).toEqual([
       "tool_call",
       "tool_result",
     ]);
     // Replaying from loop zero clears the draft before tools are replayed.
     event(store, "snapshot", { msg, seq: "1", kind: "model_start", text: "" });
-    expect(store.getSnapshot().messages[0]?.parts).toEqual([]);
+    expect(store.getSnapshot().live?.parts).toEqual([]);
   });
   it("marks unacknowledged sends uncertain when disconnected", () => {
     const { store, transport } = setup();

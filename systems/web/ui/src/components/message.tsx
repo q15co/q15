@@ -58,6 +58,7 @@ export function MessageView({ message }: { message: ChatMessage }) {
         {message.parts.map((part) => (
           <PartView
             part={part}
+            streaming={message.status === "streaming"}
             key={`${part.ordinal}:${part.part_type}:${part.tool_call?.id ?? part.tool_call_id ?? ""}`}
           />
         ))}

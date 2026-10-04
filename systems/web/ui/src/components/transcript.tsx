@@ -1,10 +1,10 @@
 import { ArrowDown, History } from "lucide-react";
 import { AnimatePresence } from "motion/react";
 import * as motion from "motion/react-m";
-import { Fragment, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, memo, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import type { ChatStore } from "../application/chat-store";
-import type { ChatState } from "../domain/chat";
+import type { ChatMessage, ChatState, Pending } from "../domain/chat";
 
 import { groupTurns } from "../domain/chat";
 import { TurnView } from "./activity";
@@ -15,9 +15,75 @@ import { Welcome } from "./welcome";
 
 import styles from "./transcript.module.css";
 
+const Turn = memo(
+  function Turn({
+    turn,
+    messages,
+    active,
+    store,
+  }: {
+    turn: string;
+    messages: readonly ChatMessage[];
+    active: boolean;
+    store: ChatStore;
+  }) {
+    const live = useSyncExternalStore(
+      (listener) => store.subscribeTurn(turn, listener),
+      () => store.getLive(turn),
+    );
+    const combined = live === null ? messages : [...messages, live];
+    return (
+      <TurnView
+        messages={combined}
+        working={active || combined.some((m) => m.status === "streaming")}
+      />
+    );
+  },
+  (previous, next) =>
+    previous.turn === next.turn &&
+    previous.active === next.active &&
+    previous.store === next.store &&
+    previous.messages.length === next.messages.length &&
+    previous.messages.every((message, index) => message === next.messages[index]),
+);
+
+function Turns({
+  messages,
+  active,
+  liveTurn,
+  pending,
+  store,
+}: {
+  messages: readonly ChatMessage[];
+  active: string | null;
+  liveTurn: string | null;
+  pending: readonly Pending[];
+  store: ChatStore;
+}) {
+  const turns = groupTurns(messages, active ?? liveTurn);
+  return (
+    <>
+      {[...turns].map(([turn, group]) => (
+        <Fragment key={turn}>
+          {pending
+            .filter((p) => p.turn === turn)
+            .map((p) => (
+              <PendingMessage key={p.id} pending={p} />
+            ))}
+          <Turn turn={turn} messages={group} active={active === turn} store={store} />
+        </Fragment>
+      ))}
+      {pending
+        .filter((p) => p.turn === undefined || !turns.has(p.turn))
+        .map((p) => (
+          <PendingMessage key={p.id} pending={p} />
+        ))}
+    </>
+  );
+}
+
 export function Transcript({ state, store }: { state: ChatState; store: ChatStore }) {
   const reduced = useMotionPreference();
-  const turns = groupTurns(state.messages, state.active);
   const scroller = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const anchor = useRef<{
@@ -59,28 +125,33 @@ export function Transcript({ state, store }: { state: ChatState; store: ChatStor
         ? item.getBoundingClientRect().top - saved.top
         : node.scrollHeight - saved.scrollHeight;
       anchor.current = null;
-    } else if (following.current && !anchor.current) {
-      node.scrollTop = node.scrollHeight;
-      followedTop.current = node.scrollTop;
     }
-  });
+  }, [state.loadingHistory]);
 
   // Follow expanding disclosures as well as text deltas, without moving a reader
   // who has scrolled back or is paging history.
   useLayoutEffect(() => {
     const element = content.current;
+    let frame: number | undefined;
+    const follow = () => {
+      frame = undefined;
+      const node = scroller.current;
+      if (node && following.current && !anchor.current) {
+        node.scrollTop = node.scrollHeight;
+        followedTop.current = node.scrollTop;
+      }
+    };
     const observer =
       element && typeof ResizeObserver !== "undefined"
         ? new ResizeObserver(() => {
-            const node = scroller.current;
-            if (node && following.current && !anchor.current) {
-              node.scrollTop = node.scrollHeight;
-              followedTop.current = node.scrollTop;
-            }
+            frame ??= requestAnimationFrame(follow);
           })
         : undefined;
     if (element) observer?.observe(element);
-    return () => observer?.disconnect();
+    return () => {
+      observer?.disconnect();
+      if (frame !== undefined) cancelAnimationFrame(frame);
+    };
   }, []);
 
   useLayoutEffect(() => {
@@ -146,27 +217,16 @@ export function Transcript({ state, store }: { state: ChatState; store: ChatStor
               </Button>
             </div>
           )}
-          {state.messages.length === 0 && state.pending.length === 0 && (
+          {state.messages.length === 0 && state.live === null && state.pending.length === 0 && (
             <Welcome store={store} connected={state.connection === "connected"} />
           )}
-          {[...turns].map(([turn, messages]) => (
-            <Fragment key={turn}>
-              {state.pending
-                .filter((p) => p.turn === turn)
-                .map((p) => (
-                  <PendingMessage key={p.id} pending={p} />
-                ))}
-              <TurnView
-                messages={messages}
-                working={state.active === turn || messages.some((m) => m.status === "streaming")}
-              />
-            </Fragment>
-          ))}
-          {state.pending
-            .filter((p) => p.turn === undefined || !turns.has(p.turn))
-            .map((p) => (
-              <PendingMessage key={p.id} pending={p} />
-            ))}
+          <Turns
+            messages={state.messages}
+            active={state.active}
+            liveTurn={state.live?.turn ?? null}
+            pending={state.pending}
+            store={store}
+          />
           {jumping && <output>Finding your message…</output>}
         </div>
       </div>

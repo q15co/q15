@@ -7,11 +7,12 @@ export interface Source {
   part: Part;
 }
 export interface ToolActivityItem {
+  key: string;
   kind: "tool";
   source: Source;
   results: Source[];
 }
-export type ActivityItem = ToolActivityItem | { kind: "message"; source: Source };
+export type ActivityItem = ToolActivityItem | { key: string; kind: "message"; source: Source };
 
 // History separates calls and results into messages; live drafts contain both.
 // Present either shape without changing canonical message or part identities.
@@ -34,6 +35,7 @@ export function presentTurn(messages: readonly ChatMessage[]) {
   const answerParts = new Map<string, Part[]>();
   const activity: ActivityItem[] = [];
   const calls = new Map<string, ToolActivityItem[]>();
+  const occurrences = new Map<string, number>();
   sources.forEach((source, i) => {
     const { part, message } = source;
     const final =
@@ -59,10 +61,14 @@ export function presentTurn(messages: readonly ChatMessage[]) {
         paired.results.push(source);
         return;
       }
+      const identity = `${part.part_type}:${part.tool_call?.id ?? part.tool_call_id ?? ""}`;
+      const occurrence = occurrences.get(identity) ?? 0;
+      occurrences.set(identity, occurrence + 1);
+      const key = `${identity}:${occurrence}`;
       const item: ActivityItem =
         part.part_type === "tool_call" || part.part_type === "tool_result"
-          ? { kind: "tool", source, results: [] }
-          : { kind: "message", source };
+          ? { key, kind: "tool", source, results: [] }
+          : { key, kind: "message", source };
       activity.push(item);
       if (
         item.kind === "tool" &&

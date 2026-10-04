@@ -10,6 +10,7 @@ export class ChatStore {
   private state: ChatState = {
     connection: "connecting",
     messages: [],
+    live: null,
     pending: [],
     active: null,
     cursor: "0",
@@ -19,6 +20,7 @@ export class ChatStore {
     error: null,
   };
   private listeners = new Set<() => void>();
+  private turnListeners = new Map<string, Set<() => void>>();
   private seenEvents = new Set<string>();
   private controller?: AbortController;
   private generation = 0;
@@ -38,9 +40,27 @@ export class ChatStore {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   };
+  getLive = (turn: string) => (this.state.live?.turn === turn ? this.state.live : null);
+  subscribeTurn = (turn: string, listener: () => void) => {
+    const listeners = this.turnListeners.get(turn) ?? new Set<() => void>();
+    listeners.add(listener);
+    this.turnListeners.set(turn, listeners);
+    return () => {
+      listeners.delete(listener);
+      if (listeners.size === 0) this.turnListeners.delete(turn);
+    };
+  };
   private update(patch: Partial<ChatState>) {
+    const previous = this.state.live;
     this.state = { ...this.state, ...patch };
     for (const listener of this.listeners) listener();
+    if (previous !== this.state.live) {
+      const turns = new Set([previous?.turn, this.state.live?.turn]);
+      for (const turn of turns) {
+        if (turn === undefined) continue;
+        for (const listener of this.turnListeners.get(turn) ?? []) listener();
+      }
+    }
   }
 
   start() {
@@ -93,7 +113,7 @@ export class ChatStore {
       this.fail(error);
       return false;
     }
-    const afterTurn = this.state.messages.at(-1)?.turn ?? "0";
+    const afterTurn = this.state.live?.turn ?? this.state.messages.at(-1)?.turn ?? "0";
     this.update({
       pending: [...this.state.pending, { id, text, state: "sending", afterTurn }],
       error: null,
@@ -176,7 +196,10 @@ export class ChatStore {
       this.historyBefore = page.turns.at(-1)?.seq ?? this.historyBefore;
       this.update({ hasMore: page.has_more });
     }
-    this.update(patch);
+    this.update({
+      ...patch,
+      live: page.turns.some((turn) => turn.seq === this.state.live?.turn) ? null : this.state.live,
+    });
     // Fetching the newest page alone cannot prove earlier replay was consumed.
     // ready advances the resume cursor; history is only used to reset it during resync.
   }
@@ -188,15 +211,18 @@ export class ChatStore {
     try {
       const page = await this.history("0", this.controller?.signal);
       if (generation !== this.generation) return;
+      const retained = this.state.messages.filter((message) => message.ordinal >= 0);
+      const patch = reconcileHistory(retained, this.state.pending, page);
+      const cursor = page.turns[0]?.seq ?? "0";
       this.update({
-        messages: [],
+        ...patch,
+        live: null,
         active: null,
+        hasMore: page.has_more,
+        cursor,
         notice: "Chat reconnected. Recent history refreshed.",
       });
-      this.historyBefore = "0";
-      this.applyPage(page, false);
-      const cursor = page.turns[0]?.seq ?? "0";
-      this.update({ cursor });
+      this.historyBefore = page.turns.at(-1)?.seq ?? "0";
       this.transport.sync(cursor);
     } catch (error) {
       if (generation === this.generation) this.fail(error);
@@ -207,6 +233,7 @@ export class ChatStore {
 
   async findMessage(turn: string, ordinal: number): Promise<string | null> {
     const key = `${turn}:${ordinal}`;
+    if (this.state.live?.key === key) return key;
     while (!this.state.messages.some((m) => m.key === key) && this.state.hasMore) {
       const previous = this.historyBefore;
       await this.loadHistory();

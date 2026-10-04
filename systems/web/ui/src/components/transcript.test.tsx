@@ -118,6 +118,22 @@ function flushFrame() {
 }
 
 describe("transcript navigation", () => {
+  it("batches resize follow once per frame and cancels pending follow on unmount", async () => {
+    const { node, resize, unmount, store } = await setup(() => Promise.resolve(page("42")));
+    const writes = vi.fn<(value: number) => void>();
+    Object.defineProperty(node, "scrollTop", { get: () => 0, set: writes });
+    resize(1000);
+    resize(1200);
+    resize(1400);
+    expect(writes).not.toHaveBeenCalled();
+    flushFrame();
+    expect(writes).toHaveBeenCalledExactlyOnceWith(1400);
+    resize(1600);
+    const cancel = vi.spyOn(window, "cancelAnimationFrame");
+    unmount();
+    expect(cancel).toHaveBeenCalledOnce();
+    store.stop();
+  });
   it.each([true, false])(
     "follows new content until the reader scrolls back; reduced motion=%s",
     async (reduced) => {
@@ -126,14 +142,17 @@ describe("transcript navigation", () => {
         reduced,
       );
       resize(1000);
+      flushFrame();
       expect(node.scrollTop).toBe(1000);
       resize(1400);
       fireEvent.scroll(node);
+      flushFrame();
       expect(screen.queryByText("Back to latest")).toBeNull();
       node.scrollTop = 400;
       fireEvent.scroll(node);
       expect(screen.getByText("Back to latest")).toBeDefined();
       resize(1800);
+      flushFrame();
       expect(node.scrollTop).toBe(400);
       fireEvent.click(screen.getByRole("button", { name: "Back to latest" }));
       expect(scrollTo).toHaveBeenCalledWith({ top: 1800, behavior: reduced ? "auto" : "smooth" });
