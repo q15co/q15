@@ -1,5 +1,7 @@
 # Streaming benchmark
 
+See [the recorded comparison](results/2026-10-04.md) for device results and raw measurements.
+
 Run from the repository root with the pinned toolchain:
 
 ```bash
@@ -36,6 +38,9 @@ overhead to both revisions. Socket delivery and encryption are excluded to measu
 independently of #209. Normal and reduced motion are measured separately. An additional
 normal-motion workload fixes only the working label's font axes via CSS, leaving Motion and the
 other animations running, to assess font shaping/layout separately.
+
+Elapsed time covers the first text frame through final rendering. CDP counters also include live
+turn/tool setup and the trailing 100ms observer drain.
 
 Default output is ignored under `benchmark-results/results.json`; set `Q15_BENCHMARK_OUTPUT` for
 another path and `Q15_BENCHMARK_RUNS` to change the default three repetitions. Run comparisons
