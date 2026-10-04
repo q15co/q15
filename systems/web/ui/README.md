@@ -129,14 +129,14 @@ make ui-fixtures-check
 ```
 
 Run those commands from the repository root. CI checks copies and generated types on every PR,
-including changes to the fixture producers. Go-only changes do not trigger the separate UI job.
+including changes to the fixture producers. Go browser-boundary changes trigger the separate UI job.
 
 JSON fixtures participate in Oxfmt, including their canonical Go sources. After editing a source and
 updating its browser copy, format and check both through the shared workflow:
 
 ```bash
-make fmt FILES='systems/web/internal/protocol/testdata/frames.json systems/web/ui/src/fixtures/protocol/frames.json'
-make lint-changed FILES='systems/web/internal/protocol/testdata/frames.json systems/web/ui/src/fixtures/protocol/frames.json'
+make fmt FILES='libs/chat-contract/browser/protocol/testdata/frames.json systems/web/ui/src/fixtures/protocol/frames.json'
+make lint-changed FILES='libs/chat-contract/browser/protocol/testdata/frames.json systems/web/ui/src/fixtures/protocol/frames.json'
 make ui-fixtures-check
 ```
 
@@ -148,6 +148,16 @@ unknown wire part types remain available to the visible renderer fallback. Shell
 install events are also checked before use. Type-aware Oxc rules reject unsafe assertions and unsafe
 uses of `any`, while `satisfies` checks configuration without widening literal values.
 
+The socket and history adapters open the version 2 sealed byte envelope before domain validation.
+Fresh non-exportable ECDH/content keys remain in memory; reconnects re-wrap history in the agent.
+The Go protocol generates both byte limits and the plaintext-control whitelist; unknown content
+types default to sealing. Before either directional stream count reaches its 65,536-entry replay
+budget, the transport drains accepted sends and reconnects with fresh keys. This recovery never
+resubmits an uncertain send. History paging is bounded by encoded plaintext bytes as well as turns.
+Failed decryption is visible and does not close the socket. See
+[content sealing](../README.md#content-sealing) for the byte framing, passive-carrier guarantee and
+trusted-delivery limits.
+
 The app keeps transcript content and drafts in memory. It never stores messages, raw private keys or
 session cookies in localStorage, IndexedDB, or worker caches. The explicit exception is the
 non-exportable session `CryptoKey` and its public binding ID in IndexedDB, shared by the HTTP/socket
@@ -156,11 +166,13 @@ sign-in gesture. The adapter verifies the WebAuthn challenge's session-key commi
 own public key before invoking the authenticator; malformed or substituted commitments refuse
 sign-in without a gesture. See [the tier README](../README.md#sessions-and-http-policy) for the
 exact hash input and the trusted-client boundary. Subsequent requests and reconnects sign silently.
-Reloads keep the key; logout deletes it. Injected scripts may use it to sign but cannot export
-private key bytes. Only the theme preference uses localStorage. Resume uses `ready.cursor` after
-replay has been consumed, independently of live event acknowledgements or the allocated `head_seq`.
-An uncertain send is shown explicitly and never resubmitted automatically. Retention gaps refresh
-completed history and send `sync` from a readable turn.
+Proof callers must pass the already escaped same-origin path and query verbatim: the server signs
+`RequestURI()`, so a later URL-encoding change causes a 401. Reloads keep the key; logout deletes
+it. Injected scripts may use it to sign but cannot export private key bytes. Only the theme
+preference uses localStorage. Resume uses `ready.cursor` after replay has been consumed,
+independently of live event acknowledgements or the allocated `head_seq`. An uncertain send is shown
+explicitly and never resubmitted automatically. Retention gaps refresh completed history and send
+`sync` from a readable turn.
 
 Text uses safe Markdown. Each turn groups commentary, reasoning and paired tool calls/results in an
 activity disclosure above the final answer. Disclosures start closed, including during active work,

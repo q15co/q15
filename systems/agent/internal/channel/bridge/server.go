@@ -50,6 +50,7 @@ const (
 type Server struct {
 	listener net.Listener
 	server   *grpc.Server
+	service  *Service
 }
 
 // NewServer resolves the listen target — only a unix:// socket binds, and a
@@ -93,7 +94,7 @@ func NewServer(target string, service *Service) (*Server, error) {
 	)
 	server := grpc.NewServer(grpc.MaxConcurrentStreams(serverMaxConcurrentStreams))
 	chatpb.RegisterChatServiceServer(server, service)
-	return &Server{listener: listener, server: server}, nil
+	return &Server{listener: listener, server: server, service: service}, nil
 }
 
 // Serve blocks serving the chat contract until ctx is canceled, then stops the
@@ -115,6 +116,9 @@ func (s *Server) Serve(ctx context.Context) error {
 }
 
 func (s *Server) stopServing() {
+	if s.service != nil {
+		defer s.service.browser.Close()
+	}
 	done := make(chan struct{})
 	go func() {
 		s.server.GracefulStop()
@@ -136,6 +140,9 @@ func (s *Server) stopServing() {
 // the hard shutdown path for callers whose Serve already ended or never ran,
 // e.g. when a sibling startup step failed first.
 func (s *Server) Close() {
+	if s.service != nil {
+		s.service.browser.Close()
+	}
 	s.server.Stop()
 	_ = s.listener.Close()
 }

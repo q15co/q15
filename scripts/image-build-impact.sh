@@ -69,6 +69,7 @@ while IFS= read -r file; do
 
 	if matches_any "${file}" \
 		"systems/web/ui/**" \
+		"libs/chat-contract/browser/**" \
 		"scripts/tool-versions.sh" \
 		"scripts/project-setup.sh" \
 		"scripts/check-ui-*" \

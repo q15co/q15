@@ -74,7 +74,9 @@ beforeEach(async () => {
       Promise.resolve(
         path === "/auth/session" || path === "/auth/worker"
           ? new Response(null, { status: 204 })
-          : Response.json({ turns: [], head_seq: "0", has_more: false }),
+          : Response.json(
+              frame("history", { turns: [], head_seq: "0", has_more: false }, "channel"),
+            ),
       ),
     ),
   );
@@ -167,4 +169,9 @@ describe("browser composition root", () => {
     await expect(vi.importActual("./main.tsx")).rejects.toThrow("missing its root element");
     expect(roots.mounted).toEqual([]);
   });
+});
+
+vi.mock("./infrastructure/seal", async () => {
+  const { PlainContent, hasContent } = await import("./testing/content");
+  return { ContentSession: PlainContent, hasContent };
 });

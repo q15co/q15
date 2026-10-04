@@ -29,10 +29,13 @@ function publishManifest() {
 }
 const preview = import.meta.env.DEV && new URLSearchParams(location.search).has("preview");
 const signedIn = preview || (await hasSession());
+const liveTransport = new SocketTransport();
 const store = signedIn
   ? preview
     ? await previewStore()
-    : new ChatStore(new SocketTransport(), fetchHistory)
+    : new ChatStore(liveTransport, (before, signal) =>
+        fetchHistory(before, signal, liveTransport.content),
+      )
   : undefined;
 const root = document.querySelector("#root");
 if (!root) throw new Error("The chat shell is missing its root element.");

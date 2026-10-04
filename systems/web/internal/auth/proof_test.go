@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,6 +13,12 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/q15co/q15/libs/chat-contract/browser"
+	browserprotocol "github.com/q15co/q15/libs/chat-contract/browser/protocol"
+	"github.com/q15co/q15/libs/chat-contract/browser/seal"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/test/bufconn"
 
 	"github.com/coder/websocket"
 	"github.com/q15co/q15/libs/chat-contract/chatpb"
@@ -185,17 +192,53 @@ func TestBearerSessionMigration(t *testing.T) {
 	}
 }
 
-type proofBridge struct{ bridge.Service }
+type proofAgent struct {
+	chatpb.UnimplementedChatServiceServer
+	endpoint *browser.Endpoint
+}
 
-func (proofBridge) ListTurns(
+func (p *proofAgent) ListTurns(
 	context.Context,
 	*chatpb.ListTurnsRequest,
 ) (*chatpb.ListTurnsResponse, error) {
 	return &chatpb.ListTurnsResponse{}, nil
 }
-func (proofBridge) Deliver(ctx context.Context) (bridge.DeliverStream, error) {
-	<-ctx.Done()
-	return nil, ctx.Err()
+
+func (p *proofAgent) Deliver(
+	_ *chatpb.DeliverRequest,
+	stream grpc.ServerStreamingServer[chatpb.DeliverResponse],
+) error {
+	<-stream.Context().Done()
+	return nil
+}
+
+func (p *proofAgent) BrowserChannel(
+	stream grpc.BidiStreamingServer[chatpb.BrowserPacket, chatpb.BrowserPacket],
+) error {
+	return p.endpoint.Channel(stream)
+}
+func newProofBridge(t *testing.T) *bridge.Client {
+	t.Helper()
+	p := &proofAgent{}
+	p.endpoint = browser.NewLocal(p)
+	t.Cleanup(p.endpoint.Close)
+	listener := bufconn.Listen(1 << 20)
+	rpc := grpc.NewServer()
+	chatpb.RegisterChatServiceServer(rpc, p)
+	go func() { _ = rpc.Serve(listener) }()
+	t.Cleanup(rpc.Stop)
+	client, err := bridge.NewClient(
+		context.Background(),
+		"unix:///test",
+		grpc.WithContextDialer(
+			func(ctx context.Context, _ string) (net.Conn, error) { return listener.DialContext(ctx) },
+		),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	return client
 }
 
 func TestSocketProofAndDeviceRevocation(t *testing.T) {
@@ -205,7 +248,7 @@ func TestSocketProofAndDeviceRevocation(t *testing.T) {
 	cookie := loginTest(t, a, d)
 	s, err := server.New(
 		context.Background(),
-		proofBridge{},
+		newProofBridge(t),
 		server.Config{Origin: testOrigin, Authorizer: a, Assets: http.NotFoundHandler()},
 	)
 	if err != nil {
@@ -242,19 +285,47 @@ func TestSocketProofAndDeviceRevocation(t *testing.T) {
 	if err == nil || response == nil || response.StatusCode != 401 {
 		t.Fatal("socket accepted replayed proof")
 	}
-	if err := conn.Write(ctx, websocket.MessageText, []byte(`{"v":1,"id":"hello","type":"hello","ts":"2026-10-03T00:00:00Z","seq":"0","payload":{"cursor":"0"}}`)); err != nil {
-		t.Fatal(err)
-	}
-	_, data, err := conn.Read(ctx)
+	_, public, err := seal.Offer()
 	if err != nil {
 		t.Fatal(err)
 	}
-	var frame struct {
-		Type string `json:"type"`
+	hello := browserprotocol.New(
+		browserprotocol.Hello,
+		"hello",
+		0,
+		time.Now(),
+		browserprotocol.HelloPayload{
+			Cursor:    0,
+			PublicKey: public,
+			Binding:   a.state.Sessions[digest(cookie.Value)].Binding,
+		},
+	)
+	data, err := json.Marshal(hello)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if json.Unmarshal(data, &frame) != nil || frame.Type != "ready" {
-		t.Fatal("socket not ready", string(data))
+	if err := conn.Write(ctx, websocket.MessageText, data); err != nil {
+		t.Fatal(err)
 	}
+	for {
+		_, data, err = conn.Read(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var frame struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(data, &frame) != nil {
+			t.Fatal("invalid frame")
+		}
+		if frame.Type == "ready" {
+			break
+		}
+		if frame.Type != "key" {
+			t.Fatal("socket not ready", string(data))
+		}
+	}
+
 	if err := a.revoke(id); err != nil {
 		t.Fatal(err)
 	}

@@ -15,6 +15,9 @@ Follow the root `AGENTS.md`; run Make targets from the repository root.
   conflicting metadata when supplied.
 - Encode int64 values as decimal JSON strings. Transcript cursors and session event indexes are
   distinct; `client_msg_id` provides correlation, not send idempotency.
+- Browser content travels only through opaque BrowserChannel/BrowserHistory frames. Keep keys,
+  content conversion, drafts and replay in the agent boundary; never add a plaintext bridge
+  fallback.
 - Go JSON types and fixtures are canonical. Update browser copies and generated types together; see
   [ui/README.md](ui/README.md) for regeneration and run `make ui-fixtures-check`.
 - Only `internal/assets/dist/.gitkeep` is tracked. Runnable builds need the UI bundle: use

@@ -18,7 +18,7 @@ func TestFrameGoldens(t *testing.T) {
 		kind    string
 		payload any
 	}{
-		{Hello, Cursor{Cursor: 41}}, {Sync, Cursor{Cursor: 41}}, {Send, SendRequest{ClientMsgID: "client-1", Text: "hello"}},
+		{Hello, HelloPayload{Cursor: 41, Binding: "binding", PublicKey: "public"}}, {Sync, Cursor{Cursor: 41}}, {Send, SendRequest{ClientMsgID: "client-1", Text: "hello"}},
 		{Abort, AbortRequest{Turn: 42}}, {Ack, AckRequest{Seq: 7}}, {Status, struct{}{}}, {Presence, PresenceRequest{FG: true}}, {Ping, struct{}{}},
 		{Ready, ReadyPayload{HeadSeq: 42, Cursor: 41, DeviceID: "device-1"}}, {TurnStart, TurnStartPayload{Turn: 42, Msg: msg}},
 		{Delta, ProgressPayload{Msg: msg, Seq: 7, Kind: "reasoning", Text: "thinking"}},

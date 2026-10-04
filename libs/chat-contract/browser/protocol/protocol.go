@@ -11,7 +11,7 @@ import (
 )
 
 // Version changes when message identity or part semantics change.
-const Version = 1
+const Version = 2
 
 // Frame types are shared with the browser's golden fixtures.
 const (
@@ -31,6 +31,8 @@ const (
 	Notice    = "notice"
 	Pong      = "pong"
 	Error     = "error"
+	Key       = "key"
+	History   = "history"
 )
 
 // Frame is the common envelope. Int64 cursors are decimal strings so JavaScript

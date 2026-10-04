@@ -10,7 +10,14 @@ import resumed from "../fixtures/server/resumed.json";
 import streamed from "../fixtures/server/streamed.json";
 import { clientFrame, frame } from "../infrastructure/envelope";
 import { required } from "../testing/required";
-import { compareSeq, parseClientFrame, parseFrame, parsePage } from "./protocol";
+import {
+  compareSeq,
+  parseClientFrame,
+  parseFrame,
+  parsePage,
+  parseSealed,
+  parseWireFrame,
+} from "./protocol";
 
 describe("frozen browser contract", () => {
   it("validates client fixtures and preserves typed outgoing requests", () => {
@@ -39,7 +46,7 @@ describe("frozen browser contract", () => {
     ] satisfies [string, unknown][]) {
       expect(() => parseClientFrame(JSON.stringify(frame(type, payload)))).toThrow(/unsupported/iu);
     }
-    expect(() => parseClientFrame(JSON.stringify({ ...request, v: 2 }))).toThrow(/unsupported/iu);
+    expect(() => parseClientFrame(JSON.stringify({ ...request, v: 1 }))).toThrow(/unsupported/iu);
   });
   it("decodes every server frame without losing content", () => {
     const server = frames.filter((f) =>
@@ -77,8 +84,8 @@ describe("frozen browser contract", () => {
     expect(compareSeq("9007199254740992", "9007199254740993")).toBe(-1);
   });
   it("pins outgoing envelopes and rejects incompatible data", () => {
-    expect(frame("hello", { cursor: "0" }).v).toBe(1);
-    expect(() => parseFrame(JSON.stringify({ ...streamed[0], v: 2 }))).toThrow(/unsupported/iu);
+    expect(frame("hello", { cursor: "0" }).v).toBe(2);
+    expect(() => parseFrame(JSON.stringify({ ...streamed[0], v: 1 }))).toThrow(/unsupported/iu);
     expect(() => parseFrame(JSON.stringify({ ...streamed[4], seq: 9007199254740992 }))).toThrow(
       /unsupported/iu,
     );
@@ -160,4 +167,38 @@ describe("frozen browser contract", () => {
     };
     expect(parsePage(value)).toEqual(value);
   });
+});
+
+it("validates public key frames and sealed envelope structure before crypto", () => {
+  const key = frame("key", { public_key: "public", binding: "binding", channel_id: "channel" });
+  expect(parseWireFrame(JSON.stringify(key))).toEqual(key);
+  expect(parseWireFrame(JSON.stringify(frame("pong", {}))).type).toBe("pong");
+  for (const payload of [
+    { public_key: 42, binding: "binding", channel_id: "channel" },
+    { public_key: "public", binding: 42, channel_id: "channel" },
+    { public_key: "public", binding: "binding", channel_id: 42 },
+  ])
+    expect(() => parseWireFrame(JSON.stringify(frame("key", payload)))).toThrow(
+      "Invalid content key",
+    );
+  expect(() => parseWireFrame(JSON.stringify({ v: 1 }))).toThrow("unsupported chat frame");
+  const chunk = { index: 0, final: true, data: "AA" };
+  expect(parseSealed({ version: 1, stream: "stream", chunks: [chunk] }).chunks).toEqual([chunk]);
+  for (const value of [
+    null,
+    {},
+    { version: 2 },
+    { version: 1, stream: 42 },
+    { version: 1, stream: "stream", chunks: [] },
+    { version: 1, stream: "stream", chunks: Array.from({ length: 515 }, () => chunk) },
+    ...[
+      null,
+      { ...chunk, index: "0" },
+      { ...chunk, index: 0.5 },
+      { ...chunk, final: "true" },
+      { ...chunk, data: 42 },
+      { ...chunk, data: "A".repeat(43713) },
+    ].map((c) => ({ version: 1, stream: "stream", chunks: [c] })),
+  ])
+    expect(() => parseSealed(value)).toThrow("Unsupported sealed envelope");
 });

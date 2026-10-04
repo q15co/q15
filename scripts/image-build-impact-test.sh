@@ -51,7 +51,7 @@ assert_impact '{"agent":false,"exec":false,"proxy":false,"web":true,"ui":true}' 
 assert_impact '{"agent":false,"exec":false,"proxy":false,"web":false,"ui":true}' \
 	'scripts/lib/common.sh' \
 	'Makefile'
-assert_impact '{"agent":false,"exec":false,"proxy":false,"web":true,"ui":false}' \
-	'systems/web/internal/protocol/testdata/frames.json'
+assert_impact '{"agent":true,"exec":false,"proxy":false,"web":true,"ui":true}' \
+	'libs/chat-contract/browser/protocol/testdata/frames.json'
 
 printf 'image build impact tests passed\n'

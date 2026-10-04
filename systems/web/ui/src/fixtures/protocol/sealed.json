@@ -1,0 +1,29 @@
+{
+  "binding": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  "browser_key": {
+    "crv": "P-256",
+    "d": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE",
+    "kty": "EC",
+    "x": "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY",
+    "y": "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU"
+  },
+  "agent_public": "BHzyexiNA09-ilI4AwS1GsPAiWnid_IbNaYLSPxHZpl4B3dVENuO0EApPZrGn3Qw27p9reY86YIpngS3nSJ4c9E",
+  "frame": {
+    "v": 2,
+    "id": "vector",
+    "type": "notice",
+    "ts": "2026-10-04T00:00:00Z",
+    "seq": "7",
+    "payload": {
+      "version": 1,
+      "stream": "OdFSd3HFVDY3NruC70D-Qw",
+      "chunks": [
+        {
+          "index": 0,
+          "final": true,
+          "data": "jyyXkiSzdf5JfOgIvOIDEAsjimpPxfw4ck0GbR4cAOuKVI2lPUNqQOtO_ZhKyRRN6b4upY5jCd7B_SYWRKw5uVeoOYgcFEf2ylyb"
+        }
+      ]
+    }
+  }
+}

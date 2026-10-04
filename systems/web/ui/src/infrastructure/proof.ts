@@ -1,6 +1,6 @@
 import { isRecord } from "../shared/type-guards";
 
-interface SessionSigner {
+export interface SessionSigner {
   readonly key: CryptoKey;
   readonly binding: string;
 }
@@ -72,12 +72,7 @@ export async function clearSessionKey() {
   await storedSigner(null);
 }
 
-export async function requestProof(
-  method: string,
-  path: string,
-  origin: string,
-  transport = "http",
-) {
+export async function sessionSigner(): Promise<SessionSigner> {
   const signer = await storedSigner();
   if (
     !isRecord(signer) ||
@@ -87,6 +82,16 @@ export async function requestProof(
     typeof signer.binding !== "string"
   )
     throw new Error("Sign in again to continue.");
+  return { key: signer.key, binding: signer.binding };
+}
+
+export async function requestProof(
+  method: string,
+  path: string,
+  origin: string,
+  transport = "http",
+) {
+  const signer = await sessionSigner();
   const stamp = Math.floor(Date.now() / 1000).toString();
   const nonce = encode(crypto.getRandomValues(new Uint8Array(16)));
   const message = [

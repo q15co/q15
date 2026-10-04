@@ -24,6 +24,11 @@ import "google/protobuf/timestamp.proto";
 // browser: the browser never speaks gRPC, and its contract is the WebSocket
 // envelope plus the frozen frame fixtures, not this handshake.
 service ChatService {
+  // BrowserChannel carries opaque browser frames. Its first packet is the
+  // authorized identity from the web gate; all later packets carry frame bytes.
+  rpc BrowserChannel(stream BrowserPacket) returns (stream BrowserPacket);
+  rpc BrowserHistory(BrowserHistoryRequest) returns (BrowserPacket);
+
   // GetRuntimeInfo is the startup handshake: protocol version, transcript head
   // sequence and enabled capabilities.
   rpc GetRuntimeInfo(GetRuntimeInfoRequest) returns (GetRuntimeInfoResponse);
@@ -333,4 +338,17 @@ message DeliverResponse {
   // queued_at is when the agent produced the message, not when the bridge
   // forwarded it.
   google.protobuf.Timestamp queued_at = 3;
+}
+
+message BrowserPacket {
+  string principal = 1;
+  string binding = 2;
+  bytes frame = 3;
+}
+
+message BrowserHistoryRequest {
+  string binding = 1;
+  string channel_id = 2;
+  int64 after_seq = 3;
+  int32 limit = 4;
 }

@@ -4,6 +4,7 @@ import type { Page } from "../generated/protocol";
 import type { History, Transport } from "./ports";
 
 import { reconcileHistory, reduceFrame } from "../domain/chat";
+import { MaxMessageBytes } from "../generated/protocol";
 
 export class ChatStore {
   private state: ChatState = {
@@ -81,7 +82,7 @@ export class ChatStore {
   send(input: string) {
     const text = input.trim();
     if (text === "") return false;
-    if (new TextEncoder().encode(text).length > 64 * 1024) {
+    if (new TextEncoder().encode(text).length > MaxMessageBytes) {
       this.update({ error: "This message is too long. Keep it under 64 KiB." });
       return false;
     }

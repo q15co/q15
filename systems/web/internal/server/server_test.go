@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/ecdh"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -16,13 +17,16 @@ import (
 	"testing/fstest"
 	"time"
 
+	"github.com/q15co/q15/libs/chat-contract/browser"
+	"github.com/q15co/q15/libs/chat-contract/browser/seal"
+
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
+	"github.com/q15co/q15/libs/chat-contract/browser/protocol"
 	"github.com/q15co/q15/libs/chat-contract/chatpb"
 	"github.com/q15co/q15/systems/web/internal/assets"
 	"github.com/q15co/q15/systems/web/internal/bridge"
 	"github.com/q15co/q15/systems/web/internal/gate"
-	"github.com/q15co/q15/systems/web/internal/protocol"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -34,6 +38,7 @@ import (
 var fixtureTime = time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 
 type fakeChat struct {
+	endpoint *browser.Endpoint
 	chatpb.UnimplementedChatServiceServer
 	mu          sync.Mutex
 	head        int64
@@ -194,6 +199,8 @@ func (f *fakeChat) emit(event *chatpb.SessionEvent) {
 
 func setup(t *testing.T, fake *fakeChat) (*Server, *httptest.Server) {
 	t.Helper()
+	fake.endpoint = browser.NewLocal(fake)
+	t.Cleanup(fake.endpoint.Close)
 	listener := bufconn.Listen(1 << 20)
 	rpc := grpc.NewServer()
 	chatpb.RegisterChatServiceServer(rpc, fake)
@@ -232,7 +239,7 @@ func setup(t *testing.T, fake *fakeChat) (*Server, *httptest.Server) {
 	return s, httpServer
 }
 
-func dial(t *testing.T, server *httptest.Server) *websocket.Conn {
+func dial(t *testing.T, server *httptest.Server) *sealedSocket {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -251,32 +258,87 @@ func dial(t *testing.T, server *httptest.Server) *websocket.Conn {
 		}
 		t.Fatal(err)
 	}
-	conn.SetReadLimit(16 << 20)
+	conn.SetReadLimit(protocol.MaxServerFrameBytes)
 	t.Cleanup(func() { _ = conn.CloseNow() })
-	return conn
+	return &sealedSocket{Conn: conn}
 }
 
-func send(t *testing.T, conn *websocket.Conn, kind string, payload any) {
+func send(t *testing.T, conn *sealedSocket, kind string, payload any) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := wsjson.Write(ctx, conn, protocol.New(kind, "request-1", 0, fixtureTime, payload)); err != nil {
+	frame := protocol.New(kind, "request-1", 0, fixtureTime, payload)
+	if kind == protocol.Hello {
+		var cursor protocol.Cursor
+		data, _ := json.Marshal(payload)
+		_ = json.Unmarshal(data, &cursor)
+		var public string
+		var err error
+		conn.private, public, err = seal.Offer()
+		if err != nil {
+			t.Fatal(err)
+		}
+		conn.public = public
+		frame.Payload, _ = json.Marshal(
+			protocol.HelloPayload{Cursor: cursor.Cursor, Binding: testBinding, PublicKey: public},
+		)
+	}
+	if kind == protocol.Send && conn.keys != nil {
+		value, err := conn.keys.Wrap(seal.JSONType, seal.Context(frame), frame.Payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		frame.Payload, _ = json.Marshal(value)
+	}
+	if err := wsjson.Write(ctx, conn.Conn, frame); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func read(t *testing.T, conn *websocket.Conn) protocol.Frame {
+func read(t *testing.T, conn *sealedSocket) protocol.Frame {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	var frame protocol.Frame
-	if err := wsjson.Read(ctx, conn, &frame); err != nil {
+	if err := wsjson.Read(ctx, conn.Conn, &frame); err != nil {
 		t.Fatal(err)
+	}
+	if frame.Type == "key" {
+		var key protocol.KeyPayload
+		if err := json.Unmarshal(frame.Payload, &key); err != nil {
+			t.Fatal(err)
+		}
+		var err error
+		conn.keys, err = seal.Agree(
+			conn.private,
+			key.PublicKey,
+			key.Binding,
+			conn.public,
+			key.PublicKey,
+			false,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		conn.channel = key.ChannelID
+		return read(t, conn)
+	}
+	if seal.Content(frame.Type) {
+		var sealed protocol.Sealed
+		if err := json.Unmarshal(frame.Payload, &sealed); err != nil {
+			t.Fatal(err)
+		}
+		var data bytes.Buffer
+		kind, err := conn.keys.Open(sealed, seal.Context(frame), &data)
+		if err != nil || kind != seal.JSONType {
+			t.Fatal("could not open content", err)
+		}
+		frame.Payload = data.Bytes()
 	}
 	return frame
 }
 
-func hello(t *testing.T, conn *websocket.Conn, cursor int64) []protocol.Frame {
+func hello(t *testing.T, conn *sealedSocket, cursor int64) []protocol.Frame {
 	t.Helper()
 	send(t, conn, protocol.Hello, protocol.Cursor{Cursor: cursor})
 	var frames []protocol.Frame
@@ -389,7 +451,7 @@ func TestStreamedTurnAndDeviceFanout(t *testing.T) {
 	for _, event := range events {
 		fake.emit(event)
 	}
-	for _, conn := range []*websocket.Conn{first, second} {
+	for _, conn := range []*sealedSocket{first, second} {
 		var frames []protocol.Frame
 		for len(frames) < len(events) {
 			frame := read(t, conn)
@@ -486,23 +548,36 @@ func TestHistoryAndResumeExcludeLiveTurn(t *testing.T) {
 		{Seq: 40, CreatedAt: timestamppb.New(fixtureTime)},
 	}
 	_, httpServer := setup(t, fake)
+	conn := dial(t, httpServer)
+	frames := hello(t, conn, 40)
 	r, err := http.NewRequest("GET", httpServer.URL+"/api/turns?limit=1", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	r.Header.Set("Cookie", "test-session=owner")
+	r.Header.Set("Q15-Channel", conn.channel)
 	response, err := http.DefaultClient.Do(r)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer response.Body.Close()
+	var wire protocol.Frame
+	if err := json.NewDecoder(response.Body).Decode(&wire); err != nil {
+		t.Fatal(err)
+	}
+	var sealed protocol.Sealed
+	if err := json.Unmarshal(wire.Payload, &sealed); err != nil {
+		t.Fatal(err)
+	}
+	var decoded bytes.Buffer
+	if _, err := conn.keys.Open(sealed, seal.Context(wire), &decoded); err != nil {
+		t.Fatal(err)
+	}
 	var page protocol.Page
-	if err := json.NewDecoder(response.Body).Decode(&page); err != nil {
+	if err := json.Unmarshal(decoded.Bytes(), &page); err != nil {
 		t.Fatal(err)
 	}
 	golden(t, "history", page)
-	conn := dial(t, httpServer)
-	frames := hello(t, conn, 40)
 	golden(t, "resumed", frames)
 	send(t, conn, protocol.Sync, protocol.Cursor{Cursor: 42})
 	ready := read(t, conn)
@@ -515,6 +590,129 @@ func TestHistoryAndResumeExcludeLiveTurn(t *testing.T) {
 	}
 	if payload.HeadSeq != 43 || payload.Cursor != 42 {
 		t.Fatalf("allocated head became readable cursor: %v", payload)
+	}
+}
+
+func TestEscapedMessageFitsDerivedSocketLimit(t *testing.T) {
+	fake := newFakeChat()
+	_, httpServer := setup(t, fake)
+	conn := dial(t, httpServer)
+	hello(t, conn, 0)
+	text := strings.Repeat("\x00", protocol.MaxMessageBytes-1) + "x"
+	send(t, conn, protocol.Send, protocol.SendRequest{ClientMsgID: "escaped", Text: text})
+	if got := take(t, fake.sends); got.GetText() != text {
+		t.Fatal("valid escaped message was changed or rejected")
+	}
+}
+
+func TestReplayByteBudgetHasNoPartialFrames(t *testing.T) {
+	fake := newFakeChat()
+	fake.head = 3
+	for seq := int64(2); seq > 0; seq-- {
+		fake.turns = append(fake.turns, &chatpb.Turn{Seq: seq, Messages: []*chatpb.Message{
+			{
+				Role:  "assistant",
+				Parts: []*chatpb.MessagePart{{PartType: "text", Text: strings.Repeat("x", 3<<20)}},
+			},
+		}})
+	}
+	_, httpServer := setup(t, fake)
+	conn := dial(t, httpServer)
+	send(t, conn, protocol.Hello, protocol.Cursor{})
+	first := read(t, conn)
+	var problem protocol.ErrorPayload
+	if err := json.Unmarshal(first.Payload, &problem); err != nil || first.Type != protocol.Error ||
+		problem.Code != "resync_from_head" {
+		t.Fatal("replay overflow delivered a partial prefix", err)
+	}
+	send(t, conn, protocol.Sync, protocol.Cursor{Cursor: 2})
+	if frame := read(t, conn); frame.Type != protocol.Ready {
+		t.Fatal("replay recovery closed channel or left partial frames")
+	}
+}
+
+func TestLargeHistoryUsesBytePagesAndKeepsSocketAlive(t *testing.T) {
+	fake := newFakeChat()
+	text := strings.Repeat("x", 13<<20)
+	turn := func(seq int64, text string) *chatpb.Turn {
+		return &chatpb.Turn{
+			Seq:       seq,
+			CreatedAt: timestamppb.New(fixtureTime),
+			Messages: []*chatpb.Message{
+				{Role: "assistant", Parts: []*chatpb.MessagePart{{PartType: "text", Text: text}}},
+			},
+		}
+	}
+	fake.head = 3
+	fake.turns = []*chatpb.Turn{turn(2, text), turn(1, text)}
+	_, httpServer := setup(t, fake)
+	conn := dial(t, httpServer)
+	send(t, conn, protocol.Hello, protocol.Cursor{})
+	resync := read(t, conn)
+	var problem protocol.ErrorPayload
+	if err := json.Unmarshal(resync.Payload, &problem); err != nil ||
+		problem.Code != "resync_from_head" {
+		t.Fatal("large replay did not request history recovery", err)
+	}
+	load := func(after int64, wantStatus int) protocol.Page {
+		t.Helper()
+		req, err := http.NewRequest(
+			"GET",
+			fmt.Sprintf("%s/api/turns?after_seq=%d", httpServer.URL, after),
+			nil,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Cookie", "test-session=owner")
+		req.Header.Set("Q15-Channel", conn.channel)
+		response, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		if response.StatusCode != wantStatus {
+			t.Fatalf("history status %d, want %d", response.StatusCode, wantStatus)
+		}
+		if wantStatus != http.StatusOK {
+			return protocol.Page{}
+		}
+		var wire protocol.Frame
+		var sealed protocol.Sealed
+		if err := json.NewDecoder(response.Body).Decode(&wire); err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(wire.Payload, &sealed); err != nil {
+			t.Fatal(err)
+		}
+		var plain bytes.Buffer
+		if _, err := conn.keys.Open(sealed, seal.Context(wire), &plain); err != nil {
+			t.Fatal(err)
+		}
+		var page protocol.Page
+		if err := json.Unmarshal(plain.Bytes(), &page); err != nil {
+			t.Fatal(err)
+		}
+		return page
+	}
+	for _, seq := range []int64{2, 1} {
+		after := int64(0)
+		if seq == 1 {
+			after = 2
+		}
+		page := load(after, http.StatusOK)
+		if len(page.Turns) != 1 || page.Turns[0].Seq != seq || page.HasMore != (seq == 2) ||
+			page.Turns[0].Messages[0].Parts[0].Text != text {
+			t.Fatal("large history page lost its record or cursor")
+		}
+	}
+	fake.mu.Lock()
+	fake.turns = []*chatpb.Turn{turn(2, strings.Repeat("x", protocol.MaxEnvelopeBytes))}
+	fake.mu.Unlock()
+	load(0, http.StatusRequestEntityTooLarge)
+	send(t, conn, protocol.Sync, protocol.Cursor{Cursor: 2})
+	if frame := read(t, conn); frame.Type != protocol.Ready {
+		t.Fatal("history failure closed the content channel")
 	}
 }
 
@@ -607,7 +805,9 @@ func (a testAuthorizer) RequireScope(scope string, next http.Handler) http.Handl
 		}
 		next.ServeHTTP(
 			w,
-			r.WithContext(gate.WithPrincipal(r.Context(), gate.Principal{ID: "owner"})),
+			r.WithContext(
+				gate.WithPrincipal(r.Context(), gate.Principal{ID: "owner", Binding: testBinding}),
+			),
 		)
 	})
 }
@@ -640,5 +840,117 @@ func TestSocketRevalidatesSession(t *testing.T) {
 			default:
 			}
 		})
+	}
+}
+
+const testBinding = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+
+type sealedSocket struct {
+	*websocket.Conn
+	private *ecdh.PrivateKey
+	public  string
+	keys    *seal.Keys
+	channel string
+}
+
+func (f *fakeChat) BrowserChannel(
+	stream grpc.BidiStreamingServer[chatpb.BrowserPacket, chatpb.BrowserPacket],
+) error {
+	return f.endpoint.Channel(stream)
+}
+
+func (f *fakeChat) BrowserHistory(
+	ctx context.Context,
+	req *chatpb.BrowserHistoryRequest,
+) (*chatpb.BrowserPacket, error) {
+	return f.endpoint.History(ctx, req)
+}
+
+func TestRelayRejectsPlaintextAndCarriesOpaqueContent(t *testing.T) {
+	fake := newFakeChat()
+	_, httpServer := setup(t, fake)
+	conn := dial(t, httpServer)
+	hello(t, conn, 0)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	request := protocol.New(protocol.Send, "plaintext", 0, fixtureTime,
+		protocol.SendRequest{ClientMsgID: "plaintext", Text: "private input"})
+	if err := wsjson.Write(ctx, conn.Conn, request); err != nil {
+		t.Fatal(err)
+	}
+	if frame := read(t, conn); frame.Type != protocol.Error ||
+		!bytes.Contains(frame.Payload, []byte("unseal_failed")) {
+		t.Fatal("plaintext fallback accepted")
+	}
+	if len(fake.sends) != 0 {
+		t.Fatal("published plaintext fallback")
+	}
+	send(t, conn, protocol.Ping, struct{}{})
+	if frame := read(t, conn); frame.Type != protocol.Pong {
+		t.Fatal("bad content broke socket")
+	}
+	send(t, conn, protocol.Send, protocol.SendRequest{ClientMsgID: "sealed", Text: "private input"})
+	if request := take(t, fake.sends); request.Text != "private input" {
+		t.Fatal("agent did not unseal input")
+	}
+	take(t, fake.watches)
+	for {
+		if frame := read(t, conn); frame.Type == protocol.Status &&
+			bytes.Contains(frame.Payload, []byte("sealed")) {
+			break
+		}
+	}
+	fake.emit(
+		&chatpb.SessionEvent{
+			TurnSeq: 42,
+			Event: &chatpb.SessionEvent_ToolFinished{
+				ToolFinished: &chatpb.ToolFinished{
+					Call:   &chatpb.ToolCall{Name: "private-tool", Arguments: "private-arguments"},
+					Output: "private-output",
+				},
+			},
+		},
+	)
+	var captured protocol.Frame
+	if err := wsjson.Read(ctx, conn.Conn, &captured); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(captured)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, marker := range []string{"private-tool", "private-arguments", "private-output", "application/json", "tool_result"} {
+		if bytes.Contains(data, []byte(marker)) {
+			t.Fatalf("carrier received %s", marker)
+		}
+	}
+	var sealed protocol.Sealed
+	if err := json.Unmarshal(captured.Payload, &sealed); err != nil {
+		t.Fatal(err)
+	}
+	var opened bytes.Buffer
+	if _, err := conn.keys.Open(sealed, seal.Context(captured), &opened); err != nil ||
+		!bytes.Contains(opened.Bytes(), []byte("private-output")) {
+		t.Fatal("browser cannot open captured content", err)
+	}
+	for _, channel := range []string{"", "another-channel"} {
+		_, err := fake.endpoint.History(
+			ctx,
+			&chatpb.BrowserHistoryRequest{Binding: testBinding, ChannelId: channel, Limit: 1},
+		)
+		if status.Code(err) != codes.Unauthenticated {
+			t.Fatal("invalid content channel accepted")
+		}
+	}
+	_, err = fake.endpoint.History(
+		ctx,
+		&chatpb.BrowserHistoryRequest{
+			Binding:   strings.Repeat("B", 43),
+			ChannelId: conn.channel,
+			Limit:     1,
+		},
+	)
+	if status.Code(err) != codes.Unauthenticated {
+		t.Fatal("cross-session history accepted")
 	}
 }

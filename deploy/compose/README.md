@@ -190,8 +190,10 @@ Only `127.0.0.1:8080` is published. On Hermes the existing host cloudflared tunn
 ingress for the configured chat hostname with `service = "http://127.0.0.1:8080"`. Keep its default
 404 fallback and forward only this public port. Host tunnel configuration and live activation belong
 to the dots deployment and are not changed here. The tunnel is transport, not owner identity;
-Cloudflare Access is optional additional protection. Cloudflare terminates TLS and can read traffic;
-chat is not end-to-end encrypted from the edge. Do not enable edge caching of authenticated data.
+Cloudflare Access is optional additional protection. Cloudflare terminates TLS and sees cookies and
+routing metadata; browser-agent sealing hides chat content from passive carriers. It does not defend
+against an active origin or relay replacing JavaScript or key exchange messages; chat is not
+end-to-end encrypted from the edge. Do not enable edge caching of authenticated data.
 
 **Kubernetes is out of scope**: `deploy/kubernetes/base/` remains untouched. Its TCP model does not
 implement this Unix-socket bridge deployment or the new auth-state volume.

@@ -13,7 +13,8 @@ import (
 	"github.com/q15co/q15/libs/chat-contract/chatpb"
 	"github.com/q15co/q15/systems/web/internal/bridge"
 	"github.com/q15co/q15/systems/web/internal/gate"
-	"github.com/q15co/q15/systems/web/internal/protocol"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const rpcTimeout = 5 * time.Second
@@ -25,20 +26,18 @@ type Config struct {
 	Assets     http.Handler
 }
 
-// Server owns only ephemeral connections, logical-session handles and progress.
-// The agent remains the sole durable transcript store.
+// Server owns only authorization, bounded relay connections and HTTP policy.
+// Content keys, replay and drafts remain in the agent.
 type Server struct {
-	ctx        context.Context
-	cancel     context.CancelFunc
-	service    bridge.Service
-	config     Config
-	handler    http.Handler
-	registry   *registry
-	sessionsMu sync.Mutex
-	sessions   map[string]*session
-	wg         sync.WaitGroup
-	workMu     sync.Mutex
-	closing    bool
+	ctx      context.Context
+	cancel   context.CancelFunc
+	service  bridge.Service
+	config   Config
+	handler  http.Handler
+	registry *registry
+	wg       sync.WaitGroup
+	workMu   sync.Mutex
+	closing  bool
 }
 
 // New wires every route through the gate except the exact health endpoint.
@@ -51,7 +50,7 @@ func New(ctx context.Context, service bridge.Service, config Config) (*Server, e
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	s := &Server{ctx: ctx, cancel: cancel, service: service, config: config,
-		registry: newRegistry(), sessions: make(map[string]*session)}
+		registry: newRegistry()}
 	protected := http.NewServeMux()
 	protected.HandleFunc("GET /ws", s.socket)
 	protected.HandleFunc("GET /api/turns", s.history)
@@ -76,7 +75,6 @@ func New(ctx context.Context, service bridge.Service, config Config) (*Server, e
 			secured.ServeHTTP(w, r)
 		}),
 	)
-	s.start(s.deliver)
 	return s, nil
 }
 
@@ -117,16 +115,25 @@ func (s *Server) history(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), rpcTimeout)
 	defer cancel()
-	page, err := s.service.ListTurns(
+	page, err := s.service.BrowserHistory(
 		ctx,
-		&chatpb.ListTurnsRequest{AfterSeq: after, Limit: int32(limit)},
+		&chatpb.BrowserHistoryRequest{
+			AfterSeq:  after,
+			Limit:     int32(limit),
+			Binding:   gate.PrincipalFrom(r.Context()).Binding,
+			ChannelId: r.Header.Get("Q15-Channel"),
+		},
 	)
 	if err != nil {
+		if status.Code(err) == codes.ResourceExhausted {
+			writeError(w, http.StatusRequestEntityTooLarge, "history_too_large")
+			return
+		}
 		writeError(w, http.StatusBadGateway, "bridge_unavailable")
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(protocol.FromPage(page))
+	_, _ = w.Write(page.GetFrame())
 }
 
 func queryInt(r *http.Request, name string, fallback int64) (int64, error) {
@@ -148,15 +155,4 @@ func writeError(w http.ResponseWriter, status int, code string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": code})
-}
-
-func (s *Server) principalSession(principal string) *session {
-	s.sessionsMu.Lock()
-	defer s.sessionsMu.Unlock()
-	value := s.sessions[principal]
-	if value == nil {
-		value = &session{owner: principal, server: s}
-		s.sessions[principal] = value
-	}
-	return value
 }

@@ -10,8 +10,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/q15co/q15/libs/chat-contract/browser"
 	"github.com/q15co/q15/libs/chat-contract/chatpb"
 	"github.com/q15co/q15/systems/agent/internal/memory"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -40,20 +42,21 @@ type TurnLister interface {
 
 var _ TurnLister = (*memory.Store)(nil)
 
-// Service is the chat-contract server adapter. ListTurns, GetRuntimeInfo,
-// OpenSession, SendMessage, Abort, WatchEvents and Deliver are implemented,
-// which is every rpc the frozen contract declares.
+// Service keeps canonical host state behind both console and sealed browser adapters.
 type Service struct {
 	chatpb.UnimplementedChatServiceServer
 
 	lister   TurnLister
 	sessions *AgentEndpoint
+	browser  *browser.Endpoint
 }
 
 // NewService constructs a bridge service over one transcript lister and the
 // session endpoint the run rpcs share with the app worker.
 func NewService(lister TurnLister, sessions *AgentEndpoint) *Service {
-	return &Service{lister: lister, sessions: sessions}
+	s := &Service{lister: lister, sessions: sessions}
+	s.browser = browser.NewLocal(s)
+	return s
 }
 
 // OpenSession allocates a logical bridge session. Empty chat_id selects
@@ -193,4 +196,19 @@ func (s *Service) GetRuntimeInfo(
 		// them, and this layer invents none.
 		Capabilities: []*chatpb.RuntimeCapability{},
 	}, nil
+}
+
+// BrowserChannel seals content before it leaves the agent and unseals before bus publication.
+func (s *Service) BrowserChannel(
+	stream grpc.BidiStreamingServer[chatpb.BrowserPacket, chatpb.BrowserPacket],
+) error {
+	return s.browser.Channel(stream)
+}
+
+// BrowserHistory wraps host records for an active connection without changing their storage format.
+func (s *Service) BrowserHistory(
+	ctx context.Context,
+	req *chatpb.BrowserHistoryRequest,
+) (*chatpb.BrowserPacket, error) {
+	return s.browser.History(ctx, req)
 }

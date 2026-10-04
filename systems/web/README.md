@@ -174,12 +174,12 @@ captured unused proof plus its cookie can race the legitimate request for that e
 its short validity window; nonce checks prevent a second acceptance. Browser/OS/authenticator
 compromise, malicious updates and a malicious TLS terminator are outside this access-control
 guarantee. An active edge serving modified JavaScript can remove the commitment check or use the
-session key as a signing oracle; the check does not authenticate application delivery. **Cloudflare
-terminates TLS and can read chat traffic and cookies. This is not end-to-end encryption from
-Cloudflare.** Model providers also receive prompts by design. Cloudflare Access is optional defense
-in depth, not required by this gate. Payload sealing is separate work in
-[#201](https://github.com/q15co/q15/issues/201). Tunnel only the public loopback port, never the
-admin socket or bridge; do not configure caching of authenticated responses.
+session key as a signing oracle; the check does not authenticate application delivery. Cloudflare
+terminates TLS and sees cookies and routing metadata, but the content envelope described below hides
+chat payloads from passive ingress and web relays. This does not authenticate JavaScript delivery or
+resist an active relay substituting key exchange messages. Model providers receive prompts by
+design. Cloudflare Access is optional defense in depth. Tunnel only the public loopback port, never
+the admin socket or bridge; do not configure caching of authenticated responses.
 
 Active agent stream interruptions retry after one second with the last received **event index**. An
 agent restart invalidates its ephemeral logical session, sends `resync_from_head`, and the next send
@@ -187,33 +187,42 @@ allocates a fresh handle; it does not invalidate the independent browser auth st
 
 ## Browser contract
 
-The browser contract is version 1, independent of the gRPC protocol version. Every frame is
+The browser contract is version 2, independent of the gRPC protocol version. Every frame is
 `{v, id, type, ts, seq, payload}`. `v` is an integer; `ts` is an RFC3339 UTC timestamp. All int64
 sequence and cursor values are **decimal JSON strings**, preserving numbers above JavaScript's safe
 integer limit. Clients should compare them as `BigInt` values.
 
-| Direction | Types                                                                                            |
-| --------- | ------------------------------------------------------------------------------------------------ |
-| Client    | `hello`, `sync`, `msg.send`, `msg.abort`, `msg.ack`, `msg.status`, `presence`, `ping`            |
-| Server    | `ready`, `turn.start`, `delta`, `snapshot`, `msg.final`, `msg.status`, `notice`, `pong`, `error` |
+| Direction | Types                                                                                                   |
+| --------- | ------------------------------------------------------------------------------------------------------- |
+| Client    | `hello`, `sync`, `msg.send`, `msg.abort`, `msg.ack`, `msg.status`, `presence`, `ping`                   |
+| Server    | `key`, `ready`, `turn.start`, `delta`, `snapshot`, `msg.final`, `msg.status`, `notice`, `pong`, `error` |
 
-The first frame must be `hello` with `{cursor:"0"}` or the last fully consumed transcript sequence.
-Each request supplies a nonempty `id` of at most 128 bytes. `sync` requests the same replay later.
-Replay emits complete canonical messages oldest first, followed by
+The first frame is `hello{cursor,binding,public_key}`. The cursor is zero or the last fully consumed
+transcript sequence. The binding is the existing authenticated session binding from #200; the public
+key offers a fresh non-exportable P-256 ECDH key. The agent answers
+`key{binding,public_key,channel_id}` before replay. The opaque channel handle lasts only as long as
+that authorized socket. Each request supplies a nonempty `id` of at most 128 bytes. `sync` requests
+the same replay later. Replay emits complete canonical messages oldest first, followed by
 `ready{head_seq,cursor,device_id}`. `ready.cursor` is the newest readable record, while `head_seq`
 may include a still unwritten live turn. Persist the completed replay cursor after consuming replay;
 never advance it merely from the allocated head. More than 500 missed readable turns (counting
-records, not numeric gaps) produces `error{code:"resync_from_head",ref,head_seq}`. Fetch history and
-resume from a completed turn. Unknown or mismatched frame versions produce explicit errors.
+records, not numeric gaps), or replay exceeding half the outgoing byte/frame budget, produces
+`error{code:"resync_from_head",ref,head_seq}` before any partial replay. Fetch history and resume
+from a completed turn. Unknown or mismatched frame versions produce explicit errors.
 
-Each principal shares one logical agent session and one `WatchEvents` subscription across devices.
-`msg.send{client_msg_id,text}` forwards to `SendMessage`; accepted or queued `msg.status` frames
-correlate the optimistic message. `client_msg_id` is correlation, not durable idempotency: clients
-must not automatically resubmit an uncertain send. `msg.abort{turn}` targets that run; zero targets
-the current run, including startup. `msg.ack{seq}` acknowledges a session event index, independently
-of the transcript cursor. `presence{fg}` is accepted without persistence, and `ping` receives
-`pong`. A transport ping runs every 25 seconds. Slow devices are disconnected once their outgoing
-queue exceeds 2,048 frames or 8 MiB, so they cannot block another device or the agent.
+The agent owns the shared logical session, drafts, replay and one `WatchEvents` subscription per
+principal. The web client exposes only `BrowserChannel`, `BrowserHistory` and the version handshake.
+Those RPCs carry opaque frame bytes; the existing plaintext RPCs remain available for console
+clients and host integrations. Both the browser and bridge protocol versions are 2. After unsealing
+in the agent, `msg.send{client_msg_id,text}` calls `SendMessage`; accepted or queued `msg.status`
+frames correlate the optimistic message. `client_msg_id` is correlation, not durable idempotency:
+clients must not automatically resubmit an uncertain send. `msg.abort{turn}` targets that run; zero
+targets the current run, including startup. `msg.ack{seq}` acknowledges a session event index,
+independently of the transcript cursor. `presence{fg}` is accepted without persistence, and `ping`
+receives `pong`. A transport ping runs every 25 seconds. Slow devices are disconnected once their
+outgoing queue exceeds 2,048 frames or `protocol.MaxServerFrameBytes` (about 21.4 MiB), so they
+cannot block another device or the agent. This byte budget accommodates one full sealed envelope;
+replay reserves half the budget for control frames and concurrent live traffic.
 
 Live frames reference `msg:{turn,ordinal:-1}`, an ephemeral run draft. `delta.kind` distinguishes
 `text`, `reasoning`, `tool_call` and `tool_result`. Tool calls retain raw JSON arguments. A
@@ -230,14 +239,78 @@ preserved, including reasoning, tool calls, tool results and media references. M
 is a later slice.
 
 `GET /api/turns?after_seq=42&limit=50` pages newest first, strictly older than `after_seq`. Omit
-`after_seq` (or pass zero) for the newest page. `limit` defaults to 50 and accepts 1–500. The
-response is `{turns,head_seq,has_more}`. `turns` includes only immutable completed records from
-`ListTurns`; the web tier never reads files or manufactures the allocated live turn.
+`after_seq` (or pass zero) for the newest page. `limit` defaults to 50 and accepts 1–500. Supply
+`Q15-Channel` with the active channel handle as well as the usual HTTP proof. The response is a
+`history` frame whose sealed payload opens to `{turns,head_seq,has_more}`. `turns` includes only
+immutable completed records from `ListTurns`; the web tier never reads files or manufactures the
+allocated live turn. Pages stop at a complete turn before their serialized plaintext exceeds 16 MiB,
+even if fewer than `limit` records fit. `has_more` remains true; use the oldest returned sequence
+for the next request. A single turn larger than this budget returns HTTP 413 `history_too_large`,
+without closing the socket.
 
-Fixtures in `internal/protocol/testdata` and `internal/server/testdata` freeze the frame table,
-message identities, parts, streamed/aborted/failed/resumed turns and history API. The UI in
-`systems/web/ui` consumes byte-identical copies of these fixtures and checks its codec in CI.
-Changes to message identity or part semantics require a browser `v` bump.
+Canonical fixtures in `libs/chat-contract/browser/protocol/testdata`, the seal package testdata, and
+`systems/web/internal/server/testdata` freeze the decoded frame table and a captured sealed
+envelope, message identities, parts, streamed/aborted/failed/resumed turns and history API. The UI
+in `systems/web/ui` consumes byte-identical copies of these fixtures and checks its codec in CI. The
+decoded fixtures test application projections, not plaintext on the wire. The Go-generated sealed
+fixture is also opened by WebCrypto. Changes to message identity or part semantics require a browser
+`v` bump.
+
+## Content sealing
+
+Sealing is mandatory on browser paths. `msg.send`, `delta`, `snapshot`, `msg.final`, `notice`, and
+HTTP `history` seal their complete payloads, including reasoning, tool arguments/results, roles,
+part types, media references and model details. Control frames remain visible for routing, ordering,
+counting and heartbeat. The web relay never parses a content payload, accumulates a draft, reads
+history parts, or has a decryption key. No content or key is stored in its auth state or logged.
+
+Each connection derives directional AES-256-GCM keys from fresh P-256 ECDH and
+[HKDF-SHA-256](https://www.rfc-editor.org/rfc/rfc5869). The salt is SHA-256 over the
+newline-separated `q15-content-v1`, auth binding, browser public key and agent public key. Browser
+private and derived keys are non-exportable [WebCrypto keys](https://www.w3.org/TR/webcrypto/) held
+in memory. ECDH derives an opaque HKDF key directly; no shared secret or derived key bytes pass
+through JavaScript buffers. No additional passkey gesture or persistent content key is needed:
+reload/reconnect establishes new keys and the agent re-wraps plaintext transcript records as they
+leave the agent. Logout, expiry and revocation cancel sockets and retire their content channels
+through the existing auth model. Host history, exports, scheduled work and transcript schema remain
+unchanged.
+
+The generic byte envelope is `{version:1,stream,chunks:[{index,final,data}]}`. `stream` is a random
+128-bit base64url ID. Each stream gets a new AES key through HKDF using the handshake salt above.
+Info is the newline-separated `q15-content-stream-v1`, direction (`browser-to-agent` or
+`agent-to-browser`), and stream ID. Chunks contain at most 32 KiB of plaintext plus a 128-bit GCM
+tag; `data` is unpadded base64url. The 96-bit nonce is eight zero bytes followed by the big-endian
+uint32 chunk index. A full chunk has `final:false`; the terminal chunk is shorter, possibly empty.
+AAD binds the envelope version tag, outer frame version/ID/type/UTC millisecond timestamp/sequence,
+stream ID, chunk index and final flag. Reordering, truncation, reflection, tampering and reuse of an
+accepted stream are rejected. Content type starts the first encrypted chunk as a big-endian uint16
+UTF-8 byte length and the type bytes. Additional content metadata belongs in encrypted bytes. Replay
+state is capped at 65,536 accepted streams per direction and connection. The browser starts key
+refresh 256 streams before that cap, drains already accepted sends, and reconnects with fresh keys.
+Invalid ciphertext still leaves the socket open; a failed decrypt is not a refresh trigger.
+
+The byte primitives read/write bounded chunks; current JSON chat adapters collect only their bounded
+text payloads for decoding. `protocol/transport.go` defines the shared byte limits, generated into
+TypeScript. Decoded message text is capped at 64 KiB; the derived client wire cap is 528 KiB,
+allowing six-byte JSON escapes plus base64 and framing. The browser checks the encoded frame before
+sending. Plaintext envelopes are capped at 16 MiB; tags, base64 and framing determine the server
+wire/queue cap and bridge receive limit. Oversized live content emits `content_too_large` rather
+than silently disconnecting. Only the Go-defined control whitelist travels in plaintext; new or
+unknown content frame types are sealed by default. Attachments are not implemented. Future file
+transport can use these same byte chunks and put name, type, dimensions and other descriptors inside
+the envelope. The carrier must relay bytes without sniffing, transcoding or resizing them.
+
+Invalid ciphertext produces a visible decryption error and leaves the socket open; a later valid
+snapshot or history request can recover. Invalid incoming ciphertext produces `unseal_failed`
+without accepting or publishing a message. The envelope hides content from passive carriers, not
+traffic size/timing or control metadata. It does not encrypt host storage or provider calls, cover
+the console, protect compromised browsers/hosts, or resist an actively compromised origin/relay
+changing application code or substituting public keys. A future agent identity pin would detect key
+substitution only with trusted client code and a trusted initial pin; TOFU would leave the first
+exchange exposed. JavaScript served by an active relay could bypass a browser pin check. Independent
+agent identity pinning and attachment transfer remain unaddressed. The trusted Unix bridge retains
+plaintext console RPCs; restricting the web client interface does not isolate those RPCs from a
+compromised web process.
 
 ## Assets
 

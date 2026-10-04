@@ -175,7 +175,7 @@ is_ui_format_file() {
 	is_typescript_file "$1" && return 0
 	case "$1" in
 	systems/web/ui/*.css | systems/web/ui/*.html | systems/web/ui/*.json | systems/web/ui/*.webmanifest | \
-		systems/web/internal/protocol/testdata/*.json | systems/web/internal/server/testdata/*.json) return 0 ;;
+		libs/chat-contract/browser/*/testdata/*.json | systems/web/internal/server/testdata/*.json) return 0 ;;
 	*) return 1 ;;
 	esac
 }

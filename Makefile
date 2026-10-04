@@ -24,7 +24,7 @@ COMPOSE_ENV := COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT_NAME)
 
 .DEFAULT_GOAL := build
 
-.PHONY: all build build-agent build-auth build-exec build-proxy build-web build-web-image test-web project-setup fmt lint lint-changed vulncheck test verify verify-ci hooks-install hooks-uninstall compose-secrets-init compose-up compose-down compose-logs compose-ps clean help protos protos-check ui-install ui-dev ui-build ui-lint ui-fix ui-test ui-test-coverage ui-e2e ui-clean ui-fixtures-check compose-check
+.PHONY: all build build-agent build-auth build-exec build-proxy build-web build-web-image test-web test-chat test-agent project-setup fmt lint lint-changed vulncheck test verify verify-ci hooks-install hooks-uninstall compose-secrets-init compose-up compose-down compose-logs compose-ps clean help protos protos-check ui-install ui-dev ui-build ui-lint ui-fix ui-test ui-test-coverage ui-e2e ui-clean ui-fixtures-check compose-check
 
 all: build
 
@@ -56,6 +56,12 @@ build-web-image:
 test-web: project-setup
 	cd $(WEB_MOD_DIR) && CGO_ENABLED=0 $(GO) test $(TEST_FLAGS) ./...
 
+test-agent: project-setup
+	cd $(AGENT_MOD_DIR) && CGO_ENABLED=0 $(GO) test $(TEST_FLAGS) ./...
+
+test-chat: project-setup
+	cd $(CHAT_CONTRACT_MOD_DIR) && CGO_ENABLED=0 $(GO) test $(TEST_FLAGS) ./...
+
 .PHONY: ui-auth-test-server
 ui-auth-test-server:
 	cd $(WEB_MOD_DIR) && $(GO) run ./internal/auth/testserver
@@ -72,8 +78,8 @@ test:
 	./scripts/compose-contract-test.sh
 	cd $(EXEC_CONTRACT_MOD_DIR) && CGO_ENABLED=0 $(GO) test ./...
 	cd $(PROXY_CONTRACT_MOD_DIR) && CGO_ENABLED=0 $(GO) test ./...
-	cd $(CHAT_CONTRACT_MOD_DIR) && CGO_ENABLED=0 $(GO) test ./...
-	cd $(AGENT_MOD_DIR) && CGO_ENABLED=0 $(GO) test ./...
+	$(MAKE) test-chat
+	$(MAKE) test-agent
 	cd $(EXEC_MOD_DIR) && CGO_ENABLED=0 $(GO) test ./...
 	cd $(PROXY_MOD_DIR) && CGO_ENABLED=0 $(GO) test ./...
 	$(MAKE) test-web
@@ -186,6 +192,8 @@ help:
 	@echo "  build-proxy   Build ./bin/q15-proxy from $(PROXY_MOD_DIR)"
 	@echo "  build-web     Build ./bin/q15-web from $(WEB_MOD_DIR)"
 	@echo "  build-web-image  Build the local q15-web image (Corepack/pnpm UI, Go embedding)"
+	@echo "  test-chat     Test chat contracts and sealed byte transport (optional TEST_FLAGS)"
+	@echo "  test-agent    Test the agent (optional TEST_FLAGS)"
 	@echo "  test-web      Test the browser tier (optional TEST_FLAGS)"
 	@echo "  ui-install    Install the pinned browser dependencies with the frozen lockfile"
 	@echo "  ui-dev        Start the Vite+ React development server"

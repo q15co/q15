@@ -7,30 +7,19 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/q15co/q15/libs/chat-contract/browser/protocol"
 	"github.com/q15co/q15/libs/chat-contract/chatpb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-// WatchStream receives progress from one logical session.
-type WatchStream interface {
-	Recv() (*chatpb.WatchEventsResponse, error)
-}
-
-// DeliverStream receives proactive agent output.
-type DeliverStream interface {
-	Recv() (*chatpb.DeliverResponse, error)
-}
-
-// Service is the bridge surface used by the browser server.
+// Service exposes only opaque browser traffic to the web tier.
 type Service interface {
 	GetRuntimeInfo(context.Context) (*chatpb.GetRuntimeInfoResponse, error)
-	OpenSession(context.Context, *chatpb.OpenSessionRequest) (*chatpb.OpenSessionResponse, error)
-	SendMessage(context.Context, *chatpb.SendMessageRequest) (*chatpb.SendMessageResponse, error)
-	Abort(context.Context, *chatpb.AbortRequest) (*chatpb.AbortResponse, error)
-	WatchEvents(context.Context, *chatpb.WatchEventsRequest) (WatchStream, error)
-	ListTurns(context.Context, *chatpb.ListTurnsRequest) (*chatpb.ListTurnsResponse, error)
-	Deliver(context.Context) (DeliverStream, error)
+	BrowserChannel(
+		context.Context,
+	) (grpc.BidiStreamingClient[chatpb.BrowserPacket, chatpb.BrowserPacket], error)
+	BrowserHistory(context.Context, *chatpb.BrowserHistoryRequest) (*chatpb.BrowserPacket, error)
 }
 
 // Client mirrors the exec client's thin gRPC adapter, restricted to local sockets.
@@ -50,7 +39,7 @@ func NewClient(ctx context.Context, target string, options ...grpc.DialOption) (
 		return nil, err
 	}
 	options = append(options, grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(16<<20)))
+		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(protocol.MaxServerFrameBytes+1024)))
 	conn, err := grpc.NewClient(target, options...)
 	if err != nil {
 		return nil, err
@@ -71,49 +60,19 @@ func (c *Client) GetRuntimeInfo(ctx context.Context) (*chatpb.GetRuntimeInfoResp
 	return c.client.GetRuntimeInfo(ctx, &chatpb.GetRuntimeInfoRequest{})
 }
 
-// OpenSession allocates a conversation session.
-func (c *Client) OpenSession(
+// BrowserChannel confines web traffic to opaque frames and authorized session identity.
+func (c *Client) BrowserChannel(
 	ctx context.Context,
-	req *chatpb.OpenSessionRequest,
-) (*chatpb.OpenSessionResponse, error) {
-	return c.client.OpenSession(ctx, req)
+) (grpc.BidiStreamingClient[chatpb.BrowserPacket, chatpb.BrowserPacket], error) {
+	return c.client.BrowserChannel(ctx)
 }
 
-// SendMessage submits a message to the session.
-func (c *Client) SendMessage(
+// BrowserHistory pages content using an agent-owned key that this client never receives.
+func (c *Client) BrowserHistory(
 	ctx context.Context,
-	req *chatpb.SendMessageRequest,
-) (*chatpb.SendMessageResponse, error) {
-	return c.client.SendMessage(ctx, req)
-}
-
-// Abort cancels the requested run.
-func (c *Client) Abort(
-	ctx context.Context,
-	req *chatpb.AbortRequest,
-) (*chatpb.AbortResponse, error) {
-	return c.client.Abort(ctx, req)
-}
-
-// WatchEvents opens a resumable session event stream.
-func (c *Client) WatchEvents(
-	ctx context.Context,
-	req *chatpb.WatchEventsRequest,
-) (WatchStream, error) {
-	return c.client.WatchEvents(ctx, req)
-}
-
-// ListTurns pages the agent's durable transcript.
-func (c *Client) ListTurns(
-	ctx context.Context,
-	req *chatpb.ListTurnsRequest,
-) (*chatpb.ListTurnsResponse, error) {
-	return c.client.ListTurns(ctx, req)
-}
-
-// Deliver subscribes to proactive agent output.
-func (c *Client) Deliver(ctx context.Context) (DeliverStream, error) {
-	return c.client.Deliver(ctx, &chatpb.DeliverRequest{})
+	req *chatpb.BrowserHistoryRequest,
+) (*chatpb.BrowserPacket, error) {
+	return c.client.BrowserHistory(ctx, req)
 }
 
 // CheckVersion rejects every version other than the frozen contract's version.

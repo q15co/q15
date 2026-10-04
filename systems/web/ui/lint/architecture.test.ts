@@ -214,7 +214,9 @@ import "./a-theme.css";
   });
 
   it("formats canonical and browser JSON fixtures identically", () => {
-    const canonical = resolve("../internal/protocol/testdata/architecture-probe-format.json");
+    const canonical = resolve(
+      "../../../libs/chat-contract/browser/protocol/testdata/architecture-probe-format.json",
+    );
     const copy = resolve("src/fixtures/protocol/architecture-probe-format.json");
     const paths = [canonical, copy];
     const source = '{"turns":[],"head_seq":"0","has_more":false}\n';
