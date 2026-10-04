@@ -29,7 +29,7 @@ func main() {
 	}
 }
 
-func run() error {
+func run() (err error) {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	parent := os.Getenv("Q15_WEB_TEST_STATE_DIR")
@@ -54,7 +54,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	defer audit.Close()
+	defer func() { err = errors.Join(err, audit.Close()) }()
 	a, err := auth.Open(directory, "http://localhost:4184", shell,
 		slog.New(slog.NewJSONHandler(audit, nil)))
 	if err != nil {
