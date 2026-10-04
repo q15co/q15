@@ -1,46 +1,59 @@
 [
   {
-    "v": 1,
+    "v": 2,
     "id": "request-1",
     "type": "hello",
     "ts": "2026-10-01T00:00:00Z",
     "seq": "7",
-    "payload": { "cursor": "41" }
+    "payload": {
+      "cursor": "41",
+      "binding": "binding",
+      "public_key": "public"
+    }
   },
   {
-    "v": 1,
+    "v": 2,
     "id": "request-1",
     "type": "sync",
     "ts": "2026-10-01T00:00:00Z",
     "seq": "7",
-    "payload": { "cursor": "41" }
+    "payload": {
+      "cursor": "41"
+    }
   },
   {
-    "v": 1,
+    "v": 2,
     "id": "request-1",
     "type": "msg.send",
     "ts": "2026-10-01T00:00:00Z",
     "seq": "7",
-    "payload": { "client_msg_id": "client-1", "text": "hello" }
+    "payload": {
+      "client_msg_id": "client-1",
+      "text": "hello"
+    }
   },
   {
-    "v": 1,
+    "v": 2,
     "id": "request-1",
     "type": "msg.abort",
     "ts": "2026-10-01T00:00:00Z",
     "seq": "7",
-    "payload": { "turn": "42" }
+    "payload": {
+      "turn": "42"
+    }
   },
   {
-    "v": 1,
+    "v": 2,
     "id": "request-1",
     "type": "msg.ack",
     "ts": "2026-10-01T00:00:00Z",
     "seq": "7",
-    "payload": { "seq": "7" }
+    "payload": {
+      "seq": "7"
+    }
   },
   {
-    "v": 1,
+    "v": 2,
     "id": "request-1",
     "type": "msg.status",
     "ts": "2026-10-01T00:00:00Z",
@@ -48,15 +61,17 @@
     "payload": {}
   },
   {
-    "v": 1,
+    "v": 2,
     "id": "request-1",
     "type": "presence",
     "ts": "2026-10-01T00:00:00Z",
     "seq": "7",
-    "payload": { "fg": true }
+    "payload": {
+      "fg": true
+    }
   },
   {
-    "v": 1,
+    "v": 2,
     "id": "request-1",
     "type": "ping",
     "ts": "2026-10-01T00:00:00Z",
@@ -64,78 +79,105 @@
     "payload": {}
   },
   {
-    "v": 1,
+    "v": 2,
     "id": "request-1",
     "type": "ready",
     "ts": "2026-10-01T00:00:00Z",
     "seq": "7",
-    "payload": { "head_seq": "42", "cursor": "41", "device_id": "device-1" }
+    "payload": {
+      "head_seq": "42",
+      "cursor": "41",
+      "device_id": "device-1"
+    }
   },
   {
-    "v": 1,
+    "v": 2,
     "id": "request-1",
     "type": "turn.start",
     "ts": "2026-10-01T00:00:00Z",
     "seq": "7",
-    "payload": { "turn": "42", "msg": { "turn": "42", "ordinal": -1 } }
+    "payload": {
+      "turn": "42",
+      "msg": {
+        "turn": "42",
+        "ordinal": -1
+      }
+    }
   },
   {
-    "v": 1,
+    "v": 2,
     "id": "request-1",
     "type": "delta",
     "ts": "2026-10-01T00:00:00Z",
     "seq": "7",
     "payload": {
-      "msg": { "turn": "42", "ordinal": -1 },
+      "msg": {
+        "turn": "42",
+        "ordinal": -1
+      },
       "seq": "7",
       "kind": "reasoning",
       "text": "thinking"
     }
   },
   {
-    "v": 1,
+    "v": 2,
     "id": "request-1",
     "type": "snapshot",
     "ts": "2026-10-01T00:00:00Z",
     "seq": "7",
     "payload": {
-      "msg": { "turn": "42", "ordinal": -1 },
+      "msg": {
+        "turn": "42",
+        "ordinal": -1
+      },
       "seq": "7",
       "kind": "text",
       "text": "answer"
     }
   },
   {
-    "v": 1,
+    "v": 2,
     "id": "request-1",
     "type": "msg.final",
     "ts": "2026-10-01T00:00:00Z",
     "seq": "7",
     "payload": {
-      "msg": { "turn": "42", "ordinal": -1 },
+      "msg": {
+        "turn": "42",
+        "ordinal": -1
+      },
       "full_text": "answer",
       "status": "completed",
       "model_ref": "model-1"
     }
   },
   {
-    "v": 1,
+    "v": 2,
     "id": "request-1",
     "type": "msg.status",
     "ts": "2026-10-01T00:00:00Z",
     "seq": "7",
-    "payload": { "turn": "42", "state": "queued", "client_msg_id": "client-1", "queued": true }
+    "payload": {
+      "turn": "42",
+      "state": "queued",
+      "client_msg_id": "client-1",
+      "queued": true
+    }
   },
   {
-    "v": 1,
+    "v": 2,
     "id": "request-1",
     "type": "notice",
     "ts": "2026-10-01T00:00:00Z",
     "seq": "7",
-    "payload": { "code": "resync", "text": "refresh history" }
+    "payload": {
+      "code": "resync",
+      "text": "refresh history"
+    }
   },
   {
-    "v": 1,
+    "v": 2,
     "id": "request-1",
     "type": "pong",
     "ts": "2026-10-01T00:00:00Z",
@@ -143,11 +185,15 @@
     "payload": {}
   },
   {
-    "v": 1,
+    "v": 2,
     "id": "request-1",
     "type": "error",
     "ts": "2026-10-01T00:00:00Z",
     "seq": "7",
-    "payload": { "code": "resync_from_head", "ref": "request-1", "head_seq": "42" }
+    "payload": {
+      "code": "resync_from_head",
+      "ref": "request-1",
+      "head_seq": "42"
+    }
   }
 ]

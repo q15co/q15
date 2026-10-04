@@ -1,4 +1,4 @@
-package server
+package browser
 
 import (
 	"context"
@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/q15co/q15/libs/chat-contract/browser/protocol"
 	"github.com/q15co/q15/libs/chat-contract/chatpb"
-	"github.com/q15co/q15/systems/web/internal/protocol"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -20,7 +20,7 @@ const maxDraftBytes = 4 << 20
 // lifetimes. Reconnecting devices do not open additional WatchEvents streams.
 type session struct {
 	owner     string
-	server    *Server
+	server    *Endpoint
 	commands  sync.Mutex
 	mu        sync.Mutex
 	id        string
@@ -239,7 +239,7 @@ func retry(ctx context.Context) bool {
 	}
 }
 
-func (s *Server) deliver() {
+func (s *Endpoint) deliver() {
 	for s.ctx.Err() == nil {
 		stream, err := s.service.Deliver(s.ctx)
 		if err == nil {

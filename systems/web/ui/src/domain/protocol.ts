@@ -1,7 +1,10 @@
 import type {
   AbortRequest,
   AckRequest,
+  Chunk,
   Cursor,
+  HelloPayload,
+  KeyPayload,
   ErrorPayload,
   FinalPayload,
   Frame,
@@ -14,6 +17,7 @@ import type {
   ProgressPayload,
   ReadyPayload,
   SendRequest,
+  Sealed,
   StatusPayload,
   ToolCall,
   Turn,
@@ -28,7 +32,7 @@ export type Envelope<T extends string, P> = Omit<Frame, "type" | "payload"> & {
   payload: P;
 };
 export type ClientPayloads = {
-  hello: Cursor;
+  hello: HelloPayload;
   sync: Cursor;
   "msg.send": SendRequest;
   "msg.abort": AbortRequest;
@@ -159,6 +163,7 @@ function isClientFrame(f: Frame): f is ClientFrame {
   if (!isRecord(p)) return false;
   switch (f.type) {
     case "hello":
+      return decimal(p.cursor) && typeof p.public_key === "string" && typeof p.binding === "string";
     case "sync":
       return decimal(p.cursor);
     case "msg.send":
@@ -223,3 +228,51 @@ export function parsePage(value: unknown): Page {
 
 export const compareSeq = (a: string, b: string) =>
   BigInt(a) < BigInt(b) ? -1 : BigInt(a) > BigInt(b) ? 1 : 0;
+
+export type WireFrame = Frame | Envelope<"key", KeyPayload>;
+export function parseWireFrame(data: string): WireFrame {
+  const value: unknown = JSON.parse(data);
+  if (!isEnvelope(value))
+    throw new Error("The server sent an unsupported chat frame. Refresh after updating q15.");
+  if (value.type === "key") {
+    const p = value.payload;
+    if (
+      !isRecord(p) ||
+      typeof p.public_key !== "string" ||
+      typeof p.binding !== "string" ||
+      typeof p.channel_id !== "string"
+    )
+      throw new Error("Invalid content key.");
+    return {
+      ...value,
+      type: "key",
+      payload: { public_key: p.public_key, binding: p.binding, channel_id: p.channel_id },
+    };
+  }
+  return value;
+}
+
+function sealedChunk(value: unknown): value is Chunk {
+  return (
+    isRecord(value) &&
+    typeof value.index === "number" &&
+    Number.isInteger(value.index) &&
+    typeof value.final === "boolean" &&
+    typeof value.data === "string" &&
+    value.data.length <= 43712
+  );
+}
+export function parseSealed(value: unknown): Sealed {
+  if (
+    !isRecord(value) ||
+    value.version !== 1 ||
+    typeof value.stream !== "string" ||
+    !Array.isArray(value.chunks) ||
+    value.chunks.length === 0 ||
+    value.chunks.length > 514
+  )
+    throw new Error("Unsupported sealed envelope.");
+  const chunks: unknown[] = value.chunks;
+  if (!chunks.every((chunk) => sealedChunk(chunk))) throw new Error("Unsupported sealed envelope.");
+  return { version: 1, stream: value.stream, chunks };
+}

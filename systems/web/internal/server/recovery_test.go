@@ -7,52 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/q15co/q15/libs/chat-contract/browser/protocol"
 	"github.com/q15co/q15/libs/chat-contract/chatpb"
-	"github.com/q15co/q15/systems/web/internal/protocol"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
-
-type fakeConnection struct {
-	frames  []protocol.Frame
-	slow    bool
-	stopped bool
-}
-
-func (f *fakeConnection) enqueue(frame protocol.Frame) bool {
-	if f.slow {
-		return false
-	}
-	f.frames = append(f.frames, frame)
-	return true
-}
-
-func (f *fakeConnection) stop() { f.stopped = true }
-
-func TestRegistryFanoutIsolationAndSlowDevice(t *testing.T) {
-	r := newRegistry()
-	first, second, other, slow := &fakeConnection{}, &fakeConnection{}, &fakeConnection{}, &fakeConnection{
-		slow: true,
-	}
-	for _, device := range []*fakeConnection{first, second, slow} {
-		if !r.add("owner", device) {
-			t.Fatal("registration failed")
-		}
-	}
-	r.add("another-owner", other)
-	r.broadcast("owner", protocol.New(protocol.Pong, "ping", 0, fixtureTime, struct{}{}))
-	if len(first.frames) != 1 || len(second.frames) != 1 || len(other.frames) != 0 ||
-		!slow.stopped {
-		t.Fatal("fanout isolation or slow-device eviction failed")
-	}
-	r.broadcast("owner", protocol.New(protocol.Pong, "ping", 0, fixtureTime, struct{}{}))
-	if len(first.frames) != 2 || len(second.frames) != 2 {
-		t.Fatal("slow device blocked healthy devices")
-	}
-	r.close()
-	if !first.stopped || !second.stopped || !other.stopped {
-		t.Fatal("shutdown left devices open")
-	}
-}
 
 func TestReplayWindowCountsRecordsRatherThanSequenceDistance(t *testing.T) {
 	for _, test := range []struct {
@@ -192,7 +150,7 @@ func TestHeartbeatAndQueueBounds(t *testing.T) {
 	defer cancel()
 	c := &socketConn{ctx: ctx, cancel: cancel, queue: make(chan []byte, 1)}
 	frame := protocol.New(protocol.Pong, "ping", 0, fixtureTime, struct{}{})
-	if !c.enqueue(frame) || c.enqueue(frame) {
+	if !c.enqueue(marshalFrame(t, frame)) || c.enqueue(marshalFrame(t, frame)) {
 		t.Fatal("queue frame limit not enforced")
 	}
 	large := protocol.New(
@@ -203,7 +161,7 @@ func TestHeartbeatAndQueueBounds(t *testing.T) {
 		protocol.NoticePayload{Text: strings.Repeat("x", maxQueueBytes)},
 	)
 	c = &socketConn{ctx: ctx, cancel: cancel, queue: make(chan []byte, 1)}
-	if c.enqueue(large) || c.queuedBytes.Load() != 0 {
+	if c.enqueue(marshalFrame(t, large)) || c.queuedBytes.Load() != 0 {
 		t.Fatal("queue byte limit not enforced")
 	}
 }
@@ -242,7 +200,7 @@ func TestAgentRestartDiscardsSessionHandle(t *testing.T) {
 
 func TestProactiveDeliveryAndRetainedSnapshot(t *testing.T) {
 	fake := newFakeChat()
-	s, httpServer := setup(t, fake)
+	_, httpServer := setup(t, fake)
 	conn := dial(t, httpServer)
 	hello(t, conn, 0)
 	fake.outbound <- &chatpb.DeliverResponse{ChatId: "default", Text: "scheduled output", QueuedAt: timestamppb.New(fixtureTime)}
@@ -251,12 +209,12 @@ func TestProactiveDeliveryAndRetainedSnapshot(t *testing.T) {
 		!strings.Contains(string(frame.Payload), "scheduled output") {
 		t.Fatalf("deliver %s/%s", frame.Type, frame.Payload)
 	}
-	// A retained window may begin after run.start. Its keyframe still proves
-	// that a run is active and supplies the draft to a new device.
-	session := s.principalSession("owner")
-	session.event(
+	// A retained keyframe proves a run is active without run.start.
+	send(t, conn, protocol.Send, protocol.SendRequest{ClientMsgID: "retained", Text: "hello"})
+	take(t, fake.sends)
+	take(t, fake.watches)
+	fake.emit(
 		&chatpb.SessionEvent{
-			EventIndex: 100,
 			TurnSeq:    42,
 			OccurredAt: timestamppb.New(fixtureTime),
 			Event: &chatpb.SessionEvent_Snapshot{
@@ -264,8 +222,25 @@ func TestProactiveDeliveryAndRetainedSnapshot(t *testing.T) {
 			},
 		},
 	)
-	snapshot, ok := session.snapshot()
-	if !ok || snapshot.Seq != 100 || !strings.Contains(string(snapshot.Payload), "retained draft") {
-		t.Fatal("retained keyframe lost active draft")
+	for {
+		if read(t, conn).Type == protocol.Snapshot {
+			break
+		}
 	}
+	second := dial(t, httpServer)
+	hello(t, second, 0)
+	snapshot := read(t, second)
+	if snapshot.Type != protocol.Snapshot ||
+		!strings.Contains(string(snapshot.Payload), "retained draft") {
+		t.Fatal("retained draft lost")
+	}
+}
+
+func marshalFrame(t *testing.T, frame protocol.Frame) []byte {
+	t.Helper()
+	data, err := json.Marshal(frame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
 }

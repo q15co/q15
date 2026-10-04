@@ -176,6 +176,8 @@ export function reduceFrame(state: Readonly<ChatState>, value: ServerFrame): Cha
         break;
       }
       const messages: Record<string, string> = {
+        seal_failed: "The message could not be encrypted and was not sent. Try again.",
+        unseal_failed: "The agent could not decrypt this message. Reconnect and try again.",
         bridge_unavailable: "The agent is unavailable. Try again shortly.",
         too_many_devices: "Too many chat windows are open. Close one and reconnect.",
         invalid_message: "The message could not be accepted. Check its length and try again.",

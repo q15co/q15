@@ -50,9 +50,15 @@ func (f *fakeTurnLister) LoadHead(ctx context.Context) (int64, time.Time, error)
 
 func startBridgeService(t *testing.T, lister TurnLister) chatpb.ChatServiceClient {
 	t.Helper()
+	return startChatService(t, NewService(lister, NewAgentEndpoint(&fakePublisher{})))
+}
+
+func startChatService(t *testing.T, service *Service) chatpb.ChatServiceClient {
+	t.Helper()
+	t.Cleanup(service.browser.Close)
 	listener := bufconn.Listen(1024 * 1024)
 	server := grpc.NewServer()
-	chatpb.RegisterChatServiceServer(server, NewService(lister, NewAgentEndpoint(&fakePublisher{})))
+	chatpb.RegisterChatServiceServer(server, service)
 	go func() {
 		_ = server.Serve(listener)
 	}()

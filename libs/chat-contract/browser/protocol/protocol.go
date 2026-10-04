@@ -11,7 +11,7 @@ import (
 )
 
 // Version changes when message identity or part semantics change.
-const Version = 1
+const Version = 2
 
 // Frame types are shared with the browser's golden fixtures.
 const (

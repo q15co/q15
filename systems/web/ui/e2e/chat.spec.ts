@@ -7,10 +7,11 @@ import { readFileSync } from "node:fs";
 import type { ClientFrame } from "../src/domain/protocol";
 import type { Frame, Page } from "../src/generated/protocol";
 
-import { parseClientFrame } from "../src/domain/protocol";
+import { parseClientFrame, parseSealed, parseWireFrame } from "../src/domain/protocol";
 import { frame } from "../src/infrastructure/envelope";
 import { parseShellManifest } from "../src/shared/shell-manifest";
 import { required } from "../src/testing/required";
+import { TestSealer } from "./seal";
 
 test.beforeEach(async ({ page }) => {
   await page.route("**/session-key-setup", (route) =>
@@ -75,9 +76,10 @@ const emptyHistory: Page = { turns: [], head_seq: "0", has_more: false };
 async function backend(
   page: BrowserPage,
   history: Page = emptyHistory,
-  onSend?: (send: (value: Frame) => void) => void,
+  onSend?: (send: (value: Frame, damage?: boolean) => void) => void,
 ) {
   const requests: ClientFrame[] = [];
+  const sealers = new Map<string, TestSealer>();
   await page.route("**/api/turns?**", (route) => {
     const before = new URL(route.request().url()).searchParams.get("after_seq");
     const response =
@@ -88,13 +90,37 @@ async function backend(
             head_seq: "30",
             has_more: false,
           };
-    return route.fulfill({ json: response });
+    const sealer = sealers.get(route.request().headers()["q15-channel"] ?? "");
+    if (!sealer) throw new Error("Missing content session");
+    return route.fulfill({ json: sealer.seal(frame("history", response, sealer.channelID)) });
   });
   await page.routeWebSocket("**/ws", (socket) => {
+    let sealer: TestSealer | undefined;
+    const send = (value: Frame, damage = false) => {
+      let wire = sealer?.seal(value) ?? value;
+      if (damage) {
+        const envelope = parseSealed(wire.payload);
+        wire = {
+          ...wire,
+          payload: {
+            ...envelope,
+            chunks: envelope.chunks.map((chunk, index) =>
+              index === 0 ? { ...chunk, data: "AAAA" } : chunk,
+            ),
+          },
+        };
+      }
+      socket.send(JSON.stringify(wire));
+    };
     socket.onMessage((data) => {
-      const request = parseClientFrame(String(data));
+      let wire = parseWireFrame(String(data));
+      if (sealer) wire = sealer.open(wire);
+      const request = parseClientFrame(JSON.stringify(wire));
       requests.push(request);
-      if (request.type === "hello")
+      if (request.type === "hello") {
+        sealer = new TestSealer(request.payload);
+        sealers.set(sealer.channelID, sealer);
+        send(sealer.key);
         socket.send(
           JSON.stringify(
             frame("ready", {
@@ -104,6 +130,7 @@ async function backend(
             }),
           ),
         );
+      }
       if (request.type === "msg.send") {
         const p = request.payload;
         const queued = requests.filter((r) => r.type === "msg.send").length > 1;
@@ -121,17 +148,15 @@ async function backend(
           socket.send(
             JSON.stringify(frame("turn.start", { turn: "31", msg: { turn: "31", ordinal: -1 } })),
           );
-        if (!queued) onSend?.((value) => socket.send(JSON.stringify(value)));
+        if (!queued) onSend?.(send);
       }
       if (request.type === "msg.abort")
-        socket.send(
-          JSON.stringify(
-            frame("msg.final", {
-              msg: { turn: "31", ordinal: -1 },
-              status: "aborted",
-              full_text: "Stopped safely.",
-            }),
-          ),
+        send(
+          frame("msg.final", {
+            msg: { turn: "31", ordinal: -1 },
+            status: "aborted",
+            full_text: "Stopped safely.",
+          }),
         );
     });
   });
@@ -840,4 +865,32 @@ test("working glow and font axes animate without moving text, and settle with re
       ),
     )
     .toBe(0);
+});
+
+test("a damaged sealed frame is visible while later content uses the same socket", async ({
+  page,
+}) => {
+  const recoveredText = `${"Recovered sealed response ".repeat(1500)}done`;
+  const sentText = "check corruption ".repeat(2500).trim();
+  const requests = await backend(page, emptyHistory, (send) => {
+    const msg = { turn: "31", ordinal: -1 };
+    send(frame("delta", { msg, seq: "1", kind: "text", text: "cannot be read" }), true);
+    send(frame("snapshot", { msg, seq: "2", kind: "text", text: recoveredText }));
+    send(frame("msg.final", { msg, status: "aborted", full_text: recoveredText }));
+  });
+  await page.goto("/");
+  await page.getByLabel("Message q15").fill(sentText);
+  await page.getByRole("button", { name: "Send message", exact: true }).click();
+  await expect(
+    page.getByText("This content could not be decrypted. Reconnect to try again.", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText(recoveredText, { exact: true })).toBeVisible();
+  expect(requests.find((request) => request.type === "msg.send")?.payload).toMatchObject({
+    text: sentText,
+  });
+  await page.getByLabel("Message q15").fill("still connected");
+  await expect(page.getByRole("button", { name: "Send message", exact: true })).toBeEnabled();
+  await page.getByRole("button", { name: "Send message", exact: true }).click();
+  await expect.poll(() => requests.filter((request) => request.type === "msg.send").length).toBe(2);
+  expect(requests.filter((request) => request.type === "hello")).toHaveLength(1);
 });

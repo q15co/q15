@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { generateKeyPairSync } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { request } from "node:http";
 import { join } from "node:path";
 
@@ -61,6 +62,11 @@ test("host enrollment, passkey sign-in, protected data and logout use the real g
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   const origin = "http://localhost:4184";
+  const chatFrames: string[] = [];
+  page.on("websocket", (socket) => {
+    socket.on("framesent", (event) => chatFrames.push(String(event.payload)));
+    socket.on("framereceived", (event) => chatFrames.push(String(event.payload)));
+  });
   const response = await page.goto(origin);
   expect(response?.status()).toBe(401);
   expect(await page.locator('link[rel="icon"]').getAttribute("href")).toMatch(
@@ -154,6 +160,31 @@ test("host enrollment, passkey sign-in, protected data and logout use the real g
     });
   });
   const history = await historyResponse;
+  const capturedBody = await history.text();
+  expect(capturedBody).not.toContain("Saved sealed history");
+  expect(capturedBody).not.toContain("part_type");
+  await expect(page.getByText("Saved sealed history", { exact: true })).toBeVisible();
+  await page.getByLabel("Message q15").fill("sealed browser send");
+  await page.getByRole("button", { name: "Send message", exact: true }).click();
+  await expect(page.getByText("Sealed agent reply", { exact: true })).toBeVisible();
+  expect(chatFrames.join("\n")).not.toContain("sealed browser send");
+  expect(chatFrames.join("\n")).not.toContain("Sealed agent reply");
+  expect(chatFrames.join("\n")).not.toContain("Saved sealed history");
+  const stateDirectory = required(process.env.Q15_WEB_TEST_STATE_DIR);
+  const persisted = readFileSync(join(stateDirectory, "auth", "auth.json"), "utf8");
+  const audit = readFileSync(join(stateDirectory, "web.log"), "utf8");
+  expect(audit).toContain('"event":"login"');
+  for (const marker of [
+    "sealed browser send",
+    "Sealed agent reply",
+    "Saved sealed history",
+    '"private_key"',
+    '"chunks"',
+  ]) {
+    expect(persisted).not.toContain(marker);
+    expect(audit).not.toContain(marker);
+  }
+
   const capturedProof = required(history.request().headers()["q15-proof"]);
   for (const path of ["/", "/api/turns", "/ws", "/manifest.webmanifest", "/icon.svg"])
     expect((await context.request.get(origin + path)).status()).toBe(401);
@@ -165,6 +196,8 @@ test("host enrollment, passkey sign-in, protected data and logout use the real g
   await page.evaluate(() => navigator.serviceWorker.ready);
   expect((await page.reload())?.status()).toBe(200);
   await expect(page.getByRole("button", { name: "Sign out", exact: true })).toBeVisible();
+  await expect(page.getByText("Saved sealed history", { exact: true })).toBeVisible();
+  await expect(page.getByText("sealed browser send", { exact: true })).toBeVisible();
   expect(gestures).toBe(1);
   expect(
     await page.evaluate(async () => {

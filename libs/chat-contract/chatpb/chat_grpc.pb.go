@@ -19,6 +19,8 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
+	ChatService_BrowserChannel_FullMethodName = "/q15.chat.v1.ChatService/BrowserChannel"
+	ChatService_BrowserHistory_FullMethodName = "/q15.chat.v1.ChatService/BrowserHistory"
 	ChatService_GetRuntimeInfo_FullMethodName = "/q15.chat.v1.ChatService/GetRuntimeInfo"
 	ChatService_OpenSession_FullMethodName    = "/q15.chat.v1.ChatService/OpenSession"
 	ChatService_SendMessage_FullMethodName    = "/q15.chat.v1.ChatService/SendMessage"
@@ -50,6 +52,10 @@ const (
 // browser: the browser never speaks gRPC, and its contract is the WebSocket
 // envelope plus the frozen frame fixtures, not this handshake.
 type ChatServiceClient interface {
+	// BrowserChannel carries opaque browser frames. Its first packet is the
+	// authorized identity from the web gate; all later packets carry frame bytes.
+	BrowserChannel(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[BrowserPacket, BrowserPacket], error)
+	BrowserHistory(ctx context.Context, in *BrowserHistoryRequest, opts ...grpc.CallOption) (*BrowserPacket, error)
 	// GetRuntimeInfo is the startup handshake: protocol version, transcript head
 	// sequence and enabled capabilities.
 	GetRuntimeInfo(ctx context.Context, in *GetRuntimeInfoRequest, opts ...grpc.CallOption) (*GetRuntimeInfoResponse, error)
@@ -81,6 +87,29 @@ type chatServiceClient struct {
 
 func NewChatServiceClient(cc grpc.ClientConnInterface) ChatServiceClient {
 	return &chatServiceClient{cc}
+}
+
+func (c *chatServiceClient) BrowserChannel(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[BrowserPacket, BrowserPacket], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &ChatService_ServiceDesc.Streams[0], ChatService_BrowserChannel_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[BrowserPacket, BrowserPacket]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ChatService_BrowserChannelClient = grpc.BidiStreamingClient[BrowserPacket, BrowserPacket]
+
+func (c *chatServiceClient) BrowserHistory(ctx context.Context, in *BrowserHistoryRequest, opts ...grpc.CallOption) (*BrowserPacket, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(BrowserPacket)
+	err := c.cc.Invoke(ctx, ChatService_BrowserHistory_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *chatServiceClient) GetRuntimeInfo(ctx context.Context, in *GetRuntimeInfoRequest, opts ...grpc.CallOption) (*GetRuntimeInfoResponse, error) {
@@ -125,7 +154,7 @@ func (c *chatServiceClient) Abort(ctx context.Context, in *AbortRequest, opts ..
 
 func (c *chatServiceClient) WatchEvents(ctx context.Context, in *WatchEventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchEventsResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &ChatService_ServiceDesc.Streams[0], ChatService_WatchEvents_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &ChatService_ServiceDesc.Streams[1], ChatService_WatchEvents_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -154,7 +183,7 @@ func (c *chatServiceClient) ListTurns(ctx context.Context, in *ListTurnsRequest,
 
 func (c *chatServiceClient) Deliver(ctx context.Context, in *DeliverRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[DeliverResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &ChatService_ServiceDesc.Streams[1], ChatService_Deliver_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &ChatService_ServiceDesc.Streams[2], ChatService_Deliver_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -193,6 +222,10 @@ type ChatService_DeliverClient = grpc.ServerStreamingClient[DeliverResponse]
 // browser: the browser never speaks gRPC, and its contract is the WebSocket
 // envelope plus the frozen frame fixtures, not this handshake.
 type ChatServiceServer interface {
+	// BrowserChannel carries opaque browser frames. Its first packet is the
+	// authorized identity from the web gate; all later packets carry frame bytes.
+	BrowserChannel(grpc.BidiStreamingServer[BrowserPacket, BrowserPacket]) error
+	BrowserHistory(context.Context, *BrowserHistoryRequest) (*BrowserPacket, error)
 	// GetRuntimeInfo is the startup handshake: protocol version, transcript head
 	// sequence and enabled capabilities.
 	GetRuntimeInfo(context.Context, *GetRuntimeInfoRequest) (*GetRuntimeInfoResponse, error)
@@ -226,6 +259,12 @@ type ChatServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedChatServiceServer struct{}
 
+func (UnimplementedChatServiceServer) BrowserChannel(grpc.BidiStreamingServer[BrowserPacket, BrowserPacket]) error {
+	return status.Errorf(codes.Unimplemented, "method BrowserChannel not implemented")
+}
+func (UnimplementedChatServiceServer) BrowserHistory(context.Context, *BrowserHistoryRequest) (*BrowserPacket, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method BrowserHistory not implemented")
+}
 func (UnimplementedChatServiceServer) GetRuntimeInfo(context.Context, *GetRuntimeInfoRequest) (*GetRuntimeInfoResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetRuntimeInfo not implemented")
 }
@@ -266,6 +305,31 @@ func RegisterChatServiceServer(s grpc.ServiceRegistrar, srv ChatServiceServer) {
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&ChatService_ServiceDesc, srv)
+}
+
+func _ChatService_BrowserChannel_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(ChatServiceServer).BrowserChannel(&grpc.GenericServerStream[BrowserPacket, BrowserPacket]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ChatService_BrowserChannelServer = grpc.BidiStreamingServer[BrowserPacket, BrowserPacket]
+
+func _ChatService_BrowserHistory_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(BrowserHistoryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ChatServiceServer).BrowserHistory(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ChatService_BrowserHistory_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ChatServiceServer).BrowserHistory(ctx, req.(*BrowserHistoryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _ChatService_GetRuntimeInfo_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -388,6 +452,10 @@ var ChatService_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*ChatServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
+			MethodName: "BrowserHistory",
+			Handler:    _ChatService_BrowserHistory_Handler,
+		},
+		{
 			MethodName: "GetRuntimeInfo",
 			Handler:    _ChatService_GetRuntimeInfo_Handler,
 		},
@@ -409,6 +477,12 @@ var ChatService_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "BrowserChannel",
+			Handler:       _ChatService_BrowserChannel_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
+		},
 		{
 			StreamName:    "WatchEvents",
 			Handler:       _ChatService_WatchEvents_Handler,

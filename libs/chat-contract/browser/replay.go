@@ -1,4 +1,4 @@
-package server
+package browser
 
 import (
 	"context"
@@ -6,14 +6,19 @@ import (
 	"strings"
 	"time"
 
+	"github.com/q15co/q15/libs/chat-contract/browser/protocol"
 	"github.com/q15co/q15/libs/chat-contract/chatpb"
-	"github.com/q15co/q15/systems/web/internal/protocol"
 )
 
 // MaxReplayTurns counts readable records, not sequence distance (seqs have gaps).
 const MaxReplayTurns = 500
 
-func (s *Server) replay(ctx context.Context, c *socketConn, device, ref string, cursor int64) bool {
+func (s *Endpoint) replay(
+	ctx context.Context,
+	c *socketConn,
+	device, ref string,
+	cursor int64,
+) bool {
 	page, err := s.service.ListTurns(ctx, &chatpb.ListTurnsRequest{Limit: MaxReplayTurns})
 	if err != nil {
 		s.socketError(c, "bridge_unavailable", ref)

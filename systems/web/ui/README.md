@@ -129,14 +129,14 @@ make ui-fixtures-check
 ```
 
 Run those commands from the repository root. CI checks copies and generated types on every PR,
-including changes to the fixture producers. Go-only changes do not trigger the separate UI job.
+including changes to the fixture producers. Go browser-boundary changes trigger the separate UI job.
 
 JSON fixtures participate in Oxfmt, including their canonical Go sources. After editing a source and
 updating its browser copy, format and check both through the shared workflow:
 
 ```bash
-make fmt FILES='systems/web/internal/protocol/testdata/frames.json systems/web/ui/src/fixtures/protocol/frames.json'
-make lint-changed FILES='systems/web/internal/protocol/testdata/frames.json systems/web/ui/src/fixtures/protocol/frames.json'
+make fmt FILES='libs/chat-contract/browser/protocol/testdata/frames.json systems/web/ui/src/fixtures/protocol/frames.json'
+make lint-changed FILES='libs/chat-contract/browser/protocol/testdata/frames.json systems/web/ui/src/fixtures/protocol/frames.json'
 make ui-fixtures-check
 ```
 
@@ -147,6 +147,12 @@ activity entries distinguish tool work from commentary. Event handling checks ex
 unknown wire part types remain available to the visible renderer fallback. Shell manifests and
 install events are also checked before use. Type-aware Oxc rules reject unsafe assertions and unsafe
 uses of `any`, while `satisfies` checks configuration without widening literal values.
+
+The socket and history adapters open the version 2 sealed byte envelope before domain validation.
+Fresh non-exportable ECDH/content keys remain in memory; reconnects re-wrap history in the agent.
+Failed decryption is visible and does not close the socket. See
+[content sealing](../README.md#content-sealing) for the byte framing, passive-carrier guarantee and
+trusted-delivery limits.
 
 The app keeps transcript content and drafts in memory. It never stores messages, raw private keys or
 session cookies in localStorage, IndexedDB, or worker caches. The explicit exception is the

@@ -190,6 +190,7 @@ func (a *Authenticator) RequireScope(scope string, next http.Handler) http.Handl
 		key := digest(requestToken(r, sessionCookie))
 		a.mu.Lock()
 		valid := a.valid(key) && a.verifyProof(key, r)
+		binding := a.state.Sessions[key].Binding
 		a.mu.Unlock()
 		if !valid {
 			a.unauthorized(w, r)
@@ -212,7 +213,7 @@ func (a *Authenticator) RequireScope(scope string, next http.Handler) http.Handl
 			cookie(w, workerCookie, "", -1)
 		}
 		ctx := context.WithValue(r.Context(), sessionKey{}, key)
-		r = r.WithContext(gate.WithPrincipal(ctx, gate.Principal{ID: "owner"}))
+		r = r.WithContext(gate.WithPrincipal(ctx, gate.Principal{ID: "owner", Binding: binding}))
 		if r.URL.Path == "/auth/session" && r.Method == http.MethodGet {
 			w.WriteHeader(http.StatusNoContent)
 			return

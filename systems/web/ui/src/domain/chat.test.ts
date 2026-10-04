@@ -30,7 +30,7 @@ function initial(): ChatState {
 
 function packet(type: string, payload: unknown) {
   return parseFrame(
-    JSON.stringify({ v: 1, id: "event", ts: "2026-10-01T00:00:00Z", seq: "0", type, payload }),
+    JSON.stringify({ v: 2, id: "event", ts: "2026-10-01T00:00:00Z", seq: "0", type, payload }),
   );
 }
 

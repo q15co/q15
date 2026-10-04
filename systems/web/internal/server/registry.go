@@ -2,14 +2,11 @@ package server
 
 import (
 	"sync"
-
-	"github.com/q15co/q15/systems/web/internal/protocol"
 )
 
 const maxDevicesPerPrincipal = 32
 
 type connection interface {
-	enqueue(protocol.Frame) bool
 	stop()
 }
 
@@ -43,21 +40,6 @@ func (r *registry) remove(principal string, conn connection) {
 	delete(r.devices[principal], conn)
 	if len(r.devices[principal]) == 0 {
 		delete(r.devices, principal)
-	}
-}
-
-func (r *registry) broadcast(principal string, frame protocol.Frame) {
-	r.mu.Lock()
-	connections := make([]connection, 0, len(r.devices[principal]))
-	for conn := range r.devices[principal] {
-		connections = append(connections, conn)
-	}
-	r.mu.Unlock()
-	for _, conn := range connections {
-		if !conn.enqueue(frame) {
-			conn.stop()
-			r.remove(principal, conn)
-		}
 	}
 }
 

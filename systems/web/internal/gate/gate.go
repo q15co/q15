@@ -11,7 +11,10 @@ import (
 )
 
 // Principal is provided by authorization, never by a browser payload.
-type Principal struct{ ID string }
+type Principal struct {
+	ID      string
+	Binding string
+}
 
 type principalKey struct{}
 
