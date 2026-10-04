@@ -17,6 +17,8 @@ systems/web/ui/.vp/
 systems/web/ui/test-results/
 systems/web/ui/playwright-report/
 systems/web/ui/coverage/
+systems/web/ui/benchmark-dist/
+systems/web/ui/benchmark-results/
 deploy/compose/secrets/*
 !deploy/compose/secrets/*.example
 !deploy/compose/secrets/README.md

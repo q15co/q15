@@ -8,10 +8,11 @@ import { MarkdownView } from "./markdown";
 
 import styles from "./parts.module.css";
 
-export function PartView({ part }: { part: Part }) {
+export function PartView({ part, streaming: live }: { part: Part; streaming?: boolean }) {
+  const streaming = live ?? false;
   switch (part.part_type) {
     case "text":
-      return <MarkdownView text={part.text ?? ""} />;
+      return <MarkdownView text={part.text ?? ""} streaming={streaming} />;
     case "reasoning":
       return (
         <details className={clsx(styles.partCard, styles.reasoning)}>
@@ -21,7 +22,7 @@ export function PartView({ part }: { part: Part }) {
             <ChevronDown size={14} />
           </summary>
           <div className={styles.partContent}>
-            <MarkdownView text={part.text ?? ""} />
+            <MarkdownView text={part.text ?? ""} streaming={streaming} />
           </div>
         </details>
       );

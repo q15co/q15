@@ -114,7 +114,17 @@ ui-fix: ui-install
 	cd $(UI_DIR) && $(PNPM) typecheck
 
 ui-test: ui-install
-	cd $(UI_DIR) && $(PNPM) test
+	cd $(UI_DIR) && $(PNPM) test $(UI_TEST_ARGS)
+
+.PHONY: ui-benchmark-build ui-benchmark-base-build ui-benchmark
+ui-benchmark-build: ui-install
+	cd $(UI_DIR) && $(PNPM) exec vp build benchmark --config benchmark/vite.config.ts
+
+ui-benchmark: ui-benchmark-build
+	cd $(UI_DIR) && $(PNPM) exec node benchmark/run.ts
+
+ui-benchmark-base-build: project-setup
+	cd $(BENCHMARK_UI_DIR) && $(PNPM) exec vp build benchmark --config benchmark/vite.config.ts
 
 ui-test-coverage: ui-install
 	cd $(UI_DIR) && $(PNPM) test:coverage $(UI_TEST_ARGS)

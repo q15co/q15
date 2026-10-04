@@ -237,6 +237,97 @@ test("prepending history preserves the visible message position and deep links p
   await expect(page.locator('[data-message-key="1:0"]')).toBeInViewport();
 });
 
+test("streaming preserves history anchors, deep links and disclosures through completion and resync", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const history: Page = {
+    turns: Array.from({ length: 20 }, (_, i) => turn(30 - i)),
+    head_seq: "31",
+    has_more: true,
+  };
+  let deliver: ((value: Frame) => void) | undefined;
+  await backend(page, history, (send) => {
+    deliver = send;
+  });
+  await page.goto("/");
+  await page.getByLabel("Message q15").fill("Read while growing");
+  await page.getByLabel("Send message", { exact: true }).click();
+  const msg = { turn: "31", ordinal: -1 };
+  const call = { id: "stable-tool", name: "exec", arguments: '{"command":"pwd"}' };
+  required(deliver)(frame("delta", { msg, seq: "1", kind: "tool_call", text: "", call }));
+  required(deliver)(
+    frame("delta", { msg, seq: "2", kind: "tool_result", text: "/workspace", call }),
+  );
+  const activity = page.locator("[data-agent-activity]").last();
+  const tool = page.locator('[data-tool-call-id="stable-tool"]');
+  await activity.locator(":scope > summary").press("Enter");
+  await tool.locator(":scope > summary").press("Enter");
+  required(deliver)(
+    frame("delta", { msg, seq: "3", kind: "text", text: "Growing answer.\n\n".repeat(20) }),
+  );
+  const answer = page.locator('article[data-message-key="31:-1"]');
+  await expect(answer).toContainText("Growing answer.");
+  const scroller = page.getByLabel("Conversation", { exact: true });
+  await scroller.evaluate((node) => {
+    node.scrollTop = 300;
+  });
+  await expect(page.getByRole("button", { name: "Back to latest" })).toBeVisible();
+  const anchor = page.locator('[data-message-key="12:0"]');
+  const before = await anchor.evaluate((node) => node.getBoundingClientRect().top);
+  required(deliver)(
+    frame("delta", { msg, seq: "4", kind: "text", text: "More live detail.\n\n".repeat(20) }),
+  );
+  await page
+    .getByRole("button", { name: "Earlier messages" })
+    .evaluate((node: HTMLButtonElement) => node.click());
+  await expect(page.locator('[data-message-key="1:0"]')).toBeAttached();
+  expect(await anchor.evaluate((node) => node.getBoundingClientRect().top)).toBeCloseTo(before, 0);
+  await page.evaluate(() => {
+    location.hash = "message-1:0";
+  });
+  await expect(page.locator('[data-message-key="1:0"]')).toBeInViewport();
+  const position = await scroller.evaluate((node) => node.scrollTop);
+  required(deliver)(
+    frame("snapshot", { msg, seq: "5", kind: "text", text: "Replacement answer.\n\n".repeat(40) }),
+  );
+  await expect(answer).toContainText("Replacement answer.");
+  expect(await scroller.evaluate((node) => node.scrollTop)).toBeCloseTo(position, 0);
+  history.turns.unshift({
+    seq: "31",
+    created_at: "2026-10-01T12:00:00Z",
+    messages: [
+      {
+        ordinal: 0,
+        role: "assistant",
+        parts: [
+          { ordinal: 0, part_type: "tool_call", tool_call: call },
+          { ordinal: 1, part_type: "tool_result", tool_call_id: call.id, content: "/workspace" },
+          { ordinal: 2, part_type: "text", disposition: "final", text: "Final canonical answer." },
+        ],
+      },
+    ],
+  });
+  required(deliver)(
+    frame("msg.final", { msg, status: "completed", full_text: "Final canonical answer." }),
+  );
+  await expect(page.locator('article[data-message-key="31:0"]')).toContainText(
+    "Final canonical answer.",
+  );
+  await expect(activity).toHaveAttribute("open", "");
+  await expect(tool).toHaveAttribute("open", "");
+  expect(await scroller.evaluate((node) => node.scrollTop)).toBeCloseTo(position, 0);
+  required(deliver)(frame("error", { code: "resync_from_head", ref: "" }));
+  await expect(page.getByText("Chat reconnected. Recent history refreshed.")).toBeVisible();
+  await expect(activity).toHaveAttribute("open", "");
+  await expect(tool).toHaveAttribute("open", "");
+  expect(await scroller.evaluate((node) => node.scrollTop)).toBeCloseTo(position, 0);
+  await page.getByRole("button", { name: "Back to latest" }).click();
+  await expect
+    .poll(() => scroller.evaluate((node) => node.scrollHeight - node.scrollTop - node.clientHeight))
+    .toBeLessThan(2);
+});
+
 test("generated precache contains only shell files and preserves the embed sentinel", () => {
   const root = new URL("../../internal/assets/dist/", import.meta.url);
   const manifest = parseShellManifest(

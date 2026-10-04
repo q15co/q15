@@ -41,6 +41,28 @@ describe("message rendering", () => {
     expect(screen.getByText("Unsupported part: future_part")).toBeDefined();
     expect(screen.getByText(/do not discard me/u)).toBeDefined();
   });
+  it("keeps part content and disclosure choices across surrounding live updates", () => {
+    const cases = [
+      ...required(required(parsePage(parts).turns[0]).messages[0]).parts,
+      { ordinal: 9, part_type: "future_part", content: "unsupported content" },
+      { ordinal: 10, part_type: "tool_result", content: "successful result" },
+    ];
+    for (const part of cases) {
+      const { container, rerender, unmount } = render(<PartView part={part} streaming={false} />);
+      const details = container.querySelector("details");
+      if (details) details.open = true;
+      const before = container.innerHTML;
+      rerender(<PartView part={part} streaming={false} />);
+      expect(container.innerHTML).toBe(before);
+      rerender(<PartView part={{ ...part }} streaming={false} />);
+      expect(container.innerHTML).toBe(before);
+      rerender(
+        <PartView part={{ ...part, text: "changed", content: "changed" }} streaming={false} />,
+      );
+      expect(details?.open ?? true).toBe(true);
+      unmount();
+    }
+  });
   it("renders reasoning and Markdown text from protocol parts", () => {
     render(
       <>

@@ -30,6 +30,7 @@ export type Pending = Readonly<
 export interface ChatState {
   readonly connection: Connection;
   readonly messages: readonly ChatMessage[];
+  readonly live: ChatMessage | null;
   readonly pending: readonly Pending[];
   readonly active: string | null;
   readonly cursor: string;
@@ -80,7 +81,7 @@ export function reduceFrame(state: Readonly<ChatState>, value: ServerFrame): Cha
     case "delta":
     case "snapshot":
       update({
-        messages: mergeMessages(next.messages, [progressMessage(next.messages, value)]),
+        live: progressMessage(next.live, value),
         active: value.payload.msg.turn,
       });
       break;
@@ -111,7 +112,8 @@ export function reduceFrame(state: Readonly<ChatState>, value: ServerFrame): Cha
     case "msg.final": {
       const p = value.payload;
       const key = `${p.msg.turn}:${p.msg.ordinal}`;
-      const previous = next.messages.find((m) => m.key === key);
+      const previous =
+        next.live?.turn === p.msg.turn ? next.live : next.messages.find((m) => m.key === key);
       const canonical = p.message;
       const parts = canonical?.parts ?? [
         ...(previous?.parts ?? []).filter(
@@ -132,7 +134,10 @@ export function reduceFrame(state: Readonly<ChatState>, value: ServerFrame): Cha
         status: p.status,
         ...(p.model_ref === undefined ? {} : { model: p.model_ref }),
       };
-      update({ messages: mergeMessages(next.messages, [message]) });
+      update({
+        messages: mergeMessages(next.messages, [message]),
+        live: next.live?.turn === p.msg.turn ? null : next.live,
+      });
       if (!canonical) {
         const starting =
           next.active === "0"
@@ -202,13 +207,13 @@ export function reduceFrame(state: Readonly<ChatState>, value: ServerFrame): Cha
 }
 
 function progressMessage(
-  messages: readonly ChatMessage[],
+  live: ChatMessage | null,
   value: Extract<ServerFrame, { type: "delta" | "snapshot" }>,
 ): ChatMessage {
   const p = value.payload;
   const key = `${p.msg.turn}:-1`;
-  const previous = messages.find((m) => m.key === key);
-  let parts: Part[] = [...(previous?.parts ?? [])];
+  const previous = live?.key === key ? live : undefined;
+  let parts: Readonly<Part>[] = [...(previous?.parts ?? [])];
   let loopStart = previous?.loopStart ?? 0;
   let loopTurn = previous?.loopTurn;
   if (value.type === "snapshot" && p.kind === "model_start") {
@@ -267,7 +272,7 @@ function progressMessage(
   return {
     ordinal: -1,
     role: "assistant",
-    parts: parts.map((part, ordinal) => ({ ...part, ordinal })),
+    parts: parts.map((part, ordinal) => (part.ordinal === ordinal ? part : { ...part, ordinal })),
     key,
     turn: p.msg.turn,
     ts: value.ts,
@@ -281,16 +286,21 @@ function progressMessage(
 export function mergeMessages(
   current: readonly ChatMessage[],
   incoming: readonly ChatMessage[],
-): ChatMessage[] {
+): readonly ChatMessage[] {
   const messages = new Map(current.map((m) => [m.key, m]));
   for (const m of incoming) {
     if (m.ordinal >= 0) messages.delete(`${m.turn}:-1`);
-    messages.set(m.key, m);
+    const previous = messages.get(m.key);
+    messages.set(m.key, previous && JSON.stringify(previous) === JSON.stringify(m) ? previous : m);
   }
-  return [...messages.values()].toSorted((a, b) => {
+  const merged = [...messages.values()].toSorted((a, b) => {
     const turn = compareSeq(a.turn, b.turn);
     return turn === 0 ? a.ordinal - b.ordinal : turn;
   });
+  return merged.length === current.length &&
+    merged.every((message, index) => message === current[index])
+    ? current
+    : merged;
 }
 
 export function reconcileHistory(

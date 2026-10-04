@@ -1,11 +1,12 @@
-import react from "@vitejs/plugin-react";
+import babel from "@rolldown/plugin-babel";
+import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import { defineConfig } from "vite-plus";
 
 import { shell } from "./build/shell";
 import { lint } from "./lint/config";
 
 export default defineConfig({
-  plugins: [react(), shell()],
+  plugins: [react(), babel({ presets: [reactCompilerPreset({ target: "19" })] }), shell()],
   build: { outDir: "../internal/assets/dist", emptyOutDir: true },
   server: {
     port: 5173,
