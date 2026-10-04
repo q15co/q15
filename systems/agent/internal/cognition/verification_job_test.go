@@ -63,6 +63,14 @@ func (l *verificationJobLoader) LoadMessagesSinceSeq(
 	return nil, nil
 }
 
+func (l *verificationJobLoader) LoadMessagesSinceSeqWindow(
+	context.Context,
+	int64,
+	int,
+) (TurnWindow, error) {
+	return TurnWindow{}, nil
+}
+
 func (l *verificationJobLoader) LoadHead(context.Context) (int64, time.Time, error) {
 	return l.headSeq, l.headUpdatedAt, nil
 }

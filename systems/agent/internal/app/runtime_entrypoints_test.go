@@ -39,6 +39,14 @@ func (s *spyRuntimeStore) LoadMessagesSinceSeq(
 	return nil, nil
 }
 
+func (s *spyRuntimeStore) LoadMessagesSinceSeqWindow(
+	context.Context,
+	int64,
+	int,
+) (cognition.TurnWindow, error) {
+	return cognition.TurnWindow{}, nil
+}
+
 func (s *spyRuntimeStore) LoadLastUserTimestamp(
 	context.Context,
 ) (time.Time, bool, error) {
