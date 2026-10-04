@@ -1,7 +1,10 @@
-import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import history from "../fixtures/server/history.json";
+import { proofHeaders, sessionKey } from "../testing/session-key";
 import { fetchHistory } from "./history";
+
+beforeEach(sessionKey);
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -14,12 +17,14 @@ describe("HTTP history adapter", () => {
     expect(fetch).toHaveBeenCalledWith("/api/turns?after_seq=42&limit=50", {
       credentials: "same-origin",
       cache: "no-store",
+      headers: proofHeaders,
       signal: controller.signal,
     });
     await fetchHistory("0");
     expect(fetch).toHaveBeenLastCalledWith("/api/turns?after_seq=0&limit=50", {
       credentials: "same-origin",
       cache: "no-store",
+      headers: proofHeaders,
     });
   });
 

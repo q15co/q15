@@ -265,7 +265,13 @@ export const lint = {
     },
     {
       files: ["worker/**"],
-      rules: { "eslint/no-restricted-imports": imports(["./**", "../src/shared/**"]) },
+      rules: {
+        "eslint/no-restricted-imports": imports([
+          "./**",
+          "../src/shared/**",
+          "../src/infrastructure/proof",
+        ]),
+      },
     },
     {
       files: ["build/**"],
@@ -278,6 +284,17 @@ export const lint = {
           "node:path",
           "parse5",
           "vite-plus",
+        ]),
+      },
+    },
+    {
+      files: ["src/testing/session-key.ts"],
+      rules: {
+        "eslint/no-restricted-imports": imports([
+          "node:crypto",
+          "fake-indexeddb",
+          "vite-plus/test",
+          "../infrastructure/proof",
         ]),
       },
     },

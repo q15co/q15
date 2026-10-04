@@ -9,7 +9,7 @@ import { build } from "vite-plus";
 
 import type { ShellManifest } from "../src/shared/shell-manifest";
 
-function inlineShell(source: string, script: string, style: string) {
+function inlineShell(source: string, script: string, style: string, icon: string) {
   const tree = parse(source);
   const nodes: DefaultTreeAdapterMap["node"][] = [tree];
   let scripts = 0;
@@ -18,6 +18,13 @@ function inlineShell(source: string, script: string, style: string) {
     if (!("childNodes" in node)) continue;
     nodes.push(...node.childNodes);
     if (!("tagName" in node)) continue;
+    if (
+      node.tagName === "link" &&
+      node.attrs.some((attr) => attr.name === "rel" && attr.value === "icon")
+    ) {
+      const href = node.attrs.find((attr) => attr.name === "href");
+      if (href) href.value = `data:image/svg+xml,${encodeURIComponent(icon)}`;
+    }
     const isScript = node.tagName === "script" && node.attrs.some((attr) => attr.name === "src");
     const isStyle =
       node.tagName === "link" &&
@@ -108,7 +115,12 @@ export function shell(): Plugin {
           styles.length !== 1
         )
           throw new Error("Expected a self-contained UI shell");
-        html.source = inlineShell(html.source, script.code, style.source);
+        html.source = inlineShell(
+          html.source,
+          script.code,
+          style.source,
+          readFileSync(resolve(config.publicDir, "icon.svg"), "utf8"),
+        );
         delete bundle[script.fileName];
         delete bundle[style.fileName];
         const paths = [

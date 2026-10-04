@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import type { TransportEvents } from "../application/ports";
 import type { ClientFrame } from "../domain/protocol";
@@ -7,6 +7,7 @@ import type { SocketLike } from "./transport";
 import { parseClientFrame } from "../domain/protocol";
 import { frame } from "../infrastructure/envelope";
 import { required } from "../testing/required";
+import { proofHeaders, sessionKey } from "../testing/session-key";
 import { SocketTransport } from "./transport";
 
 class FakeSocket implements SocketLike {
@@ -59,6 +60,8 @@ function setup() {
     },
   };
 }
+beforeEach(sessionKey);
+
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
@@ -94,6 +97,7 @@ describe("socket transport", () => {
     expect(fetch).toHaveBeenCalledWith("/auth/session", {
       credentials: "same-origin",
       cache: "no-store",
+      headers: proofHeaders,
     });
     expect(vi.getTimerCount()).toBe(0);
   });
@@ -235,4 +239,36 @@ describe("socket transport", () => {
     expect(sockets).toHaveLength(1);
     transport.stop();
   });
+});
+
+it("attaches asynchronously signed sockets and discards sockets from stopped generations", async () => {
+  const socket = new FakeSocket();
+  const events = {
+    frame: vi.fn<TransportEvents["frame"]>(),
+    connection: vi.fn<TransportEvents["connection"]>(),
+    error: vi.fn<TransportEvents["error"]>(),
+  };
+  const transport = new SocketTransport("ws://localhost/ws", () => Promise.resolve(socket));
+  transport.start(events, () => "0");
+  await Promise.resolve();
+  socket.open();
+  socket.receive("ready", { cursor: "0", head_seq: "0", device_id: "device" });
+  expect(events.connection).toHaveBeenLastCalledWith("connected");
+  transport.stop();
+  const pending = new FakeSocket();
+  const stopped = new SocketTransport("ws://localhost/ws", () => Promise.resolve(pending));
+  stopped.start(events, () => "0");
+  stopped.stop();
+  await Promise.resolve();
+  expect(pending.readyState).toBe(3);
+  const failed = new SocketTransport("ws://localhost/ws", () =>
+    Promise.reject(new Error("No key")),
+  );
+  failed.start(events, () => "0");
+  await Promise.resolve();
+  expect(events.connection).toHaveBeenLastCalledWith("unauthorized");
+  failed.start(events, () => "0");
+  failed.stop();
+  await Promise.resolve();
+  expect(events.connection).toHaveBeenLastCalledWith("connecting");
 });

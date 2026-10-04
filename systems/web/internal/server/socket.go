@@ -107,7 +107,11 @@ func (s *Server) socket(w http.ResponseWriter, r *http.Request) {
 	}
 	// Exact origin + fetch metadata was checked above; Accept's additional check
 	// is host-pattern based and would be wrong behind a Host-rewriting ingress.
-	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
+	conn, err := websocket.Accept(
+		w,
+		r,
+		&websocket.AcceptOptions{InsecureSkipVerify: true, Subprotocols: []string{"q15-auth"}},
+	)
 	if err != nil {
 		return
 	}

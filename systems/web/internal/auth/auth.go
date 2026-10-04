@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -31,9 +32,10 @@ const (
 )
 
 type ceremony struct {
-	Data    webauthn.SessionData
-	Expires time.Time
-	Name    string
+	Data      webauthn.SessionData
+	Expires   time.Time
+	Name      string
+	PublicKey []byte
 }
 
 // Authenticator owns credentials, hashed sessions and short-lived ceremonies.
@@ -187,7 +189,7 @@ func (a *Authenticator) RequireScope(scope string, next http.Handler) http.Handl
 		}
 		key := digest(requestToken(r, sessionCookie))
 		a.mu.Lock()
-		valid := a.valid(key)
+		valid := a.valid(key) && a.verifyProof(key, r)
 		a.mu.Unlock()
 		if !valid {
 			a.unauthorized(w, r)
@@ -201,6 +203,13 @@ func (a *Authenticator) RequireScope(scope string, next http.Handler) http.Handl
 			!mutationOrigin(r, a.origin) {
 			http.Error(w, "invalid origin", http.StatusForbidden)
 			return
+		}
+		if r.URL.Path == "/auth/worker" && r.Method == http.MethodPost {
+			a.workerBootstrap(w, r)
+			return
+		}
+		if r.URL.Path == "/sw.js" {
+			cookie(w, workerCookie, "", -1)
 		}
 		ctx := context.WithValue(r.Context(), sessionKey{}, key)
 		r = r.WithContext(gate.WithPrincipal(ctx, gate.Principal{ID: "owner"}))
@@ -264,7 +273,26 @@ func (a *Authenticator) signIn(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "try again later", http.StatusTooManyRequests)
 			return
 		}
+		var input struct {
+			PublicKey string `json:"public_key"`
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 1024)
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+		if decoder.Decode(&input) != nil || decoder.Decode(new(any)) != io.EOF {
+			http.Error(w, "sign in refused", http.StatusUnauthorized)
+			return
+		}
+		publicKey, err := parseSessionPublicKey(input.PublicKey)
+		if err != nil {
+			http.Error(w, "sign in refused", http.StatusUnauthorized)
+			return
+		}
+		nonce := randomBytes(32)
+		challenge := append([]byte("q15-session-key-v1\n"), nonce...)
+		commitment := sha256.Sum256(append(challenge, publicKey...))
 		options, data, err := a.webAuthn.BeginDiscoverableLogin(
+			webauthn.WithChallenge(commitment[:]),
 			webauthn.WithUserVerification(protocol.VerificationRequired),
 		)
 		if err != nil {
@@ -272,11 +300,18 @@ func (a *Authenticator) signIn(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		token := newToken()
-		a.login[digest(token)] = ceremony{Data: *data, Expires: a.now().Add(ceremonyLifetime)}
+		a.login[digest(token)] = ceremony{
+			Data:      *data,
+			Expires:   a.now().Add(ceremonyLifetime),
+			PublicKey: publicKey,
+		}
 		cookie(w, challengeCookie, token, ceremonyLifetime)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnauthorized)
-		_ = json.NewEncoder(w).Encode(options)
+		_ = json.NewEncoder(w).Encode(struct {
+			*protocol.CredentialAssertion
+			SessionKeyNonce string `json:"session_key_nonce"`
+		}{options, credentialID(nonce)})
 		return
 	}
 	key := digest(requestToken(r, challengeCookie))
@@ -315,16 +350,21 @@ func (a *Authenticator) signIn(w http.ResponseWriter, r *http.Request) {
 	// Reauthentication replaces this browser's session instead of accumulating it.
 	delete(next.Sessions, digest(requestToken(r, sessionCookie)))
 	token := newToken()
+	binding := newToken()
 	next.Sessions[digest(token)] = session{
-		Device:  id,
-		Expires: a.now().Add(sessionLifetime),
-		Scope:   "chat",
+		Device:    id,
+		Expires:   a.now().Add(sessionLifetime),
+		Scope:     "chat",
+		PublicKey: c.PublicKey,
+		Binding:   binding,
+		Used:      make(map[string]time.Time),
 	}
 	if err := a.commit(next); err != nil {
 		http.Error(w, "authentication unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	cookie(w, sessionCookie, token, sessionLifetime)
+	w.Header().Set("Q15-Session", binding)
 	a.logger.Info("owner authentication", "event", "login", "device", id)
 	w.WriteHeader(http.StatusNoContent)
 }

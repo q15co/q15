@@ -9,8 +9,8 @@ Follow the root `AGENTS.md`; run Make targets from the repository root.
   from authorization. Protect every route except `/healthz`; only the bounded WebAuthn proof
   exchange may run before a session. No public route can enroll a credential or bypass scope checks.
 - Enrollment and revocation use only the private admin Unix socket. Keep credentials and cookies out
-  of JavaScript storage, URLs and logs; revalidate long-lived sockets on input, output and idle
-  expiry.
+  of JavaScript storage, URLs and logs except the non-exportable session CryptoKey and public
+  binding ID in IndexedDB; revalidate long-lived sockets on input, output and idle expiry.
 - Require the exact configured Origin. Native WebSocket handshakes can omit Fetch Metadata; reject
   conflicting metadata when supplied.
 - Encode int64 values as decimal JSON strings. Transcript cursors and session event indexes are

@@ -10,6 +10,7 @@ import "./styles.css";
 import { MotionProvider } from "./components/ui/motion";
 import { hasSession, ownerAuthentication } from "./infrastructure/auth";
 import { fetchHistory } from "./infrastructure/history";
+import { authenticatedFetch, requestProof } from "./infrastructure/proof";
 import { logout } from "./infrastructure/session";
 import { SocketTransport } from "./infrastructure/transport";
 
@@ -17,6 +18,14 @@ async function previewStore() {
   const { MockTransport } = await import("./infrastructure/mock-transport");
   const transport = new MockTransport();
   return new ChatStore(transport, transport.history);
+}
+
+function publishManifest() {
+  const link = document.createElement("link");
+  link.rel = "manifest";
+  link.href = "/manifest.webmanifest";
+  link.crossOrigin = "use-credentials";
+  document.head.append(link);
 }
 const preview = import.meta.env.DEV && new URLSearchParams(location.search).has("preview");
 const signedIn = preview || (await hasSession());
@@ -41,7 +50,20 @@ createRoot(root).render(
 if (signedIn && import.meta.env.PROD && "serviceWorker" in navigator) {
   // Registration only caches the compiled shell; transcripts never leave memory.
   try {
-    await navigator.serviceWorker.register("/sw.js");
+    const proof = await requestProof("GET", "/sw.js", location.origin);
+    const response = await authenticatedFetch("/auth/worker", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ proof }),
+    });
+    if (response.status === 204) {
+      await navigator.serviceWorker.register("/sw.js");
+      if (navigator.serviceWorker.controller) publishManifest();
+      else
+        navigator.serviceWorker.addEventListener("controllerchange", publishManifest, {
+          once: true,
+        });
+    }
   } catch {
     /* Chat works without installation. */
   }
