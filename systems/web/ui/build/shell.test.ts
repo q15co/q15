@@ -9,6 +9,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vite-plus/test";
 import { parseShellManifest } from "../src/shared/shell-manifest";
 import { required } from "../src/testing/required";
 import { sessionKey } from "../src/testing/session-key";
+import { contentWorker } from "./content-worker";
 import { buildWorker, shell } from "./shell";
 
 const paths = ["/index.html", "/assets/app-abcdef12.js"];
@@ -111,6 +112,7 @@ async function shellBundle(content: string, scriptEndTag = "</script>") {
     configFile: false,
     logLevel: "silent",
     plugins: [
+      contentWorker(),
       shell(),
       {
         name: "test-html",

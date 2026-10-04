@@ -171,7 +171,7 @@ describe("browser composition root", () => {
   });
 });
 
-vi.mock("./infrastructure/seal", async () => {
-  const { PlainContent, hasContent } = await import("./testing/content");
-  return { ContentSession: PlainContent, hasContent };
+vi.mock("./infrastructure/content-worker", async () => {
+  const { PlainContent } = await import("./testing/content");
+  return { ContentWorker: PlainContent };
 });

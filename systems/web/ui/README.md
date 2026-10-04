@@ -61,7 +61,7 @@ requires 98% lines, 97% statements, 95% functions and 90% branches overall, plus
 aggregate coverage cannot hide an untested module. Every file requires 90% lines, statements and
 functions, and 80% branches. Domain files require 98% lines, 95% statements and branches, and 100%
 functions; application, infrastructure and shared files require 95% lines and statements, 90%
-functions and 85% branches. The service worker requires 100% of all four metrics.
+functions and 85% branches. Both worker entry points require 100% of all four metrics.
 
 Reports stay ignored under `systems/web/ui/coverage/`: open `index.html` for uncovered paths, or use
 the LCOV/JSON reports for tooling. The Browser Verify job runs this gate and uploads its reports as
@@ -161,15 +161,34 @@ unknown wire part types remain available to the visible renderer fallback. Shell
 install events are also checked before use. Type-aware Oxc rules reject unsafe assertions and unsafe
 uses of `any`, while `satisfies` checks configuration without widening literal values.
 
-The socket and history adapters open the version 2 sealed byte envelope before domain validation.
-Fresh non-exportable ECDH/content keys remain in memory; reconnects re-wrap history in the agent.
-The Go protocol generates both byte limits and the plaintext-control whitelist; unknown content
-types default to sealing. Before either directional stream count reaches its 65,536-entry replay
-budget, the transport drains accepted sends and reconnects with fresh keys. This recovery never
-resubmits an uncertain send. History paging is bounded by encoded plaintext bytes as well as turns.
-Failed decryption is visible and does not close the socket. See
-[content sealing](../README.md#content-sealing) for the byte framing, passive-carrier guarantee and
-trusted-delivery limits.
+One dedicated content worker serves each socket connection and its HTTP history. It owns all content
+ECDH/HKDF/AES keys, wire/payload JSON, canonical base64, chunk assembly, UTF-8 and byte-limit
+checks. The page sends raw socket text or transferred history buffers and receives validated domain
+values or encoded outgoing strings. Socket signing and authenticated HTTP requests remain in the
+page; only the public signing-key binding enters the content worker. Reconnect, key refresh and
+logout terminate the worker and settle its pending jobs. Fresh non-exportable content keys never
+leave that worker or persist. Worker ownership improves scheduling; it is not a security isolation
+boundary.
+
+Socket and history operations share one serial queue and replay ledger. Both ends cap queued work at
+64 jobs and 96 MiB of conservative input-byte accounting, including the active job. Overflow,
+startup failure, malformed RPC, crashes and 15-second deadlines surface a recoverable error and
+reconnect. Generation leases discard old history/socket results, and history cancellation suppresses
+publication without freeing an active job's budget early. Accepted outgoing sends drain before a
+key-budget refresh; uncertain sends are never replayed.
+
+The build bundles `worker/content.ts` into the authenticated shell through a single virtual module.
+The bootstrap creates a blob worker, so its first request needs neither service-worker control nor a
+separate proof-bearing script fetch. The shell CSP explicitly allows `worker-src 'self' blob:`;
+script nonces, static-route authentication and the prohibition on `unsafe-eval` remain intact. The
+content worker has no networking, authentication-key or storage dependencies; the separate
+`worker/sw.ts` retains its shell-cache and request-proof responsibilities. The Go protocol generates
+both byte limits and the plaintext-control whitelist; unknown content types default to sealing.
+Before either directional stream count reaches its 65,536-entry replay budget, the transport drains
+accepted sends and reconnects with fresh keys. This recovery never resubmits an uncertain send.
+History paging is bounded by encoded plaintext bytes as well as turns. Failed decryption is visible
+and does not close the socket. See [content sealing](../README.md#content-sealing) for the byte
+framing, passive-carrier guarantee and trusted-delivery limits.
 
 The app keeps transcript content and drafts in memory. It never stores messages, raw private keys or
 session cookies in localStorage, IndexedDB, or worker caches. The explicit exception is the

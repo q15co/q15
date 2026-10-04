@@ -11,7 +11,7 @@ import {
   PLAINTEXT_FRAME_TYPES,
 } from "../generated/protocol";
 import { isRecord } from "../shared/type-guards";
-import { encode, sessionSigner } from "./proof";
+import { encode, decode } from "./base64";
 
 const chunkSize = ChunkBytes;
 const maxBytes = MaxEnvelopeBytes;
@@ -19,16 +19,6 @@ const jsonType = "application/json";
 const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true });
 const failure = () => new Error("This content could not be decrypted. Reconnect to try again.");
-
-function decode(value: string): Uint8Array<ArrayBuffer> {
-  if (!/^[\w-]*$/u.test(value)) throw failure();
-  const bytes = Uint8Array.from(
-    atob(value.replaceAll("-", "+").replaceAll("_", "/")),
-    (c) => c.codePointAt(0) ?? 0,
-  );
-  if (encode(bytes) !== value) throw failure();
-  return bytes;
-}
 
 function context(frame: Frame): string {
   return [frame.v, frame.id, frame.type, new Date(frame.ts).toISOString(), frame.seq].join("\n");
@@ -110,9 +100,8 @@ export class ContentSession {
     this.ready = this.waiter();
   }
 
-  async offer(cursor: string): Promise<HelloPayload> {
+  async offer(cursor: string, binding: string): Promise<HelloPayload> {
     const generation = this.generation;
-    const signer = await sessionSigner();
     const pair = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, false, [
       "deriveKey",
     ]);
@@ -120,8 +109,8 @@ export class ContentSession {
     if (generation !== this.generation) throw failure();
     this.privateKey = pair.privateKey;
     this.publicKey = publicKey;
-    this.binding = signer.binding;
-    return { cursor, public_key: publicKey, binding: signer.binding };
+    this.binding = binding;
+    return { cursor, public_key: publicKey, binding };
   }
 
   async accept(value: unknown) {

@@ -1,13 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import history from "../fixtures/server/history.json";
+import { PlainContent } from "../testing/content";
 import { required } from "../testing/required";
 import { proofHeaders, sessionKey } from "../testing/session-key";
 import { frame } from "./envelope";
 import { fetchHistory } from "./history";
-import { ContentSession } from "./seal";
 
-const content = new ContentSession();
+const content = new PlainContent();
 beforeEach(sessionKey);
 
 afterEach(() => vi.unstubAllGlobals());
@@ -66,14 +66,3 @@ describe("HTTP history adapter", () => {
     }
   });
 });
-
-vi.mock("./seal", () => ({
-  ContentSession: class {
-    channel() {
-      return Promise.resolve("channel");
-    }
-    open(value: unknown) {
-      return Promise.resolve(value);
-    }
-  },
-}));

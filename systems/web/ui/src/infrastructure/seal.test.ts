@@ -37,7 +37,7 @@ async function setup() {
   await saveSessionKey(signer.key, vector.binding);
   vi.spyOn(crypto.subtle, "generateKey").mockResolvedValueOnce({ privateKey: source, publicKey });
   const content = new ContentSession();
-  const hello = await content.offer("41");
+  const hello = await content.offer("41", vector.binding);
   expect(source.extractable).toBe(false);
   await expect(crypto.subtle.exportKey("jwk", source)).rejects.toThrow(/.+/u);
   await content.accept({
@@ -195,7 +195,7 @@ describe("sealed browser content", () => {
     await expect(pending).rejects.toMatchObject({ name: "AbortError" });
     await expect(content.channel(controller.signal)).rejects.toMatchObject({ name: "AbortError" });
     await expect(content.accept(null)).rejects.toThrow(/.+/u);
-    await content.offer("0");
+    await content.offer("0", vector.binding);
     await expect(
       content.accept({ binding: "wrong", public_key: vector.agent_public, channel_id: "channel" }),
     ).rejects.toThrow(/.+/u);
@@ -209,7 +209,7 @@ describe("sealed browser content", () => {
         channel_id: "x".repeat(129),
       }),
     ).rejects.toThrow(/.+/u);
-    const offering = content.offer("0");
+    const offering = content.offer("0", vector.binding);
     content.reset();
     await expect(offering).rejects.toThrow(/.+/u);
   });

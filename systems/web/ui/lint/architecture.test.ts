@@ -57,6 +57,13 @@ describe("Oxlint architecture guards", () => {
         'export { SocketTransport } from "./infrastructure/transport";',
       "src/shared/architecture-probe-domain.ts": 'export { reduceFrame } from "../domain/chat";',
       "src/domain/architecture-probe-test.ts": 'export { required } from "../testing/required";',
+      "src/components/architecture-probe-worker.ts":
+        'export { ContentEngine } from "../infrastructure/content-engine";',
+      "src/infrastructure/architecture-probe-worker.ts":
+        'export { default } from "virtual:q15-content-worker";',
+      "src/infrastructure/content-engine-probe.ts": 'export { requestProof } from "./proof";',
+      "src/infrastructure/transport-probe.ts": 'export { ContentSession } from "./seal";',
+      "src/infrastructure/history-probe.ts": 'export { ContentEngine } from "./content-engine.ts";',
       "worker/architecture-probe-ui.ts": 'export { App } from "../src/app";',
       "build/architecture-probe-domain.ts": 'export { reduceFrame } from "../src/domain/chat";',
     };

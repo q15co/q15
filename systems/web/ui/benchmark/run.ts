@@ -4,6 +4,11 @@ import { cpSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } fr
 import { cpus, release, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
+import { TestSealer } from "../e2e/seal.ts";
+import { parseClientFrame } from "../src/domain/protocol.ts";
+import { frame } from "../src/infrastructure/envelope.ts";
+import { growingAnswer, loadedHistory } from "../src/testing/streaming.ts";
+
 const ui = resolve(import.meta.dirname, "..");
 const repository = resolve(ui, "../../..");
 const pnpm = join(repository, ".tools/bin/pnpm");
@@ -36,17 +41,85 @@ async function measureRun(
     reducedMotion: motion,
   });
   const errors: string[] = [];
-  page.on("pageerror", (error) => errors.push(error.message));
-  await page.goto(`http://127.0.0.1:4195/?${workload}`);
-  await page.waitForSelector('html[data-benchmark-ready="true"]', { timeout: 120_000 });
+  const failure = new Promise<never>((_resolve, reject) => {
+    page.on("pageerror", (error) => {
+      errors.push(error.message);
+      reject(error);
+    });
+  });
+  await page.route("**/benchmark/setup?*", async (route) => {
+    const hello = parseClientFrame(route.request().postData() ?? "");
+    if (hello.type !== "hello") throw new Error("Invalid codec offer");
+    const peer = new TestSealer(hello.payload);
+    const params = new URL(route.request().url()).searchParams;
+    const msg = { turn: "10001", ordinal: -1 };
+    const answer = growingAnswer(30);
+    let accumulated = "";
+    const frames =
+      params.has("history") || params.has("outgoing")
+        ? []
+        : Array.from({ length: params.has("representative") ? 24 : 48 }, (_, index) => {
+            if (params.has("representative")) {
+              const chunk =
+                answer.slice(
+                  Math.floor((answer.length * index) / 24),
+                  Math.floor((answer.length * (index + 1)) / 24),
+                ) + `\n\nframe-${index}.\n\n`;
+              accumulated += chunk;
+              const snapshot = index % 10 === 0;
+              return JSON.stringify(
+                peer.seal(
+                  frame(snapshot ? "snapshot" : "delta", {
+                    msg,
+                    seq: String(index + 1),
+                    kind: "text",
+                    text: snapshot ? accumulated : chunk,
+                  }),
+                ),
+              );
+            }
+            const text =
+              (params.has("small") ? "Small content" : "Plain content. ".repeat(4500)) +
+              Array.from({ length: index + 1 }, (_unused, marker) => `\n\nframe-${marker}.`).join(
+                "",
+              );
+            return JSON.stringify(
+              peer.seal(frame("snapshot", { msg, seq: String(index + 1), kind: "text", text })),
+            );
+          });
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        key: JSON.stringify(peer.key),
+        frames,
+        history: JSON.stringify(peer.seal(frame("history", loadedHistory(4000), peer.channelID))),
+      }),
+    });
+  });
+  await Promise.race([
+    failure,
+    page.goto(
+      `http://127.0.0.1:4195/${workload.includes("codec") ? "codec.html" : ""}?${workload}`,
+    ),
+  ]);
+  await Promise.race([
+    failure,
+    page.waitForSelector('html[data-benchmark-ready="true"]', {
+      state: "attached",
+      timeout: 120_000,
+    }),
+  ]);
   const cdp = await page.context().newCDPSession(page);
   await cdp.send("Performance.enable");
   const before = await cdp.send("Performance.getMetrics");
   await page.evaluate(() => document.dispatchEvent(new Event("benchmark-start")));
-  const result = await page.waitForSelector("[data-benchmark-result]", {
-    state: "attached",
-    timeout: 240_000,
-  });
+  const result = await Promise.race([
+    failure,
+    page.waitForSelector("[data-benchmark-result]", {
+      state: "attached",
+      timeout: 240_000,
+    }),
+  ]);
   const after = await cdp.send("Performance.getMetrics");
   const data = await result.getAttribute("data-benchmark-result");
   if (data === null || errors.length > 0)
@@ -104,13 +177,28 @@ async function measure(directory: string, revision: string) {
       });
     }
     for (const motion of ["no-preference", "reduce"] satisfies ("no-preference" | "reduce")[]) {
-      const workloads = [
-        "history=100",
-        "history=1000",
-        "history=0&large=1",
-        ...(motion === "no-preference" ? ["history=1000&staticAxes=1"] : []),
-      ];
+      const workloads =
+        process.env.Q15_BENCHMARK_CODEC === "1"
+          ? [
+              "codec=1&small=1",
+              "codec=1&large=1",
+              "codec=1&history=1",
+              "codec=1&outgoing=1",
+              "codec=1&rendered=1",
+              "codec=1&rendered=1&representative=1",
+            ]
+          : [
+              "history=100",
+              "history=1000",
+              "history=0&large=1",
+              ...(motion === "no-preference" ? ["history=1000&staticAxes=1"] : []),
+            ];
       for (const workload of workloads) {
+        if (
+          process.env.Q15_BENCHMARK_WORKLOAD !== undefined &&
+          !process.env.Q15_BENCHMARK_WORKLOAD.split(",").includes(workload)
+        )
+          continue;
         for (let run = 0; run < runs; run++) {
           await measureRun(revision, motion, workload, run);
         }
@@ -138,6 +226,8 @@ try {
       });
       const baselineUI = join(checkout, "systems/web/ui");
       cpSync(join(ui, "benchmark"), join(baselineUI, "benchmark"), { recursive: true });
+      if (process.env.Q15_BENCHMARK_CODEC === "1")
+        cpSync(join(ui, "benchmark/base-codec.ts"), join(baselineUI, "benchmark/codec-adapter.ts"));
       cpSync(join(ui, "src/testing/streaming.ts"), join(baselineUI, "src/testing/streaming.ts"));
       symlinkSync(join(ui, "node_modules"), join(baselineUI, "node_modules"), "dir");
       execFileSync("make", ["ui-benchmark-base-build", `BENCHMARK_UI_DIR=${baselineUI}`], {

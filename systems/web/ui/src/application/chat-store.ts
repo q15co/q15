@@ -79,7 +79,11 @@ export class ChatStore {
                   p.state === "sending" ? { ...p, state: "uncertain" } : p,
                 )
               : this.state.pending;
+          const reconnected =
+            connection === "connected" && this.state.connection === "reconnecting";
           this.update({ connection, pending });
+          if (reconnected && this.state.messages.length === 0 && !this.state.loadingHistory)
+            void this.loadHistory(false, generation);
         },
       },
       () => this.state.cursor,
@@ -102,7 +106,7 @@ export class ChatStore {
   send(input: string) {
     const text = input.trim();
     if (text === "") return false;
-    if (new TextEncoder().encode(text).length > MaxMessageBytes) {
+    if (text.length > MaxMessageBytes) {
       this.update({ error: "This message is too long. Keep it under 64 KiB." });
       return false;
     }
