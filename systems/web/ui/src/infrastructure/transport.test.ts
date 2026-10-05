@@ -71,6 +71,20 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 describe("socket transport", () => {
+  it("validates decoded frames without reserializing their payload", async () => {
+    const { transport, socket, events } = await setup();
+    const data = JSON.stringify(frame("notice", { code: "info", text: "decoded" }));
+    const stringify = vi.spyOn(JSON, "stringify");
+    socket.onmessage?.(new MessageEvent("message", { data }));
+    await vi.waitFor(() =>
+      expect(events.frame).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "notice", payload: { code: "info", text: "decoded" } }),
+      ),
+    );
+    expect(stringify).not.toHaveBeenCalled();
+    transport.stop();
+  });
+
   it("reports the encoded wire limit without sending or dropping the socket", async () => {
     const { transport, socket, events } = await setup();
     const before = socket.sent.length;

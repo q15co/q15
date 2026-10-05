@@ -1,7 +1,7 @@
 import type { Transport, TransportEvents } from "../application/ports";
 import type { Frame } from "../generated/protocol";
 
-import { parseFrame, parseWireFrame } from "../domain/protocol";
+import { parseFrameValue, parseWireFrame } from "../domain/protocol";
 import { MaxClientFrameBytes } from "../generated/protocol";
 import { clientFrame, frame } from "./envelope";
 import { authenticatedFetch, requestProof } from "./proof";
@@ -164,7 +164,7 @@ export class SocketTransport implements Transport {
     const data = JSON.stringify(value);
     if (new TextEncoder().encode(data).length > MaxClientFrameBytes) {
       this.events?.frame(
-        parseFrame(JSON.stringify(frame("error", { code: "message_too_large", ref: value.id }))),
+        parseFrameValue(frame("error", { code: "message_too_large", ref: value.id })),
       );
       return;
     }
@@ -181,7 +181,7 @@ export class SocketTransport implements Transport {
       .catch(() => {
         if (!this.stopped)
           this.events?.frame(
-            parseFrame(JSON.stringify(frame("error", { code: "seal_failed", ref: clientID }))),
+            parseFrameValue(frame("error", { code: "seal_failed", ref: clientID })),
           );
       });
   }
@@ -245,7 +245,7 @@ export class SocketTransport implements Transport {
       }
     }
     if (!current()) return;
-    const value = parseFrame(JSON.stringify(wire));
+    const value = parseFrameValue(wire);
     if (value.type === "ready" && !this.refreshing) {
       this.ready = true;
       this.attempts = 0;

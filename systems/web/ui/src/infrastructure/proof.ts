@@ -1,4 +1,5 @@
 import { isRecord } from "../shared/type-guards";
+import { encode } from "./base64";
 
 export interface SessionSigner {
   readonly key: CryptoKey;
@@ -42,13 +43,6 @@ async function storedSigner(value?: SessionSigner | null): Promise<unknown> {
   } finally {
     db.close();
   }
-}
-
-export function encode(bytes: Uint8Array): string {
-  return btoa(String.fromCodePoint(...bytes))
-    .replaceAll("+", "-")
-    .replaceAll("/", "_")
-    .replaceAll("=", "");
 }
 
 export async function createSessionKey() {

@@ -49,3 +49,31 @@ work counts and behavior tests, without machine-dependent timing thresholds.
 
 Commit or stage the measured changes before running. Results identify an uncommitted head by its
 staged Git tree and mark `headDirty`; committed heads use the commit revision.
+
+## Codec measurements (#209)
+
+See [the recorded codec comparison](results/209-codec.md) for device results and raw measurements.
+Compare the codec-only optimizations against the merged #208 revision:
+
+```bash
+Q15_BENCHMARK_CODEC=1 Q15_BENCHMARK_BASE=754b7f123f7389a8eb5f310904896738cbda9c10 \
+  Q15_BENCHMARK_RUNS=3 Q15_BENCHMARK_OUTPUT=benchmark-results/209-codec.json make ui-benchmark
+```
+
+Both revisions use their production ContentSession, the same post-#208 React Compiler and pinned
+dependencies. The baseline adapter preserves the decoded-frame stringify/parse round trip; the
+current adapter validates the decoded object directly. Native base64 runs where the browser supports
+it, with a canonical fallback elsewhere. Networking and peer sealing, key exchange, fixture loading,
+all historical rows and font loading finish before timing. No worker is involved in either build.
+
+Workloads isolate 48 tiny incoming frames, 48 approximately 67.5 kB replacement snapshots, a sealed
+4,000-turn history page and 48 outgoing 64,000-byte messages. Separate rendered workloads deliver 48
+large snapshots or 24 growing GFM text frames with periodic snapshots into the actual app with 1,000
+loaded messages, requesting 16 ms arrival intervals. Markers record actual arrival-to-visible
+latency and include Markdown's existing 40 ms window. The producer can be delayed by main-thread
+congestion; its clock is not an independent socket clock. CDP task/script/layout/style time, long
+tasks, codec completion and visible latency are recorded separately.
+
+Set `Q15_BENCHMARK_WORKLOAD` to comma-separated exact query strings from the runner to select
+workloads. Output paths are relative to the UI directory. Commit the measured implementation before
+running so the report identifies a revision available in the PR history.

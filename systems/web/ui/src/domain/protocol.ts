@@ -22,10 +22,15 @@ import type {
   ToolCall,
   Turn,
   TurnStartPayload,
-} from "../generated/protocol";
+} from "../generated/protocol.ts";
 
-import { VERSION, FRAME_TYPES, MaxChunkDataChars, MaxEnvelopeChunks } from "../generated/protocol";
-import { isRecord } from "../shared/type-guards";
+import {
+  VERSION,
+  FRAME_TYPES,
+  MaxChunkDataChars,
+  MaxEnvelopeChunks,
+} from "../generated/protocol.ts";
+import { isRecord } from "../shared/type-guards.ts";
 
 export type Envelope<T extends string, P> = Omit<Frame, "type" | "payload"> & {
   type: T;
@@ -192,6 +197,10 @@ export function parseClientFrame(data: string): ClientFrame {
 
 export function parseFrame(data: string): ServerFrame {
   const f: unknown = JSON.parse(data);
+  return parseFrameValue(f);
+}
+
+export function parseFrameValue(f: unknown): ServerFrame {
   if (!isEnvelope(f)) {
     throw new Error("The server sent an unsupported chat frame. Refresh after updating q15.");
   }

@@ -154,12 +154,16 @@ make ui-fixtures-check
 ```
 
 Incoming JSON remains `unknown` until runtime predicates validate the envelope, event payload and
-nested history. Outgoing requests use a discriminated union and a typed constructor that associates
-each request with its payload. Pending-message states require a turn ID only once assigned, and
-activity entries distinguish tool work from commentary. Event handling checks exhaustiveness;
-unknown wire part types remain available to the visible renderer fallback. Shell manifests and
-install events are also checked before use. Type-aware Oxc rules reject unsafe assertions and unsafe
-uses of `any`, while `satisfies` checks configuration without widening literal values.
+nested history. Decoded frames pass directly through the same value-level validator without an
+additional JSON stringify/parse pass. Content and request-proof base64 use native Uint8Array methods
+where supported, with a canonical base64url fallback. Draft limits remain UTF-8 byte limits and
+reject oversized input before clearing the composer. Outgoing requests use a discriminated union and
+a typed constructor that associates each request with its payload. Pending-message states require a
+turn ID only once assigned, and activity entries distinguish tool work from commentary. Event
+handling checks exhaustiveness; unknown wire part types remain available to the visible renderer
+fallback. Shell manifests and install events are also checked before use. Type-aware Oxc rules
+reject unsafe assertions and unsafe uses of `any`, while `satisfies` checks configuration without
+widening literal values.
 
 The socket and history adapters open the version 2 sealed byte envelope before domain validation.
 Fresh non-exportable ECDH/content keys remain in memory; reconnects re-wrap history in the agent.

@@ -1,7 +1,8 @@
 import type { OwnerAuthentication } from "../application/auth";
 
 import { isRecord } from "../shared/type-guards";
-import { authenticatedFetch, createSessionKey, encode, saveSessionKey } from "./proof";
+import { encode } from "./base64";
+import { authenticatedFetch, createSessionKey, saveSessionKey } from "./proof";
 
 export async function hasSession() {
   try {

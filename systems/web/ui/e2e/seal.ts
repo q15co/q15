@@ -9,8 +9,8 @@ import {
 
 import type { Frame, HelloPayload, Sealed } from "../src/generated/protocol";
 
-import { parseSealed } from "../src/domain/protocol";
-import { frame } from "../src/infrastructure/envelope";
+import { parseSealed } from "../src/domain/protocol.ts";
+import { frame } from "../src/infrastructure/envelope.ts";
 
 const context = (value: Frame) =>
   [value.v, value.id, value.type, new Date(value.ts).toISOString(), value.seq].join("\n");
