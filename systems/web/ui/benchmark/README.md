@@ -52,6 +52,7 @@ staged Git tree and mark `headDirty`; committed heads use the commit revision.
 
 ## Codec measurements (#209)
 
+See [the recorded codec comparison](results/209-codec.md) for device results and raw measurements.
 Compare the codec-only optimizations against the merged #208 revision:
 
 ```bash

@@ -132,7 +132,6 @@ async function run() {
     }
     sample();
   } else {
-    // A burst stays within the production queue bound, including the active job.
     await Promise.all(wires.map((wire, index) => drain(wire, index)));
   }
   const elapsedMs = performance.now() - started;
