@@ -47,7 +47,7 @@ func ServeShell(w http.ResponseWriter, shell []byte, status int) {
 	csp = strings.Replace(csp, "script-src 'self'", "script-src 'nonce-"+nonce+"'", 1)
 	csp = strings.Replace(csp, "style-src 'self'", "style-src 'nonce-"+nonce+"'", 1)
 	csp = strings.Replace(csp, "font-src 'self'", "font-src 'self' data:", 1)
-	csp += "; worker-src 'self' blob:"
+	csp += "; worker-src 'self'"
 	w.Header().Set("Content-Security-Policy", csp)
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

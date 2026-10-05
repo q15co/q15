@@ -8,7 +8,7 @@ import { ChatStore } from "../src/application/chat-store";
 import { MotionProvider } from "../src/components/ui/motion";
 import { clientFrame } from "../src/infrastructure/envelope";
 import { loadedHistory } from "../src/testing/streaming";
-import { codec, workerTimings } from "./codec-adapter";
+import { codec } from "./codec-adapter";
 
 import "../src/styles.css";
 
@@ -64,7 +64,6 @@ await codec.receive(fixture.key);
 const channel = await codec.channel();
 const historyBytes = new TextEncoder().encode(fixture.history).buffer;
 const historyByteLength = historyBytes.byteLength;
-workerTimings.length = 0;
 const arrivals: number[] = [];
 const processing: number[] = [];
 const latency: number[] = [];
@@ -151,7 +150,6 @@ async function run() {
     longTasks,
     latency,
     processing,
-    workerTimings,
     wireBytes: wires.reduce((sum, data) => sum + data.length, 0),
     historyBytes: historyByteLength,
   });

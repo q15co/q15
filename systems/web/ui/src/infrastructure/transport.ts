@@ -1,12 +1,11 @@
 import type { Transport, TransportEvents } from "../application/ports";
-import type { ClientFrame } from "../domain/protocol";
-import type { ContentCodec } from "./content-worker";
+import type { Frame } from "../generated/protocol";
 
-import { parseFrameValue } from "../domain/protocol";
-import { ContentOperationError } from "./content-error";
-import { ContentWorker } from "./content-worker";
+import { parseFrameValue, parseWireFrame } from "../domain/protocol";
+import { MaxClientFrameBytes } from "../generated/protocol";
 import { clientFrame, frame } from "./envelope";
-import { authenticatedFetch, requestProof, sessionSigner } from "./proof";
+import { authenticatedFetch, requestProof } from "./proof";
+import { ContentSession, hasContent } from "./seal";
 
 export interface SocketLike {
   readyState: number;
@@ -28,7 +27,8 @@ export class SocketTransport implements Transport {
   private attempts = 0;
   private timer?: ReturnType<typeof setTimeout>;
   private generation = 0;
-  private readonly outgoing = new Set<Promise<void>>();
+  private incoming: Promise<void> = Promise.resolve();
+  private outgoing: Promise<void> = Promise.resolve();
   private handshake?: ReturnType<typeof setTimeout>;
 
   constructor(
@@ -42,15 +42,8 @@ export class SocketTransport implements Transport {
       return new WebSocket(address, ["q15-auth", `q15-proof.${proof}`]);
     },
     private readonly sessionStatus = async () => (await authenticatedFetch("/auth/session")).status,
-    readonly content: ContentCodec = new ContentWorker(),
-  ) {
-    content.onFailure = (error) => {
-      if (this.stopped) return;
-      this.events?.error(error.message);
-      this.socket?.close();
-    };
-    content.onRefresh = () => this.refreshContent();
-  }
+    readonly content = new ContentSession(),
+  ) {}
 
   start(events: TransportEvents, cursor: () => string) {
     this.stop();
@@ -118,12 +111,14 @@ export class SocketTransport implements Transport {
     };
     socket.onmessage = (event) => {
       const generation = this.generation;
-      void this.receive(event, socket, generation).catch((error: unknown) => {
-        if (generation !== this.generation || socket !== this.socket || this.stopped) return;
-        this.events?.error(error instanceof Error ? error.message : "Invalid chat frame.");
-        this.stop();
-        this.events?.connection("offline");
-      });
+      this.incoming = this.incoming
+        .then(() => this.receive(event, socket, generation))
+        .catch((error: unknown) => {
+          if (generation !== this.generation || socket !== this.socket || this.stopped) return;
+          this.events?.error(error instanceof Error ? error.message : "Invalid chat frame.");
+          this.stop();
+          this.events?.connection("offline");
+        });
     };
     socket.onerror = () => socket.close();
     socket.onclose = (event) => {
@@ -163,9 +158,16 @@ export class SocketTransport implements Transport {
     this.timer = setTimeout(() => this.connect(), delay);
   }
 
-  private write(data: string) {
+  private write(value: Frame) {
     if (this.socket?.readyState !== 1)
       throw new Error("Chat is disconnected. Your draft is still here.");
+    const data = JSON.stringify(value);
+    if (new TextEncoder().encode(data).length > MaxClientFrameBytes) {
+      this.events?.frame(
+        parseFrameValue(frame("error", { code: "message_too_large", ref: value.id })),
+      );
+      return;
+    }
     this.socket.send(data);
   }
 
@@ -174,21 +176,14 @@ export class SocketTransport implements Transport {
     // Never replay a send after reconnect: client_msg_id is correlation, not idempotency.
     const socket = this.socket;
     const generation = this.generation;
-    const sending = this.sendSealed(text, clientID, socket, generation).catch((error: unknown) => {
-      if (!this.stopped && generation === this.generation)
-        this.events?.frame(
-          parseFrameValue(
-            frame("error", {
-              code: error instanceof ContentOperationError ? error.code : "seal_failed",
-              ref: clientID,
-            }),
-          ),
-        );
-    });
-    this.outgoing.add(sending);
-    void sending.finally(() => {
-      this.outgoing.delete(sending);
-    });
+    this.outgoing = this.outgoing
+      .then(() => this.sendSealed(text, clientID, socket, generation))
+      .catch(() => {
+        if (!this.stopped)
+          this.events?.frame(
+            parseFrameValue(frame("error", { code: "seal_failed", ref: clientID })),
+          );
+      });
   }
 
   private async sendSealed(
@@ -197,7 +192,7 @@ export class SocketTransport implements Transport {
     socket: SocketLike | undefined,
     generation: number,
   ) {
-    const sealed = await this.content.send(
+    const sealed = await this.content.wrap(
       clientFrame("msg.send", { client_msg_id: clientID, text }, clientID),
     );
     if (generation !== this.generation || socket !== this.socket || this.stopped)
@@ -214,7 +209,7 @@ export class SocketTransport implements Transport {
     const socket = this.socket;
     const generation = this.generation;
     // Drain accepted sends before retiring the key; uncertain sends are never replayed.
-    void Promise.all(this.outgoing).then(() =>
+    void this.outgoing.then(() =>
       !this.stopped && generation === this.generation && socket === this.socket
         ? socket?.close()
         : undefined,
@@ -223,17 +218,11 @@ export class SocketTransport implements Transport {
 
   private async offer(socket: SocketLike, generation: number) {
     try {
-      const binding = (await sessionSigner()).binding;
-      const current = () =>
-        !this.stopped && generation === this.generation && socket === this.socket;
-      if (!current()) return;
-      const hello = await this.content.offer(this.cursor(), binding);
-      if (current()) this.write(hello);
+      const hello = await this.content.offer(this.cursor());
+      if (!this.stopped && generation === this.generation && socket === this.socket)
+        this.write(clientFrame("hello", hello));
     } catch {
-      if (socket === this.socket && generation === this.generation && !this.stopped) {
-        this.events?.error("Chat encryption could not start. Reconnecting to try again.");
-        socket.close();
-      }
+      if (socket === this.socket && !this.stopped) this.expired();
     }
   }
 
@@ -241,16 +230,22 @@ export class SocketTransport implements Transport {
     const current = () => generation === this.generation && socket === this.socket && !this.stopped;
     if (!current()) return;
     if (typeof event.data !== "string") throw new Error("Expected a text chat frame.");
-    const result = await this.content.receive(event.data);
-    if (!current()) return;
-    if (result.kind === "key") return;
-    if (result.kind === "error") {
-      if (result.code === "invalid_frame") throw new Error(result.message);
-      this.events?.error(result.message);
+    let wire = parseWireFrame(event.data);
+    if (wire.type === "key") {
+      await this.content.accept(wire.payload);
       return;
     }
-    if (result.kind !== "frame") throw new Error("Unexpected content worker result.");
-    const value = result.frame;
+    if (hasContent(wire.type)) {
+      try {
+        wire = await this.content.open(wire);
+      } catch {
+        if (current())
+          this.events?.error("This content could not be decrypted. Reconnect to try again.");
+        return;
+      }
+    }
+    if (!current()) return;
+    const value = parseFrameValue(wire);
     if (value.type === "ready" && !this.refreshing) {
       this.ready = true;
       this.attempts = 0;
@@ -258,41 +253,19 @@ export class SocketTransport implements Transport {
       this.events?.connection("connected");
     }
     this.events?.frame(value);
-    if (value.type === "ready") this.control(clientFrame("msg.status", {}));
+    if (value.type === "ready") this.write(clientFrame("msg.status", {}));
     if (value.seq !== "0" && value.type !== "error")
-      this.control(clientFrame("msg.ack", { seq: value.seq }));
+      this.write(clientFrame("msg.ack", { seq: value.seq }));
     this.refreshContent();
   }
 
-  private control(value: ClientFrame) {
-    if (this.socket?.readyState !== 1)
-      throw new Error("Chat is disconnected. Your draft is still here.");
-    const socket = this.socket;
-    const generation = this.generation;
-    const send = async () => {
-      const data = await this.content.send(value);
-      if (!this.stopped && generation === this.generation && socket === this.socket)
-        this.write(data);
-    };
-    const sending = send().catch(() => {
-      if (!this.stopped && generation === this.generation) {
-        this.events?.error("Chat control could not be sent. Reconnecting to recover.");
-        socket.close();
-      }
-    });
-    this.outgoing.add(sending);
-    void sending.finally(() => {
-      this.outgoing.delete(sending);
-    });
-  }
-
   abort(turn: string) {
-    this.control(clientFrame("msg.abort", { turn }));
+    this.write(clientFrame("msg.abort", { turn }));
   }
   sync(cursor: string) {
-    this.control(clientFrame("sync", { cursor }));
+    this.write(clientFrame("sync", { cursor }));
   }
   presence(foreground: boolean) {
-    if (this.ready) this.control(clientFrame("presence", { fg: foreground }));
+    if (this.ready) this.write(clientFrame("presence", { fg: foreground }));
   }
 }

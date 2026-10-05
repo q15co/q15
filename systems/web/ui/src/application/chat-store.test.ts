@@ -308,22 +308,16 @@ describe("chat state", () => {
     expect(store.getSnapshot().cursor).toBe("42");
   });
 
-  it("rejects obviously oversized drafts and retains text rejected by the worker", () => {
+  it("validates trimmed UTF-8 byte length without sending rejected input", () => {
     const { store, transport } = setup();
     expect(store.send(" \n ")).toBe(false);
-    expect(store.send("x".repeat(65_537))).toBe(false);
+    expect(store.send("😀".repeat(16_385))).toBe(false);
     expect(store.getSnapshot().error).toContain("64 KiB");
     expect(transport.send).not.toHaveBeenCalled();
     expect(store.send("  hello  ")).toBe(true);
     expect(transport.send).toHaveBeenLastCalledWith("hello", expect.any(String));
     expect(store.getSnapshot().error).toBeNull();
     expect(store.send("é".repeat(32_768))).toBe(true);
-    const text = "😀".repeat(16_385);
-    expect(store.send(text)).toBe(true);
-    const ref = required(vi.mocked(transport.send).mock.calls.at(-1))[1];
-    event(store, "error", { code: "message_too_large", ref });
-    expect(store.getSnapshot().pending.at(-1)).toMatchObject({ text, state: "failed" });
-    expect(store.getSnapshot().error).toContain("too large");
   });
 
   it("reports failed Stop and history reads while retaining the current draft", async () => {
@@ -438,23 +432,4 @@ describe("chat state", () => {
     expect(store.getSnapshot().messages).toEqual([]);
     expect(store.getSnapshot().cursor).toBe("0");
   });
-});
-
-it("retries initial history after a content worker reconnect while retaining the failure", async () => {
-  const historyFn = vi
-    .fn<HistoryMock>()
-    .mockRejectedValueOnce(new Error("Chat worker could not start."))
-    .mockResolvedValue(parsePage(history));
-  const { store, transport } = setup(historyFn);
-  store.start();
-  const events = required(vi.mocked(transport.start).mock.calls[0])[0];
-  events.connection("reconnecting");
-  await vi.waitFor(() => expect(store.getSnapshot().loadingHistory).toBe(false));
-  expect(store.getSnapshot().error).toContain("could not start");
-  events.connection("connected");
-  await vi.waitFor(() => expect(store.getSnapshot().messages.length).toBeGreaterThan(0));
-  expect(historyFn).toHaveBeenCalledTimes(2);
-  events.connection("reconnecting");
-  events.connection("connected");
-  expect(historyFn).toHaveBeenCalledTimes(2);
 });

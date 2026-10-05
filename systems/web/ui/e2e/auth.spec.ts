@@ -4,7 +4,6 @@ import { readFileSync } from "node:fs";
 import { request } from "node:http";
 import { join } from "node:path";
 
-import { parseClientFrame, parseWireFrame } from "../src/domain/protocol";
 import { required } from "../src/testing/required";
 
 function admin(path: string, body?: unknown): Promise<unknown> {
@@ -63,24 +62,6 @@ test("host enrollment, passkey sign-in, protected data and logout use the real g
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   const origin = "http://localhost:4184";
-  const workerURLs: string[] = [];
-  page.on("worker", (worker) => workerURLs.push(worker.url()));
-  await page.addInitScript(() => {
-    const NativeWorker = Worker;
-    let fail = new URL(location.href).searchParams.has("failWorker");
-    window.Worker = class extends NativeWorker {
-      constructor(url: string | URL, workerOptions?: WorkerOptions) {
-        document.documentElement.dataset.firstContentWorkerControlled ??= String(
-          navigator.serviceWorker.controller !== null,
-        );
-        if (fail) {
-          fail = false;
-          throw new Error("Injected worker startup failure");
-        }
-        super(url, workerOptions);
-      }
-    };
-  });
   const chatFrames: string[] = [];
   page.on("websocket", (socket) => {
     socket.on("framesent", (event) => chatFrames.push(String(event.payload)));
@@ -88,8 +69,6 @@ test("host enrollment, passkey sign-in, protected data and logout use the real g
   });
   const response = await page.goto(origin);
   expect(response?.status()).toBe(401);
-  expect(response?.headers()["content-security-policy"]).toContain("worker-src 'self' blob:");
-  expect(response?.headers()["content-security-policy"]).not.toContain("unsafe-eval");
   expect(await page.locator('link[rel="icon"]').getAttribute("href")).toMatch(
     /^data:image\/svg\+xml,/u,
   );
@@ -185,11 +164,6 @@ test("host enrollment, passkey sign-in, protected data and logout use the real g
   expect(capturedBody).not.toContain("Saved sealed history");
   expect(capturedBody).not.toContain("part_type");
   await expect(page.getByText("Saved sealed history", { exact: true })).toBeVisible();
-  expect(page.workers()).toHaveLength(1);
-  expect(workerURLs.every((url) => url.startsWith("blob:"))).toBe(true);
-  expect(await page.locator("html").getAttribute("data-first-content-worker-controlled")).toBe(
-    "false",
-  );
   await page.getByLabel("Message q15").fill("sealed browser send");
   await page.getByRole("button", { name: "Send message", exact: true }).click();
   await expect(page.getByText("Sealed agent reply", { exact: true })).toBeVisible();
@@ -224,17 +198,6 @@ test("host enrollment, passkey sign-in, protected data and logout use the real g
   await expect(page.getByRole("button", { name: "Sign out", exact: true })).toBeVisible();
   await expect(page.getByText("Saved sealed history", { exact: true })).toBeVisible();
   await expect(page.getByText("sealed browser send", { exact: true })).toBeVisible();
-  expect(page.workers()).toHaveLength(1);
-  expect(await page.locator("html").getAttribute("data-first-content-worker-controlled")).toBe(
-    "true",
-  );
-  const publicKeys = chatFrames.flatMap((data) => {
-    if (parseWireFrame(data).type !== "hello") return [];
-    const value = parseClientFrame(data);
-    return value.type === "hello" ? [value.payload.public_key] : [];
-  });
-  expect(publicKeys.length).toBeGreaterThanOrEqual(2);
-  expect(new Set(publicKeys).size).toBe(publicKeys.length);
   expect(gestures).toBe(1);
   expect(
     await page.evaluate(async () => {
@@ -268,26 +231,6 @@ test("host enrollment, passkey sign-in, protected data and logout use the real g
       }
     }),
   ).toBe(true);
-  const worker = required(page.workers()[0]);
-  const replacement = page.waitForEvent("worker");
-  await worker.evaluate(() => {
-    setTimeout(() => {
-      throw new Error("Injected content worker crash");
-    }, 0);
-  });
-  await expect(
-    page.getByText("Chat worker stopped. Reconnect to try again.", { exact: true }),
-  ).toBeVisible();
-  await replacement;
-  await expect(page.getByLabel("Message q15")).toBeEnabled();
-  expect(page.workers()).toHaveLength(1);
-  await page.goto(origin + "/?failWorker=1");
-  await expect(
-    page.getByText("Chat worker could not start. Reconnect to try again.", { exact: true }),
-  ).toBeVisible();
-  await expect(page.getByText("Saved sealed history", { exact: true })).toBeVisible();
-  expect(page.workers()).toHaveLength(1);
-  expect(gestures).toBe(1);
   const cookies = await context.cookies();
   const cookie = required(cookies.find((value) => value.name === "__Host-q15s"));
   expect(cookie).toMatchObject({ httpOnly: true, secure: true, sameSite: "Strict", path: "/" });
@@ -301,7 +244,6 @@ test("host enrollment, passkey sign-in, protected data and logout use the real g
   await page.getByRole("button", { name: "Sign out", exact: true }).click();
   await expect(page.getByRole("button", { name: "Sign in", exact: true })).toBeVisible();
   expect((await context.request.get(origin + "/api/turns")).status()).toBe(401);
-  expect(page.workers()).toHaveLength(0);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(page.getByRole("button", { name: "Sign out", exact: true })).toBeVisible();
   if (typeof attestation !== "object" || attestation === null || !("id" in attestation))

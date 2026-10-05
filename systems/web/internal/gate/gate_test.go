@@ -72,24 +72,3 @@ func TestOrigin(t *testing.T) {
 		}
 	}
 }
-
-func TestShellContentWorkerCSP(t *testing.T) {
-	response := httptest.NewRecorder()
-	Headers("https://chat.example", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		ServeShell(
-			w,
-			[]byte(`<script nonce="__Q15_NONCE__">bootstrap</script>`),
-			http.StatusUnauthorized,
-		)
-	})).ServeHTTP(response, httptest.NewRequest("GET", "/", nil))
-	csp := response.Header().Get("Content-Security-Policy")
-	if !strings.Contains(csp, "; worker-src 'self' blob:") ||
-		strings.Contains(csp, "unsafe-eval") ||
-		strings.Contains(csp, "script-src 'self'") {
-		t.Fatalf("unexpected shell CSP: %s", csp)
-	}
-	if strings.Contains(response.Body.String(), "__Q15_NONCE__") ||
-		response.Code != http.StatusUnauthorized {
-		t.Fatal("locked shell did not receive its nonce")
-	}
-}

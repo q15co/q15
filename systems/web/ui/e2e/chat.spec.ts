@@ -255,7 +255,6 @@ test("streaming preserves history anchors, deep links and disclosures through co
   await page.getByLabel("Send message", { exact: true }).click();
   const msg = { turn: "31", ordinal: -1 };
   const call = { id: "stable-tool", name: "exec", arguments: '{"command":"pwd"}' };
-  await expect.poll(() => deliver !== undefined).toBe(true);
   required(deliver)(frame("delta", { msg, seq: "1", kind: "tool_call", text: "", call }));
   required(deliver)(
     frame("delta", { msg, seq: "2", kind: "tool_result", text: "/workspace", call }),
@@ -700,11 +699,9 @@ test("short and narrow screens keep long drafts and send controls usable", async
     );
   }
   await page.getByLabel("Send message", { exact: true }).click();
-  await expect
-    .poll(() => requests.find((request) => request.type === "msg.send")?.payload)
-    .toMatchObject({
-      text: draft.trim(),
-    });
+  expect(requests.find((request) => request.type === "msg.send")?.payload).toMatchObject({
+    text: draft.trim(),
+  });
   await input.fill("The next thought");
   await expect(page.getByLabel("Stop response")).toBeInViewport();
   await expect(page.getByLabel("Queue message", { exact: true })).toBeInViewport();
@@ -828,7 +825,6 @@ test("animated tool disclosures follow the latest message without moving a reade
   await page.getByLabel("Send message", { exact: true }).click();
   const msg = { turn: "31", ordinal: -1 };
   const call = { id: "motion-command", name: "exec", arguments: '{"command":"ls"}' };
-  await expect.poll(() => deliver !== undefined).toBe(true);
   required(deliver)(frame("snapshot", { msg, kind: "model_start", text: "", seq: "0" }));
   required(deliver)(frame("delta", { msg, kind: "tool_call", text: "", call, seq: "1" }));
   await page.locator("[data-agent-activity] > summary").click();
@@ -980,11 +976,9 @@ test("a damaged sealed frame is visible while later content uses the same socket
     page.getByText("This content could not be decrypted. Reconnect to try again.", { exact: true }),
   ).toBeVisible();
   await expect(page.getByText(recoveredText, { exact: true })).toBeVisible();
-  await expect
-    .poll(() => requests.find((request) => request.type === "msg.send")?.payload)
-    .toMatchObject({
-      text: sentText,
-    });
+  expect(requests.find((request) => request.type === "msg.send")?.payload).toMatchObject({
+    text: sentText,
+  });
   await page.getByLabel("Message q15").fill("still connected");
   await expect(page.getByRole("button", { name: "Send message", exact: true })).toBeEnabled();
   await page.getByRole("button", { name: "Send message", exact: true }).click();

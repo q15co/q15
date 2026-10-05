@@ -189,10 +189,6 @@ function isClientFrame(f: Frame): f is ClientFrame {
 
 export function parseClientFrame(data: string): ClientFrame {
   const value: unknown = JSON.parse(data);
-  return parseClientValue(value);
-}
-
-export function parseClientValue(value: unknown): ClientFrame {
   if (!isEnvelope(value) || !isClientFrame(value)) {
     throw new Error("Unsupported client chat frame.");
   }

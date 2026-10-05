@@ -3,14 +3,10 @@ import type { UserConfig } from "vite-plus";
 // Paths are relative to vite.config.ts, including when lint-changed supplies files.
 // Allow only canonical relative paths, so ./../ and nested traversal cannot bypass a layer.
 type LintRules = NonNullable<NonNullable<UserConfig["lint"]>["rules"]>;
-function imports(
-  allowed: readonly string[],
-  denied: readonly string[] = [],
-): LintRules["eslint/no-restricted-imports"] {
+function imports(allowed: readonly string[]): LintRules["eslint/no-restricted-imports"] {
   return [
     "error",
     {
-      paths: denied.flatMap((path) => [path, `${path}.ts`]),
       patterns: [
         {
           group: ["**", ...allowed.map((path) => `!${path}`)],
@@ -220,7 +216,7 @@ export const lint = {
       rules: { "eslint/no-restricted-imports": imports(["./**", "../generated/**"]) },
     },
     {
-      files: ["src/infrastructure/transport.ts", "src/infrastructure/content-worker.ts"],
+      files: ["src/infrastructure/transport.ts"],
       // This adapter owns and clears single socket callbacks, including injected test sockets.
       rules: { "unicorn/prefer-add-event-listener": "off" },
     },
@@ -255,63 +251,6 @@ export const lint = {
       },
     },
     {
-      files: ["src/infrastructure/content-worker.ts"],
-      rules: {
-        "eslint/no-restricted-imports": imports([
-          "./**",
-          "../domain/**",
-          "../generated/**",
-          "virtual:q15-content-worker",
-        ]),
-      },
-    },
-    {
-      files: ["src/infrastructure/{transport,history}*.ts"],
-      rules: {
-        "eslint/no-restricted-imports": imports(
-          ["./**", "../application/**", "../domain/**", "../generated/**"],
-          ["./seal", "./content-engine", "./content-processor"],
-        ),
-      },
-    },
-    {
-      files: [
-        "src/infrastructure/content-engine*.ts",
-        "src/infrastructure/content-processor*.ts",
-        "src/infrastructure/seal.ts",
-      ],
-      rules: {
-        "eslint/no-restricted-imports": imports([
-          "./base64",
-          "./envelope",
-          "./seal",
-          "./content-engine",
-          "../domain/**",
-          "../shared/**",
-          "../generated/**",
-        ]),
-        "eslint/no-restricted-globals": [
-          "error",
-          ...browserIOGlobals.map((name) => ({
-            name,
-            message: "Content processing cannot access authentication, networking or storage.",
-          })),
-        ],
-      },
-    },
-    {
-      files: ["src/testing/content.ts"],
-      rules: {
-        "eslint/no-restricted-imports": imports([
-          "../domain/**",
-          "../generated/**",
-          "../infrastructure/content-worker",
-          "../infrastructure/content-error",
-          "../infrastructure/envelope",
-        ]),
-      },
-    },
-    {
       files: ["src/infrastructure/mock-transport.ts"],
       rules: {
         "eslint/no-restricted-imports": imports([
@@ -332,23 +271,6 @@ export const lint = {
           "../src/shared/**",
           "../src/infrastructure/proof",
         ]),
-      },
-    },
-    {
-      files: ["worker/content.ts"],
-      rules: {
-        "eslint/no-restricted-imports": imports([
-          "../src/domain/**",
-          "../src/infrastructure/content-processor",
-        ]),
-        "eslint/no-restricted-globals": [
-          "error",
-          ...browserIOGlobals.map((name) => ({
-            name,
-            message:
-              "Content workers own ephemeral keys and bytes, not authentication, networking or storage.",
-          })),
-        ],
       },
     },
     {

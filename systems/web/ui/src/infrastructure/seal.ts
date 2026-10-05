@@ -12,6 +12,7 @@ import {
 } from "../generated/protocol";
 import { isRecord } from "../shared/type-guards";
 import { encode, decode } from "./base64";
+import { sessionSigner } from "./proof";
 
 const chunkSize = ChunkBytes;
 const maxBytes = MaxEnvelopeBytes;
@@ -100,8 +101,9 @@ export class ContentSession {
     this.ready = this.waiter();
   }
 
-  async offer(cursor: string, binding: string): Promise<HelloPayload> {
+  async offer(cursor: string): Promise<HelloPayload> {
     const generation = this.generation;
+    const signer = await sessionSigner();
     const pair = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, false, [
       "deriveKey",
     ]);
@@ -109,8 +111,8 @@ export class ContentSession {
     if (generation !== this.generation) throw failure();
     this.privateKey = pair.privateKey;
     this.publicKey = publicKey;
-    this.binding = binding;
-    return { cursor, public_key: publicKey, binding };
+    this.binding = signer.binding;
+    return { cursor, public_key: publicKey, binding: signer.binding };
   }
 
   async accept(value: unknown) {

@@ -1,17 +1,18 @@
 import type { Page } from "../generated/protocol";
-import type { ContentCodec } from "./content-worker";
+import type { ContentSession } from "./seal";
 
+import { parsePage, parseWireFrame } from "../domain/protocol";
 import { authenticatedFetch } from "./proof";
 
 export async function fetchHistory(
   before: string,
   signal: AbortSignal | undefined,
-  content: ContentCodec,
+  content: ContentSession,
 ): Promise<Page> {
   const channel = await content.channel(signal);
   const response = await authenticatedFetch(`/api/turns?after_seq=${before}&limit=50`, {
     cache: "no-store",
-    headers: { "Q15-Channel": channel.id },
+    headers: { "Q15-Channel": channel },
     credentials: "same-origin",
     ...(signal === undefined ? {} : { signal }),
   });
@@ -23,5 +24,8 @@ export async function fetchHistory(
           ? "A history turn is too large to load."
           : "History could not be loaded. Try again.",
     );
-  return content.history(await response.arrayBuffer(), channel, signal);
+  const wire = parseWireFrame(await response.text());
+  if (wire.type !== "history" || wire.id !== channel)
+    throw new Error("The server returned unsupported history.");
+  return parsePage((await content.open(wire)).payload);
 }

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 import type { TransportEvents } from "../application/ports";
 import type { ClientFrame } from "../domain/protocol";
+import type { Frame } from "../generated/protocol";
 import type { SocketLike } from "./transport";
 
 import { parseClientFrame } from "../domain/protocol";
@@ -70,6 +71,20 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 describe("socket transport", () => {
+  it("validates decoded frames without reserializing their payload", async () => {
+    const { transport, socket, events } = await setup();
+    const data = JSON.stringify(frame("notice", { code: "info", text: "decoded" }));
+    const stringify = vi.spyOn(JSON, "stringify");
+    socket.onmessage?.(new MessageEvent("message", { data }));
+    await vi.waitFor(() =>
+      expect(events.frame).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "notice", payload: { code: "info", text: "decoded" } }),
+      ),
+    );
+    expect(stringify).not.toHaveBeenCalled();
+    transport.stop();
+  });
+
   it("reports the encoded wire limit without sending or dropping the socket", async () => {
     const { transport, socket, events } = await setup();
     const before = socket.sent.length;
@@ -92,10 +107,10 @@ describe("socket transport", () => {
   it("refreshes exhausted content keys after accepted sends drain", async () => {
     vi.useFakeTimers();
     const { transport, socket, events, sockets } = await setup();
-    let release: ((value: string) => void) | undefined;
-    let pending: string | undefined;
-    vi.spyOn(transport.content, "send").mockImplementationOnce((value) => {
-      pending = JSON.stringify(value);
+    let release: ((value: Frame) => void) | undefined;
+    let pending: Frame | undefined;
+    vi.spyOn(transport.content, "wrap").mockImplementationOnce((value) => {
+      pending = value;
       return new Promise((resolve) => {
         release = resolve;
       });
@@ -184,11 +199,7 @@ describe("socket transport", () => {
   });
   it("reports an unreadable frame and consumes the next valid frame on the same socket", async () => {
     const { transport, socket, events } = await setup();
-    vi.spyOn(transport.content, "receive").mockResolvedValueOnce({
-      kind: "error",
-      code: "unseal_failed",
-      message: "This content could not be decrypted.",
-    });
+    vi.spyOn(transport.content, "open").mockRejectedValueOnce(new Error("bad tag"));
     socket.receive("notice", { code: "outbound", text: "unreadable" });
     await vi.waitFor(() =>
       expect(events.error).toHaveBeenCalledWith(expect.stringContaining("could not be decrypted")),
@@ -204,7 +215,7 @@ describe("socket transport", () => {
   });
   it("accepts content keys before replay and refuses a failed key exchange", async () => {
     const { transport, socket, events } = await setup();
-    const accept = vi.spyOn(transport.content, "receive");
+    const accept = vi.spyOn(transport.content, "accept");
     socket.receive("key", { binding: "binding", public_key: "public", channel_id: "channel" });
     await vi.waitFor(() => expect(accept).toHaveBeenCalled());
     accept.mockRejectedValueOnce(new Error("bad key"));
@@ -215,20 +226,24 @@ describe("socket transport", () => {
 
   it("keeps pending encrypted sends out of replacement sockets", async () => {
     const { transport, socket, events } = await setup();
-    let finish: ((value: string) => void) | undefined;
-    vi.spyOn(transport.content, "send").mockImplementationOnce(
+    let finish: ((value: Frame) => void) | undefined;
+    vi.spyOn(transport.content, "wrap").mockImplementationOnce(
       (value) =>
-        new Promise<string>((resolve) => {
-          finish = () => resolve(JSON.stringify(value));
+        new Promise<Frame>((resolve) => {
+          finish = () => resolve(value);
         }),
     );
     transport.send("pending", "pending-client");
     await vi.waitFor(() => expect(finish).toBeDefined());
     socket.close();
-    finish?.("");
-    await Promise.resolve();
-    expect(events.frame).not.toHaveBeenCalledWith(
-      expect.objectContaining({ payload: { code: "seal_failed", ref: "pending-client" } }),
+    finish?.(frame("msg.send", {}));
+    await vi.waitFor(() =>
+      expect(events.frame).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          type: "error",
+          payload: { code: "seal_failed", ref: "pending-client" },
+        }),
+      ),
     );
     expect(socket.sent.filter((f) => f.type === "msg.send")).toHaveLength(0);
     transport.stop();
@@ -259,7 +274,7 @@ describe("socket transport", () => {
     expect(create.mock.calls[0]?.[1][0]).toBe("q15-auth");
     vi.spyOn(transport.content, "offer").mockRejectedValueOnce(new Error("no key"));
     socket.open();
-    await vi.waitFor(() => expect(events.connection).toHaveBeenLastCalledWith("reconnecting"));
+    await vi.waitFor(() => expect(events.connection).toHaveBeenLastCalledWith("unauthorized"));
     transport.stop();
   });
   it("connects with hello then sends, queues through the server, aborts and syncs", async () => {
@@ -270,7 +285,6 @@ describe("socket transport", () => {
     await vi.waitFor(() => expect(socket.sent).toHaveLength(4));
     transport.abort("42");
     transport.sync("41");
-    await vi.waitFor(() => expect(socket.sent).toHaveLength(6));
     expect(socket.sent.slice(-4).map((f) => [f.v, f.type, f.payload])).toEqual([
       [2, "msg.send", { text: "hello", client_msg_id: "first" }],
       [2, "msg.send", { text: "next", client_msg_id: "second" }],
@@ -316,7 +330,6 @@ describe("socket transport", () => {
   it("acknowledges sequenced events, skips error acknowledgements and reports presence", async () => {
     const { transport, socket, events } = await setup();
     transport.presence(false);
-    await vi.waitFor(() => expect(socket.sent.at(-1)?.type).toBe("presence"));
     expect(socket.sent.at(-1)).toMatchObject({ type: "presence", payload: { fg: false } });
     socket.onmessage?.(
       new MessageEvent("message", {
@@ -427,50 +440,7 @@ it("attaches asynchronously signed sockets and discards sockets from stopped gen
   expect(events.connection).toHaveBeenLastCalledWith("connecting");
 });
 
-vi.mock("./content-worker", async () => {
-  const { PlainContent } = await import("../testing/content");
-  return { ContentWorker: PlainContent };
-});
-
-it("recovers a worker crash or overload without treating it as an expired session", async () => {
-  vi.useFakeTimers();
-  const { transport, socket, events, sockets } = await setup();
-  transport.content.onFailure(new Error("Chat worker stopped. Reconnect to try again."));
-  expect(events.error).toHaveBeenLastCalledWith("Chat worker stopped. Reconnect to try again.");
-  expect(socket.readyState).toBe(3);
-  expect(events.connection).toHaveBeenLastCalledWith("reconnecting");
-  vi.advanceTimersByTime(1000);
-  expect(sockets).toHaveLength(2);
-  transport.stop();
-  transport.content.onFailure(new Error("stale"));
-  expect(events.error).toHaveBeenCalledOnce();
-});
-it("refreshes keys used by history and recovers failed control writes", async () => {
-  const { transport, socket, events } = await setup();
-  vi.spyOn(transport.content, "send").mockRejectedValueOnce(new Error("worker lost"));
-  transport.sync("42");
-  await vi.waitFor(() =>
-    expect(events.error).toHaveBeenCalledWith(
-      "Chat control could not be sent. Reconnecting to recover.",
-    ),
-  );
-  expect(socket.readyState).toBe(3);
-  transport.stop();
-  const next = await setup();
-  vi.spyOn(next.transport.content, "needsRefresh", "get").mockReturnValue(true);
-  next.transport.content.onRefresh();
-  await vi.waitFor(() => expect(next.socket.readyState).toBe(3));
-  next.transport.stop();
-});
-it("does not publish unexpected result kinds or invalid worker frames", async () => {
-  for (const result of [
-    { kind: "wire", data: "wrong" },
-    { kind: "error", code: "invalid_frame", message: "Invalid frame" },
-  ] satisfies Awaited<ReturnType<SocketTransport["content"]["receive"]>>[]) {
-    const { transport, socket, events } = await setup();
-    vi.spyOn(transport.content, "receive").mockResolvedValueOnce(result);
-    socket.receive("notice", { code: "info", text: "ignored" });
-    await vi.waitFor(() => expect(events.connection).toHaveBeenLastCalledWith("offline"));
-    transport.stop();
-  }
+vi.mock("./seal", async () => {
+  const { PlainContent, hasContent } = await import("../testing/content");
+  return { ContentSession: PlainContent, hasContent };
 });

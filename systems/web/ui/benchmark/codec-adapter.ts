@@ -1,7 +1,4 @@
-import { ContentWorker } from "../src/infrastructure/content-worker";
+import { parseFrameValue } from "../src/domain/protocol";
+import { mainCodec } from "./base-codec";
 
-export const codec = new ContentWorker();
-export const workerTimings: { op: string; roundTrip: number; worker: number }[] = [];
-codec.onTiming = (sample) => {
-  workerTimings.push(sample);
-};
+export const codec = mainCodec(parseFrameValue);

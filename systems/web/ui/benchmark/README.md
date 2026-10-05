@@ -50,40 +50,29 @@ work counts and behavior tests, without machine-dependent timing thresholds.
 Commit or stage the measured changes before running. Results identify an uncommitted head by its
 staged Git tree and mark `headDirty`; committed heads use the commit revision.
 
-## Content worker measurements (#209)
+## Codec measurements (#209)
 
-Compare against the merged #208 revision, rather than combining render and codec changes:
+Compare the codec-only optimizations against the merged #208 revision:
 
 ```bash
 Q15_BENCHMARK_CODEC=1 Q15_BENCHMARK_BASE=754b7f123f7389a8eb5f310904896738cbda9c10 \
-  Q15_BENCHMARK_RUNS=3 make ui-benchmark
+  Q15_BENCHMARK_RUNS=3 Q15_BENCHMARK_OUTPUT=benchmark-results/209-codec.json make ui-benchmark
 ```
 
-The codec harness creates a real encrypted peer in the Node runner. Peer sealing, worker startup,
-key exchange, fixture loading and initial React/history/font work finish before timing. Its baseline
-adapter reproduces the previous main-thread codec and socket ordering; the current adapter uses the
-production dedicated worker. Both use the same post-#208 React Compiler and dependencies.
-
-See [the recorded worker comparison](results/209-content-worker.md) for measurements and
-limitations.
+Both revisions use their production ContentSession, the same post-#208 React Compiler and pinned
+dependencies. The baseline adapter preserves the decoded-frame stringify/parse round trip; the
+current adapter validates the decoded object directly. Native base64 runs where the browser supports
+it, with a canonical fallback elsewhere. Networking and peer sealing, key exchange, fixture loading,
+all historical rows and font loading finish before timing. No worker is involved in either build.
 
 Workloads isolate 48 tiny incoming frames, 48 approximately 67.5 kB replacement snapshots, a sealed
-4,000-turn history page, and 48 outgoing 64,000-byte messages. A separate rendered stream delivers
-48 large snapshots to the actual app with 1,000 loaded messages, requesting 16 ms arrival intervals.
-Snapshots retain all previous markers. The sampler waits for the final marker, including the 40 ms
-Markdown window, and records every marker's first rendered visibility. Main-thread congestion can
-delay the producer; timings describe actual arrival-to-visibility, not an independent network clock.
-A second rendered workload uses 24 growing GFM text frames with periodic snapshots, totaling about 4
-KiB, against the same 1,000-message history. Set `Q15_BENCHMARK_WORKLOAD` to comma-separated exact
-queries from the runner to select workloads; output paths are relative to the UI directory.
+4,000-turn history page and 48 outgoing 64,000-byte messages. Separate rendered workloads deliver 48
+large snapshots or 24 growing GFM text frames with periodic snapshots into the actual app with 1,000
+loaded messages, requesting 16 ms arrival intervals. Markers record actual arrival-to-visible
+latency and include Markdown's existing 40 ms window. The producer can be delayed by main-thread
+congestion; its clock is not an independent socket clock. CDP task/script/layout/style time, long
+tasks, codec completion and visible latency are recorded separately.
 
-CDP task/script/layout/style time and long-task durations remain separate from codec completion and
-visible latency. Worker samples record execution wall time and RPC round-trip time. Their difference
-includes queue wait, structured cloning, scheduling and page validation; it does not isolate clone
-CPU cost. WebCrypto wait is included in execution wall time. History input transfers its
-ArrayBuffer; returned domain objects and socket strings use structured clone. Codec-only bursts stay
-within the production queue limits. Worker timings exclude initial handshake and setup.
-
-Socket networking, owner login, startup and background-tab behavior are excluded from these timing
-runs and covered by the real-gate browser tests. These synthetic workloads establish device
-evidence, not universal latency guarantees or CI timing thresholds.
+Set `Q15_BENCHMARK_WORKLOAD` to comma-separated exact query strings from the runner to select
+workloads. Output paths are relative to the UI directory. Commit the measured implementation before
+running so the report identifies a revision available in the PR history.
