@@ -17,8 +17,9 @@ thresholds.
 
 The implementation uses native Uint8Array base64 methods and validates decoded objects directly. The
 comparison measures these changes together; it does not attribute savings to either change
-individually. Both builds use ContentSession and WebCrypto on the main thread, with no worker RPC.
-The native path is measured here; fallback compatibility is covered by unit tests, not timed here.
+individually. Both builds run ContentSession on the main thread and use asynchronous WebCrypto, with
+no worker RPC. The native path is measured here; fallback compatibility is covered by unit tests,
+not timed here.
 
 ## Main-thread work
 
