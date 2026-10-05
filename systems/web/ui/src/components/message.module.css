@@ -1,4 +1,6 @@
 .message {
+  /* Bound live content invalidation to this message as history grows. */
+  contain: layout style;
   margin: var(--space-6) 0 var(--space-8);
   scroll-margin: var(--space-10);
 }

@@ -1,4 +1,6 @@
 .activity {
+  /* Font-axis animation should not traverse the completed transcript. */
+  contain: layout style;
   --activity-light: var(--primary);
   margin: var(--space-5) 0 var(--space-6) var(--message-inset);
   color: var(--subtext);
