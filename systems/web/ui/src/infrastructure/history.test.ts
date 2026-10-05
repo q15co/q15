@@ -20,7 +20,7 @@ describe("HTTP history adapter", () => {
     vi.stubGlobal("fetch", fetch);
     const controller = new AbortController();
     expect(await fetchHistory("42", controller.signal, content)).toEqual(history);
-    expect(fetch).toHaveBeenCalledWith("/api/turns?after_seq=42&limit=50", {
+    expect(fetch).toHaveBeenCalledWith("/api/turns?after_seq=42&limit=10", {
       credentials: "same-origin",
       cache: "no-store",
       headers: proofHeaders,
@@ -30,7 +30,7 @@ describe("HTTP history adapter", () => {
       "channel",
     );
     await fetchHistory("0", undefined, content);
-    expect(fetch).toHaveBeenLastCalledWith("/api/turns?after_seq=0&limit=50", {
+    expect(fetch).toHaveBeenLastCalledWith("/api/turns?after_seq=0&limit=5", {
       credentials: "same-origin",
       cache: "no-store",
       headers: proofHeaders,

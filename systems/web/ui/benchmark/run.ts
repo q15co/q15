@@ -59,16 +59,47 @@ async function measureRun(
       reject(error);
     });
   });
+  let historyPeer: TestSealer | undefined;
+  await page.route("**/api/turns?**", async (route) => {
+    const peer = historyPeer;
+    if (peer === undefined) throw new Error("Missing history peer");
+    const params = new URL(route.request().url()).searchParams;
+    const before = params.get("after_seq") ?? "0";
+    const limit = Number(params.get("limit"));
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500)
+      throw new Error("Invalid history limit");
+    const history = loadedHistory(before === "0" ? 4000 : 2000);
+    const available = history.turns.filter(
+      (turn) => before === "0" || Number(turn.seq) < Number(before),
+    );
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify(
+        peer.seal(
+          frame(
+            "history",
+            {
+              ...history,
+              turns: available.slice(0, limit),
+              has_more: available.length > limit,
+            },
+            peer.channelID,
+          ),
+        ),
+      ),
+    });
+  });
   await page.route("**/benchmark/setup?*", async (route) => {
     const hello = parseClientFrame(route.request().postData() ?? "");
     if (hello.type !== "hello") throw new Error("Invalid codec offer");
     const peer = new TestSealer(hello.payload);
+    historyPeer = peer;
     const params = new URL(route.request().url()).searchParams;
     const msg = { turn: "10001", ordinal: -1 };
     const answer = growingAnswer(30);
     let accumulated = "";
     const frames =
-      params.has("history") || params.has("outgoing")
+      params.has("history") || params.has("outgoing") || params.has("startup")
         ? []
         : Array.from({ length: params.has("representative") ? 24 : 48 }, (_, index) => {
             if (params.has("representative")) {
@@ -264,6 +295,7 @@ async function measure(variants: readonly { directory: string; revision: string;
               "codec=1&rendered=1",
               "codec=1&rendered=1&representative=1",
               "codec=1&rendered=1&representative=1&paging=1",
+              "codec=1&startup=1",
             ]
           : [
               "history=100",

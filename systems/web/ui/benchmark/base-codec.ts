@@ -27,6 +27,7 @@ export function mainCodec(
     return { kind: "frame", frame: validate(wire) };
   };
   return {
+    content,
     async offer(cursor: string, _binding: string) {
       return JSON.stringify(clientFrame("hello", await content.offer(cursor)));
     },

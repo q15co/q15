@@ -8,14 +8,16 @@ import { App } from "../src/app";
 import { ChatStore } from "../src/application/chat-store";
 import { MotionProvider } from "../src/components/ui/motion";
 import { clientFrame } from "../src/infrastructure/envelope";
+import { fetchHistory } from "../src/infrastructure/history";
 import { loadedHistory } from "../src/testing/streaming";
 import { codec } from "./codec-adapter";
 
 import "../src/styles.css";
 
 const params = new URLSearchParams(location.search);
-const rendered = params.has("rendered");
-const count = rendered ? 1000 : 0;
+const startup = params.has("startup");
+const rendered = params.has("rendered") || startup;
+const count = rendered && !startup ? 1000 : 0;
 const paging = params.has("paging");
 let running = false;
 const transport: Transport = {
@@ -27,10 +29,12 @@ const transport: Transport = {
   presence: () => {},
 };
 const initial = paging
-  ? { ...loadedHistory(2000), turns: loadedHistory(2000).turns.slice(0, count) }
+  ? { ...loadedHistory(2000), turns: loadedHistory(2000).turns.slice(0, count), has_more: true }
   : loadedHistory(count);
-const store = new ChatStore(transport, (before) =>
-  running && paging && before !== "0" ? pageHistory() : Promise.resolve(initial),
+const store = new ChatStore(transport, (before, signal) =>
+  running && (startup || (paging && before !== "0"))
+    ? pageHistory(before, signal)
+    : Promise.resolve(initial),
 );
 if (rendered) {
   const root = document.querySelector("#root");
@@ -41,7 +45,10 @@ if (rendered) {
     </MotionProvider>,
   );
   await store.loadHistory(true);
-  while (root.querySelectorAll("article[data-message-key]").length !== count)
+  while (
+    root.querySelectorAll("article[data-message-key]").length !== count ||
+    root.querySelector("textarea") === null
+  )
     await new Promise<void>((done) => {
       requestAnimationFrame(() => done());
     });
@@ -61,11 +68,9 @@ if (
   !("key" in fixture) ||
   !("frames" in fixture) ||
   !("history" in fixture) ||
-  !("paging" in fixture) ||
   !("final" in fixture) ||
   typeof fixture.key !== "string" ||
   typeof fixture.history !== "string" ||
-  typeof fixture.paging !== "string" ||
   typeof fixture.final !== "string" ||
   !Array.isArray(fixture.frames) ||
   !fixture.frames.every((data: unknown) => typeof data === "string")
@@ -76,20 +81,21 @@ await codec.receive(fixture.key);
 const channel = await codec.channel();
 const historyBytes = new TextEncoder().encode(fixture.history).buffer;
 const historyByteLength = historyBytes.byteLength;
-const pagingBytes = new TextEncoder().encode(fixture.paging).buffer;
 const finalWire = fixture.final;
 const arrivals: number[] = [];
 const processing: number[] = [];
 const latency: number[] = [];
 let historyArrival: number | undefined;
 let historyCompletionMs: number | undefined;
+let historyTurns: number | undefined;
 let historyVisibleMs: number | undefined;
 let terminalArrival = 0;
 let terminalVisibleMs: number | undefined;
 let historyJob: Promise<void> | undefined;
-async function pageHistory(): Promise<Page> {
+async function pageHistory(before: string, signal: AbortSignal | undefined): Promise<Page> {
   historyArrival = performance.now();
-  const result = await codec.history(pagingBytes, channel);
+  const result = await fetchHistory(before, signal, codec.content);
+  historyTurns = result.turns.length;
   historyCompletionMs = performance.now() - historyArrival;
   return result;
 }
@@ -132,7 +138,11 @@ async function run() {
       terminalVisibleMs ??= now - terminalArrival;
     if (
       historyArrival !== undefined &&
-      document.querySelector('[data-message-key="1000:0"]') !== null
+      (startup
+        ? !store.getSnapshot().loadingHistory &&
+          document.querySelectorAll("article[data-message-key]").length ===
+            store.getSnapshot().messages.length
+        : document.querySelector('[data-message-key="1000:0"]') !== null)
     )
       historyVisibleMs ??= now - historyArrival;
     if (observing) requestAnimationFrame(sample);
@@ -145,7 +155,16 @@ async function run() {
       await codec.send(
         clientFrame("msg.send", { client_msg_id: String(index), text: "x".repeat(64000) }),
       );
-  if (rendered) {
+  if (startup) {
+    await store.loadHistory(false);
+    while (
+      document.querySelectorAll("article[data-message-key]").length !==
+      store.getSnapshot().messages.length
+    )
+      await nextFrame();
+    await nextFrame();
+    sample();
+  } else if (rendered) {
     const received: Promise<void>[] = [];
     for (let index = 0; index < wires.length; index++) {
       // Record arrival independently of completion, as a socket does.
@@ -185,7 +204,8 @@ async function run() {
   const result = document.createElement("output");
   result.dataset.benchmarkResult = JSON.stringify({
     rendered,
-    history: count,
+    startup,
+    history: startup ? store.getSnapshot().messages.length : count,
     frames: wires.length,
     elapsedMs,
     longTasks,
@@ -195,6 +215,7 @@ async function run() {
     terminalVisibleMs,
     streamingTailMs: latency.at(-1),
     historyCompletionMs,
+    historyTurns,
     historyVisibleMs,
     work: {
       markdown: performance.getEntriesByName("q15-markdown").map((entry) => entry.duration),

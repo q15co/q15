@@ -77,6 +77,7 @@ async function backend(
   page: BrowserPage,
   history: Page = emptyHistory,
   onSend?: (send: (value: Frame, damage?: boolean) => void) => void,
+  paginate = false,
 ) {
   const requests: ClientFrame[] = [];
   const sealers = new Map<string, TestSealer>();
@@ -90,9 +91,16 @@ async function backend(
             head_seq: "30",
             has_more: false,
           };
+    const available = history.turns.filter(
+      (item) => before === "0" || Number(item.seq) < Number(before),
+    );
+    const limit = Number(new URL(route.request().url()).searchParams.get("limit"));
+    const selected = paginate
+      ? { ...history, turns: available.slice(0, limit), has_more: available.length > limit }
+      : response;
     const sealer = sealers.get(route.request().headers()["q15-channel"] ?? "");
     if (!sealer) throw new Error("Missing content session");
-    return route.fulfill({ json: sealer.seal(frame("history", response, sealer.channelID)) });
+    return route.fulfill({ json: sealer.seal(frame("history", selected, sealer.channelID)) });
   });
   await page.routeWebSocket("**/ws", (socket) => {
     let sealer: TestSealer | undefined;
@@ -235,6 +243,41 @@ test("prepending history preserves the visible message position and deep links p
   expect(Math.abs(after - before)).toBeLessThan(3);
   await page.goto("/#message-1:0");
   await expect(page.locator('[data-message-key="1:0"]')).toBeInViewport();
+});
+
+test("startup loads five complete turns and older pages load ten without moving the reader", async ({
+  page,
+}) => {
+  const queries: string[] = [];
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (url.pathname === "/api/turns") queries.push(url.search);
+  });
+  await backend(
+    page,
+    {
+      turns: Array.from({ length: 20 }, (_, index) => turn(30 - index)),
+      head_seq: "31",
+      has_more: true,
+    },
+    undefined,
+    true,
+  );
+  await page.goto("/");
+  const messages = page.locator("article[data-message-key]");
+  await expect(messages).toHaveCount(10);
+  expect(queries).toEqual(["?after_seq=0&limit=5"]);
+  const anchor = page.locator('[data-message-key="30:1"]');
+  const before = await anchor.evaluate((node) => node.getBoundingClientRect().top);
+  const older = page.getByRole("button", { name: "Earlier messages" });
+  await older.evaluate((node: HTMLButtonElement) => node.click());
+  await expect(messages).toHaveCount(30);
+  expect(queries.at(-1)).toBe("?after_seq=26&limit=10");
+  expect(await anchor.evaluate((node) => node.getBoundingClientRect().top)).toBeCloseTo(before, 0);
+  await older.evaluate((node: HTMLButtonElement) => node.click());
+  await expect(messages).toHaveCount(40);
+  expect(queries.at(-1)).toBe("?after_seq=16&limit=10");
+  await expect(older).toBeHidden();
 });
 
 test("streaming preserves history anchors, deep links and disclosures through completion and resync", async ({
