@@ -1,7 +1,9 @@
 # Streaming benchmark
 
-See [the recorded comparison](results/2026-10-04.md) for device results and raw measurements. The
-[post-#212 comparison](results/213-streaming.md) profiles the remaining rendered costs.
+See [the recorded comparison](results/2026-10-04.md) for device results. The
+[post-#212 comparison](results/213-streaming.md) profiles the remaining rendered costs. Only the
+written reports are committed; raw result JSON and Chrome traces are regenerated locally with the
+commands below.
 
 Run from the repository root with the pinned toolchain:
 
@@ -56,8 +58,8 @@ staged Git tree and mark `headDirty`; committed heads use the commit revision.
 
 ## Codec measurements (#209)
 
-See [the recorded codec comparison](results/209-codec.md) for device results and raw measurements.
-Compare the codec-only optimizations against the merged #208 revision:
+See [the recorded codec comparison](results/209-codec.md) for device results. Compare the codec-only
+optimizations against the merged #208 revision:
 
 ```bash
 Q15_BENCHMARK_CODEC=1 Q15_BENCHMARK_BASE=754b7f123f7389a8eb5f310904896738cbda9c10 \
@@ -97,7 +99,8 @@ the first history request and render.
 Use `Q15_BENCHMARK_TRACE=1` in a separate run to capture the first recorded repetition for each
 revision/workload/motion with CDP timeline events, user timing and sampled CPU stacks. Compressed
 Chrome traces go into `traces/` beside the result JSON; decompress them before loading in Chrome
-DevTools or Perfetto. Profiling adds overhead, so use an untraced run for timing comparisons.
+DevTools or Perfetto. Traces and result JSON stay local and are not committed. Profiling adds
+overhead, so use an untraced run for timing comparisons.
 
 Set `Q15_BENCHMARK_WORKLOAD` to comma-separated query strings to select workloads. Output paths are
 relative to the UI directory. Commit the measured implementation before running so the report

@@ -12,7 +12,7 @@ requests, and ten turns per older page instead of fifty. Complete turns keep pro
 tool output together. The canonical Markdown parser, terminal flush, content session, protocol and
 authorization boundaries are retained.
 
-## Revisions and raw evidence
+## Revisions and evidence
 
 - Baseline: merged #212,
   [`f97db79df310dafa8c94fa428667aeecfbcab767`](https://github.com/q15co/q15/commit/f97db79df310dafa8c94fa428667aeecfbcab767).
@@ -25,22 +25,19 @@ authorization boundaries are retained.
   Its production source is identical to `c421aa79`; it corrects the benchmark producer to enqueue
   the terminal event immediately after the last live frame completes.
 
-Raw results retain every measured repetition, actual arrivals, codec completions, marker latencies,
-long tasks and render/Markdown work counts:
+The raw results behind these tables are not committed. Each run retains every measured repetition,
+actual arrivals, codec completions, marker latencies, long tasks and render/Markdown work counts,
+and the commands under [Reproduction](#reproduction) regenerate them:
 
-- [Large snapshots](213-snapshots.json), [growing GFM](213-gfm.json),
-  [history during streaming](213-history-stream.json): six pairs per workload and motion at
+- Large snapshots, growing GFM and history during streaming: six pairs per workload and motion at
   `5f687f1b`.
-- [Startup](213-startup.json): six pairs per motion at `c421aa79`, with the same production source.
-- [Codec controls](213-codec-controls.json): six pairs at the containment-only production source.
-  The recorded staged tree `b6a83513a35bcad9395ed3c0341a4c72120c32cc` is exactly the tree committed
-  as `9e5c5dbd`; the raw staged revision labels are preserved.
-- [Containment-only comparison](213-containment.json.gz) and
-  [delayed-terminal control](213-delayed-terminal.json.gz): earlier complete timing runs, retained
-  to make the selection process and harness correction inspectable.
-- [Profile results](213-traces/results.json): a separate one-pair trace run at `5f687f1b`. Each row
-  names its compressed Chrome trace in that directory. Decompress a trace before opening it in
-  DevTools or Perfetto. Trace timings are excluded from the comparison tables.
+- Startup: six pairs per motion at `c421aa79`, with the same production source.
+- Codec controls: six pairs at the containment-only production source. The recorded staged tree
+  `b6a83513a35bcad9395ed3c0341a4c72120c32cc` is exactly the tree committed as `9e5c5dbd`.
+- Containment-only comparison and the delayed-terminal control: earlier complete timing runs,
+  retained at the time to make the selection process and harness correction inspectable.
+- Profile results: a separate one-pair trace run at `5f687f1b` with `Q15_BENCHMARK_TRACE=1`. Trace
+  timings are excluded from the comparison tables.
 
 The runner now preserves the selected revision's codec adapter before copying the shared harness. In
 particular, the #212 baseline uses `parseFrameValue` and native base64. The legacy stringify/parse
@@ -276,4 +273,5 @@ All passed on the final production source:
 
 Image and Compose checks validate the build and repository deployment contract. They do not claim
 live activation on another host. Raw streaming rows, earlier controls and all sixteen compressed
-traces were compared with the original runner outputs after formatting; measurements are preserved.
+traces were compared with the original runner outputs after formatting; the traces themselves stay
+local.
