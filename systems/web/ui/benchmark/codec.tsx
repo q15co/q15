@@ -170,9 +170,10 @@ async function run() {
       // Record arrival independently of completion, as a socket does.
       received.push(drain(wires[index] ?? "", index));
       if (paging && index === 6) historyJob = store.loadHistory();
-      await new Promise<void>((done) => {
-        setTimeout(done, 16);
-      });
+      if (index + 1 < wires.length)
+        await new Promise<void>((done) => {
+          setTimeout(done, 16);
+        });
     }
     await Promise.all(received);
     await historyJob;

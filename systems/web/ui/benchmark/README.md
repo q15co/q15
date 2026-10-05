@@ -81,16 +81,18 @@ task/script/layout/style time, long tasks, codec completion and visible latency 
 separately.
 
 Rendered workloads now include a sealed terminal event and distinguish the last streaming marker
-from terminal visibility. The paging workload calls the production history adapter at the seventh
-live frame, with 1,000 completed messages already mounted. Startup (`codec=1&startup=1`) starts with
-an empty transcript and measures the selected revision's actual initial HTTP page size. Both HTTP
-workloads use authenticated fetch, the same content session as incoming frames, and a sealing peer
-that honors the requested cursor and limit. HTTP completion includes proof generation, request, peer
-sealing, decoding and validation; history DOM visibility is recorded separately. The benchmark build
-instruments Markdown parse/JSX conversion duration and live/historical message render counts; those
-probes are absent from the application build. Initial loading is excluded for streaming workloads,
-while final reconciliation and the trailing 100 ms observer drain are included. Startup excludes the
-initial font and empty-shell load, and includes the first history request and render.
+from terminal visibility. The terminal event is enqueued as soon as the last incoming frame has
+decoded, without another producer interval. The paging workload calls the production history adapter
+at the seventh live frame, with 1,000 completed messages already mounted. Startup
+(`codec=1&startup=1`) starts with an empty transcript and measures the selected revision's actual
+initial HTTP page size. Both HTTP workloads use authenticated fetch, the same content session as
+incoming frames, and a sealing peer that honors the requested cursor and limit. HTTP completion
+includes proof generation, request, peer sealing, decoding and validation; history DOM visibility is
+recorded separately. The benchmark build instruments Markdown parse/JSX conversion duration and
+live/historical message render counts; those probes are absent from the application build. Initial
+loading is excluded for streaming workloads, while final reconciliation and the trailing 100 ms
+observer drain are included. Startup excludes the initial font and empty-shell load, and includes
+the first history request and render.
 
 Use `Q15_BENCHMARK_TRACE=1` in a separate run to capture the first recorded repetition for each
 revision/workload/motion with CDP timeline events, user timing and sampled CPU stacks. Compressed
