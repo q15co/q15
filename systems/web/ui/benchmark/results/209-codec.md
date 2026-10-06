@@ -4,8 +4,9 @@ Baseline:
 [`754b7f123f7389a8eb5f310904896738cbda9c10`](https://github.com/q15co/q15/commit/754b7f123f7389a8eb5f310904896738cbda9c10)
 (merged #208). Measured implementation:
 [`c869b07454726830c59aae4977587aec27af1dfc`](https://github.com/q15co/q15/commit/c869b07454726830c59aae4977587aec27af1dfc).
-The measured tree is `2522e5d0c2634d383a5fc2a79b5fe2dd5ef53703`; `headDirty` is false. Raw
-measurements: [209-codec.json](209-codec.json).
+The measured tree is `2522e5d0c2634d383a5fc2a79b5fe2dd5ef53703`; `headDirty` is false. The raw
+measurements are not committed; the command under
+[Codec measurements](../README.md#codec-measurements-209) regenerates them.
 
 Device: Intel(R) Core(TM) i9-10885H CPU @ 2.40GHz, 8 physical cores / 16 logical CPUs; NixOS, linux
 6.18.54. Browser: Chrome 154.0.8037.92, headless, 1280 x 900. Node 24.21.0, pnpm 12.8.1 and Vite+

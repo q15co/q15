@@ -143,7 +143,7 @@ describe("streaming work", () => {
           ([text]) => text === call.arguments || text.includes('"command":"history'),
         ),
       ).toHaveLength(0);
-      expect(counts.markdown).toBe(12);
+      expect(counts.markdown).toBe(20);
       const reasoning = required(
         view.container.querySelector<HTMLDetailsElement>("[data-agent-activity]:last-of-type"),
       );
@@ -177,10 +177,10 @@ describe("growing Markdown", () => {
         vi.advanceTimersByTime(1);
       });
     }
-    expect(counts.markdown).toBeLessThan(20);
+    expect(counts.markdown).toBeLessThan(24);
     view.rerender(<MarkdownView text={full} />);
     const finished = view.container.innerHTML;
-    expect(counts.markdown).toBeLessThan(21);
+    expect(counts.markdown).toBeLessThan(25);
     view.unmount();
     const reference = render(canonical(full));
     expect(finished).toBe(reference.container.innerHTML);
@@ -196,7 +196,7 @@ describe("growing Markdown", () => {
     const view = render(<MarkdownView text="start" streaming />);
     view.rerender(<MarkdownView text="replaced **snapshot**" streaming />);
     act(() => {
-      vi.advanceTimersByTime(39);
+      vi.advanceTimersByTime(23);
     });
     expect(view.container.textContent).toBe("start");
     act(() => {

@@ -1,13 +1,24 @@
 import { chromium } from "@playwright/test";
 import { execFileSync, spawn } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { cpus, release, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { gzipSync } from "node:zlib";
 
 import { TestSealer } from "../e2e/seal.ts";
 import { parseClientFrame } from "../src/domain/protocol.ts";
 import { frame } from "../src/infrastructure/envelope.ts";
 import { growingAnswer, loadedHistory } from "../src/testing/streaming.ts";
+import { baselineAdapter } from "./baseline.ts";
 
 const ui = resolve(import.meta.dirname, "..");
 const repository = resolve(ui, "../../..");
@@ -35,6 +46,7 @@ async function measureRun(
   motion: "no-preference" | "reduce",
   workload: string,
   run: number,
+  port: number,
 ) {
   const page = await browser.newPage({
     viewport: { width: 1280, height: 900 },
@@ -47,16 +59,47 @@ async function measureRun(
       reject(error);
     });
   });
+  let historyPeer: TestSealer | undefined;
+  await page.route("**/api/turns?**", async (route) => {
+    const peer = historyPeer;
+    if (peer === undefined) throw new Error("Missing history peer");
+    const params = new URL(route.request().url()).searchParams;
+    const before = params.get("after_seq") ?? "0";
+    const limit = Number(params.get("limit"));
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500)
+      throw new Error("Invalid history limit");
+    const history = loadedHistory(before === "0" ? 4000 : 2000);
+    const available = history.turns.filter(
+      (turn) => before === "0" || Number(turn.seq) < Number(before),
+    );
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify(
+        peer.seal(
+          frame(
+            "history",
+            {
+              ...history,
+              turns: available.slice(0, limit),
+              has_more: available.length > limit,
+            },
+            peer.channelID,
+          ),
+        ),
+      ),
+    });
+  });
   await page.route("**/benchmark/setup?*", async (route) => {
     const hello = parseClientFrame(route.request().postData() ?? "");
     if (hello.type !== "hello") throw new Error("Invalid codec offer");
     const peer = new TestSealer(hello.payload);
+    historyPeer = peer;
     const params = new URL(route.request().url()).searchParams;
     const msg = { turn: "10001", ordinal: -1 };
     const answer = growingAnswer(30);
     let accumulated = "";
     const frames =
-      params.has("history") || params.has("outgoing")
+      params.has("history") || params.has("outgoing") || params.has("startup")
         ? []
         : Array.from({ length: params.has("representative") ? 24 : 48 }, (_, index) => {
             if (params.has("representative")) {
@@ -83,6 +126,7 @@ async function measureRun(
               Array.from({ length: index + 1 }, (_unused, marker) => `\n\nframe-${marker}.`).join(
                 "",
               );
+            accumulated = text;
             return JSON.stringify(
               peer.seal(frame("snapshot", { msg, seq: String(index + 1), kind: "text", text })),
             );
@@ -93,13 +137,28 @@ async function measureRun(
         key: JSON.stringify(peer.key),
         frames,
         history: JSON.stringify(peer.seal(frame("history", loadedHistory(4000), peer.channelID))),
+        paging: JSON.stringify(
+          peer.seal(
+            frame(
+              "history",
+              {
+                ...loadedHistory(2000),
+                turns: loadedHistory(2000).turns.slice(1000, 1250),
+              },
+              peer.channelID,
+            ),
+          ),
+        ),
+        final: JSON.stringify(
+          peer.seal(frame("msg.final", { msg, status: "aborted", full_text: accumulated })),
+        ),
       }),
     });
   });
   await Promise.race([
     failure,
     page.goto(
-      `http://127.0.0.1:4195/${workload.includes("codec") ? "codec.html" : ""}?${workload}`,
+      `http://127.0.0.1:${port}/${workload.includes("codec") ? "codec.html" : ""}?${workload}`,
     ),
   ]);
   await Promise.race([
@@ -110,6 +169,13 @@ async function measureRun(
     }),
   ]);
   const cdp = await page.context().newCDPSession(page);
+  const trace = process.env.Q15_BENCHMARK_TRACE === "1" && run === 0;
+  if (trace)
+    await cdp.send("Tracing.start", {
+      categories:
+        "devtools.timeline,blink.user_timing,v8.execute,disabled-by-default-v8.cpu_profiler",
+      transferMode: "ReturnAsStream",
+    });
   await cdp.send("Performance.enable");
   const before = await cdp.send("Performance.getMetrics");
   await page.evaluate(() => document.dispatchEvent(new Event("benchmark-start")));
@@ -121,6 +187,28 @@ async function measureRun(
     }),
   ]);
   const after = await cdp.send("Performance.getMetrics");
+  let tracePath: string | undefined;
+  if (trace) {
+    const completed = new Promise<string>((done) => {
+      cdp.once("Tracing.tracingComplete", (event) => {
+        if (event.stream === undefined) throw new Error("Missing trace stream");
+        done(event.stream);
+      });
+    });
+    await cdp.send("Tracing.end");
+    const handle = await completed;
+    let data = "";
+    for (;;) {
+      const chunk = await cdp.send("IO.read", { handle });
+      data +=
+        chunk.base64Encoded === true ? Buffer.from(chunk.data, "base64").toString() : chunk.data;
+      if (chunk.eof) break;
+    }
+    await cdp.send("IO.close", { handle });
+    tracePath = `${revision.slice(0, 8)}-${motion}-${workload.replaceAll(/[^a-z0-9]/gu, "-")}.json.gz`;
+    mkdirSync(join(dirname(output), "traces"), { recursive: true });
+    writeFileSync(join(dirname(output), "traces", tracePath), gzipSync(data));
+  }
   const data = await result.getAttribute("data-benchmark-result");
   if (data === null || errors.length > 0)
     throw new Error(`Invalid benchmark result: ${errors.join(", ")}`);
@@ -137,14 +225,23 @@ async function measureRun(
     }
   }
   const workloadResult: unknown = JSON.parse(data);
-  results.push({ revision, motion, workload, run, metrics, result: workloadResult });
+  if (run >= 0)
+    results.push({
+      revision,
+      motion,
+      workload,
+      run,
+      metrics,
+      trace: tracePath,
+      result: workloadResult,
+    });
   process.stdout.write(
     `${revision.slice(0, 8)} ${motion} ${workload} run ${run + 1}: ${(metrics.TaskDurationMs ?? 0).toFixed(1)} ms main thread\n`,
   );
   await page.close();
 }
 
-async function measure(directory: string, revision: string) {
+async function preview(directory: string, port: number) {
   const server = spawn(
     pnpm,
     [
@@ -155,7 +252,7 @@ async function measure(directory: string, revision: string) {
       "--config",
       "benchmark/vite.config.ts",
       "--port",
-      "4195",
+      String(port),
       "--strictPort",
       "--host",
       "127.0.0.1",
@@ -165,7 +262,7 @@ async function measure(directory: string, revision: string) {
   try {
     for (let attempt = 0; ; attempt++) {
       try {
-        const response = await fetch("http://127.0.0.1:4195");
+        const response = await fetch(`http://127.0.0.1:${port}`);
         if (response.ok) break;
       } catch {
         /* The preview process may still be starting. */
@@ -176,8 +273,19 @@ async function measure(directory: string, revision: string) {
         setTimeout(done, 100);
       });
     }
+    return server;
+  } catch (error) {
+    server.kill();
+    throw error;
+  }
+}
+
+async function measure(variants: readonly { directory: string; revision: string; port: number }[]) {
+  const servers = [];
+  try {
+    for (const variant of variants) servers.push(await preview(variant.directory, variant.port));
     for (const motion of ["no-preference", "reduce"] satisfies ("no-preference" | "reduce")[]) {
-      const workloads =
+      const defaults =
         process.env.Q15_BENCHMARK_CODEC === "1"
           ? [
               "codec=1&small=1",
@@ -186,6 +294,8 @@ async function measure(directory: string, revision: string) {
               "codec=1&outgoing=1",
               "codec=1&rendered=1",
               "codec=1&rendered=1&representative=1",
+              "codec=1&rendered=1&representative=1&paging=1",
+              "codec=1&startup=1",
             ]
           : [
               "history=100",
@@ -193,58 +303,75 @@ async function measure(directory: string, revision: string) {
               "history=0&large=1",
               ...(motion === "no-preference" ? ["history=1000&staticAxes=1"] : []),
             ];
+      const workloads = process.env.Q15_BENCHMARK_WORKLOAD?.split(",") ?? defaults;
       for (const workload of workloads) {
-        if (
-          process.env.Q15_BENCHMARK_WORKLOAD !== undefined &&
-          !process.env.Q15_BENCHMARK_WORKLOAD.split(",").includes(workload)
-        )
-          continue;
-        for (let run = 0; run < runs; run++) {
-          await measureRun(revision, motion, workload, run);
-        }
+        await repetitions(variants, motion, workload);
       }
     }
   } finally {
-    server.kill();
-    await new Promise<void>((done) => {
-      server.once("exit", () => done());
-    });
+    for (const server of servers) {
+      const stopped = new Promise<void>((done) => {
+        server.once("exit", () => done());
+      });
+      server.kill();
+      await stopped;
+    }
+  }
+}
+
+async function repetitions(
+  variants: readonly { directory: string; revision: string; port: number }[],
+  motion: "no-preference" | "reduce",
+  workload: string,
+) {
+  for (let run = -1; run < runs; run++) {
+    const ordered = run % 2 === 0 ? variants : variants.toReversed();
+    for (const variant of ordered)
+      await measureRun(variant.revision, motion, workload, run, variant.port);
   }
 }
 
 try {
-  if (base !== undefined) {
+  const revision = execFileSync("git", ["rev-parse", "HEAD"], {
+    cwd: repository,
+    encoding: "utf8",
+  }).trim();
+  const variants = [
+    { directory: ui, revision: headDirty ? `staged:${headTree}` : revision, port: 4195 },
+  ];
+  if (base === undefined) await measure(variants);
+  else {
     const checkout = mkdtempSync(join(tmpdir(), "q15-streaming-base-"));
-    const revision = execFileSync("git", ["rev-parse", base], {
+    const baseRevision = execFileSync("git", ["rev-parse", base], {
       cwd: repository,
       encoding: "utf8",
     }).trim();
     try {
-      execFileSync("git", ["worktree", "add", "--detach", checkout, revision], {
+      execFileSync("git", ["worktree", "add", "--detach", checkout, baseRevision], {
         cwd: repository,
         stdio: "ignore",
       });
       const baselineUI = join(checkout, "systems/web/ui");
+      const adapterPath = join(baselineUI, "benchmark/codec-adapter.ts");
+      const selectedAdapter = existsSync(adapterPath)
+        ? readFileSync(adapterPath, "utf8")
+        : undefined;
       cpSync(join(ui, "benchmark"), join(baselineUI, "benchmark"), { recursive: true });
       if (process.env.Q15_BENCHMARK_CODEC === "1")
-        cpSync(join(ui, "benchmark/base-codec.ts"), join(baselineUI, "benchmark/codec-adapter.ts"));
+        writeFileSync(adapterPath, baselineAdapter(selectedAdapter));
       cpSync(join(ui, "src/testing/streaming.ts"), join(baselineUI, "src/testing/streaming.ts"));
       symlinkSync(join(ui, "node_modules"), join(baselineUI, "node_modules"), "dir");
       execFileSync("make", ["ui-benchmark-base-build", `BENCHMARK_UI_DIR=${baselineUI}`], {
         cwd: repository,
         stdio: "inherit",
       });
-      await measure(baselineUI, revision);
+      variants.unshift({ directory: baselineUI, revision: baseRevision, port: 4196 });
+      await measure(variants);
     } finally {
       execFileSync("git", ["worktree", "remove", "--force", checkout], { cwd: repository });
       rmSync(checkout, { recursive: true, force: true });
     }
   }
-  const revision = execFileSync("git", ["rev-parse", "HEAD"], {
-    cwd: repository,
-    encoding: "utf8",
-  }).trim();
-  await measure(ui, headDirty ? `staged:${headTree}` : revision);
   mkdirSync(dirname(output), { recursive: true });
   writeFileSync(
     output,
@@ -254,6 +381,8 @@ try {
         os: `${process.platform} ${release()}`,
         browser: browser.version(),
         runs,
+        ordering:
+          "alternating baseline/head per pair after one unrecorded warmup per variant/workload/motion",
         headTree,
         headDirty,
         results,

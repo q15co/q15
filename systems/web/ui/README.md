@@ -199,7 +199,8 @@ visible. Message links open containing disclosures. Media parts show their refer
 attachment transfer lands. Unknown parts show their type and raw data. Sending during an active run
 uses the server queue; Stop targets the active run, including its startup. History pages backwards
 automatically near the top, preserves the visible message, and supports `#message-<turn>:<ordinal>`
-links. User bubbles and avatars sit on the right, with left-aligned text and an inset for wrapped
+links. Startup and newest-history refreshes load five complete turns; older pages load ten turns at
+a time. User bubbles and avatars sit on the right, with left-aligned text and an inset for wrapped
 messages. Pending and queued messages use the same layout. The sidebar contains Chat navigation,
 connection status and the theme toggle; it does not list individual recent messages.
 

@@ -10,7 +10,8 @@ export async function fetchHistory(
   content: ContentSession,
 ): Promise<Page> {
   const channel = await content.channel(signal);
-  const response = await authenticatedFetch(`/api/turns?after_seq=${before}&limit=50`, {
+  const limit = before === "0" ? 5 : 10;
+  const response = await authenticatedFetch(`/api/turns?after_seq=${before}&limit=${limit}`, {
     cache: "no-store",
     headers: { "Q15-Channel": channel },
     credentials: "same-origin",
