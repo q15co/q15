@@ -257,7 +257,14 @@ install_cargo_tool() {
 }
 
 install_python_env() {
-	"${TOOLS_PYTHON_DIR}/bin/python" -m pip --version >/dev/null 2>&1 || python3 -m venv "${TOOLS_PYTHON_DIR}"
+	if ! "${TOOLS_PYTHON_DIR}/bin/python" -m pip --version >/dev/null 2>&1; then
+		# A venv created without --copies symlinks its interpreter by absolute
+		# path, so a Python version change leaves bin/python3 dangling and venv
+		# refuses to rebuild over it (Errno 2). The cached tools archive can
+		# carry exactly that, so recreate the environment from scratch.
+		rm -rf "${TOOLS_PYTHON_DIR}"
+		python3 -m venv "${TOOLS_PYTHON_DIR}"
+	fi
 	"${TOOLS_PYTHON_DIR}/bin/python" -m pip install --quiet --upgrade pip
 	"${TOOLS_PYTHON_DIR}/bin/python" -m pip install --quiet \
 		"mdformat==${PYTHON_MDFORMAT_VERSION}" \

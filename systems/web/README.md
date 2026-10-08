@@ -121,7 +121,7 @@ uncontrolled pages after authenticated precaching; the worker supplies cached sh
 cache misses with the session cookie. Initial navigation can still return 401 as described above;
 subsequent controlled navigation carries a proof and succeeds with 200.
 
-Sessions expire server-side after **12 hours**, with no sliding renewal. Sign out deletes the server
+Sessions expire server-side after **30 days**, with no sliding renewal. Sign out deletes the server
 record and cookie. Sessions grant `chat` only; `console` is refused, including for the owner. A
 future console must implement a fresh, time-boxed assertion before adding that scope. Open sockets
 recheck sessions before dispatch and output, and at least once per second while idle.
