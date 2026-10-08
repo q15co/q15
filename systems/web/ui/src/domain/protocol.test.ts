@@ -84,7 +84,7 @@ describe("frozen browser contract", () => {
     expect(compareSeq("9007199254740992", "9007199254740993")).toBe(-1);
   });
   it("pins outgoing envelopes and rejects incompatible data", () => {
-    expect(frame("hello", { cursor: "0" }).v).toBe(2);
+    expect(frame("hello", { cursor: "0" }).v).toBe(3);
     expect(() => parseFrame(JSON.stringify({ ...streamed[0], v: 1 }))).toThrow(/unsupported/iu);
     expect(() => parseFrame(JSON.stringify({ ...streamed[4], seq: 9007199254740992 }))).toThrow(
       /unsupported/iu,

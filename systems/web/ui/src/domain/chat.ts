@@ -1,4 +1,4 @@
-import type { Message, Page, Part } from "../generated/protocol";
+import type { Attachment, Message, Page, Part } from "../generated/protocol";
 import type { ServerFrame } from "./protocol";
 
 import { compareSeq } from "./protocol";
@@ -17,6 +17,7 @@ export interface ChatMessage extends Readonly<Omit<Message, "parts">> {
 interface PendingInput {
   id: string;
   text: string;
+  parts?: readonly Attachment[];
   afterTurn: string;
 }
 export type Pending = Readonly<
@@ -90,10 +91,9 @@ export function reduceFrame(state: Readonly<ChatState>, value: ServerFrame): Cha
       const local = next.pending.find((item) => item.id === p.client_msg_id);
       const pending = next.pending.map((item): Pending => {
         if (item.id !== p.client_msg_id || item.turn !== undefined) return item;
+        const input: PendingInput = item;
         return {
-          id: item.id,
-          text: item.text,
-          afterTurn: item.afterTurn,
+          ...input,
           state: p.queued ? "queued" : "accepted",
         };
       });
@@ -322,6 +322,7 @@ export function reconcileHistory(
     .filter((m) => m.role === "user")
     .map((m) => ({
       turn: m.turn,
+      refs: m.parts.filter((part) => part.part_type === "media").map((part) => part.media_ref),
       text: m.parts
         .filter((p) => p.part_type === "text")
         .map((p) => p.text ?? "")
@@ -329,7 +330,10 @@ export function reconcileHistory(
     }));
   const pending = pendingInputs.filter((p) => {
     const index = users.findIndex(
-      (user) => user.text === p.text && compareSeq(user.turn, p.afterTurn) > 0,
+      (user) =>
+        user.text === p.text &&
+        compareSeq(user.turn, p.afterTurn) > 0 &&
+        JSON.stringify(user.refs) === JSON.stringify((p.parts ?? []).map((part) => part.media_ref)),
     );
     if (index < 0 || p.state === "failed") return true;
     users.splice(index, 1);

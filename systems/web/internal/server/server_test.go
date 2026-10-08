@@ -38,7 +38,11 @@ import (
 var fixtureTime = time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 
 type fakeChat struct {
-	endpoint *browser.Endpoint
+	endpoint    *browser.Endpoint
+	mediaErr    error
+	mediaFrames [][]byte
+	mediaUpload *chatpb.PutMediaRequest
+	mediaGet    *chatpb.GetMediaRequest
 	chatpb.UnimplementedChatServiceServer
 	mu          sync.Mutex
 	head        int64
@@ -202,7 +206,7 @@ func setup(t *testing.T, fake *fakeChat) (*Server, *httptest.Server) {
 	fake.endpoint = browser.NewLocal(fake)
 	t.Cleanup(fake.endpoint.Close)
 	listener := bufconn.Listen(1 << 20)
-	rpc := grpc.NewServer()
+	rpc := grpc.NewServer(grpc.MaxRecvMsgSize(protocol.MaxMediaWireBytes + 1024))
 	chatpb.RegisterChatServiceServer(rpc, fake)
 	go func() { _ = rpc.Serve(listener) }()
 	t.Cleanup(rpc.Stop)

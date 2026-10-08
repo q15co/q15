@@ -1,6 +1,6 @@
 [
   {
-    "v": 2,
+    "v": 3,
     "id": "request-1",
     "type": "hello",
     "ts": "2026-10-01T00:00:00Z",
@@ -12,7 +12,7 @@
     }
   },
   {
-    "v": 2,
+    "v": 3,
     "id": "request-1",
     "type": "sync",
     "ts": "2026-10-01T00:00:00Z",
@@ -22,18 +22,27 @@
     }
   },
   {
-    "v": 2,
+    "v": 3,
     "id": "request-1",
     "type": "msg.send",
     "ts": "2026-10-01T00:00:00Z",
     "seq": "7",
     "payload": {
       "client_msg_id": "client-1",
-      "text": "hello"
+      "text": "hello",
+      "parts": [
+        {
+          "part_type": "media",
+          "media_kind": "document",
+          "media_ref": "media://sha256/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "filename": "notes.txt",
+          "content_type": "text/plain; charset=utf-8"
+        }
+      ]
     }
   },
   {
-    "v": 2,
+    "v": 3,
     "id": "request-1",
     "type": "msg.abort",
     "ts": "2026-10-01T00:00:00Z",
@@ -43,7 +52,7 @@
     }
   },
   {
-    "v": 2,
+    "v": 3,
     "id": "request-1",
     "type": "msg.ack",
     "ts": "2026-10-01T00:00:00Z",
@@ -53,7 +62,7 @@
     }
   },
   {
-    "v": 2,
+    "v": 3,
     "id": "request-1",
     "type": "msg.status",
     "ts": "2026-10-01T00:00:00Z",
@@ -61,7 +70,7 @@
     "payload": {}
   },
   {
-    "v": 2,
+    "v": 3,
     "id": "request-1",
     "type": "presence",
     "ts": "2026-10-01T00:00:00Z",
@@ -71,7 +80,7 @@
     }
   },
   {
-    "v": 2,
+    "v": 3,
     "id": "request-1",
     "type": "ping",
     "ts": "2026-10-01T00:00:00Z",
@@ -79,7 +88,7 @@
     "payload": {}
   },
   {
-    "v": 2,
+    "v": 3,
     "id": "request-1",
     "type": "ready",
     "ts": "2026-10-01T00:00:00Z",
@@ -91,7 +100,7 @@
     }
   },
   {
-    "v": 2,
+    "v": 3,
     "id": "request-1",
     "type": "turn.start",
     "ts": "2026-10-01T00:00:00Z",
@@ -105,7 +114,7 @@
     }
   },
   {
-    "v": 2,
+    "v": 3,
     "id": "request-1",
     "type": "delta",
     "ts": "2026-10-01T00:00:00Z",
@@ -121,7 +130,7 @@
     }
   },
   {
-    "v": 2,
+    "v": 3,
     "id": "request-1",
     "type": "snapshot",
     "ts": "2026-10-01T00:00:00Z",
@@ -137,7 +146,7 @@
     }
   },
   {
-    "v": 2,
+    "v": 3,
     "id": "request-1",
     "type": "msg.final",
     "ts": "2026-10-01T00:00:00Z",
@@ -153,7 +162,7 @@
     }
   },
   {
-    "v": 2,
+    "v": 3,
     "id": "request-1",
     "type": "msg.status",
     "ts": "2026-10-01T00:00:00Z",
@@ -166,7 +175,7 @@
     }
   },
   {
-    "v": 2,
+    "v": 3,
     "id": "request-1",
     "type": "notice",
     "ts": "2026-10-01T00:00:00Z",
@@ -177,7 +186,7 @@
     }
   },
   {
-    "v": 2,
+    "v": 3,
     "id": "request-1",
     "type": "pong",
     "ts": "2026-10-01T00:00:00Z",
@@ -185,7 +194,7 @@
     "payload": {}
   },
   {
-    "v": 2,
+    "v": 3,
     "id": "request-1",
     "type": "error",
     "ts": "2026-10-01T00:00:00Z",

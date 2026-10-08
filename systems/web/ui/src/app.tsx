@@ -18,6 +18,7 @@ import { flushSync } from "react-dom";
 import type { ChatStore } from "./application/chat-store";
 
 import { Composer } from "./components/composer";
+import { MediaContext } from "./components/media-context";
 import { Transcript } from "./components/transcript";
 import { Button } from "./components/ui/button";
 import { useMotionPreference } from "./components/ui/motion-preference";
@@ -237,7 +238,9 @@ export function App({
             </Button>
           </div>
         )}
-        <Transcript state={state} store={store} />
+        <MediaContext value={store.media}>
+          <Transcript state={state} store={store} />
+        </MediaContext>
         <Composer state={state} store={store} />
       </main>
     </div>

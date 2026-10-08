@@ -20,6 +20,11 @@ type Service interface {
 		context.Context,
 	) (grpc.BidiStreamingClient[chatpb.BrowserPacket, chatpb.BrowserPacket], error)
 	BrowserHistory(context.Context, *chatpb.BrowserHistoryRequest) (*chatpb.BrowserPacket, error)
+	PutMedia(context.Context, *chatpb.PutMediaRequest) (*chatpb.BrowserPacket, error)
+	GetMedia(
+		context.Context,
+		*chatpb.GetMediaRequest,
+	) (grpc.ServerStreamingClient[chatpb.BrowserPacket], error)
 }
 
 // Client mirrors the exec client's thin gRPC adapter, restricted to local sockets.
@@ -88,3 +93,19 @@ func CheckVersion(info *chatpb.GetRuntimeInfoResponse) error {
 }
 
 var _ Service = (*Client)(nil)
+
+// PutMedia relays the authenticated envelope without interpreting content.
+func (c *Client) PutMedia(
+	ctx context.Context,
+	req *chatpb.PutMediaRequest,
+) (*chatpb.BrowserPacket, error) {
+	return c.client.PutMedia(ctx, req)
+}
+
+// GetMedia streams sealed bytes directly from the agent.
+func (c *Client) GetMedia(
+	ctx context.Context,
+	req *chatpb.GetMediaRequest,
+) (grpc.ServerStreamingClient[chatpb.BrowserPacket], error) {
+	return c.client.GetMedia(ctx, req)
+}

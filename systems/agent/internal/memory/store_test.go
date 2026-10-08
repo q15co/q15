@@ -148,6 +148,39 @@ func TestStoreAppendTurnCommitsMemoryDomains(t *testing.T) {
 	}
 }
 
+func TestMediaPartsSurviveDurableTranscriptReload(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "memory")
+	store := newTestStore(root, &fakeCommitter{})
+	ctx := context.Background()
+	if err := store.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var parts []conversation.Part
+	for _, kind := range []conversation.MediaKind{conversation.MediaKindImage, conversation.MediaKindAudio, conversation.MediaKindVideo,
+		conversation.MediaKindDocument, conversation.MediaKindSticker, conversation.MediaKindAnimation, conversation.MediaKindVideoNote} {
+		parts = append(
+			parts,
+			conversation.Part{
+				Type:      conversation.MediaPartType,
+				MediaKind: kind,
+				MediaRef:  "media://sha256/" + strings.Repeat("a", 64),
+			},
+		)
+	}
+	if err := store.AppendTurn(ctx, []conversation.Message{conversation.UserMessageParts(parts...)}); err != nil {
+		t.Fatal(err)
+	}
+	reloaded := newTestStore(root, &fakeCommitter{})
+	page, err := reloaded.ListTurns(ctx, 0, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Turns) != 1 || len(page.Turns[0].Messages) != 1 ||
+		!reflect.DeepEqual(page.Turns[0].Messages[0].Parts, parts) {
+		t.Fatalf("media parts changed during storage: %+v", page)
+	}
+}
+
 func TestStoreReserveTurnSeqAdvancesHeadWithoutTurnFile(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "memory")
 	committer := &fakeCommitter{}

@@ -54,6 +54,8 @@ func New(ctx context.Context, service bridge.Service, config Config) (*Server, e
 	protected := http.NewServeMux()
 	protected.HandleFunc("GET /ws", s.socket)
 	protected.HandleFunc("GET /api/turns", s.history)
+	protected.HandleFunc("POST /api/media", s.putMedia)
+	protected.HandleFunc("GET /api/media/{hash}", s.getMedia)
 	protected.Handle("/", config.Assets)
 	secured := config.Authorizer.RequireScope("chat", protected)
 	s.handler = gate.Headers(

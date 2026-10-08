@@ -33,7 +33,7 @@ type session struct {
 }
 
 func (s *session) send(ctx context.Context, ref string, request protocol.SendRequest) error {
-	if strings.TrimSpace(request.Text) == "" {
+	if strings.TrimSpace(request.Text) == "" && len(request.Parts) == 0 {
 		return fmt.Errorf("message text is required")
 	}
 	s.commands.Lock()
@@ -57,8 +57,19 @@ func (s *session) send(ctx context.Context, ref string, request protocol.SendReq
 			return context.Canceled
 		}
 	}
+	parts := make([]*chatpb.MessagePart, 0, len(request.Parts))
+	for _, part := range request.Parts {
+		parts = append(
+			parts,
+			&chatpb.MessagePart{
+				PartType:  part.PartType,
+				MediaKind: part.MediaKind,
+				MediaRef:  part.MediaRef,
+			},
+		)
+	}
 	response, err := s.server.service.SendMessage(ctx, &chatpb.SendMessageRequest{
-		SessionId: id, ClientMsgId: request.ClientMsgID, Text: request.Text})
+		SessionId: id, ClientMsgId: request.ClientMsgID, Text: request.Text, Parts: parts})
 	if err != nil {
 		return err
 	}

@@ -1,0 +1,88 @@
+.attachment {
+  display: grid;
+  gap: var(--space-3);
+  width: 26rem;
+  max-width: 100%;
+  padding: var(--space-3);
+  margin-block: var(--space-2);
+  min-width: 0;
+  border: 1px solid var(--muted);
+  border-radius: var(--space-3);
+  background: var(--sidebar);
+  line-height: var(--leading-ui);
+}
+.header {
+  display: grid;
+  grid-template-columns: var(--space-10) minmax(0, 1fr);
+  gap: var(--space-3);
+  align-items: center;
+}
+.icon {
+  display: grid;
+  place-items: center;
+  width: var(--space-10);
+  height: var(--space-10);
+  border-radius: var(--space-2);
+  background: var(--background);
+}
+.icon svg {
+  width: var(--space-6);
+  height: var(--space-6);
+}
+.image {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  max-height: 24rem;
+  object-fit: contain;
+  border-radius: var(--space-2);
+  background: var(--background);
+}
+.audio {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+}
+.caption {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.caption strong {
+  font-size: var(--font-sm);
+  font-weight: 500;
+  color: var(--foreground);
+}
+.caption small {
+  color: var(--muted-foreground);
+  font-size: var(--font-xs);
+  text-transform: capitalize;
+}
+.download {
+  display: inline-flex;
+  justify-self: start;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 36px;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--blue) 30%, transparent);
+  border-radius: var(--space-2);
+  background: color-mix(in srgb, var(--blue) 10%, transparent);
+  color: var(--blue);
+  font-size: var(--font-sm);
+  font-weight: 500;
+  transition: background-color var(--motion-fast);
+}
+.download:hover {
+  background: color-mix(in srgb, var(--blue) 20%, transparent);
+}
+.error {
+  color: var(--destructive);
+  font-size: var(--font-sm);
+}
+@media (pointer: coarse) {
+  .download {
+    min-height: 44px;
+  }
+}

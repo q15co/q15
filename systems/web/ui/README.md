@@ -5,6 +5,11 @@ provides Vite/Rolldown, Vitest, Oxlint and Oxfmt. Exact Node and pnpm versions l
 `scripts/tool-versions.sh`; package pins are checked against that manifest. No global frontend
 tooling is needed.
 
+Attachment file glyphs are adapted from
+[Catppuccin VSCode Icons](https://github.com/catppuccin/vscode-icons) at revision
+`b6915da9f6889b683a110aa747de96c2820a537d`, using the app's Mocha/Latte tokens. Their MIT notice is
+retained in `src/components/file-icons-LICENSE`.
+
 ## Development
 
 ```bash
@@ -165,13 +170,13 @@ fallback. Shell manifests and install events are also checked before use. Type-a
 reject unsafe assertions and unsafe uses of `any`, while `satisfies` checks configuration without
 widening literal values.
 
-The socket and history adapters open the version 2 sealed byte envelope before domain validation.
-Fresh non-exportable ECDH/content keys remain in memory; reconnects re-wrap history in the agent.
-The Go protocol generates both byte limits and the plaintext-control whitelist; unknown content
-types default to sealing. Before either directional stream count reaches its 65,536-entry replay
-budget, the transport drains accepted sends and reconnects with fresh keys. This recovery never
-resubmits an uncertain send. History paging is bounded by encoded plaintext bytes as well as turns.
-Failed decryption is visible and does not close the socket. See
+The socket and history adapters open the version 3 browser contract and sealed byte envelope before
+domain validation. Fresh non-exportable ECDH/content keys remain in memory; reconnects re-wrap
+history in the agent. The Go protocol generates both byte limits and the plaintext-control
+whitelist; unknown content types default to sealing. Before either directional stream count reaches
+its 65,536-entry replay budget, the transport drains accepted sends and reconnects with fresh keys.
+This recovery never resubmits an uncertain send. History paging is bounded by encoded plaintext
+bytes as well as turns. Failed decryption is visible and does not close the socket. See
 [content sealing](../README.md#content-sealing) for the byte framing, passive-carrier guarantee and
 trusted-delivery limits.
 

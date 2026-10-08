@@ -5,6 +5,7 @@ import { useState } from "react";
 
 import type { ChatMessage, Pending } from "../domain/chat";
 
+import { MediaView } from "./media";
 import { PartView } from "./parts";
 import { Button } from "./ui/button";
 import { useMotionPreference } from "./ui/motion-preference";
@@ -120,7 +121,12 @@ export function PendingMessage({ pending: p }: { pending: Pending }) {
                     : "Sending…"}
         </span>
       </div>
-      <p className={clsx(styles.messageBody, styles.pendingText)}>{p.text}</p>
+      <div className={styles.messageBody}>
+        <p className={styles.pendingText}>{p.text}</p>
+        {p.parts?.map((part, ordinal) => (
+          <MediaView key={part.media_ref} part={{ ...part, ordinal }} filename={part.filename} />
+        ))}
+      </div>
     </motion.article>
   );
 }

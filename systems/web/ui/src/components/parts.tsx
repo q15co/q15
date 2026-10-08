@@ -1,10 +1,11 @@
 import { clsx } from "clsx";
-import { Brain, ChevronDown, CircleAlert, File, Terminal, Check } from "lucide-react";
+import { Brain, ChevronDown, CircleAlert, Terminal, Check } from "lucide-react";
 
 import type { Part } from "../generated/protocol";
 
 import { pretty } from "./format";
 import { MarkdownView } from "./markdown";
+import { MediaView } from "./media";
 
 import styles from "./parts.module.css";
 
@@ -49,16 +50,7 @@ export function PartView({ part, streaming: live }: { part: Part; streaming?: bo
         </details>
       );
     case "media":
-      return (
-        <div className={styles.mediaReference}>
-          <File size={16} />
-          <div>
-            <strong>{part.media_kind ?? "Media"}</strong>
-            <small>{part.media_ref ?? "Attachment"}</small>
-            <small>Attachment preview will be available in a future update.</small>
-          </div>
-        </div>
-      );
+      return <MediaView part={part} />;
     default:
       return (
         <details className={clsx(styles.partCard, styles.partError)} open>

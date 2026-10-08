@@ -31,6 +31,7 @@ import {
   MaxEnvelopeChunks,
 } from "../generated/protocol.ts";
 import { isRecord } from "../shared/type-guards.ts";
+import { parseMediaResult } from "./media";
 
 export type Envelope<T extends string, P> = Omit<Frame, "type" | "payload"> & {
   type: T;
@@ -172,7 +173,14 @@ function isClientFrame(f: Frame): f is ClientFrame {
     case "sync":
       return decimal(p.cursor);
     case "msg.send":
-      return typeof p.client_msg_id === "string" && typeof p.text === "string";
+      if (typeof p.client_msg_id !== "string" || typeof p.text !== "string") return false;
+      if (p.parts === undefined) return true;
+      try {
+        parseMediaResult({ parts: p.parts });
+        return true;
+      } catch {
+        return false;
+      }
     case "msg.abort":
       return decimal(p.turn);
     case "msg.ack":

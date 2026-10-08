@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import type { ChatMessage, ChatState } from "./chat";
 
+import media from "../fixtures/protocol/media.json";
 import history from "../fixtures/server/history.json";
 import streamed from "../fixtures/server/streamed.json";
 import { isRecord } from "../shared/type-guards";
@@ -31,7 +32,7 @@ function initial(): ChatState {
 
 function packet(type: string, payload: unknown) {
   return parseFrame(
-    JSON.stringify({ v: 2, id: "event", ts: "2026-10-01T00:00:00Z", seq: "0", type, payload }),
+    JSON.stringify({ v: 3, id: "event", ts: "2026-10-01T00:00:00Z", seq: "0", type, payload }),
   );
 }
 
@@ -126,6 +127,56 @@ describe("pure chat domain", () => {
     expect(idle.active).toBeNull();
     expect(idle.pending).toEqual(state.pending);
   });
+
+  it.each([false, true])(
+    "retains attachments through acceptance, queueing and streaming (queued: %s)",
+    (queued) => {
+      const parts = freeze(media.parts);
+      let state: ChatState = freeze({
+        ...initial(),
+        pending: [{ id: "with-files", text: "", parts, afterTurn: "0", state: "sending" }],
+      } satisfies ChatState);
+      const accepted = packet("msg.status", {
+        turn: "42",
+        state: queued ? "queued" : "accepted",
+        queued,
+        client_msg_id: "with-files",
+      });
+      const next = reduceFrame(state, accepted);
+      expect(next.pending[0]?.parts).toBe(parts);
+      expect(next.pending[0]?.state).toBe(queued ? "queued" : "accepted");
+      state = freeze(next);
+      for (const value of [
+        packet("turn.start", { turn: "42", msg: { turn: "42", ordinal: -1 } }),
+        packet("msg.status", {
+          turn: "42",
+          state: "accepted",
+          queued: false,
+          client_msg_id: "with-files",
+        }),
+        packet("delta", {
+          msg: { turn: "42", ordinal: -1 },
+          seq: "1",
+          kind: "text",
+          text: "Reading the attachment",
+        }),
+        packet("snapshot", {
+          msg: { turn: "42", ordinal: -1 },
+          seq: "2",
+          kind: "text",
+          text: "Still reading",
+        }),
+        packet("msg.final", {
+          msg: { turn: "42", ordinal: -1 },
+          status: "completed",
+          full_text: "Done",
+        }),
+      ]) {
+        state = freeze(reduceFrame(state, value));
+        expect(state.pending[0]?.parts).toBe(parts);
+      }
+    },
+  );
 
   it.each([
     { code: "bridge_unavailable", text: "agent is unavailable" },

@@ -1,5 +1,5 @@
 import type { Transport, TransportEvents } from "../application/ports";
-import type { Frame } from "../generated/protocol";
+import type { Attachment, Frame } from "../generated/protocol";
 
 import { parseFrameValue, parseWireFrame } from "../domain/protocol";
 import { MaxClientFrameBytes } from "../generated/protocol";
@@ -171,13 +171,13 @@ export class SocketTransport implements Transport {
     this.socket.send(data);
   }
 
-  send(text: string, clientID: string) {
+  send(text: string, clientID: string, parts: readonly Attachment[] = []) {
     if (!this.ready) throw new Error("Wait for chat to reconnect. Your draft is still here.");
     // Never replay a send after reconnect: client_msg_id is correlation, not idempotency.
     const socket = this.socket;
     const generation = this.generation;
     this.outgoing = this.outgoing
-      .then(() => this.sendSealed(text, clientID, socket, generation))
+      .then(() => this.sendSealed(text, clientID, parts, socket, generation))
       .catch(() => {
         if (!this.stopped)
           this.events?.frame(
@@ -189,11 +189,16 @@ export class SocketTransport implements Transport {
   private async sendSealed(
     text: string,
     clientID: string,
+    parts: readonly Attachment[],
     socket: SocketLike | undefined,
     generation: number,
   ) {
     const sealed = await this.content.wrap(
-      clientFrame("msg.send", { client_msg_id: clientID, text }, clientID),
+      clientFrame(
+        "msg.send",
+        { client_msg_id: clientID, text, ...(parts.length === 0 ? {} : { parts: [...parts] }) },
+        clientID,
+      ),
     );
     if (generation !== this.generation || socket !== this.socket || this.stopped)
       throw new Error("Chat disconnected before the message was sent.");

@@ -6,6 +6,7 @@ import type { Frame } from "../generated/protocol";
 import type { SocketLike } from "./transport";
 
 import { parseClientFrame } from "../domain/protocol";
+import mediaFixture from "../fixtures/protocol/media.json";
 import { MaxClientFrameBytes } from "../generated/protocol";
 import { frame } from "../infrastructure/envelope";
 import { required } from "../testing/required";
@@ -279,19 +280,27 @@ describe("socket transport", () => {
   });
   it("connects with hello then sends, queues through the server, aborts and syncs", async () => {
     const { transport, socket, events } = await setup();
-    expect(socket.sent[0]).toMatchObject({ v: 2, type: "hello", payload: { cursor: "41" } });
+    expect(socket.sent[0]).toMatchObject({ v: 3, type: "hello", payload: { cursor: "41" } });
     transport.send("hello", "first");
     transport.send("next", "second");
     await vi.waitFor(() => expect(socket.sent).toHaveLength(4));
     transport.abort("42");
     transport.sync("41");
     expect(socket.sent.slice(-4).map((f) => [f.v, f.type, f.payload])).toEqual([
-      [2, "msg.send", { text: "hello", client_msg_id: "first" }],
-      [2, "msg.send", { text: "next", client_msg_id: "second" }],
-      [2, "msg.abort", { turn: "42" }],
-      [2, "sync", { cursor: "41" }],
+      [3, "msg.send", { text: "hello", client_msg_id: "first" }],
+      [3, "msg.send", { text: "next", client_msg_id: "second" }],
+      [3, "msg.abort", { turn: "42" }],
+      [3, "sync", { cursor: "41" }],
     ]);
     expect(events.connection).toHaveBeenCalledWith("connected");
+    transport.stop();
+  });
+  it("seals attachment-only sends with their refs", async () => {
+    const { transport, socket } = await setup();
+    const parts = [required(mediaFixture.parts[0])];
+    transport.send("", "attachment", parts);
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(3));
+    expect(socket.sent[2]?.payload).toEqual({ text: "", client_msg_id: "attachment", parts });
     transport.stop();
   });
   it("reconnects with the consumed durable cursor and never resubmits an uncertain send", async () => {
