@@ -19,7 +19,7 @@ const (
 	maxDevices      = 32
 	maxSessions     = 128
 	maxStateBytes   = 4 << 20
-	sessionLifetime = 12 * time.Hour
+	sessionLifetime = 30 * 24 * time.Hour
 )
 
 type device struct {
