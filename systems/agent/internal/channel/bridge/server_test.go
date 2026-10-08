@@ -67,7 +67,7 @@ func TestResolveListenTargetOnlyAcceptsUnix(t *testing.T) {
 // seven rpcs in the clear with no credentials and no interceptor.
 func TestNewServerRejectsNonUnixTargets(t *testing.T) {
 	for _, target := range []string{"127.0.0.1:50051", ":50053"} {
-		server, err := NewServer(target, NewService(&fakeTurnLister{}, &AgentEndpoint{}))
+		server, err := NewServer(target, NewService(&fakeTurnLister{}, &AgentEndpoint{}, nil))
 		if err == nil {
 			server.Close()
 			t.Fatalf("NewServer(%q) error = nil, want the tcp target refused", target)
@@ -168,7 +168,10 @@ func TestNewServerUnlinksStaleSocketAndPreparesModeGroup(t *testing.T) {
 		t.Fatalf("write stale socket file: %v", err)
 	}
 
-	server, err := NewServer("unix://"+address, NewService(&fakeTurnLister{}, &AgentEndpoint{}))
+	server, err := NewServer(
+		"unix://"+address,
+		NewService(&fakeTurnLister{}, &AgentEndpoint{}, nil),
+	)
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
 	}
@@ -192,7 +195,10 @@ func TestNewServerUnlinksStaleSocketAndPreparesModeGroup(t *testing.T) {
 
 	// Shutdown may leave the socket file behind; the next bind must unlink it
 	// rather than fail on startup.
-	restarted, err := NewServer("unix://"+address, NewService(&fakeTurnLister{}, &AgentEndpoint{}))
+	restarted, err := NewServer(
+		"unix://"+address,
+		NewService(&fakeTurnLister{}, &AgentEndpoint{}, nil),
+	)
 	if err != nil {
 		t.Fatalf("NewServer() after Close() error = %v", err)
 	}
@@ -204,7 +210,7 @@ func TestNewServerSurfacesBindFailure(t *testing.T) {
 	// path named, never silently.
 	target := "unix://" + filepath.Join(t.TempDir(), "missing-dir", "bridge.sock")
 
-	_, err := NewServer(target, NewService(&fakeTurnLister{}, &AgentEndpoint{}))
+	_, err := NewServer(target, NewService(&fakeTurnLister{}, &AgentEndpoint{}, nil))
 	if err == nil {
 		t.Fatalf("NewServer(%q) error = nil, want bind failure", target)
 	}
@@ -225,7 +231,10 @@ func TestServerServeStopsOnContextCancellation(t *testing.T) {
 		t.Skipf("chgrp to group %d requires root or group membership", socketGroupID)
 	}
 	address := filepath.Join(t.TempDir(), "bridge.sock")
-	server, err := NewServer("unix://"+address, NewService(&fakeTurnLister{}, &AgentEndpoint{}))
+	server, err := NewServer(
+		"unix://"+address,
+		NewService(&fakeTurnLister{}, &AgentEndpoint{}, nil),
+	)
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
 	}

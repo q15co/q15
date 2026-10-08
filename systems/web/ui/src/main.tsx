@@ -10,6 +10,7 @@ import "./styles.css";
 import { MotionProvider } from "./components/ui/motion";
 import { hasSession, ownerAuthentication } from "./infrastructure/auth";
 import { fetchHistory } from "./infrastructure/history";
+import { mediaAdapter } from "./infrastructure/media";
 import { authenticatedFetch, requestProof } from "./infrastructure/proof";
 import { logout } from "./infrastructure/session";
 import { SocketTransport } from "./infrastructure/transport";
@@ -33,8 +34,10 @@ const liveTransport = new SocketTransport();
 const store = signedIn
   ? preview
     ? await previewStore()
-    : new ChatStore(liveTransport, (before, signal) =>
-        fetchHistory(before, signal, liveTransport.content),
+    : new ChatStore(
+        liveTransport,
+        (before, signal) => fetchHistory(before, signal, liveTransport.content),
+        mediaAdapter(liveTransport.content),
       )
   : undefined;
 const root = document.querySelector("#root");

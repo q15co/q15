@@ -15,7 +15,7 @@ import (
 func TestBrowserBoundaryUnsealsInputAndRewrapsCanonicalHistory(t *testing.T) {
 	publisher := &fakePublisher{}
 	lister := &fakeTurnLister{page: fixtureBridgePage()}
-	service := NewService(lister, NewAgentEndpoint(publisher))
+	service := NewService(lister, NewAgentEndpoint(publisher), nil)
 	client := startChatService(t, service)
 	before, err := json.Marshal(lister.page)
 	if err != nil {

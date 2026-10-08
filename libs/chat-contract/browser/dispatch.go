@@ -43,7 +43,8 @@ func (s *Endpoint) dispatch(c *socketConn, principal, device string, frame proto
 		var request protocol.SendRequest
 		if !decode(frame.Payload, &request) || request.ClientMsgID == "" ||
 			len(request.ClientMsgID) > 128 ||
-			strings.TrimSpace(request.Text) == "" ||
+			(strings.TrimSpace(request.Text) == "" && len(request.Parts) == 0) ||
+			len(request.Parts) > protocol.MaxMediaFiles ||
 			len(request.Text) > protocol.MaxMessageBytes {
 			s.socketError(c, "invalid_message", frame.ID)
 			return

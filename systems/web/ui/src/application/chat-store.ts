@@ -1,7 +1,7 @@
 import type { ChatState, Pending } from "../domain/chat";
 import type { ServerFrame } from "../domain/protocol";
-import type { Page } from "../generated/protocol";
-import type { History, Transport } from "./ports";
+import type { Attachment, Page } from "../generated/protocol";
+import type { History, Media, Transport } from "./ports";
 
 import { reconcileHistory, reduceFrame } from "../domain/chat";
 import { MaxMessageBytes } from "../generated/protocol";
@@ -34,6 +34,7 @@ export class ChatStore {
   constructor(
     readonly transport: Transport,
     private readonly history: History,
+    readonly media?: Media,
   ) {}
   getSnapshot = () => this.state;
   subscribe = (listener: () => void) => {
@@ -99,27 +100,46 @@ export class ChatStore {
     this.transport.presence(foreground);
   }
 
-  send(input: string) {
+  send(input: string, parts: readonly Attachment[] = []) {
     const text = input.trim();
-    if (text === "") return false;
+    if (text === "" && parts.length === 0) return false;
     if (new TextEncoder().encode(text).length > MaxMessageBytes) {
       this.update({ error: "This message is too long. Keep it under 64 KiB." });
       return false;
     }
     const id = crypto.randomUUID();
     try {
-      this.transport.send(text, id);
+      if (parts.length === 0) this.transport.send(text, id);
+      else this.transport.send(text, id, parts);
     } catch (error) {
       this.fail(error);
       return false;
     }
     const afterTurn = this.state.live?.turn ?? this.state.messages.at(-1)?.turn ?? "0";
     this.update({
-      pending: [...this.state.pending, { id, text, state: "sending", afterTurn }],
+      pending: [...this.state.pending, { id, text, parts, state: "sending", afterTurn }],
       error: null,
     });
     return true;
   }
+  async sendFiles(input: string, files: readonly File[]): Promise<boolean> {
+    if (new TextEncoder().encode(input.trim()).length > MaxMessageBytes) {
+      this.update({ error: "This message is too long. Keep it under 64 KiB." });
+      return false;
+    }
+    const generation = this.generation;
+    try {
+      if (!this.media) throw new Error("Attachments are unavailable.");
+      const parts = await this.media.upload(files);
+      if (generation !== this.generation || this.state.connection !== "connected")
+        throw new Error("Chat reconnected. Your draft is still here.");
+      return this.send(input, parts);
+    } catch (error) {
+      this.fail(error);
+      return false;
+    }
+  }
+
   abort() {
     try {
       this.transport.abort(this.state.active ?? "0");

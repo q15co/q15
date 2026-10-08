@@ -463,8 +463,9 @@ type SendMessageRequest struct {
 	// client_msg_id is the client's own identifier for this send. It is echoed
 	// back so a client can match the accepted run to its optimistic message. The
 	// transcript has no per-message identifier, so this is not persisted.
-	ClientMsgId   string `protobuf:"bytes,2,opt,name=client_msg_id,json=clientMsgId,proto3" json:"client_msg_id,omitempty"`
-	Text          string `protobuf:"bytes,3,opt,name=text,proto3" json:"text,omitempty"`
+	ClientMsgId   string         `protobuf:"bytes,2,opt,name=client_msg_id,json=clientMsgId,proto3" json:"client_msg_id,omitempty"`
+	Text          string         `protobuf:"bytes,3,opt,name=text,proto3" json:"text,omitempty"`
+	Parts         []*MessagePart `protobuf:"bytes,4,rep,name=parts,proto3" json:"parts,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -518,6 +519,13 @@ func (x *SendMessageRequest) GetText() string {
 		return x.Text
 	}
 	return ""
+}
+
+func (x *SendMessageRequest) GetParts() []*MessagePart {
+	if x != nil {
+		return x.Parts
+	}
+	return nil
 }
 
 type SendMessageResponse struct {
@@ -2266,6 +2274,126 @@ func (x *BrowserHistoryRequest) GetLimit() int32 {
 	return 0
 }
 
+type PutMediaRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Binding       string                 `protobuf:"bytes,1,opt,name=binding,proto3" json:"binding,omitempty"`
+	ChannelId     string                 `protobuf:"bytes,2,opt,name=channel_id,json=channelId,proto3" json:"channel_id,omitempty"`
+	Frame         []byte                 `protobuf:"bytes,3,opt,name=frame,proto3" json:"frame,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PutMediaRequest) Reset() {
+	*x = PutMediaRequest{}
+	mi := &file_q15_chat_v1_chat_proto_msgTypes[34]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PutMediaRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PutMediaRequest) ProtoMessage() {}
+
+func (x *PutMediaRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_q15_chat_v1_chat_proto_msgTypes[34]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PutMediaRequest.ProtoReflect.Descriptor instead.
+func (*PutMediaRequest) Descriptor() ([]byte, []int) {
+	return file_q15_chat_v1_chat_proto_rawDescGZIP(), []int{34}
+}
+
+func (x *PutMediaRequest) GetBinding() string {
+	if x != nil {
+		return x.Binding
+	}
+	return ""
+}
+
+func (x *PutMediaRequest) GetChannelId() string {
+	if x != nil {
+		return x.ChannelId
+	}
+	return ""
+}
+
+func (x *PutMediaRequest) GetFrame() []byte {
+	if x != nil {
+		return x.Frame
+	}
+	return nil
+}
+
+type GetMediaRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Binding       string                 `protobuf:"bytes,1,opt,name=binding,proto3" json:"binding,omitempty"`
+	ChannelId     string                 `protobuf:"bytes,2,opt,name=channel_id,json=channelId,proto3" json:"channel_id,omitempty"`
+	MediaRef      string                 `protobuf:"bytes,3,opt,name=media_ref,json=mediaRef,proto3" json:"media_ref,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetMediaRequest) Reset() {
+	*x = GetMediaRequest{}
+	mi := &file_q15_chat_v1_chat_proto_msgTypes[35]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetMediaRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetMediaRequest) ProtoMessage() {}
+
+func (x *GetMediaRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_q15_chat_v1_chat_proto_msgTypes[35]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetMediaRequest.ProtoReflect.Descriptor instead.
+func (*GetMediaRequest) Descriptor() ([]byte, []int) {
+	return file_q15_chat_v1_chat_proto_rawDescGZIP(), []int{35}
+}
+
+func (x *GetMediaRequest) GetBinding() string {
+	if x != nil {
+		return x.Binding
+	}
+	return ""
+}
+
+func (x *GetMediaRequest) GetChannelId() string {
+	if x != nil {
+		return x.ChannelId
+	}
+	return ""
+}
+
+func (x *GetMediaRequest) GetMediaRef() string {
+	if x != nil {
+		return x.MediaRef
+	}
+	return ""
+}
+
 var File_q15_chat_v1_chat_proto protoreflect.FileDescriptor
 
 const file_q15_chat_v1_chat_proto_rawDesc = "" +
@@ -2289,12 +2417,13 @@ const file_q15_chat_v1_chat_proto_rawDesc = "" +
 	"\x12OpenSessionRequest\x12\x17\n" +
 	"\achat_id\x18\x01 \x01(\tR\x06chatId\"E\n" +
 	"\x13OpenSessionResponse\x12.\n" +
-	"\asession\x18\x01 \x01(\v2\x14.q15.chat.v1.SessionR\asession\"k\n" +
+	"\asession\x18\x01 \x01(\v2\x14.q15.chat.v1.SessionR\asession\"\x9b\x01\n" +
 	"\x12SendMessageRequest\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\"\n" +
 	"\rclient_msg_id\x18\x02 \x01(\tR\vclientMsgId\x12\x12\n" +
-	"\x04text\x18\x03 \x01(\tR\x04text\"\x81\x01\n" +
+	"\x04text\x18\x03 \x01(\tR\x04text\x12.\n" +
+	"\x05parts\x18\x04 \x03(\v2\x18.q15.chat.v1.MessagePartR\x05parts\"\x81\x01\n" +
 	"\x13SendMessageResponse\x12\"\n" +
 	"\rclient_msg_id\x18\x01 \x01(\tR\vclientMsgId\x12\x16\n" +
 	"\x06queued\x18\x02 \x01(\bR\x06queued\x12.\n" +
@@ -2412,7 +2541,17 @@ const file_q15_chat_v1_chat_proto_rawDesc = "" +
 	"\n" +
 	"channel_id\x18\x02 \x01(\tR\tchannelId\x12\x1b\n" +
 	"\tafter_seq\x18\x03 \x01(\x03R\bafterSeq\x12\x14\n" +
-	"\x05limit\x18\x04 \x01(\x05R\x05limit*z\n" +
+	"\x05limit\x18\x04 \x01(\x05R\x05limit\"`\n" +
+	"\x0fPutMediaRequest\x12\x18\n" +
+	"\abinding\x18\x01 \x01(\tR\abinding\x12\x1d\n" +
+	"\n" +
+	"channel_id\x18\x02 \x01(\tR\tchannelId\x12\x14\n" +
+	"\x05frame\x18\x03 \x01(\fR\x05frame\"g\n" +
+	"\x0fGetMediaRequest\x12\x18\n" +
+	"\abinding\x18\x01 \x01(\tR\abinding\x12\x1d\n" +
+	"\n" +
+	"channel_id\x18\x02 \x01(\tR\tchannelId\x12\x1b\n" +
+	"\tmedia_ref\x18\x03 \x01(\tR\bmediaRef*z\n" +
 	"\fSessionState\x12\x1d\n" +
 	"\x19SESSION_STATE_UNSPECIFIED\x10\x00\x12\x16\n" +
 	"\x12SESSION_STATE_IDLE\x10\x01\x12\x19\n" +
@@ -2422,10 +2561,12 @@ const file_q15_chat_v1_chat_proto_rawDesc = "" +
 	"\x16RUN_STATUS_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14RUN_STATUS_COMPLETED\x10\x01\x12\x16\n" +
 	"\x12RUN_STATUS_ABORTED\x10\x02\x12\x15\n" +
-	"\x11RUN_STATUS_FAILED\x10\x032\xd4\x05\n" +
+	"\x11RUN_STATUS_FAILED\x10\x032\xe2\x06\n" +
 	"\vChatService\x12L\n" +
 	"\x0eBrowserChannel\x12\x1a.q15.chat.v1.BrowserPacket\x1a\x1a.q15.chat.v1.BrowserPacket(\x010\x01\x12P\n" +
-	"\x0eBrowserHistory\x12\".q15.chat.v1.BrowserHistoryRequest\x1a\x1a.q15.chat.v1.BrowserPacket\x12Y\n" +
+	"\x0eBrowserHistory\x12\".q15.chat.v1.BrowserHistoryRequest\x1a\x1a.q15.chat.v1.BrowserPacket\x12D\n" +
+	"\bPutMedia\x12\x1c.q15.chat.v1.PutMediaRequest\x1a\x1a.q15.chat.v1.BrowserPacket\x12F\n" +
+	"\bGetMedia\x12\x1c.q15.chat.v1.GetMediaRequest\x1a\x1a.q15.chat.v1.BrowserPacket0\x01\x12Y\n" +
 	"\x0eGetRuntimeInfo\x12\".q15.chat.v1.GetRuntimeInfoRequest\x1a#.q15.chat.v1.GetRuntimeInfoResponse\x12P\n" +
 	"\vOpenSession\x12\x1f.q15.chat.v1.OpenSessionRequest\x1a .q15.chat.v1.OpenSessionResponse\x12P\n" +
 	"\vSendMessage\x12\x1f.q15.chat.v1.SendMessageRequest\x1a .q15.chat.v1.SendMessageResponse\x12>\n" +
@@ -2447,7 +2588,7 @@ func file_q15_chat_v1_chat_proto_rawDescGZIP() []byte {
 }
 
 var file_q15_chat_v1_chat_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_q15_chat_v1_chat_proto_msgTypes = make([]protoimpl.MessageInfo, 34)
+var file_q15_chat_v1_chat_proto_msgTypes = make([]protoimpl.MessageInfo, 36)
 var file_q15_chat_v1_chat_proto_goTypes = []any{
 	(SessionState)(0),              // 0: q15.chat.v1.SessionState
 	(RunStatus)(0),                 // 1: q15.chat.v1.RunStatus
@@ -2485,61 +2626,68 @@ var file_q15_chat_v1_chat_proto_goTypes = []any{
 	(*DeliverResponse)(nil),        // 33: q15.chat.v1.DeliverResponse
 	(*BrowserPacket)(nil),          // 34: q15.chat.v1.BrowserPacket
 	(*BrowserHistoryRequest)(nil),  // 35: q15.chat.v1.BrowserHistoryRequest
-	(*timestamppb.Timestamp)(nil),  // 36: google.protobuf.Timestamp
+	(*PutMediaRequest)(nil),        // 36: q15.chat.v1.PutMediaRequest
+	(*GetMediaRequest)(nil),        // 37: q15.chat.v1.GetMediaRequest
+	(*timestamppb.Timestamp)(nil),  // 38: google.protobuf.Timestamp
 }
 var file_q15_chat_v1_chat_proto_depIdxs = []int32{
 	3,  // 0: q15.chat.v1.GetRuntimeInfoResponse.capabilities:type_name -> q15.chat.v1.RuntimeCapability
 	0,  // 1: q15.chat.v1.Session.state:type_name -> q15.chat.v1.SessionState
-	36, // 2: q15.chat.v1.Session.opened_at:type_name -> google.protobuf.Timestamp
+	38, // 2: q15.chat.v1.Session.opened_at:type_name -> google.protobuf.Timestamp
 	5,  // 3: q15.chat.v1.OpenSessionResponse.session:type_name -> q15.chat.v1.Session
-	5,  // 4: q15.chat.v1.SendMessageResponse.session:type_name -> q15.chat.v1.Session
-	5,  // 5: q15.chat.v1.AbortResponse.session:type_name -> q15.chat.v1.Session
-	14, // 6: q15.chat.v1.WatchEventsResponse.event:type_name -> q15.chat.v1.SessionEvent
-	36, // 7: q15.chat.v1.SessionEvent.occurred_at:type_name -> google.protobuf.Timestamp
-	15, // 8: q15.chat.v1.SessionEvent.session_opened:type_name -> q15.chat.v1.SessionOpened
-	16, // 9: q15.chat.v1.SessionEvent.run_started:type_name -> q15.chat.v1.RunStarted
-	17, // 10: q15.chat.v1.SessionEvent.model_turn_started:type_name -> q15.chat.v1.ModelTurnStarted
-	18, // 11: q15.chat.v1.SessionEvent.model_turn_delta:type_name -> q15.chat.v1.ModelTurnDelta
-	19, // 12: q15.chat.v1.SessionEvent.model_reasoning_delta:type_name -> q15.chat.v1.ModelReasoningDelta
-	21, // 13: q15.chat.v1.SessionEvent.tool_started:type_name -> q15.chat.v1.ToolStarted
-	22, // 14: q15.chat.v1.SessionEvent.tool_finished:type_name -> q15.chat.v1.ToolFinished
-	23, // 15: q15.chat.v1.SessionEvent.run_finished:type_name -> q15.chat.v1.RunFinished
-	24, // 16: q15.chat.v1.SessionEvent.run_failed:type_name -> q15.chat.v1.RunFailed
-	25, // 17: q15.chat.v1.SessionEvent.snapshot:type_name -> q15.chat.v1.Snapshot
-	26, // 18: q15.chat.v1.SessionEvent.notice:type_name -> q15.chat.v1.Notice
-	20, // 19: q15.chat.v1.ToolStarted.call:type_name -> q15.chat.v1.ToolCall
-	20, // 20: q15.chat.v1.ToolFinished.call:type_name -> q15.chat.v1.ToolCall
-	1,  // 21: q15.chat.v1.RunFinished.status:type_name -> q15.chat.v1.RunStatus
-	1,  // 22: q15.chat.v1.RunFailed.status:type_name -> q15.chat.v1.RunStatus
-	29, // 23: q15.chat.v1.ListTurnsResponse.turns:type_name -> q15.chat.v1.Turn
-	36, // 24: q15.chat.v1.Turn.created_at:type_name -> google.protobuf.Timestamp
-	30, // 25: q15.chat.v1.Turn.messages:type_name -> q15.chat.v1.Message
-	31, // 26: q15.chat.v1.Message.parts:type_name -> q15.chat.v1.MessagePart
-	20, // 27: q15.chat.v1.MessagePart.tool_call:type_name -> q15.chat.v1.ToolCall
-	36, // 28: q15.chat.v1.DeliverResponse.queued_at:type_name -> google.protobuf.Timestamp
-	34, // 29: q15.chat.v1.ChatService.BrowserChannel:input_type -> q15.chat.v1.BrowserPacket
-	35, // 30: q15.chat.v1.ChatService.BrowserHistory:input_type -> q15.chat.v1.BrowserHistoryRequest
-	2,  // 31: q15.chat.v1.ChatService.GetRuntimeInfo:input_type -> q15.chat.v1.GetRuntimeInfoRequest
-	6,  // 32: q15.chat.v1.ChatService.OpenSession:input_type -> q15.chat.v1.OpenSessionRequest
-	8,  // 33: q15.chat.v1.ChatService.SendMessage:input_type -> q15.chat.v1.SendMessageRequest
-	10, // 34: q15.chat.v1.ChatService.Abort:input_type -> q15.chat.v1.AbortRequest
-	12, // 35: q15.chat.v1.ChatService.WatchEvents:input_type -> q15.chat.v1.WatchEventsRequest
-	27, // 36: q15.chat.v1.ChatService.ListTurns:input_type -> q15.chat.v1.ListTurnsRequest
-	32, // 37: q15.chat.v1.ChatService.Deliver:input_type -> q15.chat.v1.DeliverRequest
-	34, // 38: q15.chat.v1.ChatService.BrowserChannel:output_type -> q15.chat.v1.BrowserPacket
-	34, // 39: q15.chat.v1.ChatService.BrowserHistory:output_type -> q15.chat.v1.BrowserPacket
-	4,  // 40: q15.chat.v1.ChatService.GetRuntimeInfo:output_type -> q15.chat.v1.GetRuntimeInfoResponse
-	7,  // 41: q15.chat.v1.ChatService.OpenSession:output_type -> q15.chat.v1.OpenSessionResponse
-	9,  // 42: q15.chat.v1.ChatService.SendMessage:output_type -> q15.chat.v1.SendMessageResponse
-	11, // 43: q15.chat.v1.ChatService.Abort:output_type -> q15.chat.v1.AbortResponse
-	13, // 44: q15.chat.v1.ChatService.WatchEvents:output_type -> q15.chat.v1.WatchEventsResponse
-	28, // 45: q15.chat.v1.ChatService.ListTurns:output_type -> q15.chat.v1.ListTurnsResponse
-	33, // 46: q15.chat.v1.ChatService.Deliver:output_type -> q15.chat.v1.DeliverResponse
-	38, // [38:47] is the sub-list for method output_type
-	29, // [29:38] is the sub-list for method input_type
-	29, // [29:29] is the sub-list for extension type_name
-	29, // [29:29] is the sub-list for extension extendee
-	0,  // [0:29] is the sub-list for field type_name
+	31, // 4: q15.chat.v1.SendMessageRequest.parts:type_name -> q15.chat.v1.MessagePart
+	5,  // 5: q15.chat.v1.SendMessageResponse.session:type_name -> q15.chat.v1.Session
+	5,  // 6: q15.chat.v1.AbortResponse.session:type_name -> q15.chat.v1.Session
+	14, // 7: q15.chat.v1.WatchEventsResponse.event:type_name -> q15.chat.v1.SessionEvent
+	38, // 8: q15.chat.v1.SessionEvent.occurred_at:type_name -> google.protobuf.Timestamp
+	15, // 9: q15.chat.v1.SessionEvent.session_opened:type_name -> q15.chat.v1.SessionOpened
+	16, // 10: q15.chat.v1.SessionEvent.run_started:type_name -> q15.chat.v1.RunStarted
+	17, // 11: q15.chat.v1.SessionEvent.model_turn_started:type_name -> q15.chat.v1.ModelTurnStarted
+	18, // 12: q15.chat.v1.SessionEvent.model_turn_delta:type_name -> q15.chat.v1.ModelTurnDelta
+	19, // 13: q15.chat.v1.SessionEvent.model_reasoning_delta:type_name -> q15.chat.v1.ModelReasoningDelta
+	21, // 14: q15.chat.v1.SessionEvent.tool_started:type_name -> q15.chat.v1.ToolStarted
+	22, // 15: q15.chat.v1.SessionEvent.tool_finished:type_name -> q15.chat.v1.ToolFinished
+	23, // 16: q15.chat.v1.SessionEvent.run_finished:type_name -> q15.chat.v1.RunFinished
+	24, // 17: q15.chat.v1.SessionEvent.run_failed:type_name -> q15.chat.v1.RunFailed
+	25, // 18: q15.chat.v1.SessionEvent.snapshot:type_name -> q15.chat.v1.Snapshot
+	26, // 19: q15.chat.v1.SessionEvent.notice:type_name -> q15.chat.v1.Notice
+	20, // 20: q15.chat.v1.ToolStarted.call:type_name -> q15.chat.v1.ToolCall
+	20, // 21: q15.chat.v1.ToolFinished.call:type_name -> q15.chat.v1.ToolCall
+	1,  // 22: q15.chat.v1.RunFinished.status:type_name -> q15.chat.v1.RunStatus
+	1,  // 23: q15.chat.v1.RunFailed.status:type_name -> q15.chat.v1.RunStatus
+	29, // 24: q15.chat.v1.ListTurnsResponse.turns:type_name -> q15.chat.v1.Turn
+	38, // 25: q15.chat.v1.Turn.created_at:type_name -> google.protobuf.Timestamp
+	30, // 26: q15.chat.v1.Turn.messages:type_name -> q15.chat.v1.Message
+	31, // 27: q15.chat.v1.Message.parts:type_name -> q15.chat.v1.MessagePart
+	20, // 28: q15.chat.v1.MessagePart.tool_call:type_name -> q15.chat.v1.ToolCall
+	38, // 29: q15.chat.v1.DeliverResponse.queued_at:type_name -> google.protobuf.Timestamp
+	34, // 30: q15.chat.v1.ChatService.BrowserChannel:input_type -> q15.chat.v1.BrowserPacket
+	35, // 31: q15.chat.v1.ChatService.BrowserHistory:input_type -> q15.chat.v1.BrowserHistoryRequest
+	36, // 32: q15.chat.v1.ChatService.PutMedia:input_type -> q15.chat.v1.PutMediaRequest
+	37, // 33: q15.chat.v1.ChatService.GetMedia:input_type -> q15.chat.v1.GetMediaRequest
+	2,  // 34: q15.chat.v1.ChatService.GetRuntimeInfo:input_type -> q15.chat.v1.GetRuntimeInfoRequest
+	6,  // 35: q15.chat.v1.ChatService.OpenSession:input_type -> q15.chat.v1.OpenSessionRequest
+	8,  // 36: q15.chat.v1.ChatService.SendMessage:input_type -> q15.chat.v1.SendMessageRequest
+	10, // 37: q15.chat.v1.ChatService.Abort:input_type -> q15.chat.v1.AbortRequest
+	12, // 38: q15.chat.v1.ChatService.WatchEvents:input_type -> q15.chat.v1.WatchEventsRequest
+	27, // 39: q15.chat.v1.ChatService.ListTurns:input_type -> q15.chat.v1.ListTurnsRequest
+	32, // 40: q15.chat.v1.ChatService.Deliver:input_type -> q15.chat.v1.DeliverRequest
+	34, // 41: q15.chat.v1.ChatService.BrowserChannel:output_type -> q15.chat.v1.BrowserPacket
+	34, // 42: q15.chat.v1.ChatService.BrowserHistory:output_type -> q15.chat.v1.BrowserPacket
+	34, // 43: q15.chat.v1.ChatService.PutMedia:output_type -> q15.chat.v1.BrowserPacket
+	34, // 44: q15.chat.v1.ChatService.GetMedia:output_type -> q15.chat.v1.BrowserPacket
+	4,  // 45: q15.chat.v1.ChatService.GetRuntimeInfo:output_type -> q15.chat.v1.GetRuntimeInfoResponse
+	7,  // 46: q15.chat.v1.ChatService.OpenSession:output_type -> q15.chat.v1.OpenSessionResponse
+	9,  // 47: q15.chat.v1.ChatService.SendMessage:output_type -> q15.chat.v1.SendMessageResponse
+	11, // 48: q15.chat.v1.ChatService.Abort:output_type -> q15.chat.v1.AbortResponse
+	13, // 49: q15.chat.v1.ChatService.WatchEvents:output_type -> q15.chat.v1.WatchEventsResponse
+	28, // 50: q15.chat.v1.ChatService.ListTurns:output_type -> q15.chat.v1.ListTurnsResponse
+	33, // 51: q15.chat.v1.ChatService.Deliver:output_type -> q15.chat.v1.DeliverResponse
+	41, // [41:52] is the sub-list for method output_type
+	30, // [30:41] is the sub-list for method input_type
+	30, // [30:30] is the sub-list for extension type_name
+	30, // [30:30] is the sub-list for extension extendee
+	0,  // [0:30] is the sub-list for field type_name
 }
 
 func init() { file_q15_chat_v1_chat_proto_init() }
@@ -2566,7 +2714,7 @@ func file_q15_chat_v1_chat_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_q15_chat_v1_chat_proto_rawDesc), len(file_q15_chat_v1_chat_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   34,
+			NumMessages:   36,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

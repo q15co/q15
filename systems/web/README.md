@@ -187,7 +187,7 @@ allocates a fresh handle; it does not invalidate the independent browser auth st
 
 ## Browser contract
 
-The browser contract is version 2, independent of the gRPC protocol version. Every frame is
+The browser contract is version 3, independent of the gRPC protocol version. Every frame is
 `{v, id, type, ts, seq, payload}`. `v` is an integer; `ts` is an RFC3339 UTC timestamp. All int64
 sequence and cursor values are **decimal JSON strings**, preserving numbers above JavaScript's safe
 integer limit. Clients should compare them as `BigInt` values.
@@ -352,3 +352,24 @@ Tests exercise a `bufconn` bridge with real `httptest` sockets, a real Unix-sock
 handshake, policy goldens, gate/origin matrices, multiple devices, stream reconnects, sparse replay
 windows, live-turn exclusion, embedded assertions, SPA routing and a disk override containing only
 an index.
+
+## Attachments
+
+The composer holds files in memory until Send. One proof-authorized `POST /api/media` carries a
+sealed batch, capped at 16 files and 8 MiB of decoded file bytes total. Raster images larger than
+2048 pixels are resized before upload. Attachment-only messages are supported. Agent and web must
+upgrade together (bridge and browser protocol version 3).
+
+The agent authenticates the envelope, sniffs bytes, and writes through its runtime media store.
+Neither q15-web nor its volume sees plaintext files or descriptors. `GetMedia` streams the existing
+32 KiB encrypted chunks through `GET /api/media/<sha256>` for the current content session. Filename,
+sniffed type and size are inside the authenticated descriptor; HTTP headers describe only the sealed
+response (`attachment`, `nosniff`, sandbox CSP, `no-store`). The browser creates temporary object
+URLs after complete authenticated decryption and releases them when a part unmounts. Only
+allowlisted raster images and audio render inline; every other kind uses a download link, including
+HTML and SVG. Both live and historical messages use the same renderer.
+
+Each upload/send owns a conversation scope. At startup and hourly, the agent retains scopes named by
+completed transcript parts and calls `ReleaseAll` for unreferenced web scopes older than 24 hours.
+Queuing a previously uploaded ref renews that grace period. Transcript retention therefore controls
+referenced media retention; interrupted uploads are swept without a pending-upload store.

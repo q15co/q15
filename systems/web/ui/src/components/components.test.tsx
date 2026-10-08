@@ -32,7 +32,7 @@ describe("message rendering", () => {
     expect(screen.getByText("Thinking")).toBeDefined();
     expect(screen.getByText("bash")).toBeDefined();
     expect(screen.getByText("Tool error")).toBeDefined();
-    expect(screen.getByText("media://sha256/hash")).toBeDefined();
+    expect(screen.getByTitle("Attachment")).toBeDefined();
     expect(screen.getByText("answer")).toBeDefined();
     expect(container.querySelectorAll("details")).toHaveLength(3);
     render(

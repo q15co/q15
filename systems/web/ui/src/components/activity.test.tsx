@@ -64,7 +64,7 @@ describe("turn activity", () => {
       />,
     );
     expect(screen.getByText("answer")).toBeDefined();
-    expect(screen.getByText("media://sha256/hash")).toBeDefined();
+    expect(screen.getByTitle("Attachment")).toBeDefined();
     expect(screen.getByText("1 error")).toBeDefined();
     expect(screen.getByText("/workspace")).toBeDefined();
     expect(container.querySelectorAll('[id="message-42:0"]')).toHaveLength(1);

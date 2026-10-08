@@ -50,7 +50,7 @@ func (f *fakeTurnLister) LoadHead(ctx context.Context) (int64, time.Time, error)
 
 func startBridgeService(t *testing.T, lister TurnLister) chatpb.ChatServiceClient {
 	t.Helper()
-	return startChatService(t, NewService(lister, NewAgentEndpoint(&fakePublisher{})))
+	return startChatService(t, NewService(lister, NewAgentEndpoint(&fakePublisher{}), nil))
 }
 
 func startChatService(t *testing.T, service *Service) chatpb.ChatServiceClient {

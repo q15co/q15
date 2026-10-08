@@ -5,8 +5,9 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 
 import type { ClientFrame } from "../src/domain/protocol";
-import type { Frame, Page } from "../src/generated/protocol";
+import type { Attachment, Frame, Page } from "../src/generated/protocol";
 
+import { parseMediaFiles } from "../src/domain/media";
 import { parseClientFrame, parseSealed, parseWireFrame } from "../src/domain/protocol";
 import { frame } from "../src/infrastructure/envelope";
 import { parseShellManifest } from "../src/shared/shell-manifest";
@@ -78,9 +79,9 @@ async function backend(
   history: Page = emptyHistory,
   onSend?: (send: (value: Frame, damage?: boolean) => void) => void,
   paginate = false,
+  sealers = new Map<string, TestSealer>(),
 ) {
   const requests: ClientFrame[] = [];
-  const sealers = new Map<string, TestSealer>();
   await page.route("**/api/turns?**", (route) => {
     const before = new URL(route.request().url()).searchParams.get("after_seq");
     const response =
@@ -1027,4 +1028,201 @@ test("a damaged sealed frame is visible while later content uses the same socket
   await page.getByRole("button", { name: "Send message", exact: true }).click();
   await expect.poll(() => requests.filter((request) => request.type === "msg.send").length).toBe(2);
   expect(requests.filter((request) => request.type === "hello")).toHaveLength(1);
+});
+
+test("held attachments fit above the message in both palettes and on narrow screens", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const requests = await backend(page);
+  await page.goto("/");
+  await expect(page.getByRole("button", { name: "Attach files" })).toBeEnabled();
+  const pdfName = "2025_komprimierte_druckvorschau_5899504.pdf";
+  await page.getByLabel("Choose attachments").setInputFiles([
+    { name: pdfName, mimeType: "application/pdf", buffer: Buffer.alloc(1536 * 1024) },
+    { name: "holiday-photo.png", mimeType: "image/png", buffer: Buffer.alloc(96 * 1024) },
+    { name: "voice-note.ogg", mimeType: "audio/ogg", buffer: Buffer.alloc(24 * 1024) },
+  ]);
+  const tray = page.getByRole("region", { name: "Selected attachments" });
+  await expect(tray.getByText(pdfName)).toBeVisible();
+  await expect(tray.getByText("PDF · 1.5 MiB")).toBeVisible();
+  await expect(page.getByLabel(`Remove ${pdfName}`)).toBeEnabled();
+  await page.locator("form").screenshot({ path: "test-results/attachments-mocha.png" });
+  await page.getByRole("button", { name: /Switch to .* theme/u }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "latte");
+  await page.locator("form").screenshot({ path: "test-results/attachments-latte.png" });
+  await page.setViewportSize({ width: 320, height: 640 });
+  await expect(page.getByLabel("Message q15")).toBeInViewport();
+  await expect(page.getByRole("button", { name: "Send message", exact: true })).toBeInViewport();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.locator("form").screenshot({ path: "test-results/attachments-mobile.png" });
+  await page.getByLabel(`Remove ${pdfName}`).click();
+  await expect(tray.getByText(pdfName)).toHaveCount(0);
+  await page.getByLabel("Choose attachments").setInputFiles(
+    Array.from({ length: 14 }, (_, index) => ({
+      name: `a-very-long-file-name-to-check-composer-overflow-${index}.txt`,
+      mimeType: "text/plain",
+      buffer: Buffer.alloc(1),
+    })),
+  );
+  await expect(page.getByLabel("Message q15")).toBeInViewport();
+  await expect(page.getByRole("button", { name: "Send message", exact: true })).toBeInViewport();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  expect(requests.filter((request) => request.type === "msg.send")).toHaveLength(0);
+});
+
+test("uploads on send, renders a resized image and preserves sealed media across reload", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const sealers = new Map<string, TestSealer>();
+  const history: Page = { turns: [], head_seq: "0", has_more: false };
+  const files = new Map<string, { filename: string; contentType: string; data: Buffer }>();
+  let uploads = 0;
+  let parts: Attachment[] = [];
+  let completeResponse: (() => void) | undefined;
+  await page.route("**/api/media", async (route) => {
+    uploads++;
+    const headers = route.request().headers();
+    expect(headers["q15-proof"]).toBeDefined();
+    const sealer = required(sealers.get(headers["q15-channel"] ?? ""));
+    const wire = parseWireFrame(required(route.request().postData()));
+    expect(JSON.stringify(wire)).not.toContain("picked.png");
+    const decoded = sealer.openBytes(wire);
+    expect(decoded.contentType).toBe("application/vnd.q15.media");
+    const headerLength = decoded.bytes.readUInt32BE(0);
+    const descriptors: unknown = JSON.parse(decoded.bytes.subarray(4, 4 + headerLength).toString());
+    const metadata = parseMediaFiles(descriptors);
+    let offset = 4 + headerLength;
+    parts = metadata.map((file) => {
+      const data = decoded.bytes.subarray(offset, offset + file.size);
+      offset += file.size;
+      const ref = "media://sha256/" + createHash("sha256").update(data).digest("hex");
+      files.set(ref, { filename: file.filename, contentType: file.content_type, data });
+      return {
+        part_type: "media",
+        media_kind: file.content_type === "image/png" ? "image" : "document",
+        media_ref: ref,
+        filename: file.filename,
+        content_type: file.content_type,
+      };
+    });
+    await route.fulfill({ json: sealer.seal(frame("media.done", { parts }, wire.id)) });
+  });
+  await page.route("**/api/media/*", async (route) => {
+    const sealer = required(sealers.get(route.request().headers()["q15-channel"] ?? ""));
+    const ref = "media://sha256/" + new URL(route.request().url()).pathname.split("/").at(-1);
+    const file = required(files.get(ref));
+    const header = Buffer.from(
+      JSON.stringify([
+        { filename: file.filename, content_type: file.contentType, size: file.data.length },
+      ]),
+    );
+    const prefix = Buffer.alloc(4);
+    prefix.writeUInt32BE(header.length);
+    await route.fulfill({
+      json: sealer.seal(
+        frame("media.get", {}, ref),
+        "application/vnd.q15.media",
+        Buffer.concat([prefix, header, file.data]),
+      ),
+    });
+  });
+  const requests = await backend(
+    page,
+    history,
+    (send) => {
+      send(
+        frame("delta", {
+          msg: { turn: "31", ordinal: -1 },
+          seq: "1",
+          kind: "text",
+          text: "Reading your attachment…",
+        }),
+      );
+      completeResponse = () => {
+        history.head_seq = "31";
+        history.turns = [
+          {
+            seq: "31",
+            created_at: "2026-10-08T00:00:00Z",
+            messages: [
+              {
+                ordinal: 0,
+                role: "user",
+                parts: parts.map((part, ordinal) => ({
+                  ordinal,
+                  part_type: "media",
+                  media_kind: part.media_kind,
+                  media_ref: part.media_ref,
+                })),
+              },
+            ],
+          },
+        ];
+        send(
+          frame("msg.final", {
+            msg: { turn: "31", ordinal: -1 },
+            status: "completed",
+            full_text: "Attachment received.",
+          }),
+        );
+      };
+    },
+    false,
+    sealers,
+  );
+  await page.goto("/");
+  await expect(page.getByRole("button", { name: "Attach files" })).toBeEnabled();
+  const encoded = await page.evaluate(() => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 4096;
+    canvas.height = 2048;
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Canvas unavailable");
+    context.fillStyle = "#a6e3a1";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/png").split(",")[1];
+  });
+  await page.getByLabel("Choose attachments").setInputFiles([
+    {
+      name: "picked.png",
+      mimeType: "image/png",
+      buffer: Buffer.from(required(encoded), "base64"),
+    },
+    { name: "report.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.7\nreport\n") },
+  ]);
+  expect(uploads).toBe(0);
+  await page.getByRole("button", { name: "Send message", exact: true }).click();
+  await expect(page.getByText("Reading your attachment…", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Stop response" })).toBeVisible();
+  const image = page.getByRole("img", { name: "picked.png" });
+  await expect(image).toBeVisible();
+  expect(
+    await image.evaluate((element) =>
+      element instanceof HTMLImageElement ? element.naturalWidth : 0,
+    ),
+  ).toBe(2048);
+  expect(requests.find((request) => request.type === "msg.send")?.payload).toMatchObject({
+    text: "",
+    parts,
+  });
+  expect(uploads).toBe(1);
+  await expect(page.getByText("report.pdf", { exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Download", exact: true })).toHaveCount(2);
+  await page.screenshot({ path: "test-results/attachments-streaming-mocha.png" });
+  await page.getByRole("button", { name: /Switch to .* theme/u }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "latte");
+  await page.screenshot({ path: "test-results/attachments-streaming-latte.png" });
+  await page.setViewportSize({ width: 320, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await expect(page.getByRole("button", { name: "Stop response" })).toBeInViewport();
+  await page.screenshot({ path: "test-results/attachments-streaming-mobile.png" });
+  required(completeResponse)();
+  await expect(page.getByRole("button", { name: "Stop response" })).toHaveCount(0);
+  await expect(image).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole("img", { name: "picked.png" })).toBeVisible();
+  await expect(page.getByText("report.pdf", { exact: true })).toBeVisible();
+  expect(uploads).toBe(1);
 });

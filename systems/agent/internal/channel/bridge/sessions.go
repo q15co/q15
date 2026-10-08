@@ -12,6 +12,7 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/bus"
 	channelport "github.com/q15co/q15/systems/agent/internal/channel"
+	"github.com/q15co/q15/systems/agent/internal/conversation"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -152,15 +153,17 @@ func (e *AgentEndpoint) publishSend(
 	session *logicalSession,
 	clientMsgID string,
 	text string,
+	attachments []conversation.Part,
 ) error {
 	return e.publisher.PublishInbound(ctx, bus.InboundMessage{
-		Channel:   bus.ChannelBridge,
-		ChatID:    session.chatID,
-		SessionID: session.id,
-		UserID:    bridgeOwnerID,
-		MessageID: clientMsgID,
-		SentAt:    time.Now(),
-		Text:      text,
+		Channel:     bus.ChannelBridge,
+		ChatID:      session.chatID,
+		SessionID:   session.id,
+		UserID:      bridgeOwnerID,
+		MessageID:   clientMsgID,
+		SentAt:      time.Now(),
+		Text:        text,
+		Attachments: conversation.CloneParts(attachments),
 	})
 }
 

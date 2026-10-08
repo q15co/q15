@@ -1,0 +1,60 @@
+{
+  "parts": [
+    {
+      "part_type": "media",
+      "media_kind": "image",
+      "media_ref": "media://sha256/0000000000000000000000000000000000000000000000000000000000000000",
+      "filename": "photo.png",
+      "content_type": "image/png"
+    },
+    {
+      "part_type": "media",
+      "media_kind": "audio",
+      "media_ref": "media://sha256/0000000000000000000000000000000000000000000000000000000000000001",
+      "filename": "voice.wav",
+      "content_type": "audio/wave"
+    },
+    {
+      "part_type": "media",
+      "media_kind": "video",
+      "media_ref": "media://sha256/0000000000000000000000000000000000000000000000000000000000000002",
+      "filename": "video.mp4",
+      "content_type": "video/mp4"
+    },
+    {
+      "part_type": "media",
+      "media_kind": "document",
+      "media_ref": "media://sha256/0000000000000000000000000000000000000000000000000000000000000003",
+      "filename": "\u003cscript\u003enotes\u003c/script\u003e.html",
+      "content_type": "text/html; charset=utf-8"
+    },
+    {
+      "part_type": "media",
+      "media_kind": "sticker",
+      "media_ref": "media://sha256/0000000000000000000000000000000000000000000000000000000000000004",
+      "filename": "sticker.png",
+      "content_type": "image/png"
+    },
+    {
+      "part_type": "media",
+      "media_kind": "animation",
+      "media_ref": "media://sha256/0000000000000000000000000000000000000000000000000000000000000005",
+      "filename": "animation.gif",
+      "content_type": "image/gif"
+    },
+    {
+      "part_type": "media",
+      "media_kind": "video_note",
+      "media_ref": "media://sha256/0000000000000000000000000000000000000000000000000000000000000006",
+      "filename": "note.mp4",
+      "content_type": "video/mp4"
+    },
+    {
+      "part_type": "media",
+      "media_kind": "image",
+      "media_ref": "media://sha256/0000000000000000000000000000000000000000000000000000000000000007",
+      "filename": "unsafe.svg",
+      "content_type": "image/svg+xml"
+    }
+  ]
+}

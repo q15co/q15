@@ -48,7 +48,7 @@ const send = (type: string, payload: unknown) =>
   store.consume(
     parseFrame(
       JSON.stringify({
-        v: 2,
+        v: 3,
         id: crypto.randomUUID(),
         ts: "2026-10-01T12:00:00Z",
         seq: "0",

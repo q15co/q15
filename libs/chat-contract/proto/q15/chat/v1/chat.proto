@@ -28,6 +28,8 @@ service ChatService {
   // authorized identity from the web gate; all later packets carry frame bytes.
   rpc BrowserChannel(stream BrowserPacket) returns (stream BrowserPacket);
   rpc BrowserHistory(BrowserHistoryRequest) returns (BrowserPacket);
+  rpc PutMedia(PutMediaRequest) returns (BrowserPacket);
+  rpc GetMedia(GetMediaRequest) returns (stream BrowserPacket);
 
   // GetRuntimeInfo is the startup handshake: protocol version, transcript head
   // sequence and enabled capabilities.
@@ -122,6 +124,7 @@ message SendMessageRequest {
   // transcript has no per-message identifier, so this is not persisted.
   string client_msg_id = 2;
   string text = 3;
+  repeated MessagePart parts = 4;
 }
 
 message SendMessageResponse {
@@ -351,4 +354,16 @@ message BrowserHistoryRequest {
   string channel_id = 2;
   int64 after_seq = 3;
   int32 limit = 4;
+}
+
+message PutMediaRequest {
+  string binding = 1;
+  string channel_id = 2;
+  bytes frame = 3;
+}
+
+message GetMediaRequest {
+  string binding = 1;
+  string channel_id = 2;
+  string media_ref = 3;
 }
