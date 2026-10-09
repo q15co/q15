@@ -15,6 +15,11 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 FROM nixos/nix:latest
 
+# buildx sets TARGETARCH for every platform in a multi-platform build. The
+# nix-ld shim and the loader it points at sit at different paths on x86_64 and
+# aarch64, so both are selected from it below rather than hardcoded.
+ARG TARGETARCH
+
 RUN nix --extra-experimental-features 'nix-command flakes' build --no-link \
         nixpkgs#tzdata nixpkgs#fontconfig.out \
         nixpkgs#dejavu_fonts nixpkgs#inter nixpkgs#liberation_ttf nixpkgs#noto-fonts \
@@ -37,14 +42,19 @@ RUN nix --extra-experimental-features 'nix-command flakes' build --no-link \
     LIBXML2_PATH="$(nix --extra-experimental-features 'nix-command flakes' eval --raw nixpkgs#libxml2.out.outPath)" && \
     OPENSSL_PATH="$(nix --extra-experimental-features 'nix-command flakes' eval --raw nixpkgs#openssl.out.outPath)" && \
     CURL_PATH="$(nix --extra-experimental-features 'nix-command flakes' eval --raw nixpkgs#curl.out.outPath)" && \
-    mkdir -p /etc/fonts /etc/nix-ld/lib /lib64 /var/lib/q15/bootstrap-nix && \
+    case "${TARGETARCH:-$(uname -m)}" in \
+        amd64|x86_64) LD_SO="ld-linux-x86-64.so.2"; LD_DIR="/lib64" ;; \
+        arm64|aarch64) LD_SO="ld-linux-aarch64.so.1"; LD_DIR="/lib" ;; \
+        *) echo "unsupported target architecture: ${TARGETARCH:-$(uname -m)}" >&2; exit 1 ;; \
+    esac && \
+    mkdir -p /etc/fonts /etc/nix-ld/lib "${LD_DIR}" /var/lib/q15/bootstrap-nix && \
     ln -sfn "${TZDATA_PATH}/share/zoneinfo" /etc/zoneinfo && \
     ln -sfn "${FONTCONFIG_PATH}/etc/fonts/fonts.conf" /etc/fonts/fonts.conf && \
     printf '<?xml version="1.0"?>\n<!DOCTYPE fontconfig SYSTEM "fonts.dtd">\n<fontconfig>\n  <dir>%s/share/fonts</dir>\n  <dir>%s/share/fonts</dir>\n  <dir>%s/share/fonts</dir>\n  <dir>%s/share/fonts</dir>\n</fontconfig>\n' \
         "${DEJAVU_PATH}" "${INTER_PATH}" "${LIBERATION_PATH}" "${NOTO_PATH}" \
         > /etc/fonts/local.conf && \
-    ln -sfn "${NIXLD_PATH}/libexec/nix-ld" /lib64/ld-linux-x86-64.so.2 && \
-    ln -sfn "${GLIBC_PATH}/lib/ld-linux-x86-64.so.2" /etc/nix-ld/ld && \
+    ln -sfn "${NIXLD_PATH}/libexec/nix-ld" "${LD_DIR}/${LD_SO}" && \
+    ln -sfn "${GLIBC_PATH}/lib/${LD_SO}" /etc/nix-ld/ld && \
     ln -sfn "${GLIBC_PATH}/lib" /etc/nix-ld/lib/glibc && \
     ln -sfn "${GCC_LIB_PATH}/lib" /etc/nix-ld/lib/gcc && \
     ln -sfn "${ZLIB_PATH}/lib" /etc/nix-ld/lib/zlib && \
@@ -57,7 +67,7 @@ RUN nix --extra-experimental-features 'nix-command flakes' build --no-link \
     test -d /etc/zoneinfo && \
     test -e /etc/fonts/fonts.conf && \
     test -e /etc/fonts/local.conf && \
-    test -e /lib64/ld-linux-x86-64.so.2 && \
+    test -e "${LD_DIR}/${LD_SO}" && \
     test -e /etc/nix-ld/ld && \
     test -d /etc/nix-ld/lib/glibc && \
     test -d /etc/nix-ld/lib/gcc && \
