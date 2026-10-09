@@ -215,6 +215,8 @@ describe.each(["source", "compiled"] satisfies ("source" | "compiled")[])(
       const sw = await worker(mode);
       sw.fetch.mockResolvedValue(new Response("unauthorized", { status: 401 }));
       await expect(sw.lifecycle("install")).rejects.toThrow("Shell authentication failed");
+      // A rejected install leaves sibling proof requests running against stubbed globals.
+      await vi.waitFor(() => expect(sw.fetch).toHaveBeenCalledTimes(paths.length));
       expect(sw.cache.put).not.toHaveBeenCalled();
     });
 
