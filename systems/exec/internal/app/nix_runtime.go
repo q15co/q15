@@ -19,9 +19,16 @@ var requiredNixRuntimeMarkers = []string{
 	"var/nix/profiles/default/bin/bash",
 }
 
+// requiredImageRuntimePaths are the stable paths baked into the exec image
+// by docker/exec.Dockerfile. The nix-ld shim, its real loader, and the
+// library directory let exec sessions start unpatched distro-built ELF
+// binaries; without them the first foreign ELF a session runs fails.
 var requiredImageRuntimePaths = []string{
 	"/etc/zoneinfo",
 	"/etc/fonts/fonts.conf",
+	"/lib64/ld-linux-x86-64.so.2",
+	"/etc/nix-ld/ld",
+	"/etc/nix-ld/lib",
 }
 
 var requiredBootstrapSourceMarkers = []string{
