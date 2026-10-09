@@ -1,0 +1,160 @@
+.root {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  max-height: 18rem;
+  overflow: auto;
+  font-size: var(--font-sm);
+  line-height: var(--leading-ui);
+  color: var(--foreground);
+}
+.raw {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: "Recursive Variable", monospace;
+}
+.fields {
+  display: grid;
+  margin: 0;
+  padding: 0;
+}
+.nested {
+  margin: var(--space-1) 0 var(--space-1) 0;
+  padding-left: var(--space-3);
+  border-left: 2px solid color-mix(in srgb, var(--border) 80%, transparent);
+}
+.field {
+  display: grid;
+  grid-template-columns: minmax(4.5rem, 8.5rem) 1fr;
+  gap: var(--space-1) var(--space-3);
+  align-items: baseline;
+  padding: var(--space-2) 0;
+}
+.field + .field {
+  border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+}
+.key {
+  font-family: "Recursive Variable", monospace;
+  font-size: var(--font-xs);
+  color: var(--blue);
+  overflow-wrap: anywhere;
+}
+.value {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.shell {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--crust);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: "Recursive Variable", monospace;
+  font-size: var(--font-sm);
+}
+.block {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--crust);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: "Recursive Variable", monospace;
+  font-size: var(--font-sm);
+}
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+  color: var(--subtext);
+  font-family: "Recursive Variable", monospace;
+  font-size: var(--font-xs);
+  overflow-wrap: anywhere;
+}
+.chip[data-kind="string"] {
+  color: var(--green);
+}
+.chip[data-kind="number"] {
+  color: var(--warning);
+}
+.chip[data-kind="boolean"] {
+  color: var(--sapphire);
+}
+.chip[data-kind="null"] {
+  color: var(--overlay);
+  font-style: italic;
+}
+.items {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.item {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: color-mix(in srgb, var(--crust) 70%, transparent);
+}
+.item .field {
+  grid-template-columns: minmax(4.5rem, 7rem) 1fr;
+}
+.more {
+  align-self: center;
+  color: var(--overlay);
+  font-size: var(--font-xs);
+}
+.empty {
+  color: var(--overlay);
+  font-size: var(--font-xs);
+  font-style: italic;
+}
+.cmd {
+  color: var(--primary);
+  font-weight: 600;
+}
+.flag {
+  color: var(--sapphire);
+}
+.string {
+  color: var(--green);
+}
+.variable {
+  color: var(--maroon);
+}
+.operator {
+  color: var(--overlay);
+}
+.comment {
+  color: var(--overlay);
+  font-style: italic;
+}
+.number {
+  color: var(--warning);
+}
+.plain {
+  color: var(--foreground);
+}
+@container app (max-width: 48rem) {
+  .field,
+  .item .field {
+    grid-template-columns: 1fr;
+    gap: var(--space-1);
+    padding: var(--space-2) 0;
+  }
+}
