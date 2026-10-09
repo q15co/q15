@@ -51,29 +51,42 @@ export function MessageView({ message }: { message: ChatMessage }) {
           />
         ))}
       </div>
-      {!user &&
-        message.status !== "streaming" &&
-        (text !== "" || message.status === "aborted" || message.status === "failed") && (
-          <div className={styles.messageActions}>
-            {text !== "" && (
-              <Button
-                variant="ghost"
-                size="sm"
-                aria-label="Copy response"
-                data-copied={copied || undefined}
-                onClick={() => {
-                  void copyText();
-                }}
-              >
-                {copied ? <Check /> : <Copy />}
-                {copied ? "Copied" : "Copy"}
-              </Button>
+      {!user && message.status !== "streaming" && (
+        <div className={styles.messageActions}>
+          {text !== "" && (
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-label="Copy response"
+              data-copied={copied || undefined}
+              onClick={() => {
+                void copyText();
+              }}
+            >
+              {copied ? <Check /> : <Copy />}
+              {copied ? "Copied" : "Copy"}
+            </Button>
+          )}
+          {copyError && <output>Copy unavailable. Select the text to copy.</output>}
+          {message.status === "aborted" && <small>Stopped</small>}
+          {message.status === "failed" && <small className={styles.failed}>Failed</small>}
+          <span className={styles.messageMeta}>
+            {(message.model ?? "") !== "" && (
+              <span className={styles.modelTag}>{message.model}</span>
             )}
-            {copyError && <output>Copy unavailable. Select the text to copy.</output>}
-            {message.status === "aborted" && <small>Stopped</small>}
-            {message.status === "failed" && <small className={styles.failed}>Failed</small>}
-          </div>
-        )}
+            <a
+              className={styles.messageTime}
+              href={`#message-${message.key}`}
+              aria-label={`Link to message ${message.key}`}
+            >
+              {new Date(message.ts).toLocaleTimeString([], {
+                hour: "2-digit",
+                minute: "2-digit",
+              })}
+            </a>
+          </span>
+        </div>
+      )}
     </MessageElement>
   );
 }
