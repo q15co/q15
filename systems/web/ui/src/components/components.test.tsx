@@ -151,7 +151,8 @@ describe("message rendering", () => {
     await screen.findByText("Copied");
     expect(writeText).toHaveBeenLastCalledWith("first second");
     expect(screen.queryByText("Copy unavailable. Select the text to copy.")).toBeNull();
-    expect(screen.getByText("model-a")).toBeDefined();
+    expect(screen.queryByText("model-a")).toBeNull();
+    expect(screen.queryByRole("link", { name: "Link to message 42:1" })).toBeNull();
   });
 
   it.each([

@@ -18,7 +18,7 @@ import type { Part } from "../generated/protocol";
 import { presentTurn } from "../domain/activity";
 import { isRecord } from "../shared/type-guards";
 import { pretty } from "./format";
-import { MessageIdentity, MessageView } from "./message";
+import { MessageView } from "./message";
 import { PartView } from "./parts";
 import { recursiveAxes } from "./ui/font-motion";
 import { useMotionPreference } from "./ui/motion-preference";
@@ -169,7 +169,6 @@ export function TurnView({
 }) {
   const reduced = useMotionPreference();
   const { activity, answers } = presentTurn(messages);
-  const identity = messages.find((m) => m.role === "assistant");
   const usingTool = activity.some(
     (item) =>
       item.kind === "tool" &&
@@ -215,11 +214,7 @@ export function TurnView({
           <MessageView message={m} key={m.key} />
         ))}
       {(working || messages.some((m) => m.role !== "user")) && (
-        <div className={styles.turn} data-agent-turn>
-          <MessageIdentity message={identity} />
-          {answers.map((m) => (
-            <MessageView message={m} showIdentity={false} key={m.key} />
-          ))}
+        <article className={styles.turn} data-agent-turn aria-label="Agent response">
           {(activity.length > 0 || working || empty.length > 0) && (
             <details
               className={styles.activity}
@@ -316,7 +311,10 @@ export function TurnView({
               </div>
             </details>
           )}
-        </div>
+          {answers.map((m) => (
+            <MessageView message={m} key={m.key} />
+          ))}
+        </article>
       )}
     </>
   );

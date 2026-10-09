@@ -131,9 +131,8 @@ describe("transcript navigation", () => {
       false,
       true,
     ]);
-    expect(turns.map((turn) => turn.querySelectorAll("[data-turn-identity]").length)).toEqual([
-      1, 1, 1, 1,
-    ]);
+    expect(turns.map((turn) => turn.tagName)).toEqual(["ARTICLE", "ARTICLE", "ARTICLE", "ARTICLE"]);
+    expect(container.querySelector("[data-turn-identity]")).toBeNull();
     expect(new Set(turns.map((turn) => turn.parentElement)).size).toBe(1);
     store.stop();
   });

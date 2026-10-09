@@ -1,7 +1,7 @@
 .message {
   /* Bound live content invalidation to this message as history grows. */
   contain: layout style;
-  margin: var(--space-6) 0 var(--space-8);
+  margin: 0;
   scroll-margin: var(--space-10);
 }
 .message:target {
@@ -9,58 +9,10 @@
   outline: 1px solid var(--primary);
   outline-offset: var(--space-3);
 }
-.turnMessage {
-  margin: 0;
-}
-.turnMessage + .turnMessage {
+.answer + .answer {
   margin-top: var(--space-4);
 }
-.messageHeading {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--space-3);
-  font-size: var(--font-sm);
-  margin-bottom: var(--space-3);
-}
-.avatar {
-  display: grid;
-  place-items: center;
-  width: var(--space-8);
-  height: var(--space-8);
-  border-radius: 0.625rem;
-  color: var(--primary);
-  background: color-mix(in srgb, var(--primary) 11%, transparent);
-  flex: none;
-}
-.userAvatar {
-  background: var(--surface);
-  color: var(--foreground);
-  font-size: var(--font-xs);
-}
-.messageAuthor {
-  font-weight: 600;
-}
-.messageTime {
-  color: var(--muted-foreground);
-  font-size: var(--font-xs);
-  font-variant-numeric: tabular-nums;
-  margin-left: auto;
-}
-.modelTag {
-  font-size: var(--font-xs);
-  color: var(--foreground);
-  background: color-mix(in srgb, var(--blue) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--blue) 35%, var(--border));
-  border-radius: var(--space-2);
-  padding: 1px var(--space-2);
-  max-width: 45%;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
 .messageBody {
-  padding-left: var(--message-inset);
   line-height: var(--leading-body);
   font-size: var(--font-md);
   overflow-wrap: anywhere;
@@ -69,22 +21,16 @@
   display: flex;
   flex-direction: column;
   align-items: flex-end;
-}
-.userMessage .messageHeading {
-  flex-direction: row-reverse;
-  max-width: 100%;
-}
-.userMessage .messageTime,
-.userMessage .pendingLabel {
-  margin-left: 0;
+  margin: var(--space-6) 0 var(--space-8);
 }
 .userMessage .messageBody {
   --subtext: var(--foreground);
-  background: var(--surface);
-  border: 1px solid var(--border);
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--primary) 18%, var(--background));
+  border: 1px solid color-mix(in srgb, var(--primary) 45%, var(--border));
   padding: var(--space-3) var(--space-4);
   width: fit-content;
-  max-width: min(85%, calc(100% - var(--message-inset)));
+  max-width: 85%;
   min-width: 0;
   text-align: left;
   border-radius: var(--space-3) var(--space-1) var(--space-3) var(--space-3);
@@ -94,7 +40,7 @@
   align-items: center;
   flex-wrap: wrap;
   gap: var(--space-3);
-  padding-left: calc(var(--message-inset) - var(--space-3));
+  margin-left: calc(-1 * var(--space-3));
   padding-top: var(--space-2);
 }
 .messageActions small,
@@ -103,7 +49,7 @@
   color: var(--muted-foreground);
 }
 .pendingLabel {
-  margin-left: auto;
+  margin-top: var(--space-2);
   max-width: 70%;
   text-align: right;
 }
@@ -131,13 +77,7 @@
   }
 }
 @container app (max-width: 48rem) {
-  .messageBody {
-    padding-left: 0;
-  }
   .userMessage .messageBody {
     max-width: calc(100% - var(--space-6));
-  }
-  .messageActions {
-    padding-left: 0;
   }
 }

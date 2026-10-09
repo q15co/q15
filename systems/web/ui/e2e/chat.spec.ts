@@ -265,7 +265,7 @@ test("startup loads five complete turns and older pages load ten without moving 
     true,
   );
   await page.goto("/");
-  const messages = page.locator("article[data-message-key]");
+  const messages = page.locator("[data-user-turn], [data-agent-turn] > [data-message-key]");
   await expect(messages).toHaveCount(10);
   expect(queries).toEqual(["?after_seq=0&limit=5"]);
   const anchor = page.locator('[data-message-key="30:1"]');
@@ -310,7 +310,7 @@ test("streaming preserves history anchors, deep links and disclosures through co
   required(deliver)(
     frame("delta", { msg, seq: "3", kind: "text", text: "Growing answer.\n\n".repeat(20) }),
   );
-  const answer = page.locator('article[data-message-key="31:-1"]');
+  const answer = page.locator('[data-agent-turn] > [data-message-key="31:-1"]');
   await expect(answer).toContainText("Growing answer.");
   const scroller = page.getByLabel("Conversation", { exact: true });
   await scroller.evaluate((node) => {
@@ -355,7 +355,7 @@ test("streaming preserves history anchors, deep links and disclosures through co
   required(deliver)(
     frame("msg.final", { msg, status: "completed", full_text: "Final canonical answer." }),
   );
-  await expect(page.locator('article[data-message-key="31:0"]')).toContainText(
+  await expect(page.locator('[data-agent-turn] > [data-message-key="31:0"]')).toContainText(
     "Final canonical answer.",
   );
   await expect(activity).toHaveAttribute("open", "");
@@ -558,7 +558,7 @@ function toolHistory(): Page {
   };
 }
 
-test("agent turns own their identity, answer and compact expandable tool work", async ({
+test("speaker turns use user bubbles and plain agent answers below compact tool work", async ({
   page,
 }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
@@ -566,15 +566,47 @@ test("agent turns own their identity, answer and compact expandable tool work", 
   await page.goto("/");
   const activity = page.locator("[data-agent-activity]");
   const agent = page.locator("[data-agent-turn]");
-  const identity = agent.locator("[data-turn-identity]");
-  await expect(identity).toHaveCount(1);
-  await expect(identity.getByText("q15", { exact: true })).toBeVisible();
-  await expect(identity.locator("svg")).toBeVisible();
+  const expectBubble = async () => {
+    const bubble = await page.locator("[data-user-turn] > div").evaluate((node) => {
+      const user = node.parentElement;
+      const context = document.createElement("canvas").getContext("2d");
+      if (!user || !context) throw new Error("Expected a user bubble and canvas context.");
+      const luminance = (color: string) => {
+        context.fillStyle = color;
+        context.fillRect(0, 0, 1, 1);
+        const [r = 0, g = 0, b = 0] = Array.from(context.getImageData(0, 0, 1, 1).data)
+          .slice(0, 3)
+          .map((channel) => {
+            const value = channel / 255;
+            return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+          });
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      };
+      const style = getComputedStyle(node);
+      const foreground = luminance(style.color);
+      const background = luminance(style.backgroundColor);
+      return {
+        contrast:
+          (Math.max(foreground, background) + 0.05) / (Math.min(foreground, background) + 0.05),
+        rightGap: user.getBoundingClientRect().right - node.getBoundingClientRect().right,
+        width: node.getBoundingClientRect().width / user.getBoundingClientRect().width,
+      };
+    });
+    expect(bubble.contrast).toBeGreaterThanOrEqual(4.5);
+    expect(bubble.rightGap).toBeCloseTo(0, 0);
+    expect(bubble.width).toBeLessThan(1);
+    await expect(agent.locator(":scope > [data-message-key]")).toHaveCSS(
+      "background-color",
+      "rgba(0, 0, 0, 0)",
+    );
+  };
+  await expect(page.locator("[data-turn-identity]")).toHaveCount(0);
+  await expect(page.getByRole("article", { name: "Your message" })).toHaveCount(1);
+  await expect(page.getByRole("article", { name: "Agent response" })).toHaveCount(1);
   await expect(agent.locator("[data-agent-activity]")).toHaveCount(1);
   expect(await agent.evaluate((node) => [...node.children].map((child) => child.tagName))).toEqual([
-    "DIV",
-    "ARTICLE",
     "DETAILS",
+    "DIV",
   ]);
   await expect(page.getByText("Used 2 tools")).toBeVisible();
   await expect(page.getByText("ready", { exact: true })).toBeVisible();
@@ -582,16 +614,17 @@ test("agent turns own their identity, answer and compact expandable tool work", 
   await expect(page.getByText("/workspace", { exact: true })).toBeHidden();
   const spacing = await agent.evaluate((node) => {
     const user = node.previousElementSibling;
-    const answer = node.querySelector("article");
+    const answer = node.querySelector(":scope > [data-message-key]");
     const work = node.querySelector("[data-agent-activity]");
     if (!user || !answer || !work) throw new Error("Expected a complete exchange.");
     return {
       betweenTurns: node.getBoundingClientRect().top - user.getBoundingClientRect().bottom,
-      insideTurn: work.getBoundingClientRect().top - answer.getBoundingClientRect().bottom,
+      insideTurn: answer.getBoundingClientRect().top - work.getBoundingClientRect().bottom,
     };
   });
   expect(spacing.insideTurn).toBeGreaterThan(0);
   expect(spacing.betweenTurns).toBeGreaterThan(spacing.insideTurn);
+  await expectBubble();
   await page.screenshot({ path: "test-results/activity-collapsed.png" });
   await page.getByText("Used 2 tools").click();
   await expect(page.getByText("I’ll check both.")).toBeVisible();
@@ -606,10 +639,17 @@ test("agent turns own their identity, answer and compact expandable tool work", 
   await page.screenshot({ path: "test-results/activity-desktop.png" });
   await page.getByRole("button", { name: /Switch to .* theme/u }).click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "latte");
+  await expectBubble();
   await page.setViewportSize({ width: 390, height: 844 });
+  await expectBubble();
   await expect(page.getByRole("complementary", { name: "Chat navigation" })).not.toBeInViewport();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: "test-results/activity-mobile.png" });
+  await activity.locator(":scope > summary").press("Enter");
+  await expect(activity).not.toHaveAttribute("open");
+  await page.screenshot({ path: "test-results/activity-mobile-collapsed.png" });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.screenshot({ path: "test-results/activity-latte-collapsed.png" });
 });
 
 test("deep links reveal completed tool outputs inside both disclosures", async ({ page }) => {
@@ -633,10 +673,8 @@ test("live work stays closed by default and tool updates preserve the reader's c
   await page.getByLabel("Send message", { exact: true }).click();
   await expect(page.getByLabel("Stop response")).toBeVisible();
   const agent = page.locator("[data-agent-turn]");
-  const identity = agent.locator("[data-turn-identity]");
-  await expect(identity.getByText("q15", { exact: true })).toBeVisible();
-  await expect(identity.locator("svg")).toBeVisible();
-  await expect(agent.locator("article")).toHaveCount(0);
+  await expect(agent).toHaveCount(1);
+  await expect(agent.locator(":scope > [data-message-key]")).toHaveCount(0);
   const call = { id: "live-command", name: "exec", arguments: '{"command":"pwd"}' };
   required(deliver)(
     frame("snapshot", {
@@ -650,8 +688,6 @@ test("live work stays closed by default and tool updates preserve the reader's c
   const activity = page.locator("[data-agent-activity]");
   await expect(page.getByText("Thinking…", { exact: true })).toBeVisible();
   await expect(activity).not.toHaveAttribute("open");
-  await expect(identity.getByText("model-a", { exact: true })).toBeVisible();
-  await expect(identity.getByRole("link", { name: "Link to message 31:-1" })).toBeVisible();
   required(deliver)(
     frame("delta", {
       msg: { turn: "31", ordinal: -1 },
@@ -660,8 +696,8 @@ test("live work stays closed by default and tool updates preserve the reader's c
       seq: "1",
     }),
   );
-  await expect(agent.locator("article")).toHaveCount(0);
-  await expect(agent.locator("[data-turn-identity]")).toHaveCount(1);
+  await expect(agent.locator(":scope > [data-message-key]")).toHaveCount(0);
+  await expect(page.locator('[id="message-31:-1"]')).toHaveCount(1);
   required(deliver)(
     frame("delta", {
       msg: { turn: "31", ordinal: -1 },
@@ -717,11 +753,10 @@ test("live work stays closed by default and tool updates preserve the reader's c
   await expect(page.getByText("The workspace is ready.", { exact: true })).toBeVisible();
   await expect(page.locator("[data-agent-activity]")).not.toHaveAttribute("open");
   await expect(page.getByLabel("Copy response")).toHaveCount(1);
-  await expect(agent.locator("[data-turn-identity]")).toHaveCount(1);
+  await expect(agent).toHaveCount(1);
   expect(await agent.evaluate((node) => [...node.children].map((child) => child.tagName))).toEqual([
-    "DIV",
-    "ARTICLE",
     "DETAILS",
+    "DIV",
   ]);
 });
 
