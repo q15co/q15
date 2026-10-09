@@ -43,6 +43,27 @@ func TestNixRuntimeHealthyRejectsMissingMarkers(t *testing.T) {
 	}
 }
 
+func TestRequiredImageRuntimePathsCoversLoaderAndLibraries(t *testing.T) {
+	t.Parallel()
+
+	required := make(map[string]bool, len(requiredImageRuntimePaths))
+	for _, path := range requiredImageRuntimePaths {
+		required[path] = true
+	}
+
+	for _, path := range []string{
+		"/etc/zoneinfo",
+		"/etc/fonts/fonts.conf",
+		"/lib64/ld-linux-x86-64.so.2",
+		"/etc/nix-ld/ld",
+		"/etc/nix-ld/lib",
+	} {
+		if !required[path] {
+			t.Fatalf("requiredImageRuntimePaths is missing %q", path)
+		}
+	}
+}
+
 func TestRuntimePathsHealthyAcceptsExistingSymlinkTargets(t *testing.T) {
 	t.Parallel()
 
