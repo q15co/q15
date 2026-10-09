@@ -17,6 +17,7 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       ui: ${{ steps.impact.outputs.ui }}
+      exec: ${{ steps.impact.outputs.exec }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -31,6 +32,27 @@ jobs:
         run: |
           impact="$(git diff --name-only "${BASE_SHA}" "${HEAD_SHA}" | scripts/image-build-impact.sh)"
           echo "ui=$(jq -r '.ui' <<< "${impact}")" >> "${GITHUB_OUTPUT}"
+          echo "exec=$(jq -r '.exec' <<< "${impact}")" >> "${GITHUB_OUTPUT}"
+
+  exec-image:
+    name: Verify exec image loader paths
+    needs: changes
+    if: needs.changes.outputs.exec == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+          cache: true
+      - uses: cachix/install-nix-action@v31
+      - name: Check the loader paths against nixpkgs
+        env:
+          # The nixpkgs comparison skips itself without nix, so this job, whose
+          # only purpose is that comparison, turns the skip into a failure.
+          Q15_REQUIRE_NIX: "1"
+        run: go test -v ./systems/exec/internal/app/
 
   ui:
     name: Browser Verify
