@@ -558,17 +558,40 @@ function toolHistory(): Page {
   };
 }
 
-test("tool work is compact, paired, expandable, and separate from the final answer", async ({
+test("agent turns own their identity, answer and compact expandable tool work", async ({
   page,
 }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await backend(page, toolHistory());
   await page.goto("/");
   const activity = page.locator("[data-agent-activity]");
+  const agent = page.locator("[data-agent-turn]");
+  const identity = agent.locator("[data-turn-identity]");
+  await expect(identity).toHaveCount(1);
+  await expect(identity.getByText("q15", { exact: true })).toBeVisible();
+  await expect(identity.locator("svg")).toBeVisible();
+  await expect(agent.locator("[data-agent-activity]")).toHaveCount(1);
+  expect(await agent.evaluate((node) => [...node.children].map((child) => child.tagName))).toEqual([
+    "DIV",
+    "ARTICLE",
+    "DETAILS",
+  ]);
   await expect(page.getByText("Used 2 tools")).toBeVisible();
   await expect(page.getByText("ready", { exact: true })).toBeVisible();
   await expect(page.getByLabel("Copy response")).toHaveCount(1);
   await expect(page.getByText("/workspace", { exact: true })).toBeHidden();
+  const spacing = await agent.evaluate((node) => {
+    const user = node.previousElementSibling;
+    const answer = node.querySelector("article");
+    const work = node.querySelector("[data-agent-activity]");
+    if (!user || !answer || !work) throw new Error("Expected a complete exchange.");
+    return {
+      betweenTurns: node.getBoundingClientRect().top - user.getBoundingClientRect().bottom,
+      insideTurn: work.getBoundingClientRect().top - answer.getBoundingClientRect().bottom,
+    };
+  });
+  expect(spacing.insideTurn).toBeGreaterThan(0);
+  expect(spacing.betweenTurns).toBeGreaterThan(spacing.insideTurn);
   await page.screenshot({ path: "test-results/activity-collapsed.png" });
   await page.getByText("Used 2 tools").click();
   await expect(page.getByText("I’ll check both.")).toBeVisible();
@@ -609,6 +632,11 @@ test("live work stays closed by default and tool updates preserve the reader's c
   await page.getByLabel("Message q15").fill("Check the workspace");
   await page.getByLabel("Send message", { exact: true }).click();
   await expect(page.getByLabel("Stop response")).toBeVisible();
+  const agent = page.locator("[data-agent-turn]");
+  const identity = agent.locator("[data-turn-identity]");
+  await expect(identity.getByText("q15", { exact: true })).toBeVisible();
+  await expect(identity.locator("svg")).toBeVisible();
+  await expect(agent.locator("article")).toHaveCount(0);
   const call = { id: "live-command", name: "exec", arguments: '{"command":"pwd"}' };
   required(deliver)(
     frame("snapshot", {
@@ -616,18 +644,31 @@ test("live work stays closed by default and tool updates preserve the reader's c
       kind: "model_start",
       text: "",
       seq: "0",
+      model_ref: "model-a",
     }),
   );
   const activity = page.locator("[data-agent-activity]");
   await expect(page.getByText("Thinking…", { exact: true })).toBeVisible();
   await expect(activity).not.toHaveAttribute("open");
+  await expect(identity.getByText("model-a", { exact: true })).toBeVisible();
+  await expect(identity.getByRole("link", { name: "Link to message 31:-1" })).toBeVisible();
+  required(deliver)(
+    frame("delta", {
+      msg: { turn: "31", ordinal: -1 },
+      kind: "reasoning",
+      text: "Considering the workspace.",
+      seq: "1",
+    }),
+  );
+  await expect(agent.locator("article")).toHaveCount(0);
+  await expect(agent.locator("[data-turn-identity]")).toHaveCount(1);
   required(deliver)(
     frame("delta", {
       msg: { turn: "31", ordinal: -1 },
       kind: "tool_call",
       text: "",
       call,
-      seq: "1",
+      seq: "2",
     }),
   );
   await expect(page.getByText("Using tools…", { exact: true })).toBeVisible();
@@ -649,7 +690,7 @@ test("live work stays closed by default and tool updates preserve the reader's c
       kind: "tool_result",
       text: "/workspace",
       call,
-      seq: "2",
+      seq: "3",
       is_error: false,
     }),
   );
@@ -661,7 +702,7 @@ test("live work stays closed by default and tool updates preserve the reader's c
       kind: "model_start",
       text: "",
       loop_turn: 1,
-      seq: "3",
+      seq: "4",
     }),
   );
   await expect(page.getByText("Completed", { exact: true })).toBeVisible();
@@ -676,6 +717,12 @@ test("live work stays closed by default and tool updates preserve the reader's c
   await expect(page.getByText("The workspace is ready.", { exact: true })).toBeVisible();
   await expect(page.locator("[data-agent-activity]")).not.toHaveAttribute("open");
   await expect(page.getByLabel("Copy response")).toHaveCount(1);
+  await expect(agent.locator("[data-turn-identity]")).toHaveCount(1);
+  expect(await agent.evaluate((node) => [...node.children].map((child) => child.tagName))).toEqual([
+    "DIV",
+    "ARTICLE",
+    "DETAILS",
+  ]);
 });
 
 test("enlarged text preserves conversation space, navigation, and keyboard access", async ({

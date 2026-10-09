@@ -118,6 +118,25 @@ function flushFrame() {
 }
 
 describe("transcript navigation", () => {
+  it("alternates reader and agent turn elements across completed exchanges", async () => {
+    const { container, store } = await setup(() =>
+      Promise.resolve({ ...page("43"), turns: [...page("43").turns, ...page("42").turns] }),
+    );
+    const turns = [
+      ...container.querySelectorAll<HTMLElement>("[data-user-turn], [data-agent-turn]"),
+    ];
+    expect(turns.map((turn) => Object.hasOwn(turn.dataset, "agentTurn"))).toEqual([
+      false,
+      true,
+      false,
+      true,
+    ]);
+    expect(turns.map((turn) => turn.querySelectorAll("[data-turn-identity]").length)).toEqual([
+      1, 1, 1, 1,
+    ]);
+    expect(new Set(turns.map((turn) => turn.parentElement)).size).toBe(1);
+    store.stop();
+  });
   it("batches resize follow once per frame and cancels pending follow on unmount", async () => {
     const { node, resize, unmount, store } = await setup(() => Promise.resolve(page("42")));
     const writes = vi.fn<(value: number) => void>();

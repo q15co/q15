@@ -9,6 +9,12 @@
   outline: 1px solid var(--primary);
   outline-offset: var(--space-3);
 }
+.turnMessage {
+  margin: 0;
+}
+.turnMessage + .turnMessage {
+  margin-top: var(--space-4);
+}
 .messageHeading {
   display: flex;
   align-items: center;

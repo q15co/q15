@@ -12,7 +12,38 @@ import { useMotionPreference } from "./ui/motion-preference";
 
 import styles from "./message.module.css";
 
-export function MessageView({ message }: { message: ChatMessage }) {
+export function MessageIdentity({ message }: { message: ChatMessage | undefined }) {
+  const role = message?.role ?? "assistant";
+  const user = role === "user";
+  return (
+    <div className={styles.messageHeading} data-turn-identity>
+      <span className={clsx(styles.avatar, user && styles.userAvatar)} aria-hidden="true">
+        {user ? "Y" : <Sparkles size={16} />}
+      </span>
+      <span className={styles.messageAuthor}>
+        {user ? "You" : role === "assistant" ? "q15" : role}
+      </span>
+      {(message?.model ?? "") !== "" && <span className={styles.modelTag}>{message?.model}</span>}
+      {message && (
+        <a
+          className={styles.messageTime}
+          href={`#message-${message.key}`}
+          aria-label={`Link to message ${message.key}`}
+        >
+          {new Date(message.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+        </a>
+      )}
+    </div>
+  );
+}
+
+export function MessageView({
+  message,
+  showIdentity = true,
+}: {
+  message: ChatMessage;
+  showIdentity?: boolean;
+}) {
   const reduced = useMotionPreference();
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState(false);
@@ -36,25 +67,15 @@ export function MessageView({ message }: { message: ChatMessage }) {
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: reduced ? 0 : 0.24 }}
       id={`message-${message.key}`}
-      className={clsx(styles.message, user && styles.userMessage)}
+      className={clsx(
+        styles.message,
+        user && styles.userMessage,
+        !showIdentity && styles.turnMessage,
+      )}
       data-message-key={message.key}
+      data-user-turn={user || undefined}
     >
-      <div className={styles.messageHeading}>
-        <span className={clsx(styles.avatar, user && styles.userAvatar)} aria-hidden="true">
-          {user ? "Y" : <Sparkles size={16} />}
-        </span>
-        <span className={styles.messageAuthor}>
-          {user ? "You" : message.role === "assistant" ? "q15" : message.role}
-        </span>
-        {(message.model ?? "") !== "" && <span className={styles.modelTag}>{message.model}</span>}
-        <a
-          className={styles.messageTime}
-          href={`#message-${message.key}`}
-          aria-label={`Link to message ${message.key}`}
-        >
-          {new Date(message.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-        </a>
-      </div>
+      {showIdentity && <MessageIdentity message={message} />}
       <div className={styles.messageBody}>
         {message.parts.map((part) => (
           <PartView
@@ -99,8 +120,9 @@ export function PendingMessage({ pending: p }: { pending: Pending }) {
       initial={reduced ? false : { opacity: 0, y: 6 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: reduced ? 0 : 0.24 }}
+      data-user-turn
     >
-      <div className={styles.messageHeading}>
+      <div className={styles.messageHeading} data-turn-identity>
         <span className={clsx(styles.avatar, styles.userAvatar)} aria-hidden="true">
           Y
         </span>

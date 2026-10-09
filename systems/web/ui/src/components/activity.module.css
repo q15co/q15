@@ -1,8 +1,11 @@
+.turn {
+  margin: var(--space-6) 0 var(--space-8);
+}
 .activity {
   /* Font-axis animation should not traverse the completed transcript. */
   contain: layout style;
   --activity-light: var(--primary);
-  margin: var(--space-5) 0 var(--space-6) var(--message-inset);
+  margin: var(--space-4) 0 0 var(--message-inset);
   color: var(--subtext);
   font-size: var(--font-sm);
 }
