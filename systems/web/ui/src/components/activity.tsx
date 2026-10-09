@@ -17,9 +17,9 @@ import type { Part } from "../generated/protocol";
 
 import { presentTurn } from "../domain/activity";
 import { isRecord } from "../shared/type-guards";
-import { pretty } from "./format";
 import { MessageView } from "./message";
 import { PartView } from "./parts";
+import { ToolArguments, ToolResult } from "./toolcall";
 import { useMotionPreference } from "./ui/motion-preference";
 
 import styles from "./activity.module.css";
@@ -120,8 +120,11 @@ const ToolActivity = memo(
         <div className={styles.toolBody}>
           {part.tool_call && (
             <section>
-              <h3>{name} · Input</h3>
-              <pre>{pretty(part.tool_call.arguments)}</pre>
+              <h3>
+                {name !== "" && <span className={styles.toolName}>{name}</span>}
+                <span>Input</span>
+              </h3>
+              <ToolArguments raw={part.tool_call.arguments} />
             </section>
           )}
           {results.map((result) => (
@@ -133,7 +136,7 @@ const ToolActivity = memo(
                 <MessageAnchor source={result} />
               )}
               <h3>{result.part.is_error === true ? "Error" : "Output"}</h3>
-              <pre>{result.part.content ?? ""}</pre>
+              <ToolResult content={result.part.content ?? ""} />
             </section>
           ))}
           {results.length === 0 && (
