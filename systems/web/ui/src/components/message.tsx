@@ -33,7 +33,7 @@ export function MessageView({ message }: { message: ChatMessage }) {
   };
   return (
     <MessageElement
-      initial={!reduced && message.status === "streaming" ? { opacity: 0, y: 6 } : false}
+      initial={!reduced && message.status === "streaming" ? { opacity: 0 } : false}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: reduced ? 0 : 0.24 }}
       id={`message-${message.key}`}

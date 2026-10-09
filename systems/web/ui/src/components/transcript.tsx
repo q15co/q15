@@ -82,6 +82,20 @@ function Turns({
   );
 }
 
+function followTop(scroller: HTMLElement, content: HTMLElement | null) {
+  const turn = content?.lastElementChild;
+  const first =
+    turn instanceof HTMLElement && Object.hasOwn(turn.dataset, "agentTurn")
+      ? turn.querySelector<HTMLElement>(":scope > [data-message-key]")
+      : null;
+  const last = turn?.lastElementChild;
+  if (!first || !last) return scroller.scrollHeight;
+  const start = first.getBoundingClientRect().top;
+  if (last.getBoundingClientRect().bottom - start <= scroller.clientHeight)
+    return scroller.scrollHeight;
+  return scroller.scrollTop + start - scroller.getBoundingClientRect().top;
+}
+
 export function Transcript({ state, store }: { state: ChatState; store: ChatStore }) {
   const reduced = useMotionPreference();
   const scroller = useRef<HTMLDivElement>(null);
@@ -128,8 +142,8 @@ export function Transcript({ state, store }: { state: ChatState; store: ChatStor
     }
   }, [state.loadingHistory]);
 
-  // Follow expanding disclosures as well as text deltas, without moving a reader
-  // who has scrolled back or is paging history.
+  // Keep tall answers readable from their beginning while content grows.
+  // A reader scrolling away or paging history owns their position.
   useLayoutEffect(() => {
     const element = content.current;
     let frame: number | undefined;
@@ -137,7 +151,7 @@ export function Transcript({ state, store }: { state: ChatState; store: ChatStor
       frame = undefined;
       const node = scroller.current;
       if (node && following.current && !anchor.current) {
-        node.scrollTop = node.scrollHeight;
+        node.scrollTop = followTop(node, element);
         followedTop.current = node.scrollTop;
       }
     };
@@ -244,11 +258,16 @@ export function Transcript({ state, store }: { state: ChatState; store: ChatStor
                 variant="outline"
                 size="sm"
                 onClick={() => {
+                  const node = scroller.current;
+                  if (!node) return;
                   following.current = true;
-                  scroller.current?.scrollTo({
-                    top: scroller.current.scrollHeight,
-                    behavior: reduced ? "auto" : "smooth",
+                  const top = followTop(node, content.current);
+                  node.scrollTo({
+                    top,
+                    behavior: reduced || top !== node.scrollHeight ? "auto" : "smooth",
                   });
+                  followedTop.current = node.scrollTop;
+                  setShowLatest(false);
                 }}
               >
                 <ArrowDown />

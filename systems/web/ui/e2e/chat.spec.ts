@@ -990,13 +990,98 @@ test("animated tool disclosures follow the latest message without moving a reade
   await expect(page.getByText(/More detail about the workspace/u).first()).toBeAttached();
   expect(await scroller.evaluate((node) => node.scrollTop)).toBeCloseTo(position, 0);
   await page.getByRole("button", { name: "Back to latest" }).click();
-  await expect.poll(gap).toBeLessThan(2);
+  const answerTop = () =>
+    page.locator('[data-agent-turn] > [data-message-key="31:-1"]').evaluate((node) => {
+      const conversation = node.closest('[aria-label="Conversation"]');
+      if (!conversation) throw new Error("Expected the conversation scroller.");
+      return node.getBoundingClientRect().top - conversation.getBoundingClientRect().top;
+    });
+  await expect.poll(answerTop).toBeCloseTo(0, 0);
   await summary.evaluate((node: HTMLElement) => node.click());
   await expect(page.locator('[data-tool-call-id="motion-command"] pre').last()).toBeHidden();
-  await expect.poll(gap).toBeLessThan(2);
+  await expect.poll(answerTop).toBeCloseTo(0, 0);
 });
 
-test("working glow and font axes animate without moving text, and settle with reduced motion", async ({
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 900 },
+  { name: "mobile", width: 390, height: 844 },
+])
+  test(`incoming answers keep their beginning visible on ${viewport.name}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+    const history: Page = {
+      turns: Array.from({ length: 20 }, (_, i) => turn(30 - i)),
+      head_seq: "31",
+      has_more: false,
+    };
+    let deliver: ((value: Frame) => void) | undefined;
+    await backend(page, history, (send) => {
+      deliver = send;
+    });
+    await page.goto("/");
+    await page.getByLabel("Message q15").fill("Explain the workspace");
+    await page.getByLabel("Send message", { exact: true }).click();
+    const msg = { turn: "31", ordinal: -1 };
+    required(deliver)(frame("snapshot", { msg, kind: "model_start", text: "", seq: "0" }));
+    required(deliver)(
+      frame("delta", {
+        msg,
+        kind: "reasoning",
+        text: "Considering the workspace.\n\n".repeat(50),
+        seq: "1",
+      }),
+    );
+    await page.locator("[data-agent-activity] > summary").click();
+    const short = "# Start of answer\n\nA short answer.";
+    required(deliver)(frame("delta", { msg, kind: "text", text: short, seq: "2" }));
+    const answer = page.locator('[data-agent-turn] > [data-message-key="31:-1"]');
+    await expect(answer.getByText("A short answer.", { exact: true })).toBeInViewport();
+    const details = "\n\nMore detail about the workspace and how its services work.".repeat(80);
+    required(deliver)(frame("delta", { msg, kind: "text", text: details, seq: "3" }));
+    const answerTop = () =>
+      page
+        .locator("[data-agent-turn] > [data-message-key]")
+        .last()
+        .evaluate((node) => {
+          const conversation = node.closest('[aria-label="Conversation"]');
+          if (!conversation) throw new Error("Expected the conversation scroller.");
+          return node.getBoundingClientRect().top - conversation.getBoundingClientRect().top;
+        });
+    await expect.poll(answerTop).toBeCloseTo(0, 0);
+    await expect(answer.getByRole("heading", { name: "Start of answer" })).toBeInViewport();
+    await expect(page.getByRole("button", { name: "Back to latest" })).toBeHidden();
+    const scroller = page.getByLabel("Conversation", { exact: true });
+    await scroller.evaluate((node) => {
+      node.scrollTop -= 250;
+    });
+    await expect(page.getByRole("button", { name: "Back to latest" })).toBeVisible();
+    const position = await scroller.evaluate((node) => node.scrollTop);
+    const more = "\n\nFurther detail.".repeat(20);
+    required(deliver)(frame("delta", { msg, kind: "text", text: more, seq: "4" }));
+    await expect(answer).toContainText("Further detail.");
+    expect(await scroller.evaluate((node) => node.scrollTop)).toBeCloseTo(position, 0);
+    await page.getByRole("button", { name: "Back to latest" }).click();
+    await expect.poll(answerTop).toBeCloseTo(0, 0);
+    const completed = `# Start of final answer\n\n${details}${more}`;
+    history.turns.unshift({
+      seq: "31",
+      created_at: "2026-10-01T12:00:00Z",
+      messages: [
+        {
+          ordinal: 0,
+          role: "assistant",
+          parts: [{ ordinal: 0, part_type: "text", disposition: "final", text: completed }],
+        },
+      ],
+    });
+    required(deliver)(frame("msg.final", { msg, status: "completed", full_text: completed }));
+    await expect(page.getByRole("heading", { name: "Start of final answer" })).toBeInViewport();
+    await expect(page.locator('[data-agent-turn] > [data-message-key="31:0"]')).toBeAttached();
+    await expect.poll(answerTop).toBeCloseTo(0, 0);
+    await page.screenshot({ path: `test-results/answer-top-${viewport.name}.png` });
+  });
+
+test("working status uses one surface and a stationary pulse that respects reduced motion", async ({
   page,
 }) => {
   await page.emulateMedia({ reducedMotion: "no-preference" });
@@ -1011,31 +1096,38 @@ test("working glow and font axes animate without moving text, and settle with re
   const activity = page.locator("[data-agent-activity]");
   const summary = activity.locator(":scope > summary");
   const label = summary.getByText("Thinking…", { exact: true });
-  const floating = label.locator("..");
+  const icon = summary.locator("svg").first();
   await expect(activity).not.toHaveAttribute("open");
   await expect(activity).toHaveAttribute("data-phase", "thinking");
   const before = await label.evaluate((node) => ({
     axes: getComputedStyle(node).fontVariationSettings,
     width: node.getBoundingClientRect().width,
+    top: node.getBoundingClientRect().top,
   }));
   await expect
-    .poll(() => label.evaluate((node) => getComputedStyle(node).fontVariationSettings))
-    .not.toBe(before.axes);
+    .poll(() => icon.evaluate((node) => Number(getComputedStyle(node).opacity)))
+    .toBeLessThan(0.9);
+  expect(await label.evaluate((node) => getComputedStyle(node).fontVariationSettings)).toBe(
+    before.axes,
+  );
+  expect(await label.evaluate((node) => node.getBoundingClientRect().top)).toBeCloseTo(
+    before.top,
+    1,
+  );
   expect(await label.evaluate((node) => node.getBoundingClientRect().width)).toBeCloseTo(
     before.width,
     1,
   );
   await expect
-    .poll(() => floating.evaluate((node) => getComputedStyle(node).transform))
-    .not.toBe("none");
-  expect(
-    await summary.evaluate((node) => Number(getComputedStyle(node, "::before").opacity)),
-  ).toBeGreaterThan(0);
+    .poll(() => label.locator("..").evaluate((node) => getComputedStyle(node).transform))
+    .toBe("none");
+  await expect(summary).toHaveCSS("border-top-width", "0px");
+  await expect(summary).toHaveCSS("box-shadow", "none");
+  expect(await summary.evaluate((node) => getComputedStyle(node, "::before").content)).toBe("none");
+  await page.screenshot({ path: "test-results/activity-thinking.png" });
   await page.emulateMedia({ reducedMotion: "reduce" });
   await expect.poll(() => page.evaluate(() => document.getAnimations().length)).toBe(0);
-  await expect
-    .poll(() => floating.evaluate((node) => getComputedStyle(node).transform))
-    .toBe("none");
+  await expect.poll(() => icon.evaluate((node) => getComputedStyle(node).opacity)).toBe("1");
   const stationary = await label.evaluate(async (node) => {
     const samples: string[] = [];
     for (let i = 0; i < 6; i++) {
@@ -1050,11 +1142,15 @@ test("working glow and font axes animate without moving text, and settle with re
   });
   expect(new Set(stationary).size).toBe(1);
   const msg = { turn: "31", ordinal: -1 };
-  const call = { id: "glow-command", name: "exec", arguments: '{"command":"pwd"}' };
+  const call = { id: "pulse-command", name: "exec", arguments: '{"command":"pwd"}' };
   required(deliver)(frame("delta", { msg, kind: "tool_call", text: "", call, seq: "1" }));
   await expect(activity).toHaveAttribute("data-phase", "tool");
   await expect(activity).not.toHaveAttribute("open");
   await expect(page.getByText("Using tools…", { exact: true })).toBeVisible();
+  await page.screenshot({ path: "test-results/activity-tools.png" });
+  await page.getByRole("button", { name: /Switch to .* theme/u }).click();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({ path: "test-results/activity-tools-mobile.png" });
   await page.emulateMedia({ reducedMotion: "no-preference" });
   await expect
     .poll(() =>

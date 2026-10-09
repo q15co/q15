@@ -20,7 +20,6 @@ import { isRecord } from "../shared/type-guards";
 import { pretty } from "./format";
 import { MessageView } from "./message";
 import { PartView } from "./parts";
-import { recursiveAxes } from "./ui/font-motion";
 import { useMotionPreference } from "./ui/motion-preference";
 
 import styles from "./activity.module.css";
@@ -167,7 +166,6 @@ export function TurnView({
   messages: readonly ChatMessage[];
   working: boolean;
 }) {
-  const reduced = useMotionPreference();
   const { activity, answers } = presentTurn(messages);
   const usingTool = activity.some(
     (item) =>
@@ -231,16 +229,7 @@ export function TurnView({
                     data-message-key={m.key}
                   />
                 ))}
-                <motion.span
-                  className={styles.summaryContent}
-                  initial={reduced ? false : { y: 0 }}
-                  animate={{ y: working && !reduced ? [0, -3, 0] : 0 }}
-                  transition={{
-                    duration: reduced ? 0 : working ? 4.8 : 0.3,
-                    repeat: working && !reduced ? Infinity : 0,
-                    ease: "easeInOut",
-                  }}
-                >
+                <span className={styles.summaryContent}>
                   {usingTool ? (
                     <Wrench size={15} className={styles.thinking} aria-hidden="true" />
                   ) : (
@@ -250,34 +239,7 @@ export function TurnView({
                       aria-hidden="true"
                     />
                   )}
-                  <motion.span
-                    className={styles.activityLabel}
-                    initial={reduced ? false : { fontVariationSettings: recursiveAxes(0.2, 500) }}
-                    animate={{
-                      fontVariationSettings:
-                        working && !reduced
-                          ? [
-                              recursiveAxes(0.2, 500),
-                              recursiveAxes(0.9, 570, -4),
-                              recursiveAxes(0.2, 500),
-                            ]
-                          : recursiveAxes(0.2, 500),
-                    }}
-                    transition={{
-                      duration: reduced ? 0 : working ? 4.8 : 0.3,
-                      repeat: working && !reduced ? Infinity : 0,
-                      ease: "easeInOut",
-                    }}
-                  >
-                    {label}
-                  </motion.span>
-                  {working && (
-                    <span className={styles.workingDots} aria-hidden="true">
-                      <i />
-                      <i />
-                      <i />
-                    </span>
-                  )}
+                  <span className={styles.activityLabel}>{label}</span>
                   {working && toolCount > 0 && (
                     <span className={styles.status}>
                       {toolCount} {toolCount === 1 ? "tool" : "tools"}
@@ -289,7 +251,7 @@ export function TurnView({
                     </span>
                   )}
                   <ChevronDown size={14} className={styles.chevron} aria-hidden="true" />
-                </motion.span>
+                </span>
               </summary>
               <div className={styles.timeline}>
                 {activity.map((item) =>
