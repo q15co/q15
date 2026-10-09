@@ -151,8 +151,52 @@ describe("message rendering", () => {
     await screen.findByText("Copied");
     expect(writeText).toHaveBeenLastCalledWith("first second");
     expect(screen.queryByText("Copy unavailable. Select the text to copy.")).toBeNull();
+    expect(screen.getByText("model-a")).toBeDefined();
+    expect(screen.getByRole("link", { name: "Link to message 42:1" }).getAttribute("href")).toBe(
+      "#message-42:1",
+    );
+  });
+
+  it("links every settled agent answer to its anchor, even without text, with an optional model label", () => {
+    render(
+      <MessageView
+        message={{
+          key: "42:2",
+          turn: "42",
+          ts: "2026-10-01T12:00:00Z",
+          ordinal: 2,
+          role: "assistant",
+          status: "completed",
+          model: "model-a",
+          parts: [],
+        }}
+      />,
+    );
+    const link = screen.getByRole("link", { name: "Link to message 42:2" });
+    expect(link.getAttribute("href")).toBe("#message-42:2");
+    expect(link.textContent).not.toBe("");
+    expect(screen.getByText("model-a")).toBeDefined();
+    expect(screen.queryByLabelText("Copy response")).toBeNull();
+  });
+
+  it("omits the actions row, link and model label while a response is streaming", () => {
+    render(
+      <MessageView
+        message={{
+          key: "42:3",
+          turn: "42",
+          ts: "2026-10-01T12:00:00Z",
+          ordinal: 3,
+          role: "assistant",
+          status: "streaming",
+          model: "model-a",
+          parts: [{ ordinal: 0, part_type: "text", text: "partial" }],
+        }}
+      />,
+    );
+    expect(screen.queryByRole("link", { name: "Link to message 42:3" })).toBeNull();
     expect(screen.queryByText("model-a")).toBeNull();
-    expect(screen.queryByRole("link", { name: "Link to message 42:1" })).toBeNull();
+    expect(screen.queryByLabelText("Copy response")).toBeNull();
   });
 
   it.each([
