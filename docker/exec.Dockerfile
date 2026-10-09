@@ -15,11 +15,11 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 FROM nixos/nix:latest
 
-# buildx sets TARGETARCH for every platform in a multi-platform build. The
-# nix-ld shim and the loader it points at sit at different paths on x86_64 and
-# aarch64, so both are selected from it below rather than hardcoded.
-ARG TARGETARCH
-
+# The nix-patched binaries in this image carry their own interpreter, but a
+# distro-built binary asks the FHS path for its architecture: /lib64 on the
+# x86_64 multiarch layout, /lib everywhere else. The loader file name is
+# therefore asked of nixpkgs for this build's own system instead of being
+# written down, and only its directory is chosen here.
 RUN nix --extra-experimental-features 'nix-command flakes' build --no-link \
         nixpkgs#tzdata nixpkgs#fontconfig.out \
         nixpkgs#dejavu_fonts nixpkgs#inter nixpkgs#liberation_ttf nixpkgs#noto-fonts \
@@ -42,10 +42,11 @@ RUN nix --extra-experimental-features 'nix-command flakes' build --no-link \
     LIBXML2_PATH="$(nix --extra-experimental-features 'nix-command flakes' eval --raw nixpkgs#libxml2.out.outPath)" && \
     OPENSSL_PATH="$(nix --extra-experimental-features 'nix-command flakes' eval --raw nixpkgs#openssl.out.outPath)" && \
     CURL_PATH="$(nix --extra-experimental-features 'nix-command flakes' eval --raw nixpkgs#curl.out.outPath)" && \
-    case "${TARGETARCH:-$(uname -m)}" in \
-        amd64|x86_64) LD_SO="ld-linux-x86-64.so.2"; LD_DIR="/lib64" ;; \
-        arm64|aarch64) LD_SO="ld-linux-aarch64.so.1"; LD_DIR="/lib" ;; \
-        *) echo "unsupported target architecture: ${TARGETARCH:-$(uname -m)}" >&2; exit 1 ;; \
+    LD_PATH="$(nix --extra-experimental-features 'nix-command flakes' eval --raw nixpkgs#stdenv.cc.bintools.dynamicLinker)" && \
+    LD_SO="${LD_PATH##*/}" && \
+    case "${LD_SO}" in \
+        ld-linux-x86-64.so.2) LD_DIR="/lib64" ;; \
+        *) LD_DIR="/lib" ;; \
     esac && \
     mkdir -p /etc/fonts /etc/nix-ld/lib "${LD_DIR}" /var/lib/q15/bootstrap-nix && \
     ln -sfn "${TZDATA_PATH}/share/zoneinfo" /etc/zoneinfo && \

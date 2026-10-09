@@ -2,6 +2,7 @@ package app
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -101,57 +102,81 @@ func TestRequiredImageRuntimePathsRejectUnknownArchitecture(t *testing.T) {
 	}
 }
 
-// loaderCaseLine matches the architecture cases that select the nix-ld shim
-// path in docker/exec.Dockerfile, for example:
-//
-//	amd64|x86_64) LD_SO="ld-linux-x86-64.so.2"; LD_DIR="/lib64" ;;
-var loaderCaseLine = regexp.MustCompile(
-	`(?m)^\s*(amd64\|x86_64|arm64\|aarch64)\)\s*LD_SO="([^"]+)";\s*LD_DIR="([^"]+)"`,
-)
+// execImageLoaderSystems maps a Go architecture to the nixpkgs system whose
+// glibc provides the dynamic loader the image installs for it.
+var execImageLoaderSystems = map[string]string{
+	"amd64": "x86_64-linux",
+	"arm64": "aarch64-linux",
+}
 
-// TestDockerfileLoaderPathsMatchGoTable keeps docker/exec.Dockerfile and the
-// loader paths this package checks in step. The image is built for more than
-// one architecture, so a shim installed at a path that Go does not expect, or
-// expected by Go but never installed, is a failure only the image build would
-// otherwise find.
-func TestDockerfileLoaderPathsMatchGoTable(t *testing.T) {
+// TestExecImageLoaderPathsMatchNixpkgs checks the loader file names this
+// binary expects against the ones nixpkgs links binaries against for the same
+// architectures, which is the value the image build installs. Hardcoding the
+// x86_64 loader for both is what broke the arm64 image build, and the two
+// names only agree by accident on one of the two platforms.
+func TestExecImageLoaderPathsMatchNixpkgs(t *testing.T) {
+	t.Parallel()
+
+	nix, err := exec.LookPath("nix")
+	if err != nil {
+		if os.Getenv("Q15_REQUIRE_NIX") != "" {
+			t.Fatalf("nix is required here but not installed: %v", err)
+		}
+		t.Skip("nix is not installed, so the loader names cannot be checked against nixpkgs")
+	}
+
+	for goarch, loader := range execImageLoaderPaths {
+		system, ok := execImageLoaderSystems[goarch]
+		if !ok {
+			t.Errorf("no nixpkgs system is known for %q", goarch)
+			continue
+		}
+
+		attr := "nixpkgs#legacyPackages." + system + ".stdenv.cc.bintools.dynamicLinker"
+		out, err := exec.Command(
+			nix,
+			"eval",
+			"--raw",
+			"--extra-experimental-features", "nix-command",
+			"--extra-experimental-features", "flakes",
+			attr,
+		).Output()
+		if err != nil {
+			t.Fatalf("nix eval %q error = %v", attr, err)
+		}
+
+		want := filepath.Base(loader)
+		got := filepath.Base(strings.TrimSpace(string(out)))
+		if got != want {
+			t.Errorf(
+				"%s links against %q, but requiredImageRuntimePaths wants %q",
+				system, got, want,
+			)
+		}
+	}
+}
+
+// loaderAssignment matches a loader name written into docker/exec.Dockerfile
+// rather than derived at build time.
+var loaderAssignment = regexp.MustCompile(`LD_SO="ld-linux`)
+
+// TestExecDockerfileDerivesItsLoaderPath keeps the image build from going back
+// to a hardcoded loader name, which is what produced an arm64 image the
+// aarch64 glibc could not satisfy.
+func TestExecDockerfileDerivesItsLoaderPath(t *testing.T) {
 	t.Parallel()
 
 	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "docker", "exec.Dockerfile"))
 	if err != nil {
 		t.Fatalf("ReadFile(exec.Dockerfile) error = %v", err)
 	}
+	dockerfile := string(raw)
 
-	installed := make(map[string]string)
-	for _, match := range loaderCaseLine.FindAllStringSubmatch(string(raw), -1) {
-		goarch, _, _ := strings.Cut(match[1], "|")
-		installed[goarch] = match[3] + "/" + match[2]
+	if !strings.Contains(dockerfile, "dynamicLinker") {
+		t.Error("exec.Dockerfile no longer asks nixpkgs for the loader path")
 	}
-	if len(installed) == 0 {
-		t.Fatal("exec.Dockerfile has no readable loader case line")
-	}
-
-	for goarch, want := range execImageLoaderPaths {
-		got, ok := installed[goarch]
-		if !ok {
-			t.Errorf("exec.Dockerfile installs no nix-ld shim for %q", goarch)
-			continue
-		}
-		if got != want {
-			t.Errorf(
-				"exec.Dockerfile installs the %q shim at %q, but the Go side requires %q",
-				goarch, got, want,
-			)
-		}
-	}
-
-	for goarch := range installed {
-		if _, ok := execImageLoaderPaths[goarch]; !ok {
-			t.Errorf(
-				"exec.Dockerfile installs a shim for %q, which the Go side does not know",
-				goarch,
-			)
-		}
+	if loaderAssignment.MatchString(dockerfile) {
+		t.Error("exec.Dockerfile assigns a loader file name instead of deriving it")
 	}
 }
 
