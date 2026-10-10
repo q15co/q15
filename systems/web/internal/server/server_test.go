@@ -6,6 +6,7 @@ import (
 	"crypto/ecdh"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -224,7 +225,11 @@ func setup(t *testing.T, fake *fakeChat) (*Server, *httptest.Server) {
 	valid := &atomic.Bool{}
 	valid.Store(true)
 	authorizer := testAuthorizer{valid: valid}
-	content, err := assets.New(fstest.MapFS{"index.html": {Data: []byte("<html>chat</html>")}})
+	content, err := assets.New(fstest.MapFS{
+		"index.html":           {Data: []byte("<html>chat</html>")},
+		"manifest.webmanifest": {Data: []byte(`{"share_target":{"action":"/share"}}`)},
+		"icon-192.png":         {Data: []byte("png")},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -748,6 +753,61 @@ func TestUnauthorizedRouteMatrix(t *testing.T) {
 	defer response.Body.Close()
 	if response.StatusCode != 200 {
 		t.Fatalf("health %d", response.StatusCode)
+	}
+}
+
+// TestPublicInstallAssets pins the only paths that answer without a request
+// proof, besides /healthz. A browser and, for a WebAPK, the platform's install
+// and share handling read the manifest and the icons it references with no
+// session and no proof, so gating them keeps the app out of the share sheet.
+func TestPublicInstallAssets(t *testing.T) {
+	_, httpServer := setup(t, newFakeChat())
+	response, err := http.Get(httpServer.URL + "/manifest.webmanifest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := io.ReadAll(response.Body)
+	_ = response.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK || !bytes.Contains(manifest, []byte("share_target")) {
+		t.Fatalf("manifest = %d %s", response.StatusCode, manifest)
+	}
+	if response.Header.Get("Content-Security-Policy") == "" {
+		t.Fatal("manifest escaped the shared header policy")
+	}
+	for _, path := range []string{"/icon-192.png", "/icon-512.png", "/icon.svg"} {
+		response, err := http.Get(httpServer.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = response.Body.Close()
+		if response.StatusCode != http.StatusOK {
+			t.Errorf("%s = %d", path, response.StatusCode)
+		}
+	}
+	// Exact matches only: a lookalike path still needs a session, and the
+	// exemption must not add a write path.
+	response, err = http.Get(httpServer.URL + "/manifest.webmanifest.bak")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("lookalike manifest = %d", response.StatusCode)
+	}
+	response, err = http.Post(
+		httpServer.URL+"/manifest.webmanifest",
+		"text/plain",
+		strings.NewReader("x"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("post manifest = %d", response.StatusCode)
 	}
 }
 
