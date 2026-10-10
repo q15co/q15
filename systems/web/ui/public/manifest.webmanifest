@@ -6,6 +6,27 @@
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
+  "share_target": {
+    "action": "/share",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": {
+      "files": [
+        {
+          "name": "files",
+          "accept": [
+            "application/pdf",
+            ".pdf",
+            "image/*",
+            "audio/*",
+            "video/*",
+            "text/*",
+            "application/octet-stream"
+          ]
+        }
+      ]
+    }
+  },
   "background_color": "#1e1e2e",
   "theme_color": "#1e1e2e",
   "icons": [

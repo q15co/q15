@@ -6,6 +6,14 @@ import { runInNewContext } from "node:vm";
 import { build } from "vite-plus";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vite-plus/test";
 
+import { MaxMediaFiles } from "../src/generated/protocol";
+import {
+  parseShareEntry,
+  ShareCacheName,
+  ShareField,
+  SharePath,
+  ShareRejected,
+} from "../src/shared/share-inbox";
 import { parseShellManifest } from "../src/shared/shell-manifest";
 import { required } from "../src/testing/required";
 import { sessionKey } from "../src/testing/session-key";
@@ -23,6 +31,22 @@ interface WorkerEvent {
 
 const cacheMiss: Response | undefined = undefined;
 
+function shareRequest(files: readonly string[], headers: Record<string, string> = {}): Request {
+  const form = new FormData();
+  for (const name of files) form.append(ShareField, new File(["scan"], name));
+  return new Request(new URL(SharePath, "https://chat.example"), {
+    method: "POST",
+    body: form,
+    headers,
+  });
+}
+
+function stashPath(value: RequestInfo | URL): string {
+  if (typeof value === "string") return value;
+  if (value instanceof URL) return value.pathname;
+  return new URL(value.url).pathname;
+}
+
 async function worker(mode: "source" | "compiled") {
   const signer = await sessionKey();
   const handlers = new Map<string, (event: WorkerEvent) => void>();
@@ -32,6 +56,7 @@ async function worker(mode: "source" | "compiled") {
       (path: string): Promise<Response | undefined> =>
         Promise.resolve(new Response(`cached ${path}`)),
     ),
+    delete: vi.fn<Cache["delete"]>().mockResolvedValue(true),
     put: vi.fn<Cache["put"]>(),
   };
   const caches = {
@@ -57,6 +82,9 @@ async function worker(mode: "source" | "compiled") {
     Response,
     Request,
     Headers,
+    Blob,
+    File,
+    FormData,
     indexedDB: signer.indexedDB,
     crypto: webcrypto,
     CryptoKey: signer.key.constructor,
@@ -232,10 +260,87 @@ describe.each(["source", "compiled"] satisfies ("source" | "compiled")[])(
         new Request("https://chat.example/index.html", { method: "POST" }),
         new Request("https://chat.example/assets/app-abcdef12.js", { method: "HEAD" }),
         new Request("https://chat.example/unlisted.html"),
+        new Request("https://chat.example/share"),
+        new Request("https://chat.example/other", { method: "POST" }),
       ];
       for (const request of excluded) expect(sw.request(request)).toBeUndefined();
       expect(sw.fetch).not.toHaveBeenCalled();
       expect(sw.caches.open).not.toHaveBeenCalled();
+    });
+
+    it("keeps a shared file for the app and answers the share sheet with a redirect", async () => {
+      const sw = await worker(mode);
+      const response = required(await sw.request(shareRequest(["scan.pdf"])));
+      expect(response.status).toBe(303);
+      expect(response.headers.get("location")).toBe("https://chat.example/");
+      expect(sw.caches.open).toHaveBeenCalledWith(ShareCacheName);
+      const stashed = sw.cache.put.mock.calls.map((call) => stashPath(call[0]));
+      expect(stashed).toHaveLength(1);
+      expect(parseShareEntry(required(stashed[0]))).toMatchObject({ index: 0 });
+      expect(sw.fetch).not.toHaveBeenCalled();
+    });
+
+    it("keeps every file of a multi-file share under one arrival", async () => {
+      const sw = await worker(mode);
+      await sw.request(shareRequest(["scan.pdf", "photo.png"]));
+      const entries = sw.cache.put.mock.calls.map((call) => parseShareEntry(stashPath(call[0])));
+      expect(entries.map((entry) => entry?.index)).toEqual([0, 1]);
+      expect(required(entries[1]).receivedAt).toBe(required(entries[0]).receivedAt);
+    });
+
+    it("refuses a share beyond the storage backstop rather than keeping part of it", async () => {
+      const sw = await worker(mode);
+      const names = Array.from({ length: MaxMediaFiles + 1 }, () => "scan.pdf");
+      const response = required(await sw.request(shareRequest(names)));
+      expect(response.headers.get("location")).toBe(`https://chat.example/?share=${ShareRejected}`);
+      expect(sw.cache.put).not.toHaveBeenCalled();
+    });
+
+    it("redirects a share that carries no file or cannot be read", async () => {
+      const sw = await worker(mode);
+      const empty = new FormData();
+      empty.append("note", "hello");
+      const noFile = new Request(new URL(SharePath, "https://chat.example"), {
+        method: "POST",
+        body: empty,
+      });
+      const unreadable = shareRequest(["scan.pdf"]);
+      Object.defineProperty(unreadable, "formData", {
+        value: () => Promise.reject(new Error("unreadable")),
+      });
+      for (const request of [noFile, unreadable])
+        expect(required(await sw.request(request)).headers.get("location")).toBe(
+          `https://chat.example/?share=${ShareRejected}`,
+        );
+      expect(sw.cache.put).not.toHaveBeenCalled();
+    });
+
+    it("answers a cross-site post without keeping anything", async () => {
+      const sw = await worker(mode);
+      const response = required(
+        await sw.request(shareRequest(["scan.pdf"], { "sec-fetch-site": "cross-site" })),
+      );
+      expect(response.status).toBe(303);
+      expect(response.headers.get("location")).toBe("https://chat.example/");
+      expect(sw.cache.put).not.toHaveBeenCalled();
+      expect(sw.fetch).not.toHaveBeenCalled();
+    });
+
+    it("keeps a share whole or not at all when the inbox cannot hold a file", async () => {
+      const sw = await worker(mode);
+      sw.cache.put.mockRejectedValueOnce(new Error("quota")).mockResolvedValue(undefined);
+      const response = required(await sw.request(shareRequest(["scan.pdf", "photo.png"])));
+      expect(response.headers.get("location")).toBe(`https://chat.example/?share=${ShareRejected}`);
+      const cleaned = sw.cache.delete.mock.calls.map((call) => parseShareEntry(stashPath(call[0])));
+      expect(cleaned.map((entry) => entry?.index)).toEqual([0, 1]);
+    });
+
+    it("serves the shell for a navigation that carries a query string", async () => {
+      const sw = await worker(mode);
+      const request = new Request("https://chat.example/?share=rejected");
+      Object.defineProperty(request, "mode", { value: "navigate" });
+      expect(await required(await sw.request(request)).text()).toBe("network");
+      expect(sw.cache.match).not.toHaveBeenCalled();
     });
 
     it("uses the network for HTML and the precached entry when navigation is offline", async () => {
@@ -282,6 +387,29 @@ describe.each(["source", "compiled"] satisfies ("source" | "compiled")[])(
         display: "standalone",
         start_url: "/",
         icons: [{ sizes: "192x192" }, { sizes: "512x512" }, { sizes: "any" }],
+      });
+      expect(manifest).toMatchObject({
+        share_target: {
+          action: SharePath,
+          method: "POST",
+          enctype: "multipart/form-data",
+          params: {
+            files: [
+              {
+                name: ShareField,
+                accept: [
+                  "application/pdf",
+                  ".pdf",
+                  "image/*",
+                  "audio/*",
+                  "video/*",
+                  "text/*",
+                  "application/octet-stream",
+                ],
+              },
+            ],
+          },
+        },
       });
     });
   },
