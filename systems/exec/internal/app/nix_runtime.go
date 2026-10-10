@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 )
 
 const (
@@ -19,9 +20,51 @@ var requiredNixRuntimeMarkers = []string{
 	"var/nix/profiles/default/bin/bash",
 }
 
-var requiredImageRuntimePaths = []string{
+// requiredImageRuntimePathsBase are the architecture independent paths baked
+// into the exec image by docker/exec.Dockerfile. The nix-ld shim, its real
+// loader target, and the library directory let exec sessions start unpatched
+// distro-built ELF binaries; without them the first foreign ELF a session runs
+// fails.
+var requiredImageRuntimePathsBase = []string{
 	"/etc/zoneinfo",
 	"/etc/fonts/fonts.conf",
+	"/etc/nix-ld/ld",
+	"/etc/nix-ld/lib",
+}
+
+// execImageLoaderPaths maps a Go architecture to the FHS path where the exec
+// image installs the nix-ld shim. The Dockerfile selects the same path from
+// the build's target architecture, so an architecture missing here is one
+// whose image would place the shim where no binary looks for it.
+var execImageLoaderPaths = map[string]string{
+	"amd64": "/lib64/ld-linux-x86-64.so.2",
+	"arm64": "/lib/ld-linux-aarch64.so.1",
+}
+
+// requiredImageRuntimePaths reports the paths the exec image must provide on
+// goarch. An unknown architecture reports the base paths and false so callers
+// fail loudly instead of silently checking less.
+func requiredImageRuntimePaths(goarch string) ([]string, bool) {
+	paths := append([]string{}, requiredImageRuntimePathsBase...)
+
+	loader, ok := execImageLoaderPaths[goarch]
+	if !ok {
+		return paths, false
+	}
+	return append(paths, loader), true
+}
+
+// execImageRuntimeHealthy reports whether the image paths this binary depends
+// on exist in the container it is running in.
+func execImageRuntimeHealthy() (bool, error) {
+	paths, ok := requiredImageRuntimePaths(runtime.GOARCH)
+	if !ok {
+		return false, fmt.Errorf(
+			"no exec image loader path known for GOARCH %q",
+			runtime.GOARCH,
+		)
+	}
+	return runtimePathsHealthy(paths)
 }
 
 var requiredBootstrapSourceMarkers = []string{
@@ -35,7 +78,7 @@ func bootstrapNixRuntime() error {
 	if err != nil {
 		return err
 	}
-	imagePathsHealthy, err := runtimePathsHealthy(requiredImageRuntimePaths)
+	imagePathsHealthy, err := execImageRuntimeHealthy()
 	if err != nil {
 		return err
 	}
@@ -65,7 +108,7 @@ func bootstrapNixRuntime() error {
 	if !healthy {
 		return fmt.Errorf("bootstrapped /nix is still missing required runtime markers")
 	}
-	imagePathsHealthy, err = runtimePathsHealthy(requiredImageRuntimePaths)
+	imagePathsHealthy, err = execImageRuntimeHealthy()
 	if err != nil {
 		return err
 	}

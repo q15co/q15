@@ -2,7 +2,11 @@ package app
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
+	"slices"
+	"strings"
 	"testing"
 )
 
@@ -40,6 +44,139 @@ func TestNixRuntimeHealthyRejectsMissingMarkers(t *testing.T) {
 	}
 	if healthy {
 		t.Fatalf("expected nix runtime at %q to be unhealthy", root)
+	}
+}
+
+func TestRequiredImageRuntimePathsCoverLoaderAndLibrariesPerArchitecture(t *testing.T) {
+	t.Parallel()
+
+	base := []string{
+		"/etc/zoneinfo",
+		"/etc/fonts/fonts.conf",
+		"/etc/nix-ld/ld",
+		"/etc/nix-ld/lib",
+	}
+
+	for _, tc := range []struct {
+		goarch string
+		loader string
+	}{
+		{goarch: "amd64", loader: "/lib64/ld-linux-x86-64.so.2"},
+		{goarch: "arm64", loader: "/lib/ld-linux-aarch64.so.1"},
+	} {
+		paths, ok := requiredImageRuntimePaths(tc.goarch)
+		if !ok {
+			t.Fatalf("requiredImageRuntimePaths(%q) ok = false, want true", tc.goarch)
+		}
+		for _, want := range append(base, tc.loader) {
+			if !slices.Contains(paths, want) {
+				t.Errorf("requiredImageRuntimePaths(%q) is missing %q", tc.goarch, want)
+			}
+		}
+		for goarch, loader := range execImageLoaderPaths {
+			if goarch == tc.goarch {
+				continue
+			}
+			if slices.Contains(paths, loader) {
+				t.Errorf(
+					"requiredImageRuntimePaths(%q) requires %q, which belongs to %q",
+					tc.goarch, loader, goarch,
+				)
+			}
+		}
+	}
+}
+
+func TestRequiredImageRuntimePathsRejectUnknownArchitecture(t *testing.T) {
+	t.Parallel()
+
+	paths, ok := requiredImageRuntimePaths("riscv64")
+	if ok {
+		t.Fatal("requiredImageRuntimePaths(\"riscv64\") ok = true, want false")
+	}
+	if !slices.Equal(paths, requiredImageRuntimePathsBase) {
+		t.Fatalf(
+			"requiredImageRuntimePaths(\"riscv64\") = %v, want the base paths %v",
+			paths, requiredImageRuntimePathsBase,
+		)
+	}
+}
+
+// execImageLoaderSystems maps a Go architecture to the nixpkgs system whose
+// glibc provides the dynamic loader the image installs for it.
+var execImageLoaderSystems = map[string]string{
+	"amd64": "x86_64-linux",
+	"arm64": "aarch64-linux",
+}
+
+// TestExecImageLoaderPathsMatchNixpkgs checks the loader file names this
+// binary expects against the ones nixpkgs links binaries against for the same
+// architectures, which is the value the image build installs. Hardcoding the
+// x86_64 loader for both is what broke the arm64 image build, and the two
+// names only agree by accident on one of the two platforms.
+func TestExecImageLoaderPathsMatchNixpkgs(t *testing.T) {
+	t.Parallel()
+
+	nix, err := exec.LookPath("nix")
+	if err != nil {
+		if os.Getenv("Q15_REQUIRE_NIX") != "" {
+			t.Fatalf("nix is required here but not installed: %v", err)
+		}
+		t.Skip("nix is not installed, so the loader names cannot be checked against nixpkgs")
+	}
+
+	for goarch, loader := range execImageLoaderPaths {
+		system, ok := execImageLoaderSystems[goarch]
+		if !ok {
+			t.Errorf("no nixpkgs system is known for %q", goarch)
+			continue
+		}
+
+		attr := "nixpkgs#legacyPackages." + system + ".stdenv.cc.bintools.dynamicLinker"
+		out, err := exec.Command(
+			nix,
+			"eval",
+			"--raw",
+			"--extra-experimental-features", "nix-command",
+			"--extra-experimental-features", "flakes",
+			attr,
+		).Output()
+		if err != nil {
+			t.Fatalf("nix eval %q error = %v", attr, err)
+		}
+
+		want := filepath.Base(loader)
+		got := filepath.Base(strings.TrimSpace(string(out)))
+		if got != want {
+			t.Errorf(
+				"%s links against %q, but requiredImageRuntimePaths wants %q",
+				system, got, want,
+			)
+		}
+	}
+}
+
+// loaderAssignment matches a loader name written into docker/exec.Dockerfile
+// rather than derived at build time.
+var loaderAssignment = regexp.MustCompile(`LD_SO="ld-linux`)
+
+// TestExecDockerfileDerivesItsLoaderPath keeps the image build from going back
+// to a hardcoded loader name, which is what produced an arm64 image the
+// aarch64 glibc could not satisfy.
+func TestExecDockerfileDerivesItsLoaderPath(t *testing.T) {
+	t.Parallel()
+
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "docker", "exec.Dockerfile"))
+	if err != nil {
+		t.Fatalf("ReadFile(exec.Dockerfile) error = %v", err)
+	}
+	dockerfile := string(raw)
+
+	if !strings.Contains(dockerfile, "dynamicLinker") {
+		t.Error("exec.Dockerfile no longer asks nixpkgs for the loader path")
+	}
+	if loaderAssignment.MatchString(dockerfile) {
+		t.Error("exec.Dockerfile assigns a loader file name instead of deriving it")
 	}
 }
 
