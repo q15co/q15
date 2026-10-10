@@ -133,9 +133,7 @@ const ToolActivity = memo(
                 )}
                 <h3 className="sr-only">{failed ? "Tool error" : "Tool output"}</h3>
                 {(failed || results.length > 1) && (
-                  <p className={styles.flowLabel}>
-                    {failed ? "Error" : `Output ${index + 1}`}
-                  </p>
+                  <p className={styles.flowLabel}>{failed ? "Error" : `Output ${index + 1}`}</p>
                 )}
                 <ToolResult content={result.part.content ?? ""} />
               </section>

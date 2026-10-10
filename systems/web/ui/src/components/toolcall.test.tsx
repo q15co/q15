@@ -7,6 +7,13 @@ import { ToolArguments, ToolResult } from "./toolcall";
 
 afterEach(cleanup);
 
+/** The pill for a rendered scalar: the text lives in a label span, the pill keeps `data-kind`. */
+function chipOf(text: string): HTMLElement {
+  const pill = screen.getByText(text).closest<HTMLElement>("[data-kind]");
+  if (pill === null) throw new Error(`no pill rendered for ${text}`);
+  return pill;
+}
+
 /** Renders twice so memoised branches are exercised, the way a delta re-renders the app. */
 function renderTwice(ui: ReactElement) {
   const view = render(ui);
@@ -31,10 +38,10 @@ describe("tool argument rendering", () => {
       <ToolArguments raw={'{"max_results":5,"fetch_page":true,"query":"nix-ld","note":null}'} />,
     );
     expect(screen.getByText("max_results")).toBeDefined();
-    expect(screen.getByText("5").dataset.kind).toBe("number");
-    expect(screen.getByText("true").dataset.kind).toBe("boolean");
-    expect(screen.getByText("nix-ld").dataset.kind).toBe("string");
-    expect(screen.getByText("null").dataset.kind).toBe("null");
+    expect(chipOf("5").dataset.kind).toBe("number");
+    expect(chipOf("true").dataset.kind).toBe("boolean");
+    expect(chipOf("nix-ld").dataset.kind).toBe("string");
+    expect(chipOf("null").dataset.kind).toBe("null");
     expect(container.querySelectorAll("dl")).toHaveLength(1);
   });
 
@@ -46,7 +53,7 @@ describe("tool argument rendering", () => {
     );
     expect(container.querySelector("pre")?.textContent).toBe("line one\nline two");
     expect(screen.getAllByText("empty")).toHaveLength(3);
-    expect(screen.getByText("short").dataset.kind).toBe("string");
+    expect(chipOf("short").dataset.kind).toBe("string");
   });
 
   it("renders short arrays as chips and long ones with a remainder", () => {

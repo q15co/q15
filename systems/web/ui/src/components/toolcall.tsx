@@ -68,7 +68,7 @@ function Chip({ value }: { value: Scalar }) {
   const kind = value === null ? "null" : typeof value;
   return (
     <span className={styles.chip} data-kind={kind}>
-      {String(value)}
+      <span className={styles.chipText}>{String(value)}</span>
     </span>
   );
 }

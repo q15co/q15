@@ -69,8 +69,15 @@
   padding: 0;
   list-style: none;
 }
+/*
+ * The pill is the flex container and the label inside it does the clipping: an
+ * `overflow: hidden` inline-block reports its bottom margin edge as its baseline,
+ * so `align-items: baseline` would hang the whole pill off the row baseline and
+ * the key's text would sit below the value's.
+ */
 .chip {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
   max-width: 100%;
   padding: var(--space-1) var(--space-2);
   border: 1px solid var(--border);
@@ -79,9 +86,13 @@
   color: var(--subtext);
   font-family: "Recursive Variable", monospace;
   font-size: var(--font-xs);
-  white-space: nowrap;
+}
+.chipText {
+  display: block;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .chips li {
   min-width: 0;
