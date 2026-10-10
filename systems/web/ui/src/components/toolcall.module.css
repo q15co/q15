@@ -1,0 +1,160 @@
+.root {
+  margin: 0;
+  padding: var(--space-3) var(--space-5);
+  max-height: 18rem;
+  overflow: auto;
+  scrollbar-gutter: stable;
+  font-size: var(--font-sm);
+  line-height: var(--leading-ui);
+  color: var(--foreground);
+}
+.raw {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: "Recursive Variable", monospace;
+}
+.fields {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: var(--space-4);
+  row-gap: var(--space-2);
+  align-items: baseline;
+  margin: 0;
+}
+.nested {
+  margin: var(--space-2) 0;
+  padding-left: var(--space-4);
+  border-left: 2px solid color-mix(in srgb, var(--border) 80%, transparent);
+}
+.field {
+  display: contents;
+}
+.key {
+  font-family: "Recursive Variable", monospace;
+  font-size: var(--font-xs);
+  color: var(--blue);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.value {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: break-word;
+}
+.shell {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: 0.5rem;
+  background: var(--crust);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: "Recursive Variable", monospace;
+  font-size: var(--font-sm);
+}
+.block {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: 0.5rem;
+  background: var(--crust);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: "Recursive Variable", monospace;
+  font-size: var(--font-sm);
+}
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+/*
+ * The pill is the flex container and the label inside it does the clipping: an
+ * `overflow: hidden` inline-block reports its bottom margin edge as its baseline,
+ * so `align-items: baseline` would hang the whole pill off the row baseline and
+ * the key's text would sit below the value's.
+ */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+  color: var(--subtext);
+  font-family: "Recursive Variable", monospace;
+  font-size: var(--font-xs);
+}
+.chipText {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chips li {
+  min-width: 0;
+  max-width: 100%;
+}
+.chip[data-kind="string"] {
+  color: var(--green);
+}
+.chip[data-kind="number"] {
+  color: var(--warning);
+}
+.chip[data-kind="boolean"] {
+  color: var(--sapphire);
+}
+.chip[data-kind="null"] {
+  color: var(--overlay);
+  font-style: italic;
+}
+.items {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.item {
+  padding: var(--space-1) 0 var(--space-1) var(--space-3);
+  border-left: 2px solid color-mix(in srgb, var(--border) 80%, transparent);
+}
+.more {
+  align-self: center;
+  color: var(--overlay);
+  font-size: var(--font-xs);
+}
+.empty {
+  color: var(--overlay);
+  font-size: var(--font-xs);
+  font-style: italic;
+}
+.cmd {
+  color: var(--primary);
+  font-weight: 600;
+}
+.flag {
+  color: var(--sapphire);
+}
+.string {
+  color: var(--green);
+}
+.variable {
+  color: var(--maroon);
+}
+.operator {
+  color: var(--overlay);
+}
+.comment {
+  color: var(--overlay);
+  font-style: italic;
+}
+.number {
+  color: var(--warning);
+}
+.plain {
+  color: var(--foreground);
+}

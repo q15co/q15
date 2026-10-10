@@ -7,7 +7,6 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import type { Transport } from "../application/ports";
 import type * as chatModule from "../domain/chat";
-import type * as formatModule from "./format";
 import type * as messageModule from "./message";
 
 import { ChatStore } from "../application/chat-store";
@@ -19,7 +18,7 @@ import { MarkdownView } from "./markdown";
 import { Transcript } from "./transcript";
 import { ReducedMotion } from "./ui/motion-preference";
 
-const counts = vi.hoisted(() => ({ rows: 0, markdown: 0, tool: 0, grouped: 0 }));
+const counts = vi.hoisted(() => ({ rows: 0, markdown: 0, grouped: 0 }));
 vi.mock("react-markdown", async (original) => {
   const actual = await original<typeof markdownModule>();
   return {
@@ -50,17 +49,6 @@ vi.mock("../domain/chat", async (original) => {
     },
   };
 });
-vi.mock("./format", async (original) => {
-  const actual = await original<typeof formatModule>();
-  return {
-    ...actual,
-    pretty: (text: string) => {
-      counts.tool++;
-      return actual.pretty(text);
-    },
-  };
-});
-
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
@@ -109,7 +97,6 @@ describe("streaming work", () => {
       const unchanged = required(store.getSnapshot().live).parts.slice(0, 2);
       counts.rows = 0;
       counts.markdown = 0;
-      counts.tool = 0;
       counts.grouped = 0;
       const parse = vi.spyOn(JSON, "parse");
       let full = "Initial answer";
@@ -136,7 +123,6 @@ describe("streaming work", () => {
       expect(required(store.getSnapshot().live).parts[1]).toBe(unchanged[1]);
       expect(counts.rows).toBe(0);
       expect(counts.grouped).toBe(0);
-      expect(counts.tool).toBe(0);
       expect(
         parse.mock.calls.filter(
           ([text]) => text === call.arguments || text.includes('"command":"history'),

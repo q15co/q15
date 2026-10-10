@@ -370,7 +370,10 @@ describe("transcript navigation", () => {
     flushFrame();
     flushFrame();
     expect(disclosures.every((details) => details.dataset.instant === undefined)).toBe(true);
-    expect(container.querySelector("pre")?.textContent).toBe('{\n  "command": "pwd"\n}');
+    // The tool input renders as a highlighted command, not as re-encoded JSON.
+    const input = required(container.querySelector("pre"));
+    expect(input.textContent).toBe("pwd");
+    expect(input.querySelector("span")?.textContent).toBe("pwd");
     for (const hash of ["#message-999:0", "#message-invalid", "#other"]) {
       window.history.replaceState(null, "", hash);
       await act(async () => {

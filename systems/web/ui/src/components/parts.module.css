@@ -38,6 +38,9 @@
 .reasoning summary > svg:first-child {
   color: var(--primary);
 }
+.partDivider {
+  border-top: 1px solid var(--border);
+}
 .reasoning .partContent {
   color: var(--foreground);
 }
