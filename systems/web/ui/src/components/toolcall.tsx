@@ -78,7 +78,8 @@ function TextValue({ name, value, depth }: { name: string; value: string; depth:
   if (value === "") return <span className={styles.empty}>empty</span>;
   if (value.includes("\n") || value.length > blockLimit)
     return <pre className={styles.block}>{value}</pre>;
-  if (depth === 1) return <Chip value={value} />;
+  // Long strings stretch a pill to its own line; keep chips for short scalars.
+  if (depth === 1 && value.length <= 48) return <Chip value={value} />;
   return <span className={styles.string}>{value}</span>;
 }
 

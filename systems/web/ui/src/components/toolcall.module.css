@@ -1,8 +1,9 @@
 .root {
   margin: 0;
-  padding: var(--space-3) var(--space-4);
+  padding: var(--space-3) var(--space-5);
   max-height: 18rem;
   overflow: auto;
+  scrollbar-gutter: stable;
   font-size: var(--font-sm);
   line-height: var(--leading-ui);
   color: var(--foreground);
@@ -18,35 +19,32 @@
   padding: 0;
 }
 .nested {
-  margin: var(--space-1) 0 var(--space-1) 0;
-  padding-left: var(--space-3);
+  margin: var(--space-2) 0;
+  padding-left: var(--space-4);
   border-left: 2px solid color-mix(in srgb, var(--border) 80%, transparent);
 }
 .field {
   display: grid;
-  grid-template-columns: minmax(4.5rem, 8.5rem) 1fr;
-  gap: var(--space-1) var(--space-3);
+  grid-template-columns: minmax(5rem, 7.5rem) minmax(0, 1fr);
+  gap: var(--space-2) var(--space-4);
   align-items: baseline;
   padding: var(--space-2) 0;
-}
-.field + .field {
-  border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
 }
 .key {
   font-family: "Recursive Variable", monospace;
   font-size: var(--font-xs);
   color: var(--blue);
+  min-width: 0;
   overflow-wrap: anywhere;
 }
 .value {
   margin: 0;
   min-width: 0;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 .shell {
   margin: 0;
   padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--border);
   border-radius: 0.5rem;
   background: var(--crust);
   white-space: pre-wrap;
@@ -57,7 +55,6 @@
 .block {
   margin: 0;
   padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--border);
   border-radius: 0.5rem;
   background: var(--crust);
   white-space: pre-wrap;
@@ -74,16 +71,22 @@
   list-style: none;
 }
 .chip {
-  display: inline-flex;
-  align-items: center;
-  padding: 1px var(--space-2);
+  display: inline-block;
+  max-width: 100%;
+  padding: var(--space-1) var(--space-2);
   border: 1px solid var(--border);
   border-radius: 999px;
   background: color-mix(in srgb, var(--surface) 70%, transparent);
   color: var(--subtext);
   font-family: "Recursive Variable", monospace;
   font-size: var(--font-xs);
-  overflow-wrap: anywhere;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chips li {
+  min-width: 0;
+  max-width: 100%;
 }
 .chip[data-kind="string"] {
   color: var(--green);
@@ -100,19 +103,14 @@
 }
 .items {
   display: grid;
-  gap: var(--space-2);
+  gap: var(--space-3);
   margin: 0;
   padding: 0;
   list-style: none;
 }
 .item {
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--border);
-  border-radius: 0.5rem;
-  background: color-mix(in srgb, var(--crust) 70%, transparent);
-}
-.item .field {
-  grid-template-columns: minmax(4.5rem, 7rem) 1fr;
+  padding: var(--space-1) 0 var(--space-1) var(--space-3);
+  border-left: 2px solid color-mix(in srgb, var(--border) 80%, transparent);
 }
 .more {
   align-self: center;
@@ -151,8 +149,7 @@
   color: var(--foreground);
 }
 @container app (max-width: 48rem) {
-  .field,
-  .item .field {
+  .field {
     grid-template-columns: 1fr;
     gap: var(--space-1);
     padding: var(--space-2) 0;

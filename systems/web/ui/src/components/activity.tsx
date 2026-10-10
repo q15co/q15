@@ -90,7 +90,7 @@ const ToolActivity = memo(
     anchors: Set<string>;
   }) {
     const reduced = useMotionPreference();
-    const { name, title, status, error, running, Icon } = toolPresentation(item, working);
+    const { title, status, error, running, Icon } = toolPresentation(item, working);
     const part = item.source.part;
     const description = context(part);
     const results = part.part_type === "tool_result" ? [item.source] : item.results;
@@ -120,25 +120,27 @@ const ToolActivity = memo(
         <div className={styles.toolBody}>
           {part.tool_call && (
             <section>
-              <h3>
-                {name !== "" && <span className={styles.toolName}>{name}</span>}
-                <span>Input</span>
-              </h3>
+              <h3 className="sr-only">Tool arguments</h3>
               <ToolArguments raw={part.tool_call.arguments} />
             </section>
           )}
-          {results.map((result) => (
-            <section
-              key={result.key}
-              className={result.part.is_error === true ? styles.error : undefined}
-            >
-              {result !== item.source && anchors.has(result.key) && (
-                <MessageAnchor source={result} />
-              )}
-              <h3>{result.part.is_error === true ? "Error" : "Output"}</h3>
-              <ToolResult content={result.part.content ?? ""} />
-            </section>
-          ))}
+          {results.map((result, index) => {
+            const failed = result.part.is_error === true;
+            return (
+              <section key={result.key} className={failed ? styles.error : undefined}>
+                {result !== item.source && anchors.has(result.key) && (
+                  <MessageAnchor source={result} />
+                )}
+                <h3 className="sr-only">{failed ? "Tool error" : "Tool output"}</h3>
+                {(failed || results.length > 1) && (
+                  <p className={styles.flowLabel}>
+                    {failed ? "Error" : `Output ${index + 1}`}
+                  </p>
+                )}
+                <ToolResult content={result.part.content ?? ""} />
+              </section>
+            );
+          })}
           {results.length === 0 && (
             <p className={styles.noResult}>
               {working ? "Waiting for the tool result…" : "No result was recorded for this call."}

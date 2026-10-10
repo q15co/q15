@@ -38,6 +38,7 @@
   color: var(--foreground);
 }
 .activityLabel {
+  flex-shrink: 0;
   min-width: 0;
   overflow-wrap: anywhere;
 }
@@ -94,26 +95,39 @@
   min-width: 0;
 }
 .tool > summary {
-  padding: var(--space-2) 0;
+  padding: var(--space-2) var(--space-3);
+  margin-left: calc(var(--space-3) * -1);
   font-size: var(--font-sm);
   border-radius: var(--space-2);
+  cursor: pointer;
+}
+.tool > summary:hover {
+  background: var(--surface);
+}
+/* The tool icon and chevron must never be squeezed by a long description. */
+.tool > summary > svg {
+  flex-shrink: 0;
 }
 .tool[data-running] > summary {
   color: var(--foreground);
 }
 .toolTitle {
+  flex: 0 0 auto;
   min-width: 0;
+  color: var(--foreground);
   overflow-wrap: anywhere;
 }
 .context {
+  flex: 1 1 0;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: var(--font-sm);
-  color: var(--foreground);
+  color: var(--subtext);
 }
 .status {
+  flex: 0 0 auto;
   font-size: var(--font-xs);
   white-space: nowrap;
   margin-left: auto;
@@ -121,7 +135,7 @@
 .status[data-status] {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-2);
   color: var(--foreground);
 }
 .status[data-status]::before {
@@ -141,9 +155,9 @@
   background: var(--destructive);
 }
 .toolBody {
-  margin: var(--space-2) 0 0 var(--space-6);
+  margin: var(--space-3) 0 0 var(--space-6);
   border: 1px solid var(--border);
-  border-radius: 0.625rem;
+  border-radius: 0.75rem;
   background: var(--sidebar);
   overflow: hidden;
 }
@@ -153,31 +167,18 @@
 .toolBody section + section {
   border-top: 1px solid var(--border);
 }
-.toolBody h3 {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  margin: 0;
-  padding: var(--space-3) var(--space-4) 0;
-  font-size: var(--font-xs);
-  font-weight: 500;
-  color: var(--subtext);
-}
-.toolName {
-  padding: 0 var(--space-2);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--surface) 70%, transparent);
-  color: var(--blue);
-  font-family: "Recursive Variable", monospace;
-}
 .error,
-.error > summary,
-.error h3 {
+.error > summary {
   color: var(--destructive);
 }
+.flowLabel {
+  margin: 0;
+  padding: var(--space-3) var(--space-5) 0;
+  font-size: var(--font-xs);
+  color: var(--subtext);
+}
 .noResult {
-  padding: var(--space-3) var(--space-4);
+  padding: var(--space-3) var(--space-5);
   margin: 0;
   font-size: var(--font-sm);
 }
@@ -245,7 +246,7 @@
   }
   .context {
     order: 1;
-    flex-basis: 100%;
+    flex: 1 1 100%;
     padding-left: var(--space-6);
   }
   .toolBody {
