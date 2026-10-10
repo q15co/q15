@@ -128,15 +128,19 @@ recheck sessions before dispatch and output, and at least once per second while 
 Expiry/revocation closes them with code 4401. The UI stops reconnecting and shows a sign-in link; a
 failed upgrade checks `/auth/session` to distinguish authentication loss from a network failure.
 
-Without a valid session, `/`, `/ws`, `/api/turns`, assets and unknown paths answer 401. `/` serves
-the same compiled React shell with per-response CSP nonces, rendering sign-in before any chat
+Without a valid session, `/`, `/ws`, `/api/turns`, other assets and unknown paths answer 401. `/`
+serves the same compiled React shell with per-response CSP nonces, rendering sign-in before any chat
 adapters are created. Its script, style and fonts are inlined so locked navigation needs no public
 asset exceptions. The shell contains no application data, and this trades separate asset caching for
-one browser entry and consistent presentation. `/healthz` remains the only unauthenticated
-successful resource. The unavoidable proof exchange is `POST /auth/login` (401 plus non-secret
-challenge options) and `POST /auth/login/finish` (204 **only after** a valid enrolled WebAuthn
-assertion). They do not reach the bridge. `GET /auth/session` and `POST /auth/logout` require a
-valid chat session.
+one browser entry and consistent presentation. `/healthz` and the four install assets
+(`/manifest.webmanifest` and the three `/icon-*` files it references) are the only unauthenticated
+successful resources. An install reads the manifest and its icons before any session exists, and a
+WebAPK whose `share_target` cannot be fetched never appears in the Android share sheet, so those
+four files are exempt from the proof requirement; they carry presentation metadata only, and a
+request to any other path still answers 401. The unavoidable proof exchange is `POST /auth/login`
+(401 plus non-secret challenge options) and `POST /auth/login/finish` (204 **only after** a valid
+enrolled WebAuthn assertion). They do not reach the bridge. `GET /auth/session` and
+`POST /auth/logout` require a valid chat session.
 
 All HTTP mutations, including login and logout, require both the exact configured Origin and
 `Sec-Fetch-Site: same-origin`. Native WebSocket upgrades require the exact Origin and reject

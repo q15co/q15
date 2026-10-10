@@ -19,6 +19,19 @@ import (
 
 const rpcTimeout = 5 * time.Second
 
+// publicAssets are fetched by the browser and by the platform on its own
+// behalf, without a request proof, so they cannot sit behind the gate. A web
+// app manifest and the icons it references decide whether an installed app can
+// be minted as a WebAPK, and only a WebAPK can appear in the Android share
+// sheet, so gating them keeps a deployed share_target invisible. The set is an
+// exact match and every member carries presentation metadata only.
+var publicAssets = map[string]struct{}{
+	"/manifest.webmanifest": {},
+	"/icon-192.png":         {},
+	"/icon-512.png":         {},
+	"/icon.svg":             {},
+}
+
 // Config provides the HTTP policy and the replaceable authorization seam.
 type Config struct {
 	Origin     string
@@ -40,7 +53,8 @@ type Server struct {
 	closing  bool
 }
 
-// New wires every route through the gate except the exact health endpoint.
+// New wires every route through the gate except the exact health endpoint and
+// the install assets the platform fetches without credentials.
 func New(ctx context.Context, service bridge.Service, config Config) (*Server, error) {
 	if err := gate.ValidateOrigin(config.Origin); err != nil {
 		return nil, err
@@ -72,6 +86,10 @@ func New(ctx context.Context, service bridge.Service, config Config) (*Server, e
 				if r.Method != http.MethodHead {
 					_, _ = w.Write([]byte("ok\n"))
 				}
+				return
+			}
+			if _, ok := publicAssets[r.URL.Path]; ok {
+				config.Assets.ServeHTTP(w, r)
 				return
 			}
 			secured.ServeHTTP(w, r)
