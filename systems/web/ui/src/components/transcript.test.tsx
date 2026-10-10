@@ -118,6 +118,24 @@ function flushFrame() {
 }
 
 describe("transcript navigation", () => {
+  it("alternates reader and agent turn elements across completed exchanges", async () => {
+    const { container, store } = await setup(() =>
+      Promise.resolve({ ...page("43"), turns: [...page("43").turns, ...page("42").turns] }),
+    );
+    const turns = [
+      ...container.querySelectorAll<HTMLElement>("[data-user-turn], [data-agent-turn]"),
+    ];
+    expect(turns.map((turn) => Object.hasOwn(turn.dataset, "agentTurn"))).toEqual([
+      false,
+      true,
+      false,
+      true,
+    ]);
+    expect(turns.map((turn) => turn.tagName)).toEqual(["ARTICLE", "ARTICLE", "ARTICLE", "ARTICLE"]);
+    expect(container.querySelector("[data-turn-identity]")).toBeNull();
+    expect(new Set(turns.map((turn) => turn.parentElement)).size).toBe(1);
+    store.stop();
+  });
   it("batches resize follow once per frame and cancels pending follow on unmount", async () => {
     const { node, resize, unmount, store } = await setup(() => Promise.resolve(page("42")));
     const writes = vi.fn<(value: number) => void>();
@@ -134,6 +152,55 @@ describe("transcript navigation", () => {
     expect(cancel).toHaveBeenCalledOnce();
     store.stop();
   });
+  it.each([false, true])(
+    "anchors a tall answer at its start, including multiple messages=%s",
+    async (multiple) => {
+      const history = page("42");
+      if (multiple)
+        required(history.turns[0]).messages.push({
+          ordinal: 2,
+          role: "assistant",
+          parts: [{ ordinal: 0, part_type: "text", text: "More detail." }],
+        });
+      const { node, resize, scrollTo, store } = await setup(() => Promise.resolve(history));
+      const answers = [
+        ...node.querySelectorAll<HTMLElement>("[data-agent-turn] > [data-message-key]"),
+      ];
+      const first = required(answers[0]);
+      let height = 200;
+      vi.spyOn(node, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 100, 100, 300));
+      vi.spyOn(first, "getBoundingClientRect").mockImplementation(
+        () => new DOMRect(0, 900 - node.scrollTop, 100, height),
+      );
+      if (multiple)
+        vi.spyOn(required(answers[1]), "getBoundingClientRect").mockImplementation(
+          () => new DOMRect(0, 920 + height - node.scrollTop, 100, height),
+        );
+      resize(1500);
+      flushFrame();
+      expect(node.scrollTop).toBe(multiple ? 800 : 1500);
+      height = multiple ? 280 : 600;
+      resize(2000);
+      fireEvent.scroll(node);
+      flushFrame();
+      expect(node.scrollTop).toBe(800);
+      fireEvent.scroll(node);
+      expect(screen.queryByText("Back to latest")).toBeNull();
+      height += 200;
+      resize(2500);
+      flushFrame();
+      expect(node.scrollTop).toBe(800);
+      node.scrollTop = 400;
+      fireEvent.scroll(node);
+      resize(2800);
+      flushFrame();
+      expect(node.scrollTop).toBe(400);
+      fireEvent.click(screen.getByRole("button", { name: "Back to latest" }));
+      expect(scrollTo).toHaveBeenCalledWith({ top: 800, behavior: "auto" });
+      expect(screen.queryByText("Back to latest")).toBeNull();
+      store.stop();
+    },
+  );
   it.each([true, false])(
     "follows new content until the reader scrolls back; reduced motion=%s",
     async (reduced) => {

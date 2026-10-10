@@ -91,7 +91,7 @@ describe("composer attachments", () => {
       ]),
     );
     expect(upload).toHaveBeenCalledWith([file]);
-    expect(screen.queryByText("photo.png")).toBeNull();
+    await waitFor(() => expect(screen.queryByText("photo.png")).toBeNull());
     expect(store.getSnapshot().pending[0]?.parts).toEqual([required(fixture.parts[0])]);
   });
   it("keeps the draft and held files after upload rejection without a pending bubble", async () => {

@@ -45,6 +45,16 @@ const history = [
 describe("turn activity", () => {
   it("pairs separate call/result messages and gives only the answer response actions", () => {
     const { container } = render(<TurnView messages={history} working={false} />);
+    const agent = required(container.querySelector("[data-agent-turn]"));
+    const answer = required(agent.querySelector(":scope > [data-message-key]"));
+    const activity = required(agent.querySelector("[data-agent-activity]"));
+    expect([...container.children]).toEqual([container.querySelector("[data-user-turn]"), agent]);
+    expect([...agent.children]).toEqual([activity, answer]);
+    expect(screen.getByRole("article", { name: "Your message" })).toBeDefined();
+    expect(screen.getByRole("article", { name: "Agent response" })).toBe(agent);
+    expect(container.querySelector("[data-turn-identity]")).toBeNull();
+    expect(screen.queryByText("You")).toBeNull();
+    expect(screen.queryByText("q15")).toBeNull();
     expect(container.querySelectorAll("article")).toHaveLength(2);
     expect(screen.getAllByLabelText("Copy response")).toHaveLength(1);
     expect(screen.getByText("Used 1 tool")).toBeDefined();
@@ -54,6 +64,58 @@ describe("turn activity", () => {
     expect(screen.getByText("/workspace")).toBeDefined();
     for (const m of history)
       expect(container.querySelectorAll(`[id="message-${m.key}"]`)).toHaveLength(1);
+  });
+  it("keeps a stable agent turn and activity before reasoning or answer text arrives", () => {
+    const { container, rerender } = render(<TurnView messages={[]} working />);
+    const agent = required(container.querySelector("[data-agent-turn]"));
+    const activity = required(agent.querySelector("[data-agent-activity]"));
+    expect([...agent.children]).toEqual([activity]);
+    expect(screen.getByText("Thinking…")).toBeDefined();
+    const reasoning = {
+      ...message(1, "assistant", [{ part_type: "reasoning", text: "Considering the request." }]),
+      status: "streaming",
+      model: "model-a",
+    };
+    rerender(<TurnView messages={[reasoning]} working />);
+    expect(container.querySelector("[data-agent-turn]")).toBe(agent);
+    expect(agent.querySelector("[data-agent-activity]")).toBe(activity);
+    expect(agent.querySelector(":scope > [data-message-key]")).toBeNull();
+    expect(activity.querySelector('[id="message-42:1"]')).not.toBeNull();
+    expect(screen.getByText("Considering the request.")).toBeDefined();
+    rerender(
+      <TurnView
+        messages={[
+          {
+            ...reasoning,
+            parts: [...reasoning.parts, { ordinal: 1, part_type: "text", text: "An answer." }],
+          },
+        ]}
+        working
+      />,
+    );
+    const answer = required(agent.querySelector(":scope > [data-message-key]"));
+    expect([...agent.children]).toEqual([activity, answer]);
+    expect(container.querySelectorAll('[id="message-42:1"]')).toHaveLength(1);
+  });
+  it("keeps multiple assistant answers below their shared activity with distinct anchors", () => {
+    const messages = [
+      ...history,
+      message(4, "assistant", [{ part_type: "text", disposition: "final", text: "More detail." }]),
+    ];
+    const { container } = render(<TurnView messages={messages} working={false} />);
+    const agent = required(container.querySelector("[data-agent-turn]"));
+    expect(container.querySelectorAll("[data-agent-turn]")).toHaveLength(1);
+    expect(agent.querySelectorAll(":scope > [data-message-key]")).toHaveLength(2);
+    expect([...agent.children].map((child) => child.tagName)).toEqual(["DETAILS", "DIV", "DIV"]);
+    for (const m of messages)
+      expect(container.querySelectorAll(`[id="message-${m.key}"]`)).toHaveLength(1);
+  });
+  it("renders each reader message as its own turn without inventing idle agent work", () => {
+    const { container } = render(<TurnView messages={[required(history[0])]} working={false} />);
+    expect(container.children).toHaveLength(1);
+    expect(container.querySelectorAll("[data-user-turn]")).toHaveLength(1);
+    expect(container.querySelector("[data-agent-turn]")).toBeNull();
+    expect(screen.getByRole("article", { name: "Your message" })).toBeDefined();
   });
   it("handles the frozen mixed live message without repeating its canonical anchor", () => {
     const original = required(required(parsePage(parts).turns[0]).messages[0]);
@@ -65,6 +127,10 @@ describe("turn activity", () => {
     );
     expect(screen.getByText("answer")).toBeDefined();
     expect(screen.getByTitle("Attachment")).toBeDefined();
+    const agent = required(container.querySelector("[data-agent-turn]"));
+    expect(screen.getByTitle("Attachment").closest("[data-message-key]")?.parentElement).toBe(
+      agent,
+    );
     expect(screen.getByText("1 error")).toBeDefined();
     expect(screen.getByText("/workspace")).toBeDefined();
     expect(container.querySelectorAll('[id="message-42:0"]')).toHaveLength(1);

@@ -7,7 +7,6 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import type { Transport } from "../application/ports";
 import type * as chatModule from "../domain/chat";
-import type { ChatMessage } from "../domain/chat";
 import type * as formatModule from "./format";
 import type * as messageModule from "./message";
 
@@ -35,7 +34,7 @@ vi.mock("./message", async (original) => {
   const actual = await original<typeof messageModule>();
   return {
     ...actual,
-    MessageView: (props: { message: ChatMessage }) => {
+    MessageView: (props: Parameters<typeof actual.MessageView>[0]) => {
       if (props.message.turn !== "10001") counts.rows++;
       return <actual.MessageView {...props} />;
     },
@@ -145,7 +144,7 @@ describe("streaming work", () => {
       ).toHaveLength(0);
       expect(counts.markdown).toBe(20);
       const reasoning = required(
-        view.container.querySelector<HTMLDetailsElement>("[data-agent-activity]:last-of-type"),
+        [...view.container.querySelectorAll<HTMLDetailsElement>("[data-agent-activity]")].at(-1),
       );
       reasoning.open = true;
       feed(store, "msg.final", { msg, status: "aborted", full_text: full });

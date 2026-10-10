@@ -20,7 +20,6 @@ import { isRecord } from "../shared/type-guards";
 import { pretty } from "./format";
 import { MessageView } from "./message";
 import { PartView } from "./parts";
-import { recursiveAxes } from "./ui/font-motion";
 import { useMotionPreference } from "./ui/motion-preference";
 
 import styles from "./activity.module.css";
@@ -167,7 +166,6 @@ export function TurnView({
   messages: readonly ChatMessage[];
   working: boolean;
 }) {
-  const reduced = useMotionPreference();
   const { activity, answers } = presentTurn(messages);
   const usingTool = activity.some(
     (item) =>
@@ -213,105 +211,73 @@ export function TurnView({
         .map((m) => (
           <MessageView message={m} key={m.key} />
         ))}
-      {(activity.length > 0 || working || empty.length > 0) && (
-        <details
-          className={styles.activity}
-          data-agent-activity
-          data-working={working || undefined}
-          data-phase={phase}
-        >
-          <summary>
-            {empty.map((m) => (
-              <span
-                key={m.key}
-                className={styles.anchor}
-                id={`message-${m.key}`}
-                data-message-key={m.key}
-              />
-            ))}
-            <motion.span
-              className={styles.summaryContent}
-              initial={reduced ? false : { y: 0 }}
-              animate={{ y: working && !reduced ? [0, -3, 0] : 0 }}
-              transition={{
-                duration: reduced ? 0 : working ? 4.8 : 0.3,
-                repeat: working && !reduced ? Infinity : 0,
-                ease: "easeInOut",
-              }}
+      {(working || messages.some((m) => m.role !== "user")) && (
+        <article className={styles.turn} data-agent-turn aria-label="Agent response">
+          {(activity.length > 0 || working || empty.length > 0) && (
+            <details
+              className={styles.activity}
+              data-agent-activity
+              data-working={working || undefined}
+              data-phase={phase}
             >
-              {usingTool ? (
-                <Wrench size={15} className={styles.thinking} aria-hidden="true" />
-              ) : (
-                <Brain
-                  size={15}
-                  className={working ? styles.thinking : undefined}
-                  aria-hidden="true"
-                />
-              )}
-              <motion.span
-                className={styles.activityLabel}
-                initial={reduced ? false : { fontVariationSettings: recursiveAxes(0.2, 500) }}
-                animate={{
-                  fontVariationSettings:
-                    working && !reduced
-                      ? [
-                          recursiveAxes(0.2, 500),
-                          recursiveAxes(0.9, 570, -4),
-                          recursiveAxes(0.2, 500),
-                        ]
-                      : recursiveAxes(0.2, 500),
-                }}
-                transition={{
-                  duration: reduced ? 0 : working ? 4.8 : 0.3,
-                  repeat: working && !reduced ? Infinity : 0,
-                  ease: "easeInOut",
-                }}
-              >
-                {label}
-              </motion.span>
-              {working && (
-                <span className={styles.workingDots} aria-hidden="true">
-                  <i />
-                  <i />
-                  <i />
-                </span>
-              )}
-              {working && toolCount > 0 && (
-                <span className={styles.status}>
-                  {toolCount} {toolCount === 1 ? "tool" : "tools"}
-                </span>
-              )}
-              {errors > 0 && (
-                <span className={styles.error}>
-                  {errors} {errors === 1 ? "error" : "errors"}
-                </span>
-              )}
-              <ChevronDown size={14} className={styles.chevron} aria-hidden="true" />
-            </motion.span>
-          </summary>
-          <div className={styles.timeline}>
-            {activity.map((item) =>
-              item.kind === "tool" ? (
-                <ToolActivity item={item} working={working} anchors={anchors} key={item.key} />
-              ) : (
-                <div className={styles.commentary} key={item.key}>
-                  {anchors.has(item.source.key) && <MessageAnchor source={item.source} />}
-                  <PartView
-                    part={item.source.part}
-                    streaming={item.source.message.status === "streaming"}
+              <summary>
+                {empty.map((m) => (
+                  <span
+                    key={m.key}
+                    className={styles.anchor}
+                    id={`message-${m.key}`}
+                    data-message-key={m.key}
                   />
-                </div>
-              ),
-            )}
-            {working && activity.length === 0 && (
-              <span className={styles.noResult}>q15 is thinking…</span>
-            )}
-          </div>
-        </details>
+                ))}
+                <span className={styles.summaryContent}>
+                  {usingTool ? (
+                    <Wrench size={15} className={styles.thinking} aria-hidden="true" />
+                  ) : (
+                    <Brain
+                      size={15}
+                      className={working ? styles.thinking : undefined}
+                      aria-hidden="true"
+                    />
+                  )}
+                  <span className={styles.activityLabel}>{label}</span>
+                  {working && toolCount > 0 && (
+                    <span className={styles.status}>
+                      {toolCount} {toolCount === 1 ? "tool" : "tools"}
+                    </span>
+                  )}
+                  {errors > 0 && (
+                    <span className={styles.error}>
+                      {errors} {errors === 1 ? "error" : "errors"}
+                    </span>
+                  )}
+                  <ChevronDown size={14} className={styles.chevron} aria-hidden="true" />
+                </span>
+              </summary>
+              <div className={styles.timeline}>
+                {activity.map((item) =>
+                  item.kind === "tool" ? (
+                    <ToolActivity item={item} working={working} anchors={anchors} key={item.key} />
+                  ) : (
+                    <div className={styles.commentary} key={item.key}>
+                      {anchors.has(item.source.key) && <MessageAnchor source={item.source} />}
+                      <PartView
+                        part={item.source.part}
+                        streaming={item.source.message.status === "streaming"}
+                      />
+                    </div>
+                  ),
+                )}
+                {working && activity.length === 0 && (
+                  <span className={styles.noResult}>q15 is thinking…</span>
+                )}
+              </div>
+            </details>
+          )}
+          {answers.map((m) => (
+            <MessageView message={m} key={m.key} />
+          ))}
+        </article>
       )}
-      {answers.map((m) => (
-        <MessageView message={m} key={m.key} />
-      ))}
     </>
   );
 }
