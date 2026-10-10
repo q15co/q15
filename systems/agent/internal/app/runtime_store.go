@@ -49,6 +49,14 @@ func (s *runtimeStore) LoadMessagesSinceSeq(
 	return s.memory.LoadMessagesSinceSeq(ctx, afterSeq)
 }
 
+func (s *runtimeStore) LoadMessagesSinceSeqWindow(
+	ctx context.Context,
+	afterSeq int64,
+	maxTurns int,
+) (cognition.TurnWindow, error) {
+	return s.memory.LoadMessagesSinceSeqWindow(ctx, afterSeq, maxTurns)
+}
+
 func (s *runtimeStore) LoadLastUserTimestamp(
 	ctx context.Context,
 ) (time.Time, bool, error) {
