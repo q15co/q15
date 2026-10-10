@@ -38,16 +38,23 @@ export function App({
   store,
   preview: offlinePreview,
   onLogout,
+  collectShares,
+  shareNotice,
 }: {
   store: ChatStore;
   preview?: boolean;
   onLogout?: () => Promise<void>;
+  /** Reads any file an Android share left for the reader. */
+  collectShares?: () => Promise<readonly File[]>;
+  /** Why a share did not reach the composer, shown once at start. */
+  shareNotice?: string;
 }) {
   const preview = offlinePreview ?? false;
   const reduced = useMotionPreference();
   const state = useSyncExternalStore(store.subscribe, store.getSnapshot);
   const [theme, setTheme] = useState(initialTheme);
   const [menu, setMenu] = useState(false);
+  const [notice, setNotice] = useState(shareNotice ?? null);
   const [logoutError, setLogoutError] = useState<string | null>(null);
   const [install, setInstall] = useState<InstallEvent | null>(null);
   const promptInstall = async (event: InstallEvent) => {
@@ -221,18 +228,21 @@ export function App({
             )}
           </output>
         )}
-        {(state.notice !== null || state.error !== null) && (
+        {(state.notice !== null || state.error !== null || notice !== null) && (
           <div
             className={clsx(styles.noticeBanner, state.error !== null && styles.errorBanner)}
             role={state.error === null ? "status" : "alert"}
           >
             <CircleAlert size={15} />
-            <span>{state.error ?? state.notice}</span>
+            <span>{state.error ?? notice ?? state.notice}</span>
             <Button
               variant="ghost"
               size="sm"
               aria-label="Dismiss notice"
-              onClick={() => store.dismiss()}
+              onClick={() => {
+                setNotice(null);
+                store.dismiss();
+              }}
             >
               <X />
             </Button>
@@ -241,7 +251,11 @@ export function App({
         <MediaContext value={store.media}>
           <Transcript state={state} store={store} />
         </MediaContext>
-        <Composer state={state} store={store} />
+        <Composer
+          state={state}
+          store={store}
+          {...(collectShares === undefined ? {} : { collectShares })}
+        />
       </main>
     </div>
   );

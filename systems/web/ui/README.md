@@ -226,6 +226,24 @@ fake-indexeddb with real WebCrypto; end-to-end tests exercise Chromium's real ke
 ceremony, proof replay rejection and navigation across reloads. Existing pages retain their active
 worker until they close, avoiding a forced reload during a response.
 
+Android can share a file straight into the composer. The manifest declares a `share_target` posting
+`multipart/form-data` to `/share`, and the worker answers that path itself: it reads the posted files
+into the `q15-share` cache as `/share-inbox/<arrival>-<index>` entries and redirects to `/`. No server
+route is added, so a share never reaches the web tier and cannot open a new unauthenticated surface
+there, and answering the path keeps a share from ever surfacing as a 404 page. The composition root
+hands the composer a collector, which reads the inbox once the composer is on screen, clears it, and
+adds the files to the attachment tray; they upload through the same proof-carrying, sealed media route
+as a picked file. A share is kept whole or
+refused whole: more files than the composer can send, an unreadable body, or a bundle past the 64 MiB
+storage backstop leaves nothing staged and reports it in the app, and a partly written share is
+removed rather than left behind. Byte size is judged again by the composer after image downscaling,
+so its own limits remain the only ones that decide what can be sent. An entry nobody collected is
+dropped a day after it arrived, on every start, and a share arriving while signed out survives the
+sign-in round trip because collection only happens once a session exists. The declared `accept` list
+is deliberately wide: a type it omits makes q15 silently absent from the share sheet. A cross-site
+post to `/share` is another page's form submission rather than the share sheet, so the worker answers
+it and keeps nothing.
+
 ## Appearance
 
 Component styles live in colocated `*.module.css` files and use Vite's native CSS Modules support.

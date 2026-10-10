@@ -15,16 +15,26 @@ afterEach(() => {
   cleanup();
   for (const store of stores.splice(0)) store.stop();
 });
-function Harness({ store }: { store: ChatStore }) {
+function Harness({
+  store,
+  collectShares,
+}: {
+  store: ChatStore;
+  collectShares?: () => Promise<readonly File[]>;
+}) {
   const state = useSyncExternalStore(store.subscribe, store.getSnapshot);
   return (
     <>
-      <Composer store={store} state={state} />
+      <Composer
+        store={store}
+        state={state}
+        {...(collectShares === undefined ? {} : { collectShares })}
+      />
       {state.error !== null && <output>{state.error}</output>}
     </>
   );
 }
-function setup(media?: Media) {
+function setup(media?: Media, collectShares?: () => Promise<readonly File[]>) {
   let events: TransportEvents | undefined;
   const transport: Transport = {
     start: (value) => {
@@ -44,7 +54,7 @@ function setup(media?: Media) {
   );
   stores.push(store);
   store.start();
-  render(<Harness store={store} />);
+  render(<Harness store={store} {...(collectShares === undefined ? {} : { collectShares })} />);
   return { store, transport, events: required(events) };
 }
 function pick(...files: File[]) {
@@ -153,5 +163,15 @@ describe("composer attachments", () => {
     await expect(store.sendFiles("caption", [new File([], "file")])).resolves.toBe(false);
     expect(store.getSnapshot().pending).toEqual([]);
     expect(store.getSnapshot().error).toBe("disconnected");
+  });
+  it("opens with the files an Android share left for the composer", async () => {
+    const upload = vi.fn<Media["upload"]>();
+    setup({ upload, load: () => Promise.reject(new Error("unused")) }, () =>
+      Promise.resolve([new File(["scan"], "scan.pdf", { type: "application/pdf" })]),
+    );
+    expect(await screen.findByTitle("scan.pdf")).toBeDefined();
+    expect(screen.getByRole("region", { name: "Selected attachments" })).toBeDefined();
+    expect(screen.getByText("PDF · 4 B")).toBeDefined();
+    expect(upload).not.toHaveBeenCalled();
   });
 });

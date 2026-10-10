@@ -1,7 +1,7 @@
 import { ArrowUp, ListPlus, Square, CornerDownLeft, Paperclip, X } from "lucide-react";
 import { AnimatePresence } from "motion/react";
 import * as motion from "motion/react-m";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type { ChatStore } from "../application/chat-store";
 import type { ChatState } from "../domain/chat";
@@ -18,13 +18,36 @@ function fileSize(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
-export function Composer({ store, state }: { store: ChatStore; state: ChatState }) {
+export function Composer({
+  store,
+  state,
+  collectShares,
+}: {
+  store: ChatStore;
+  state: ChatState;
+  /** Reads the files an Android share left for the reader, once the composer is on screen. */
+  collectShares?: () => Promise<readonly File[]>;
+}) {
   const reduced = useMotionPreference();
   const [text, setText] = useState("");
   const [files, setFiles] = useState<readonly { id: string; file: File }[]>([]);
   const [uploading, setUploading] = useState(false);
   const picker = useRef<HTMLInputElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
+  // Claiming the inbox is destructive, so a strict-mode double effect must not run it twice.
+  const claimed = useRef(false);
+  useEffect(() => {
+    if (claimed.current) return;
+    claimed.current = true;
+    void (async () => {
+      const shared = await collectShares?.();
+      if (shared === undefined || shared.length === 0) return;
+      setFiles((current) => [
+        ...current,
+        ...shared.map((file) => ({ id: crypto.randomUUID(), file })),
+      ]);
+    })();
+  }, [collectShares]);
   const clear = () => {
     setText("");
     setFiles([]);

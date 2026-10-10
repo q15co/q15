@@ -1,6 +1,6 @@
 import type * as ReactDOMClient from "react-dom/client";
 
-import { act, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import type { SocketLike } from "./infrastructure/transport";
@@ -162,6 +162,44 @@ describe("browser composition root", () => {
     await waitFor(() => expect(screen.getByText("answer")).toBeDefined());
     expect(ReadySocket.created).toEqual([]);
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("collects a share the service worker kept into the composer", async () => {
+    const receivedAt = Date.now();
+    const open = vi.fn<() => Promise<unknown>>(() =>
+      Promise.resolve({
+        keys: () =>
+          Promise.resolve([
+            new Request(new URL(`/share-inbox/${receivedAt}-0`, location.origin).href),
+          ]),
+        match: () =>
+          Promise.resolve(
+            new Response("scan", {
+              headers: { "x-q15-filename": "scan.pdf", "content-type": "application/pdf" },
+            }),
+          ),
+        delete: () => Promise.resolve(true),
+      }),
+    );
+    vi.stubGlobal("caches", { keys: () => Promise.resolve(["q15-share"]), open });
+    await act(async () => {
+      await vi.importActual("./main.tsx");
+    });
+    expect(await screen.findByTitle("scan.pdf")).toBeDefined();
+    expect(open).toHaveBeenCalledWith("q15-share");
+  });
+
+  it("explains a share the worker could not keep and drops the reason from the url", async () => {
+    window.history.replaceState(null, "", "/?share=rejected");
+    await act(async () => {
+      await vi.importActual("./main.tsx");
+    });
+    expect(
+      await screen.findByText("q15 could not attach that share. Pick the file in q15 instead."),
+    ).toBeDefined();
+    expect(location.search).toBe("");
+    fireEvent.click(screen.getByLabelText("Dismiss notice"));
+    await waitFor(() => expect(screen.queryByText(/could not be attached/u)).toBeNull());
   });
 
   it("fails explicitly when the embedded shell has no root element", async () => {
