@@ -61,6 +61,14 @@ func (l *workingMemoryJobLoader) LoadMessagesSinceSeq(
 	return nil, nil
 }
 
+func (l *workingMemoryJobLoader) LoadMessagesSinceSeqWindow(
+	context.Context,
+	int64,
+	int,
+) (TurnWindow, error) {
+	return TurnWindow{}, nil
+}
+
 func (l *workingMemoryJobLoader) LoadHead(context.Context) (int64, time.Time, error) {
 	return 0, time.Time{}, nil
 }

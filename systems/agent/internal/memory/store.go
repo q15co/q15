@@ -18,6 +18,7 @@ import (
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/atomicfile"
+	"github.com/q15co/q15/systems/agent/internal/cognition"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
 	"github.com/q15co/q15/systems/agent/internal/memoryrepo"
 	"github.com/yuin/goldmark"
@@ -266,6 +267,31 @@ func (s *Store) LoadMessagesSinceSeq(
 	defer release()
 
 	return s.loadMessagesSinceSeqLocked(afterSeq)
+}
+
+// LoadMessagesSinceSeqWindow loads at most maxTurns of the oldest turns after
+// the provided transcript sequence boundary and reports the sequence the
+// window reached.
+//
+// It is the bounded counterpart of LoadMessagesSinceSeq, which is only safe
+// while the backlog after the boundary stays small: a caller that keeps a
+// durable checkpoint can drain an arbitrarily long backlog in fixed-size steps
+// by advancing that checkpoint to TurnWindow.LastSeq after every successful
+// run.
+func (s *Store) LoadMessagesSinceSeqWindow(
+	ctx context.Context,
+	afterSeq int64,
+	maxTurns int,
+) (cognition.TurnWindow, error) {
+	_ = ctx
+	if maxTurns <= 0 {
+		return cognition.TurnWindow{}, nil
+	}
+
+	release := s.repository.Acquire()
+	defer release()
+
+	return s.loadMessagesSinceSeqWindowLocked(afterSeq, maxTurns)
 }
 
 // LoadLastUserTimestamp returns the most recent persisted user-message
@@ -1102,6 +1128,53 @@ func (s *Store) loadMessagesSinceSeqLocked(
 		out = append(out, promptVisibleMessages(turn.Messages)...)
 	}
 	return out, nil
+}
+
+func (s *Store) loadMessagesSinceSeqWindowLocked(
+	afterSeq int64,
+	maxTurns int,
+) (cognition.TurnWindow, error) {
+	entries, err := s.listTurnEntries()
+	if err != nil {
+		return cognition.TurnWindow{}, err
+	}
+	if len(entries) == 0 {
+		return cognition.TurnWindow{}, nil
+	}
+
+	start := sort.Search(len(entries), func(i int) bool {
+		return entries[i].Seq > afterSeq
+	})
+	if start == len(entries) {
+		return cognition.TurnWindow{}, nil
+	}
+
+	pending := entries[start:]
+	remaining := 0
+	if len(pending) > maxTurns {
+		remaining = len(pending) - maxTurns
+		pending = pending[:maxTurns]
+	}
+
+	records := make([]turnRecord, 0, len(pending))
+	for _, entry := range pending {
+		turn, err := s.readTurn(entry.Path)
+		if err != nil {
+			return cognition.TurnWindow{}, err
+		}
+		records = append(records, turn)
+	}
+
+	out := make([]conversation.Message, 0, len(records)*2)
+	for _, turn := range records {
+		out = append(out, promptVisibleMessages(turn.Messages)...)
+	}
+
+	return cognition.TurnWindow{
+		Messages:       out,
+		LastSeq:        pending[len(pending)-1].Seq,
+		RemainingTurns: remaining,
+	}, nil
 }
 
 func (s *Store) headStatePath() string {

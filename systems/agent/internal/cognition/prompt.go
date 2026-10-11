@@ -18,6 +18,10 @@ type Spec struct {
 	RequireToolCalling bool
 	AllowedTools       []string
 	ToolCallPolicy     agent.ToolCallPolicy
+	// CheckpointSeq is the transcript sequence this run's input actually covered
+	// when the job processed a bounded window of the backlog. The zero value
+	// means the run covered everything up to the run head.
+	CheckpointSeq int64
 }
 
 func renderPrompt(jobType string, spec Spec) (string, error) {

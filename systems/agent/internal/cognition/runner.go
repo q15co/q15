@@ -25,6 +25,11 @@ type ContextLoader interface {
 	LoadRecentMessages(ctx context.Context, turns int) ([]conversation.Message, error)
 	LoadLatestMessages(ctx context.Context, turns int) ([]conversation.Message, error)
 	LoadMessagesSinceSeq(ctx context.Context, afterSeq int64) ([]conversation.Message, error)
+	LoadMessagesSinceSeqWindow(
+		ctx context.Context,
+		afterSeq int64,
+		maxTurns int,
+	) (TurnWindow, error)
 	LoadHead(ctx context.Context) (int64, time.Time, error)
 	LoadConsolidationCheckpoint(ctx context.Context) (ConsolidationCheckpoint, error)
 	LoadSemanticExtractionCheckpoint(ctx context.Context) (SemanticExtractionCheckpoint, error)
@@ -37,6 +42,22 @@ type ContextLoader interface {
 type Artifact struct {
 	RelativePath string
 	Content      string
+}
+
+// TurnWindow is a bounded slice of the oldest transcript turns that follow a
+// sequence boundary, together with the boundary the window actually reached.
+//
+// It is the bounded counterpart of an unbounded replay load: a job that keeps a
+// durable checkpoint can drain an arbitrarily long backlog in fixed-size steps
+// instead of assembling one prompt that grows until every model rejects it.
+type TurnWindow struct {
+	// Messages is the flattened prompt-visible message slice of the window.
+	Messages []conversation.Message
+	// LastSeq is the transcript sequence of the last turn included in the
+	// window, or zero when the window is empty.
+	LastSeq int64
+	// RemainingTurns counts the turns after the window that stay unprocessed.
+	RemainingTurns int
 }
 
 // JobDefinition describes one typed cognition job.
@@ -60,6 +81,11 @@ type JobOutput struct {
 type ParsedResult struct {
 	Summary  string
 	Metadata map[string]string
+	// CheckpointSeq is the transcript sequence this run actually processed when
+	// the job worked through a bounded window instead of the whole backlog. The
+	// zero value means the run covered everything up to the run head, which is
+	// the default behaviour for every job that does not window its input.
+	CheckpointSeq int64
 }
 
 // Result is the completed structured outcome for one cognition job.
@@ -71,6 +97,10 @@ type Result struct {
 	Messages  []conversation.Message
 	ModelRef  string
 	Turn      int
+	// CheckpointSeq is the transcript sequence this run actually processed when
+	// the job worked through a bounded window. Zero means the run covered
+	// everything up to the run head.
+	CheckpointSeq int64
 }
 
 // Runner executes typed cognition jobs on the shared model/tool engine.
@@ -302,13 +332,14 @@ func (r *Runner) Run(
 	}
 
 	result := Result{
-		Type:      jobType,
-		Summary:   strings.TrimSpace(parsed.Summary),
-		Metadata:  cloneMetadata(parsed.Metadata),
-		FinalText: runResult.FinalText,
-		Messages:  conversation.CloneMessages(runResult.Messages),
-		ModelRef:  runResult.ModelRef,
-		Turn:      runResult.Turn,
+		Type:          jobType,
+		Summary:       strings.TrimSpace(parsed.Summary),
+		Metadata:      cloneMetadata(parsed.Metadata),
+		FinalText:     runResult.FinalText,
+		Messages:      conversation.CloneMessages(runResult.Messages),
+		ModelRef:      runResult.ModelRef,
+		Turn:          runResult.Turn,
+		CheckpointSeq: parsed.CheckpointSeq,
 	}
 	notifyRunEvent(ctx, observer, agent.RunEvent{
 		Type:      agent.RunEventRunFinished,
