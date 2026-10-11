@@ -179,7 +179,7 @@ proxy:
         - iaas.eu-frankfurt-1.oraclecloud.com
       sign_oci:
         secret: OCI_API_KEY
-        key_id: ocid1.tenancy.oc1..t/ocid1.user.oc1..u/20:3B:97:13:55:1C:5B:0D:D3:37:D8:50:4E:C5:3A:34
+        key_id: ocid1.tenancy.oc1..t/ocid1.user.oc1..u/12:34:56:78:90:AB:CD:EF:12:34:56:78:90:AB:CD:EF
 `), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -204,7 +204,7 @@ proxy:
 }
 
 func TestValidateOCISigningRules(t *testing.T) {
-	const fingerprint = "20:3B:97:13:55:1C:5B:0D:D3:37:D8:50:4E:C5:3A:34"
+	const fingerprint = "12:34:56:78:90:AB:CD:EF:12:34:56:78:90:AB:CD:EF"
 
 	tests := []struct {
 		name    string
@@ -362,7 +362,7 @@ func TestNormalizeProxyRulesCarriesOCISigning(t *testing.T) {
 			MatchHosts: []string{" IAAS.EU-FRANKFURT-1.ORACLECLOUD.COM "},
 			SignOCI: &ProxyOCISign{
 				Secret: " OCI_API_KEY ",
-				KeyID:  "  ocid1.t/ocid1.u/20:3B:97:13  ",
+				KeyID:  "  ocid1.t/ocid1.u/12:34:56:78  ",
 			},
 			SetHeader:    map[string]string{" authorization ": "Bearer x"},
 			SetBasicAuth: &ProxyBasicAuth{Username: " user ", Secret: " OCI_API_KEY "},
@@ -388,7 +388,7 @@ func TestNormalizeProxyRulesCarriesOCISigning(t *testing.T) {
 	if sign.Secret != "oci_api_key" {
 		t.Fatalf("secret = %q, want it trimmed and lower cased", sign.Secret)
 	}
-	if sign.KeyID != "ocid1.t/ocid1.u/20:3B:97:13" {
+	if sign.KeyID != "ocid1.t/ocid1.u/12:34:56:78" {
 		t.Fatalf("key id = %q, want it trimmed", sign.KeyID)
 	}
 	if _, ok := normalized[0].SetHeader["Authorization"]; !ok {
@@ -436,8 +436,8 @@ func TestPolicyRevisionTracksOCISigning(t *testing.T) {
 		return runtime.PolicyRevision
 	}
 
-	first := resolve("20:3B:97:13:55:1C:5B:0D:D3:37:D8:50:4E:C5:3A:34")
-	second := resolve("AA:3B:97:13:55:1C:5B:0D:D3:37:D8:50:4E:C5:3A:34")
+	first := resolve("12:34:56:78:90:AB:CD:EF:12:34:56:78:90:AB:CD:EF")
+	second := resolve("FE:DC:BA:98:76:54:32:10:FE:DC:BA:98:76:54:32:10")
 
 	if first == "" || second == "" {
 		t.Fatal("expected a policy revision for both configs")

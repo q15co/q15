@@ -122,13 +122,13 @@ func TestOCISignsBodyOnlyForBodyMethods(t *testing.T) {
 
 func TestOCIAuthorizationHeaderFormat(t *testing.T) {
 	got := ociAuthorizationHeader(
-		"ocid1.tenancy.oc1..t/ocid1.user.oc1..u/20:3B:97:13",
+		"ocid1.tenancy.oc1..t/ocid1.user.oc1..u/12:34:56:78",
 		[]string{"date", "(request-target)", "host"},
 		"c2ln",
 	)
 	want := `Signature algorithm="rsa-sha256",` +
 		`headers="date (request-target) host",` +
-		`keyId="ocid1.tenancy.oc1..t/ocid1.user.oc1..u/20:3B:97:13",` +
+		`keyId="ocid1.tenancy.oc1..t/ocid1.user.oc1..u/12:34:56:78",` +
 		`signature="c2ln",version="1"`
 	if got != want {
 		t.Fatalf("ociAuthorizationHeader() = %q, want %q", got, want)
@@ -313,7 +313,7 @@ func TestOCISignerApplyRejectsMissingInput(t *testing.T) {
 		t.Fatal("expected an error for a signer without a key")
 	}
 
-	noKey := &compiledOCISigner{keyID: ociTestKeyIDPrefix + "20:3B:97:13"}
+	noKey := &compiledOCISigner{keyID: ociTestKeyIDPrefix + "12:34:56:78"}
 	if err := noKey.apply(httptest.NewRequest(http.MethodGet, "https://example.com/", nil), ociTestNow); err == nil {
 		t.Fatal("expected an error for a signer whose key failed to parse")
 	}
@@ -322,7 +322,7 @@ func TestOCISignerApplyRejectsMissingInput(t *testing.T) {
 		t.Fatal("expected an error for a nil request")
 	}
 
-	broken := &compiledOCISigner{keyID: ociTestKeyIDPrefix + "20:3B:97:13", key: unusableTestKey()}
+	broken := &compiledOCISigner{keyID: ociTestKeyIDPrefix + "12:34:56:78", key: unusableTestKey()}
 	if err := broken.apply(httptest.NewRequest(http.MethodGet, "https://example.com/", nil), ociTestNow); err == nil {
 		t.Fatal("expected an error rather than an unsigned request when the key cannot sign")
 	}
@@ -542,7 +542,7 @@ func TestOCIFingerprintsAndMatching(t *testing.T) {
 		},
 		{name: "one nibble off", fingerprint: flipFirstNibble(md5Print), want: false},
 		{name: "empty", fingerprint: "", want: false},
-		{name: "wrong length", fingerprint: "20:3B:97", want: false},
+		{name: "wrong length", fingerprint: "12:34:56", want: false},
 		{name: "not hex", fingerprint: strings.Repeat("zz:", 15) + "zz", want: false},
 	}
 	for _, test := range tests {
@@ -595,7 +595,7 @@ func TestSplitOCIKeyID(t *testing.T) {
 		},
 		{
 			name:    "short fingerprint",
-			keyID:   "t/u/20:3B:97",
+			keyID:   "t/u/12:34:56",
 			wantErr: "must be the 16 colon separated hex pairs of an MD5 fingerprint",
 		},
 		{

@@ -14,7 +14,7 @@ func TestToProxyRulesCarriesOCISigning(t *testing.T) {
 			MatchHosts: []string{"iaas.eu-frankfurt-1.oraclecloud.com"},
 			SignOCI: &config.ProxyOCISign{
 				Secret: "oci_api_key",
-				KeyID:  "ocid1.t/ocid1.u/20:3B:97:13",
+				KeyID:  "ocid1.t/ocid1.u/12:34:56:78",
 			},
 		},
 		{Name: "plain", MatchHosts: []string{"api.github.com"}},
@@ -27,7 +27,7 @@ func TestToProxyRulesCarriesOCISigning(t *testing.T) {
 	if sign == nil {
 		t.Fatal("expected the signing block to reach the proxy")
 	}
-	if sign.Secret != "oci_api_key" || sign.KeyID != "ocid1.t/ocid1.u/20:3B:97:13" {
+	if sign.Secret != "oci_api_key" || sign.KeyID != "ocid1.t/ocid1.u/12:34:56:78" {
 		t.Fatalf("signing block = %#v, want the configured values", sign)
 	}
 	if rules[1].SignOCI != nil {
