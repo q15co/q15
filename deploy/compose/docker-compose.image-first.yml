@@ -44,7 +44,8 @@ services:
       retries: 5
       start_period: 60s
     environment:
-      TZ: Europe/Berlin
+      # The stack runs in UTC unless the deployer sets TZ (see release.env.example).
+      TZ: ${TZ:-UTC}
     volumes:
       - type: volume
         source: q15_workspace
@@ -80,14 +81,19 @@ services:
         target: /qdrant/storage
 
   q15-tei:
-    # Local embeddings backend (Hugging Face Text Embeddings Inference),
-    # served keylessly to q15-agent via the openai embeddings provider.
-    # Default model: Qwen/Qwen3-Embedding-0.6B at 1024 dimensions; weights
-    # download into the q15_tei_hf_cache volume on first start. The
-    # turing-1.9 image targets Turing GPUs (T4, RTX 2000 series); set
-    # TEI_IMAGE for other hardware and remove the GPU reservation on
-    # CPU-only hosts. Gated or private models need HF_TOKEN on the container.
-    image: ${TEI_IMAGE:-ghcr.io/huggingface/text-embeddings-inference:turing-1.9}
+    # Deprecated. The install profile runs ollama for chat and for embeddings, so this
+    # service is not part of it (see the install spec, issue #215), and it is removed one
+    # release after that profile ships. It stays here for existing deployments and for
+    # GPU hosts, where it is still the better embeddings backend.
+    #
+    # Local embeddings backend (Hugging Face Text Embeddings Inference), served keylessly
+    # to q15-agent via the openai embeddings provider. Default model:
+    # Qwen/Qwen3-Embedding-0.6B at 1024 dimensions; weights download into the
+    # q15_tei_hf_cache volume on first start. The default image is the CPU build, so a host
+    # without a GPU can start: on a GPU host set TEI_IMAGE to a GPU build (:turing-1.9 for
+    # T4/RTX 2000-class, :1.9 for Ampere and newer) and re-add the device reservation with
+    # a local override file. Gated or private models need HF_TOKEN on the container.
+    image: ${TEI_IMAGE:-ghcr.io/huggingface/text-embeddings-inference:cpu-1.9}
     restart: unless-stopped
     init: true
     command:
@@ -102,13 +108,6 @@ services:
       - "80"
     environment:
       HUGGINGFACE_HUB_CACHE: /data
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
     volumes:
       - type: volume
         source: q15_tei_hf_cache
@@ -140,7 +139,7 @@ services:
       HOME: /root
       GODEBUG: updatemaxprocs=0
       GOMAXPROCS: "1"
-      TZ: Europe/Berlin
+      TZ: ${TZ:-UTC}
       MOONSHOT_API_KEY_FILE: /run/q15-secrets/moonshot_api_key
       OLLAMA_API_KEY_FILE: /run/q15-secrets/ollama_api_key
       ZAI_API_KEY_FILE: /run/q15-secrets/zai_api_key
