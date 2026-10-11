@@ -222,6 +222,7 @@ func (s *Server) handleRequest(
 		return req, nil
 	}
 
+	var signer *compiledOCISigner
 	for _, rule := range s.compiledRules {
 		if !rule.matchesRequest(req) {
 			continue
@@ -231,7 +232,22 @@ func (s *Server) handleRequest(
 				req,
 				goproxy.ContentTypeText,
 				http.StatusBadGateway,
-				fmt.Sprintf("proxy rule %q header render failed", displayRuleName(rule)),
+				fmt.Sprintf("proxy rule %q failed: %v", displayRuleName(rule), err),
+			)
+		}
+		if rule.signOCI != nil {
+			signer = rule.signOCI
+		}
+	}
+	// A signature covers header values, so it is made once every rule has had its say. Signing
+	// inside the loop instead would let a later rule rewrite a header that was already signed.
+	if signer != nil {
+		if err := signer.apply(req, time.Now()); err != nil {
+			return req, goproxy.NewResponse(
+				req,
+				goproxy.ContentTypeText,
+				http.StatusBadGateway,
+				fmt.Sprintf("proxy could not sign the request: %v", err),
 			)
 		}
 	}

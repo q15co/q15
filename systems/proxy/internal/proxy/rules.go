@@ -17,6 +17,7 @@ type Rule struct {
 	SetHeader          map[string]string
 	SetBasicAuth       *BasicAuth
 	ReplacePlaceholder []PlaceholderReplacement
+	SignOCI            *OCISign
 }
 
 // BasicAuth injects an Authorization Basic header from a named secret.
@@ -39,6 +40,7 @@ type compiledRule struct {
 	setHeader          map[string]string
 	setBasicAuthHeader string
 	replacePlaceholder []compiledPlaceholderReplacement
+	signOCI            *compiledOCISigner
 }
 
 type compiledPlaceholderReplacement struct {
@@ -72,9 +74,9 @@ func compileRules(rules []Rule, secretValues map[string]string) ([]compiledRule,
 			return nil, fmt.Errorf("rule[%d] has no usable match hosts", i)
 		}
 
+		hasAuthorizationHeader := false
 		if len(rule.SetHeader) > 0 {
 			compiled.setHeader = make(map[string]string, len(rule.SetHeader))
-			hasAuthorizationHeader := false
 			for k, v := range rule.SetHeader {
 				headerName := textproto.CanonicalMIMEHeaderKey(strings.TrimSpace(k))
 				if headerName == "" {
@@ -146,6 +148,20 @@ func compileRules(rules []Rule, secretValues map[string]string) ([]compiledRule,
 				}
 				compiled.replacePlaceholder = append(compiled.replacePlaceholder, compiledRepl)
 			}
+		}
+
+		if rule.SignOCI != nil {
+			if hasAuthorizationHeader || rule.SetBasicAuth != nil {
+				return nil, fmt.Errorf(
+					"rule[%d] cannot sign requests and also set an Authorization header",
+					i,
+				)
+			}
+			signer, err := compileOCISigner(i, *rule.SignOCI, secretValues)
+			if err != nil {
+				return nil, err
+			}
+			compiled.signOCI = signer
 		}
 
 		out = append(out, compiled)

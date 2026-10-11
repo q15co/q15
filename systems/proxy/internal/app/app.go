@@ -131,6 +131,7 @@ func toProxyRules(rules []config.ProxyRule) []proxy.Rule {
 			SetHeader:          cloneStringMap(rule.SetHeader),
 			SetBasicAuth:       cloneBasicAuth(rule.SetBasicAuth),
 			ReplacePlaceholder: clonePlaceholderReplacements(rule.ReplacePlaceholder),
+			SignOCI:            cloneOCISign(rule.SignOCI),
 		})
 	}
 	return out
@@ -154,6 +155,16 @@ func cloneBasicAuth(value *config.ProxyBasicAuth) *proxy.BasicAuth {
 	return &proxy.BasicAuth{
 		Username: value.Username,
 		Secret:   value.Secret,
+	}
+}
+
+func cloneOCISign(value *config.ProxyOCISign) *proxy.OCISign {
+	if value == nil {
+		return nil
+	}
+	return &proxy.OCISign{
+		Secret: value.Secret,
+		KeyID:  value.KeyID,
 	}
 }
 

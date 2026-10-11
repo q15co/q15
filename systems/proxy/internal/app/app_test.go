@@ -3,7 +3,37 @@ package app
 import (
 	"strings"
 	"testing"
+
+	"github.com/q15co/q15/systems/proxy/internal/config"
 )
+
+func TestToProxyRulesCarriesOCISigning(t *testing.T) {
+	rules := toProxyRules([]config.ProxyRule{
+		{
+			Name:       " oci-api ",
+			MatchHosts: []string{"iaas.eu-frankfurt-1.oraclecloud.com"},
+			SignOCI: &config.ProxyOCISign{
+				Secret: "oci_api_key",
+				KeyID:  "ocid1.t/ocid1.u/20:3B:97:13",
+			},
+		},
+		{Name: "plain", MatchHosts: []string{"api.github.com"}},
+	})
+
+	if len(rules) != 2 {
+		t.Fatalf("expected two rules, got %#v", rules)
+	}
+	sign := rules[0].SignOCI
+	if sign == nil {
+		t.Fatal("expected the signing block to reach the proxy")
+	}
+	if sign.Secret != "oci_api_key" || sign.KeyID != "ocid1.t/ocid1.u/20:3B:97:13" {
+		t.Fatalf("signing block = %#v, want the configured values", sign)
+	}
+	if rules[1].SignOCI != nil {
+		t.Fatalf("expected no signing block on a plain rule, got %#v", rules[1].SignOCI)
+	}
+}
 
 func TestValidateArgsAcceptsNoArgs(t *testing.T) {
 	if err := validateArgs(nil); err != nil {

@@ -19,3 +19,22 @@ proxy:
         - github-api
       in:
         - header
+
+# Requests to Oracle Cloud Infrastructure APIs carry no token. Each one is signed with an RSA
+# private key, so a sandbox can be allowed to call OCI without ever holding that key: the proxy
+# signs the request on its way out. Add the key to proxy.secrets (OCI_API_KEY_FILE points at the
+# PEM private key) and add a rule that signs for the API host:
+#
+#   rules:
+#     - name: oci-api
+#       match_hosts:
+#         - iaas.eu-frankfurt-1.oraclecloud.com
+#       sign_oci:
+#         secret: oci_api_key
+#         key_id: ocid1.tenancy.oc1..aaaa/ocid1.user.oc1..bbbb/20:3B:97:13:55:1C:5B:0D:D3:37:D8:50:4E:C5:3A:34
+#
+# key_id is the triple the API key is registered under. Its fingerprint half, in the MD5 form
+# the console shows, is checked against the private key when the proxy starts, so a mismatched
+# key fails at boot rather than on the first call. The caller may send any Authorization header
+# it likes; the signature replaces it. A caller that sends a body must also send content-type and
+# x-content-sha256, because the proxy signs those headers rather than reading the body.

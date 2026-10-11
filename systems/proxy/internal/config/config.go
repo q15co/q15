@@ -47,6 +47,14 @@ type ProxyRule struct {
 	SetHeader          map[string]string             `yaml:"set_header"`
 	SetBasicAuth       *ProxyBasicAuth               `yaml:"set_basic_auth"`
 	ReplacePlaceholder []ProxyPlaceholderReplacement `yaml:"replace_placeholder"`
+	SignOCI            *ProxyOCISign                 `yaml:"sign_oci"`
+}
+
+// ProxyOCISign signs requests for one OCI API host with a private key, the way the OCI CLI
+// does. The key half of KeyID is checked against the secret at startup.
+type ProxyOCISign struct {
+	Secret string `yaml:"secret"`
+	KeyID  string `yaml:"key_id"`
 }
 
 // ProxyBasicAuth injects an Authorization Basic header from a managed secret.
@@ -309,6 +317,29 @@ func validateProxy(proxy Proxy) error {
 				}
 			}
 		}
+
+		if rule.SignOCI != nil {
+			secretAlias, err := normalizeProxySecretAlias(rule.SignOCI.Secret)
+			if err != nil {
+				return fmt.Errorf("rules[%d].sign_oci.secret: %w", i, err)
+			}
+			if _, ok := secretEnvByAlias[secretAlias]; !ok {
+				return fmt.Errorf(
+					"rules[%d].sign_oci.secret %q is not defined in proxy.secrets",
+					i,
+					secretAlias,
+				)
+			}
+			if err := validateOCIKeyIDShape(rule.SignOCI.KeyID); err != nil {
+				return fmt.Errorf("rules[%d].sign_oci.key_id: %w", i, err)
+			}
+			if hasAuthorizationHeader || rule.SetBasicAuth != nil {
+				return fmt.Errorf(
+					"rules[%d] cannot sign requests and also set an Authorization header",
+					i,
+				)
+			}
+		}
 	}
 
 	ruleNameCounts := make(map[string]int, len(proxy.Rules))
@@ -412,6 +443,12 @@ func normalizeProxyRules(rules []ProxyRule) []ProxyRule {
 			normalizedRule.SetBasicAuth = &ProxyBasicAuth{
 				Username: strings.TrimSpace(rule.SetBasicAuth.Username),
 				Secret:   strings.ToLower(strings.TrimSpace(rule.SetBasicAuth.Secret)),
+			}
+		}
+		if rule.SignOCI != nil {
+			normalizedRule.SignOCI = &ProxyOCISign{
+				Secret: strings.ToLower(strings.TrimSpace(rule.SignOCI.Secret)),
+				KeyID:  strings.TrimSpace(rule.SignOCI.KeyID),
 			}
 		}
 		if len(rule.ReplacePlaceholder) > 0 {
@@ -555,6 +592,62 @@ func normalizeProxySecretAlias(alias string) (string, error) {
 		return "", errors.New("alias must contain only a-z, 0-9, _, or -")
 	}
 	return alias, nil
+}
+
+// validateOCIKeyIDShape checks the "<tenancy ocid>/<user ocid>/<key fingerprint>" form. The
+// fingerprint is only checked against the key itself in the proxy package, which is where
+// the secret's value is available.
+func validateOCIKeyIDShape(keyID string) error {
+	const want = "must be <tenancy ocid>/<user ocid>/<key fingerprint>, " +
+		"with ocids of letters, digits, dots, dashes and underscores"
+	parts := strings.Split(strings.TrimSpace(keyID), "/")
+	if len(parts) != 3 {
+		return errors.New(want)
+	}
+	for _, part := range parts[:2] {
+		if !ociKeyIDPartShape(part) {
+			return errors.New(want)
+		}
+	}
+	if !ociKeyFingerprintShape(parts[2]) {
+		return errors.New(
+			"fingerprint must be the 16 colon separated hex pairs of an MD5 fingerprint",
+		)
+	}
+	return nil
+}
+
+func ociKeyIDPartShape(part string) bool {
+	part = strings.TrimSpace(part)
+	if part == "" {
+		return false
+	}
+	for _, r := range part {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '.', r == '_', r == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// ociKeyFingerprintShape mirrors ociFingerprintShape in the proxy package, which is where the
+// fingerprint is compared against the key itself.
+func ociKeyFingerprintShape(fingerprint string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(fingerprint))
+	normalized = strings.ReplaceAll(normalized, ":", "")
+	normalized = strings.ReplaceAll(normalized, " ", "")
+	if len(normalized) != 32 {
+		return false
+	}
+	for _, r := range normalized {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func normalizeProxyEnvName(name string) (string, error) {
