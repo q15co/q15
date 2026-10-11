@@ -40,65 +40,60 @@ what it is not, and what it does not claim to be.
 
 ## Install
 
-The supported path today is the image-first Compose stack in this repository. It is six containers,
-some secret files and a passkey. The full walkthrough, including TLS, backups and reboots, is the
-[install guide](https://q15.co/install/).
+q15 installs with four commands, on a server you control.
 
 ```bash
-git clone https://github.com/q15co/q15
-cd q15
-
-make compose-secrets-init                            # writes the secret files, keeps any you already have
-cp deploy/compose/release.env.example deploy/compose/release.env
-$EDITOR deploy/compose/release.env                   # the release tag, and Q15_WEB_ORIGIN if you have a hostname
-$EDITOR deploy/compose/agent-config.yaml             # name the agent, declare a model provider
-
-podman compose --env-file deploy/compose/release.env \
-  -f deploy/compose/docker-compose.image-first.yml up -d --wait
+curl -fsSL https://q15.co/install.sh | sh
+q15 init
+q15 up
+q15 status
 ```
 
-On Docker, use `docker compose` in place of `podman compose`; every flag is the same. Then enrol a
-passkey on the host and open the address you configured:
+| Command      | What it does                                                                   |
+| ------------ | ------------------------------------------------------------------------------ |
+| the `curl`   | One signed binary into `~/.local/bin`. No sudo, nothing installed system-wide. |
+| `q15 init`   | Names the agent, picks a model, sets the address.                              |
+| `q15 up`     | Renders the units, starts the stack, waits for health.                         |
+| `q15 status` | What runs, and what the agent can reach.                                       |
 
-```bash
-podman compose --env-file deploy/compose/release.env \
-  -f deploy/compose/docker-compose.image-first.yml exec q15-web \
-  /usr/local/bin/q15-web auth enroll 'Laptop'
-```
+`init` prints the address of the browser client: open it, create your passkey, and send a message.
+It asks for the agent's name, the address, and the model. The name and the address are the two that
+do not change afterwards; the model does.
 
-> **The installer does not exist yet.** A one-command install is specified but not built: a single
-> signed `q15` binary that bootstraps the container runtime, walks through the same decisions,
-> renders units for the init system and keeps them updated. Until it ships, the Compose stack above
-> is the deployment path.
+> **The installer is not built yet.** There is no `q15` binary in any release: the tickets that
+> produce it are filed and none has shipped, so those four commands do not work today. Until they
+> do, [run the published images](https://q15.co/reference/#run-it-today-end-to-end) - that page has
+> the Compose file, the volumes, the secret files and the health checks, and it is how every
+> deployment that exists was built. [docs/deployment.md](docs/deployment.md) covers the same ground
+> for a checkout of this repository, and the Development section below is the from-source route.
 
 ## Requirements
 
 ```text
 FOR THIS YOU NEED
 · SSH and a shell
-· To edit two YAML files
 · A DNS record, only if you want a public hostname
 
 AND THIS
-· A Linux server, Debian or Ubuntu assumed here
-· An OCI container runtime with Compose: podman (the default) or Docker Engine
-· git, make, curl
+· Linux with systemd
+· A rootless container runtime: podman (the default) or Docker Engine
+· 2 GB RAM for the stack, plus room for the models you pick
 · A model provider: an Ollama API key, your own Ollama server, or any OpenAI-compatible endpoint
 · A passkey-capable authenticator, bound to a device
 ```
 
 Three of those are worth reading twice.
 
-**Synced passkeys are refused.** iCloud Keychain and password-manager passkeys cannot be revoked per
-device, so q15 declines them at enrolment. Use a security key with PIN verification, or a
+**Synced passkeys are refused.** q15 needs a credential it can revoke for one device, so iCloud
+Keychain and password-manager passkeys do not enrol. Use a security key with PIN verification, or a
 device-bound platform authenticator.
 
 **The hostname is permanent.** Your passkey is bound to the hostname at enrolment. Changing it later
 fails startup by design; there is a re-enrolment path, but decide the name before you begin.
 
-**The sizing numbers are still in development.** The stack itself is light, and the first start
-downloads roughly 1.2 GB of embedding model weights, but tested minimum CPU, RAM and disk figures
-are not published yet.
+**The sizing numbers are still in development.** The stack is light: about 2 GB of RAM, and roughly
+1.2 GB of embedding weights on the first start. Tested minimum CPU, RAM and disk figures are not
+published yet.
 
 ## How it fits together
 
