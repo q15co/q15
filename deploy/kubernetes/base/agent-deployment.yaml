@@ -24,8 +24,9 @@ spec:
               value: updatemaxprocs=0
             - name: GOMAXPROCS
               value: "1"
+            # Neutral default; an overlay patches this to the deployment's timezone.
             - name: TZ
-              value: Europe/Berlin
+              value: "UTC"
           envFrom:
             - secretRef:
                 name: q15-agent-env

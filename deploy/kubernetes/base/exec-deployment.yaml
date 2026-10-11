@@ -41,8 +41,9 @@ spec:
         - name: exec
           image: ghcr.io/q15co/q15-exec:main
           env:
+            # Neutral default; an overlay patches this to the deployment's timezone.
             - name: TZ
-              value: Europe/Berlin
+              value: "UTC"
           ports:
             - name: grpc
               containerPort: 50051
