@@ -5,7 +5,7 @@ that gets instantiated once per namespace.
 
 For the canonical runtime storage/config/secret contract (including requiredness by Kubernetes vs
 Compose and local-dev exceptions), see the top-level
-[Storage Contract (Canonical)](../../../README.md#storage-contract-canonical).
+[Storage Contract (Canonical)](../../../docs/configuration.md#storage-contract-canonical).
 
 It owns:
 
