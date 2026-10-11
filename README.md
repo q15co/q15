@@ -1,705 +1,208 @@
 # q15
 
-`q15` is a self-hosted, Telegram-based AI agent runtime split across three long-lived runtime
-services:
+[![Main verify](https://img.shields.io/github/actions/workflow/status/q15co/q15/publish-main-images.yml?branch=main&style=flat-square&label=main%20verify)](https://github.com/q15co/q15/actions/workflows/publish-main-images.yml)
+[![Licence: MIT](https://img.shields.io/badge/licence-MIT-blue?style=flat-square)](LICENSE)
+[![Go 1.26](https://img.shields.io/badge/go-1.26-00ADD8?style=flat-square&logo=go&logoColor=white)](go.work)
+[![q15 images on GHCR](https://img.shields.io/badge/ghcr.io-q15--agent%20%C2%B7%20q15--exec%20%C2%B7%20q15--proxy%20%C2%B7%20q15--web-2496ED?style=flat-square)](https://github.com/q15co/q15/pkgs/container/q15-agent)
+[![Docs](https://img.shields.io/badge/docs-q15.co-6366F1?style=flat-square)](https://q15.co)
 
-- `q15-agent`: the agent runtime
-- `q15-exec`: command execution and session lifecycle
-- `q15-proxy`: proxy policy and auth-env mediation
+![q15: your agent, on your server, with the files on your own disk](docs/assets/q15-banner.png)
 
-Interactive auth bootstrap is handled separately by `q15-auth`.
+**Your agent. Your server. Your files.**
 
-## Architecture
+q15 is a self-hosted AI agent runtime. It runs on a Linux server you control, and it keeps
+everything it produces in folders you can open: the conversation, the memory extracted from it, the
+files it works on, and the jobs it runs while you are away. There is no account and no hosted
+service in the middle, and the credentials it uses are held by a proxy the agent never reads.
 
-- The agent owns prompt assembly, tool wiring, Telegram I/O, memory management, scheduled-job state,
-  and rooted file operations.
-- `q15-exec` owns command execution and reports the authoritative model-visible runtime directories:
-  `/workspace`, `/memory`, and `/skills`.
-- `q15-proxy` owns policy, egress, and auth-env injection for exec sessions.
-- `q15-auth` is an operator tool that produces `auth.json` outside the runtime containers.
+One owner, one agent, left running. Bring an Ollama API key, your own Ollama server, or any
+OpenAI-compatible endpoint, and choose the model at runtime. [Why q15](https://q15.co/why-q15/) says
+what it is not, and what it does not claim to be.
 
-This maps directly onto the intended deployment model: one `q15-agent`, one `q15-exec`, and one
-`q15-proxy` running together in Compose or Kubernetes.
+## What you get
 
-In Kubernetes, the supported topology is one namespace per q15 stack. Each stack contains one
-`q15-agent`, one `q15-exec`, one `q15-proxy`, stack-local ConfigMaps and Secrets, and stack-owned
-persistent volumes for `/workspace`, `/memory`, `/skills`, `/nix`, `/var/lib/q15/agent`, and
-`/var/lib/q15/proxy`. The namespace is the isolation boundary for that stack. Downstream multi-stack
-deployments should repeat this stack in separate namespaces.
+- **Two clients, one conversation.** A passkey-locked browser app with streaming chat, history and
+  attachments, plus a Telegram bot. Both reach the same agent, the same transcript and the same
+  memory.
+- **Credentials outside the agent.** Every outbound request goes through an egress proxy that
+  applies your policy and attaches the secrets. The agent, and therefore the model, never hold them.
+- **Execution without a shell on your host.** Commands run inside the `q15-exec` container, in a Nix
+  environment with its own package store, and reach the network only through the egress proxy.
+- **A workspace that is not scratch space.** `/workspace` is a project tree that survives restarts,
+  updates and redeployments. A new stack may start with it empty, and it is expected to stay
+  attached.
+- **Memory that accumulates.** Identity, extracted knowledge, working state and the full turn
+  history live under `/memory` as files. Background jobs keep them current between conversations.
+- **Work while you are away.** Scheduled jobs run unattended, each with its own model pin, its own
+  tool allow-list and its own turn budget.
+- **A model you can change at runtime.** Providers are declared in config and their rosters are
+  discovered; the interactive model, and the model behind each background job, are runtime state.
 
-`/workspace` is not ephemeral scratch space. For each stack it is stack-owned, persistent, and
-long-lived state that carries the durable project tree and working files over time. A newly created
-stack may attach an empty persistent volume or empty host directory at `/workspace`; that empty
-initial state is valid, and operators may populate it later through normal agent work or manual
-setup.
+## Install
 
-## Prompt-Visible Temporal Metadata
+The supported path today is the image-first Compose stack in this repository. It is six containers,
+some secret files and a passkey. The full walkthrough, including TLS, backups and reboots, is the
+[install guide](https://q15.co/install/).
 
-Interactive user turns may carry runtime-injected temporal metadata at the start of the
-prompt-visible user message:
+```bash
+git clone https://github.com/q15co/q15
+cd q15
+
+make compose-secrets-init                            # writes the secret files, keeps any you already have
+cp deploy/compose/release.env.example deploy/compose/release.env
+$EDITOR deploy/compose/release.env                   # the release tag, and Q15_WEB_ORIGIN if you have a hostname
+$EDITOR deploy/compose/agent-config.yaml             # name the agent, declare a model provider
+
+podman compose --env-file deploy/compose/release.env \
+  -f deploy/compose/docker-compose.image-first.yml up -d --wait
+```
+
+On Docker, use `docker compose` in place of `podman compose`; every flag is the same. Then enrol a
+passkey on the host and open the address you configured:
+
+```bash
+podman compose --env-file deploy/compose/release.env \
+  -f deploy/compose/docker-compose.image-first.yml exec q15-web \
+  /usr/local/bin/q15-web auth enroll 'Laptop'
+```
+
+> **The installer does not exist yet.** A one-command install is specified but not built: a single
+> signed `q15` binary that bootstraps the container runtime, walks through the same decisions,
+> renders units for the init system and keeps them updated. Until it ships, the Compose stack above
+> is the deployment path.
+
+## Requirements
 
 ```text
-<message_meta day_of_week_local="Wednesday" timestamp_local="20260401T184700+0200" since_prev_user_message="3m42s"/>
+FOR THIS YOU NEED
+· SSH and a shell
+· To edit two YAML files
+· A DNS record, only if you want a public hostname
+
+AND THIS
+· A Linux server, Debian or Ubuntu assumed here
+· An OCI container runtime with Compose: podman (the default) or Docker Engine
+· git, make, curl
+· A model provider: an Ollama API key, your own Ollama server, or any OpenAI-compatible endpoint
+· A passkey-capable authenticator, bound to a device
 ```
 
-- The tag describes that same user message only; it is not user-authored content.
-- `day_of_week_local` makes the local calendar context explicit without asking the model to derive
-  the weekday from the timestamp.
-- `timestamp_local` uses the runtime host's local timezone with a numeric offset and carries the
-  full local date and time.
-- When user-facing time references are tied to the conversation, the agent should prefer that same
-  runtime local timezone over UTC unless the user explicitly asks for another timezone.
-- Explicit field names are used intentionally instead of abbreviations like `ts` or `gap` so the
-  model reads the timing semantics without guesswork.
-- The shipped Compose and Kubernetes manifests set container `TZ`, and q15 uses the container's
-  local timezone for prompt-visible timestamps.
-- The shipped `q15-agent` and `q15-exec` images also include timezone data so shell tools can
-  resolve named zones such as `Europe/Berlin` correctly.
+Three of those are worth reading twice.
 
-## Telegram Replies And Progress
+**Synced passkeys are refused.** iCloud Keychain and password-manager passkeys cannot be revoked per
+device, so q15 declines them at enrolment. Use a security key with PIN verification, or a
+device-bound platform authenticator.
 
-In private chats, Ollama and OpenAI-compatible providers can show a growing reply draft while the
-model generates. Updates reuse one draft per run, are coalesced to at most one per second, and
-refresh every 20 seconds during longer waits. Completion sends the final reply through the normal
-safe rich message path. Telegram's Stop button cancels the current run and discards its unfinished
-draft; the worker remains available for the next message.
+**The hostname is permanent.** Your passkey is bound to the hostname at enrolment. Changing it later
+fails startup by design; there is a re-enrolment path, but decide the name before you begin.
 
-While waiting for a model, the draft uses Telegram's native thinking block. When Ollama or an
-OpenAI-compatible provider streams reasoning text, that block shows a recent excerpt, limited to 640
-characters in progress mode or 1,600 in verbose mode, and at most eight lines. Answer text replaces
-the thinking block as it arrives. Thinking is ephemeral and never added to the final reply.
-Providers without reasoning streaming still get the native thinking indicator in supported chats.
+**The sizing numbers are still in development.** The stack itself is light, and the first start
+downloads roughly 1.2 GB of embedding model weights, but tested minimum CPU, RAM and disk figures
+are not published yet.
 
-Use `/progress quiet`, `/progress progress`, or `/progress verbose` to choose the amount of
-feedback:
+## How it fits together
 
-- `quiet` keeps thinking, partial replies, and routine tool activity hidden, with the existing
-  long-wait notice.
-- `progress` shows the current action with a short command, file, or search preview.
-- `verbose` allows a longer preview of that same action.
+Six containers in one Compose project.
 
-Commands appear in Bash code blocks, preserving line breaks and shell syntax. Progress mode shows up
-to 320 characters and five lines; verbose mode allows 640 characters and ten lines. File and search
-previews stay on one line. Tool output is not dumped into progress messages. Tool progress shares
-the active draft, so the chat does not accumulate a message for every tool call. Unsupported chats,
-oversized previews, and draft API errors retain the ordinary progress and final-message path. Draft
-answers use the same untrusted Markdown rendering boundary as final text; only the Telegram adapter
-can create a thinking block.
+| Service      | What it does                                                                                     |
+| ------------ | ------------------------------------------------------------------------------------------------ |
+| `q15-proxy`  | Applies your egress policy and injects credentials into outbound requests.                       |
+| `q15-exec`   | Runs commands in an isolated Nix environment. Sees `/workspace`, `/memory`, `/media`, `/skills`. |
+| `q15-qdrant` | Stores the embedding collections.                                                                |
+| `q15-tei`    | Serves the default local embedding backend over the Compose network.                             |
+| `q15-agent`  | The agent itself: prompt assembly, tools, memory, scheduled jobs, Telegram, the bridge socket.   |
+| `q15-web`    | The browser client. Publishes only `127.0.0.1:8080`.                                             |
 
-Internally, `agent.StreamingModelClient` is an optional extension of `ModelClient`. Providers send
-ordered content-only callbacks. The separate optional `agent.ReasoningStreamingModelClient`
-extension provides reasoning text through `model_reasoning_delta` events. Opaque replay and tool
-arguments remain in the canonical result. The engine emits synchronous content and reasoning events
-between model-turn and tool/run lifecycle events. Synchronous delivery supplies backpressure without
-an event queue; observers own bounded buffering and display throttling. Each `model_turn_started`
-begins a fresh attempt, allowing consumers to replace a failed model's partial preview during
-fallback. Runs without an observer keep using `Complete`. Incomplete provider streams return errors
-and cannot become final transcript text.
+Four of those are q15's own images, and they always carry the **same tag**: the agent and the
+browser client share a bridge protocol, so a release is one set of four images, never a mix. The
+other two are third-party images for Qdrant and for the embeddings backend.
 
-## Development Setup
+Only one port is published to the host, `127.0.0.1:8080`, and only by `q15-web`. Everything else
+talks over the Compose network. Durable state lives in eleven named volumes, and `q15-web` mounts
+none of them.
 
-The standard contributor and agent workflow is:
+## Documentation
 
-```bash
-make project-setup
-make verify
-```
+The manual is [q15.co](https://q15.co). Start by what you want to do:
 
-`make project-setup` installs the pinned repo-local toolchain under `./.tools`. Hooks, CI, and agent
-workflows use those same repo-owned commands and do not depend on `devenv`.
+| Goal                                         | Start here                                         |
+| -------------------------------------------- | -------------------------------------------------- |
+| Deploy it, step by step                      | [Install](https://q15.co/install/)                 |
+| Understand what it is, and who it is not for | [Why q15](https://q15.co/why-q15/)                 |
+| Use the browser app                          | [Chat](https://q15.co/chat/)                       |
+| Use the Telegram bot                         | [Telegram](https://q15.co/telegram/)               |
+| Choose models and providers                  | [Models](https://q15.co/models/)                   |
+| Understand the memory files                  | [Memory](https://q15.co/memory/)                   |
+| Read the security model                      | [Security](https://q15.co/security/)               |
+| Move to a new release, or roll back          | [Updating](https://q15.co/updating/)               |
+| Something is broken                          | [Troubleshooting](https://q15.co/troubleshooting/) |
+| Look up a key or a path                      | [Reference](https://q15.co/reference/)             |
 
-Outside Nix, the setup script expects:
+The repository keeps its own reference next to the code:
 
-- Go `1.25.x`
-- `python3`
-- `node` and `npm`
-- `curl`, `git`, and `tar`
+| Document                                       | Covers                                                                                             |
+| ---------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| [docs/architecture.md](docs/architecture.md)   | The services, the transcript and memory layout, and how the agent reports progress.                |
+| [docs/configuration.md](docs/configuration.md) | Config strategy, agent config and proxy policy, and the canonical storage contract.                |
+| [docs/deployment.md](docs/deployment.md)       | Releases and image tags, first-start inputs, the three checked-in deployment paths, and rollbacks. |
+| [AGENTS.md](AGENTS.md)                         | The working conventions for this repository, including how agent sessions are expected to behave.  |
 
-Optional local conveniences:
+An agent-readable digest of the manual is served at [q15.co/llms.txt](https://q15.co/llms.txt), with
+the full text at [q15.co/llms-full.txt](https://q15.co/llms-full.txt).
 
-```bash
-nix develop
-make hooks-install
-```
+## Security
 
-- `nix develop` is a thin convenience shell for Nix users; it is not the source of truth for CI or
-  tooling behavior
-- `make hooks-install` installs one thin `pre-commit` hook that verifies `./.tools` and runs
-  `make lint-changed`
-- `make lint-changed FILES='path/a.go path/b.md'` is the explicit changed-file entrypoint for agents
-  and scripts
+q15 separates trusted coordination from untrusted execution, and enforces the credential boundary in
+the proxy rather than in the prompt. Read the [security page](https://q15.co/security/) before you
+give the agent a shell, and the install guide's trust model before you point a public hostname at
+it.
 
-## Build And Test
+Treat every inbound message as untrusted input: the agent runs commands on your machine, and a
+hosted model provider sees your prompts. The browser app's transcript is sealed between the browser
+and the agent, but the edge terminating TLS in front of it, and the model provider behind it, are
+outside that guarantee.
+
+If you think you have found something sensitive, say so in the issue without posting the details
+first, and it will be taken to a private channel from there.
+
+## Development
+
+The repository is a Go workspace (Go 1.26.9, pinned in [go.work](go.work)) with a Vite UI under
+`systems/web/ui` (Node 24.21.0 and pnpm 12.8.1, pinned in
+[scripts/tool-versions.sh](scripts/tool-versions.sh)).
 
 ```bash
-make build
+make project-setup   # installs the pinned repo-local toolchain under ./.tools
+make verify          # builds, lints and tests everything; this is the gate CI runs
+make build           # writes ./bin: q15-agent, q15-auth, q15-exec, q15-proxy, q15-web
 make test
 ```
 
-Artifacts are written to `./bin`:
-
-- `q15-agent`
-- `q15-auth`
-- `q15-exec`
-- `q15-proxy`
-
-## Release Artifacts
-
-Runtime services are published as OCI images to GHCR on verified pushes to `main`:
-
-- `ghcr.io/q15co/q15-agent`
-- `ghcr.io/q15co/q15-exec`
-- `ghcr.io/q15co/q15-proxy`
-
-Published runtime tags:
-
-- `main` tracks the latest successful component build.
-- `stable` tracks the latest verified three-image release.
-- `YYYY.MM.DD.<run-number>` identifies one immutable release, for example `2026.09.05.164`.
-
-The release job publishes the same DateVer on `q15-agent`, `q15-exec`, and `q15-proxy`, verifies all
-three multi-platform indexes, and then moves each package's `stable` tag to that release. Unchanged
-services reuse their existing image index and are retagged without rebuilding. Deployments pull
-`stable` only after the publish workflow succeeds.
-
-The build dependency graph is:
-
-- `libs/exec-contract/**` rebuilds `q15-agent` and `q15-exec`.
-- `libs/proxy-contract/**` rebuilds `q15-exec` and `q15-proxy`.
-- Service implementation and Dockerfile changes rebuild only that service.
-- Workspace-level Go dependency changes rebuild all three services.
-- Docker build-context policy changes rebuild all three services.
-
-This separates component build identity from stack compatibility: `main` is a moving integration
-tag, while a synchronized DateVer identifies one compatible three-image deployment.
-
-GHCR runtime images are intended to be publicly pullable without registry auth for ordinary
-self-hosted consumption. Maintain the GitHub package visibility for `q15-agent`, `q15-exec`, and
-`q15-proxy` as public outside this repo.
-
-`q15-auth` is published separately as GitHub Release archives on pushed tags that match `v*`, after
-the tagged commit passes verification and is confirmed to be reachable from `main`. The release
-assets are:
-
-- `q15-auth_<version>_linux_amd64.tar.gz`
-- `q15-auth_<version>_linux_arm64.tar.gz`
-- `q15-auth_<version>_darwin_amd64.tar.gz`
-- `q15-auth_<version>_darwin_arm64.tar.gz`
-- `checksums.txt`
-
-## Config Strategy
-
-q15 uses a narrow container-first runtime contract:
-
-- agent config is a mounted YAML file at `/etc/q15/agent/config.yaml`
-- proxy policy is a mounted YAML file at `/etc/q15/proxy/policy.yaml`
-- auth credentials are a JSON file at `/etc/q15/auth/auth.json` within a mounted auth directory
-- provider, Brave, Gemini, Telegram, and proxy secrets come from env vars or `_FILE`
-- service topology, ports, and runtime directories are hard-coded
-
-The fixed runtime contract is:
-
-- `q15-agent`
-  - reads `/etc/q15/agent/config.yaml`
-  - reads `/etc/q15/auth/auth.json`
-  - uses `/workspace`, `/memory`, and `/skills`
-  - connects to `q15-exec:50051`
-  - connects to Qdrant only when embedding tools are configured
-- `q15-exec`
-  - listens on `:50051`
-  - talks to `q15-proxy:50052`
-  - uses `/workspace`, `/memory`, and `/skills`
-- `q15-proxy`
-  - reads `/etc/q15/proxy/policy.yaml`
-  - listens on `:50052` and `:18080`
-  - advertises `http://q15-proxy:18080`
-  - uses `/var/lib/q15/proxy`
-- `q15-qdrant`
-  - stores dense and sparse embedding collections for `library`, `zettelkasten`, `semantic`, and
-    `core`
-  - uses persistent Qdrant storage
-
-`q15-exec` intentionally passes `--option build-users-group ""` to `nix shell`. That keeps Nix
-builds on the current container user, which is expected to be `root` in the current runtime images,
-because common container seccomp defaults can block `execve` after Nix drops to `nixbld` users. The
-security boundary for those builds is the container or Kubernetes namespace, not Nix `nixbld` user
-isolation inside the container.
-
-This repo no longer treats runtime wiring as a user-facing config surface.
-
-`/workspace` is the durable working state for a q15 stack. It is expected to preserve project files
-and in-progress work across restarts and redeployments, and a new deployment may start with an empty
-`/workspace`. Pre-populating `/workspace` before first startup is optional, not required.
-
-## Storage Contract (Canonical)
-
-This table is the canonical runtime storage/config/secret contract across Kubernetes, Compose, and
-local development. Use this as the source of truth when deciding what must persist, what can be
-ephemeral, and what must be provided as config/secret input.
-
-| Runtime path or config/secret location    | Classification | Deployment expectations                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | Owning service                    | Notes/purpose                                                                                                                                                                                                                                                                                |
-| ----------------------------------------- | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/workspace`                              | Persistent     | **Kubernetes:** required PVC (`q15-workspace`). **Compose:** required mount (bind or named volume). **Local development:** may start empty and be populated later.                                                                                                                                                                                                                                                                                                                                    | shared (`q15-agent`, `q15-exec`)  | Durable project tree and working files; long-lived stack state. Empty initial state is valid.                                                                                                                                                                                                |
-| `/workspace/.q15/embed/sources.json`      | Persistent     | Lives inside `/workspace`; created by `embed_sources`.                                                                                                                                                                                                                                                                                                                                                                                                                                                | `q15-agent`                       | Typed embedding source registry. Sources declare `collection`, `source_type`, and `path`; scanner behavior is never inferred from collection names.                                                                                                                                          |
-| `/workspace/.q15/embed/state.jsonl`       | Persistent     | Lives inside `/workspace`; created by `embed_sync`.                                                                                                                                                                                                                                                                                                                                                                                                                                                   | `q15-agent`                       | Dirty-tracking and pruning state for embedding syncs.                                                                                                                                                                                                                                        |
-| `/memory`                                 | Persistent     | **Kubernetes:** required PVC (`q15-memory`). **Compose:** required named volume or equivalent mount. **Local development:** persistence is recommended for continuity, but disposable runs are possible.                                                                                                                                                                                                                                                                                              | shared (`q15-agent`, `q15-exec`)  | Git-backed agent memory root. Internal layers live under `core/`, `semantic/`, `working/`, `history/`, and `cognition/`; canonical semantic files are `semantic/facts.md`, `semantic/preferences.md`, and `semantic/projects.md`; auxiliary zettelkasten notebook files live under `notes/`. |
-| `/skills`                                 | Persistent     | **Kubernetes:** required PVC (`q15-skills`). **Compose:** required named volume or equivalent mount. **Local development:** may be reset, but persistence avoids repeated skill bootstrap.                                                                                                                                                                                                                                                                                                            | shared (`q15-agent`, `q15-exec`)  | Installed skill artifacts and related runtime data.                                                                                                                                                                                                                                          |
-| `/nix`                                    | Persistent     | **Kubernetes:** required PVC (`q15-exec-nix`). Fresh PVCs must preserve the image-provided bootstrap Nix runtime on first mount, because an empty `/nix` hides the image's own shell, cert bundle, profiles, and `nix` binary. **Compose:** required named volume or equivalent mount for long-running stacks. Docker named volumes copy up the image's `/nix` contents on first use. **Local development:** disposable runs may use ephemeral state, but persistent reuse is the normal expectation. | `q15-exec`                        | Intentionally persistent executor package/store state and fetched store paths; not scratch space.                                                                                                                                                                                            |
-| `/var/lib/q15/agent`                      | Persistent     | **Kubernetes:** required PVC (`q15-agent-state`). **Compose:** required named volume (`q15_agent_state`) or equivalent mount. **Local development:** persistence is required when scheduled jobs must survive container replacement.                                                                                                                                                                                                                                                                  | `q15-agent`                       | Agent-owned operational state outside Git-backed memory. Scheduled definitions and run records live under `schedule/`; this volume is not mounted into `q15-exec`.                                                                                                                           |
-| `/var/lib/q15/proxy`                      | Persistent     | **Kubernetes:** required PVC (`q15-proxy-state`). **Compose:** required named volume or equivalent mount for durable proxy state. **Local development:** may be ephemeral only when proxy state durability is intentionally not needed.                                                                                                                                                                                                                                                               | `q15-proxy`                       | Proxy-owned durable state directory.                                                                                                                                                                                                                                                         |
-| `/var/lib/q15-web`                        | Persistent     | **Compose:** required `q15_web_state` volume, mounted only by `q15-web`; image-owned UID 65532/GID 1000, mode 0700. Preserve across updates. **Kubernetes:** not implemented.                                                                                                                                                                                                                                                                                                                         | `q15-web`                         | Owner WebAuthn public credentials, counters, hashed bounded sessions, session public keys and bounded proof-reuse records. Private admin Unix socket; never mount this state in the agent.                                                                                                   |
-| Qdrant storage                            | Persistent     | **Compose:** required named volume (`q15_qdrant_storage`) for embedding collections.                                                                                                                                                                                                                                                                                                                                                                                                                  | `q15-qdrant`                      | Dense Gemini vectors plus Qdrant BM25 sparse vectors for opt-in typed sources.                                                                                                                                                                                                               |
-| `/etc/q15/agent/config.yaml`              | Config         | **Kubernetes:** required via `ConfigMap/q15-agent-config`. **Compose:** required via compose `configs` or bind mount. **Local development:** required when running `q15-agent`.                                                                                                                                                                                                                                                                                                                       | `q15-agent`                       | Structured agent config (providers, models, Telegram policy).                                                                                                                                                                                                                                |
-| `/etc/q15/proxy/policy.yaml`              | Config         | **Kubernetes:** required via `ConfigMap/q15-proxy-policy`. **Compose:** required via compose `configs` or bind mount. **Local development:** required when running `q15-proxy`.                                                                                                                                                                                                                                                                                                                       | `q15-proxy`                       | Structured proxy policy (rules, allowed secret aliases, request env mapping).                                                                                                                                                                                                                |
-| `/etc/q15/auth/auth.json`                 | Secret         | **Kubernetes:** required via `Secret/q15-agent-auth` (`auth.json` key). **Compose:** required writable directory mount at `/etc/q15/auth` containing `auth.json`; do not bind-mount only the file. **Local development:** may be omitted only when auth-dependent flows are intentionally not used.                                                                                                                                                                                                   | `q15-agent`                       | Auth bootstrap output from `q15-auth`; consumed at runtime by the agent and updated when OpenAI OAuth refreshes rotate credentials.                                                                                                                                                          |
-| Provider/API key secrets (env or `_FILE`) | Secret         | **Kubernetes:** required secret keys in `q15-agent-env` and/or `q15-proxy-env` based on configured providers and policy aliases. **Compose:** required Docker secrets or env files for enabled integrations. **Local development:** optional only for integrations you are not using.                                                                                                                                                                                                                 | shared (`q15-agent`, `q15-proxy`) | Includes provider keys, Telegram token, Brave key (optional), Gemini key (optional), and proxy secret aliases resolved from env or `_FILE`.                                                                                                                                                  |
-
-### Ephemeral/Scratch Paths
-
-There are currently no contract-required explicit ephemeral mounts.
-
-Transient data naturally lives on each container's writable filesystem layer by default. Do not
-downgrade any contract-required persistent paths (`/workspace`, `/memory`, `/skills`, `/nix`,
-`/var/lib/q15/agent`, `/var/lib/q15/proxy`) to ephemeral mounts (`emptyDir`, anonymous volumes, or
-temporary bind locations) in long-running deployments.
-
-### Agent Config
-
-Keep the agent file focused on identity, providers, the current model refs, optional tools, and
-Telegram policy. Provider discovery is mandatory: there is no hand-written `models:` list.
-
-Example:
-
-```yaml
-providers:
-  - name: openai
-    type: openai-codex
-
-  - name: moonshot
-    type: openai-compatible
-    base_url: https://api.moonshot.ai/v1
-    key_env: MOONSHOT_API_KEY
-    discovery:
-      models_dev: true
-
-  - name: ollama-local
-    type: ollama
-    discovery:
-      models_dev: true
-
-  - name: ollama-cloud
-    type: ollama
-    base_url: https://ollama.com
-    key_env: OLLAMA_API_KEY
-    discovery:
-      models_dev: true
-
-agent:
-  name: Q15
-  memory_recent_turns: 6
-  tools:
-    web_search:
-      brave_api_key_env: BRAVE_API_KEY
-    embeddings:
-      qdrant_url_env: Q15_QDRANT_URL
-      provider: openai
-      base_url_env: Q15_EMBEDDINGS_BASE_URL
-      model: qwen3-embedding-0.6b
-      dimensions: 1024
-      batch_size: 128
-      # hosted alternative: provider: gemini + gemini_api_key_env,
-      # model gemini-embedding-2, dimensions 768
-    schedule:
-      max_jobs: 64
-      max_run_turns: 16
-  telegram:
-    token_env: Q15_TELEGRAM_TOKEN
-    allowed_user_ids_env: Q15_TELEGRAM_ALLOWED_USER_IDS
-```
-
-Notes:
-
-- provider keys, Brave API keys, Telegram tokens, and Telegram allowed-user lists can come from
-  `NAME` or `NAME_FILE`
-- `openai-codex` uses `/etc/q15/auth/auth.json` from `q15-auth`; `openai-compatible` providers use
-  `key_env`
-- `ollama` defaults to local `http://localhost:11434` when `base_url` is omitted; set
-  `base_url: https://ollama.com` plus `key_env: OLLAMA_API_KEY` for direct Ollama Cloud API access
-- For Ollama Cloud, create an API key from the Ollama account settings, expose it as
-  `OLLAMA_API_KEY` or `OLLAMA_API_KEY_FILE`, and use native Ollama model names such as
-  `gpt-oss:120b`; browse the current cloud model catalog at `https://ollama.com/search`
-- `agent.tools.web_search.brave_api_key_env` is optional; omit it to disable `web_search`; when it
-  is set, q15 resolves that env var through `NAME` or `NAME_FILE`
-- `agent.tools.embeddings` is optional; omit it to disable `embed_sources`, `embed_sync`,
-  `embed_search`, and `embed_status`
-- `agent.tools.embeddings.provider` selects the embedding backend: `openai` for any
-  OpenAI-compatible `/embeddings` endpoint such as TEI, OpenAI, Jina, or Ollama `/v1/embeddings`, or
-  `gemini` for hosted Gemini. Omitting `provider` defaults to `gemini`; the checked-in Compose
-  stacks set `openai` against the local TEI service
-- `provider: openai` resolves `api_key_env` through `NAME` or `NAME_FILE`; setting only
-  `base_url_env` targets that base URL without an API key (local unauthenticated endpoints such as
-  TEI). `model` and `dimensions` are required for the openai provider
-- `batch_size` bounds per-request embedding batches; omit it or set `0` to use the provider default
-  (gemini 32, openai 128)
-- changing the embeddings provider, model, or dimensions invalidates existing sync state and
-  triggers a full dense re-embed; collections recreate automatically at the configured dimensions on
-  the next sync. Run `embed_sync` with `full: true` after switching, and see the Gemini-to-TEI
-  migration runbook in [deploy/compose/README.md](/deploy/compose/README.md)
-- `agent.tools.schedule` controls agent-created scheduled jobs. When omitted it allows up to 64 jobs
-  and caps each run at 16 model/tool turns
-- each job declares its own `allowed_tools` when it is created or updated. The main agent selects
-  only the capabilities required by that job; an empty list runs without tools
-- create/update rejects tool names outside the current scheduled-run catalog. If a persisted tool
-  later becomes unavailable, the job remains intact but its run fails closed until the tool is
-  restored or the job policy is updated; q15 never substitutes another tool
-- each job also chooses a context profile: `minimal` (the default) receives trusted run
-  identity/timing plus the isolated scheduled task, while `agent` adds the main agent's system
-  envelope, core and working memory, skill catalog, and bounded recent conversation. Context
-  selection does not add tool capabilities beyond the job's `allowed_tools`
-- `schedule_runs` queries owner-scoped archived run records and exact status aggregates. It is the
-  source of truth for execution counts; transcript messages and notification text are not
-- each scheduled job pins an exact provider/model pair. If that target leaves the live roster, q15
-  never falls back to another model: recurring jobs record the unavailable occurrence and continue
-  their normal cadence, while one-shot jobs remain active and retry. Unavailable notifications are
-  suppressed only after the transport acknowledges delivery; a failed delivery leaves the transition
-  open for the next occurrence
-- embedding search stores provider dense vectors (Gemini by default) and Qdrant-generated BM25
-  sparse vectors, then uses hybrid dense+sparse search by default
-- `embed_sources` action `delete_collection` deliberately drops one Qdrant collection and clears
-  matching sync state; the next `embed_sync` recreates it from configured sources
-- embedding sources are typed records under `/workspace/.q15/embed/sources.json`; use
-  `source_type: chunked_markdown_tree` for pre-chunked Markdown libraries such as
-  `/workspace/library/<author>/<work>/chunks`
-- `chunked_markdown_tree` treats each Markdown file as one embedding unit and loads sibling
-  `meta.yml`; EPUB/PDF ingestion is not part of this path
-- provider discovery is mandatory; provider rosters are the source of truth for available models and
-  capabilities
-- the interactive and cognition models are NOT in config; they are runtime state. On first run q15
-  auto-selects a first-eligible roster model (preferring a tool-calling model), persists it under
-  `/workspace/.q15/agent/selection.json`, and the agent/user changes it at runtime with
-  `list_providers`, `list_models`, `switch_model`, and `switch_cognition_model`. Switches survive
-  restart.
-- background cognition jobs inherit the interactive model unless `switch_cognition_model` sets a
-  per-job override
-- current inference is intentionally text-first; image-input and tool-calling requirement inference
-  land when canonical request signals for those modes are available
-- agent memory lives under `/memory`
-- `BRAVE_API_KEY` / `BRAVE_API_KEY_FILE` is the default Brave web-search secret name used by the
-  checked-in deployment examples
-- `Q15_GEMINI_API_KEY` / `Q15_GEMINI_API_KEY_FILE` is the default Gemini embedding secret name used
-  by the checked-in Compose examples
-
-#### Asynchronous sync
-
-`embed_sync` runs as a managed background job and takes `wait_seconds` (default 30, capped at 300).
-The call blocks until the sync finishes or the window elapses, and returns the job plus the final
-result when completed; otherwise it returns the still-running job snapshot with a note.
-`wait_seconds: 0` returns immediately. Jobs run on a context detached from the conversation, so
-interrupting a waiting turn (for example with Telegram Stop) never kills the in-flight sync: the
-tool call reports the still-running job with a note and the sync continues in the background. Poll
-`embed_job` to completion before reporting a sync as done.
-
-`embed_job` inspects or cancels those jobs: `action: status` (optional `job_id`; omit it for the
-active job) and `action: cancel` (required `job_id`). It registers alongside the other embedding
-tools whenever `agent.tools.embeddings` is configured. Only one sync runs at a time; starting
-another fails with an error naming the running job. Progress counters are cumulative across the
-whole sync run.
-
-Job tracking is in-memory: only the ten most recent finished jobs are kept, and everything is
-forgotten on restart. Durable progress lives in `/workspace/.q15/embed/state.jsonl`: syncs
-checkpoint in batches (embed, upsert, record state), so a cancelled or interrupted sync keeps all
-completed batches and the next `embed_sync` re-embeds only the remainder.
-
-### Conversation History
-
-- Completed turns are stored as JSON files under `/memory/history/turns/YYYY/MM/DD/`.
-- Transcript sequence metadata is stored under `/memory/history/state/head.json`.
-- The current persisted format is `schema_version: 5` with canonical ordered `messages[].parts[]`
-  entries of type `text`, `reasoning`, `tool_call`, and `tool_result`.
-- On agent startup, existing history is eagerly upgraded in place before replay. Unreadable turn
-  files are moved to `/memory/history/quarantine/`.
-- Provider-specific opaque replay state is only persisted on `reasoning.replay`. Cross-provider
-  fallback uses portable transcript data first.
-- When a provider exposes only opaque reasoning for an assistant tool-call replay, q15 backfills an
-  explicit portable reasoning placeholder before persisting the turn so later fallback remains
-  replayable.
-- After a scheduled notification is transport-acknowledged, its exact text is idempotently appended
-  as an assistant event with structured job, run, transport, and delivery-time metadata. During
-  replay, q15 exposes that provenance in a trusted system-role record immediately before the exact
-  delivered assistant text; assistant-authored lookalike metadata is never trusted. The scheduled
-  job's private prompt/tool trace is not included.
-
-### Memory Layout
-
-- `/memory/core/` stores the agent's always-injected identity, personality, and self-model files.
-- `/memory/semantic/` stores durable extracted knowledge the agent knows in the canonical editable
-  files `facts.md`, `preferences.md`, and `projects.md`; it is not auto-injected.
-- `/memory/working/WORKING_MEMORY.md` is the canonical prompt-visible working-memory artifact for
-  bounded active state.
-- Other files under `/memory/working/` are not implicitly prompt-visible, and `/memory/notes/`
-  remains the general notebook area.
-- `/memory/history/` stores the canonical episodic transcript and its sequencing metadata.
-- `/memory/cognition/` is reserved for system-owned control, indexing, and background-maintenance
-  state.
-- `/memory/notes/inbox/`, `/memory/notes/zettel/`, and `/memory/notes/maps/` form the auxiliary
-  zettelkasten notebook layer.
-- Scheduled-job operational state is deliberately outside Git-backed memory:
-  `/var/lib/q15/agent/schedule/jobs/` stores active definitions and
-  `/var/lib/q15/agent/schedule/runs/YYYY/MM/DD/` stores completed run records.
-
-### Proxy Policy
-
-Keep the proxy file focused on policy and secret-backed request mutation.
-
-Example:
-
-```yaml
-proxy:
-  no_proxy:
-    - localhost
-    - 127.0.0.1
-    - ::1
-    - q15-proxy
-    - q15-exec
-  set_lowercase_proxy_env: true
-  secrets:
-    - github_token
-  rules:
-    - name: github-api
-      match_hosts:
-        - api.github.com
-  env:
-    - name: GH_TOKEN
-      secret: github_token
-      rules:
-        - github-api
-      in:
-        - header
-```
-
-Proxy secret aliases resolve from either the uppercased alias env var or its `_FILE` companion.
-
-## q15-auth
-
-`q15-auth` is the interactive bootstrap tool for generating and inspecting `auth.json`. It is
-intended to run on an operator machine, not inside the runtime containers.
-
-Examples:
-
-```bash
-q15-auth login --auth-path ./auth.json
-q15-auth status --auth-path ./auth.json
-q15-auth logout --auth-path ./auth.json
-```
-
-For Compose, put the resulting `auth.json` in the directory mounted at `/etc/q15/auth`; do not
-single-file bind-mount `auth.json`, because `q15-auth` and q15-agent write credentials atomically by
-replacing the file. For Kubernetes, store it as the `auth.json` key in the agent auth Secret.
-
-## First Startup Inputs
-
-Before first startup, every long-running q15 stack must provide:
-
-- agent config at `/etc/q15/agent/config.yaml`
-- proxy policy at `/etc/q15/proxy/policy.yaml`
-- `auth.json` at `/etc/q15/auth/auth.json`
-- provider or API secrets required by the chosen agent config
-- proxy secret aliases required by the chosen proxy policy
-- persistent storage for `/workspace`, `/memory`, `/skills`, `/nix`, `/var/lib/q15/agent`, and
-  `/var/lib/q15/proxy`
-
-`/workspace` may begin empty, but it is expected to remain attached to the same stack over time.
-
-## Local Docker Compose Stack (Development Only)
-
-The checked-in local-development stack lives at [docker-compose.yml](/docker-compose.yml) and uses
-the templates under [deploy/compose](/deploy/compose). It is not the canonical downstream
-deployment-consumer example.
-
-Its interface is organized as:
-
-- [deploy/compose/agent-config.yaml](/deploy/compose/agent-config.yaml) for structured agent config
-- [deploy/compose/proxy-policy.yaml](/deploy/compose/proxy-policy.yaml) for structured proxy policy
-- ignored local Docker secret files under [deploy/compose/secrets](/deploy/compose/secrets), seeded
-  from tracked `*.example` templates in that same directory
-- ignored local OpenAI auth state under [deploy/compose/auth](/deploy/compose/auth), seeded from
-  [auth.json.example](/deploy/compose/auth/auth.json.example)
-
-The local-development stack intentionally:
-
-- keeps local source builds enabled with `build:`
-- tags those local builds with the canonical GHCR image names on `:main`
-- uses a named `q15_workspace` volume for `/workspace`
-- uses the root `make compose-*` targets for local iteration
-
-Bring it up with:
-
-```bash
-make compose-secrets-init
-make compose-up
-```
-
-`make compose-up` waits for the stack's health checks. `q15-agent` starts once the proxy, executor,
-and Qdrant probes pass and TEI has started; TEI then loads the model (the first start downloads ~1.2
-GB of weights), so the first embedding calls may wait on the embedder's retries. The stack runs a
-local TEI (Hugging Face Text Embeddings Inference) embeddings backend by default; see
-[deploy/compose/README.md](/deploy/compose/README.md) for hardware overrides and the Gemini-to-TEI
-migration runbook.
-
-The local-development stack uses:
-
-- default container entrypoints with no runtime flags
-- Compose `configs` for non-secret YAML files
-- a read-write bind mount for the auth directory at `/etc/q15/auth`
-- a named volume shared as `/workspace`
-- a named volume shared as `/memory`
-- a named volume for `/skills`
-- a named `q15_agent_state` volume mounted only into `q15-agent` at `/var/lib/q15/agent`
-- a named volume `q15_exec_nix_store` mounted at `/nix` for persistent executor package/store reuse
-  across sessions
-- Docker secret files under [deploy/compose/secrets](/deploy/compose/secrets)
-
-That `/nix` named volume keeps fetched packages warm across sessions. Docker's named-volume copy-up
-behavior also preserves the image's built-in bootstrap Nix runtime on first use, which is why the
-local stack can safely keep `/nix` persistent without manually pre-seeding it.
-
-Before using the local-development stack, replace the placeholder values in:
-
-- [deploy/compose/secrets/moonshot_api_key.example](/deploy/compose/secrets/moonshot_api_key.example)
-- [deploy/compose/secrets/q15_telegram_token.example](/deploy/compose/secrets/q15_telegram_token.example)
-- [deploy/compose/secrets/github_token.example](/deploy/compose/secrets/github_token.example)
-- [deploy/compose/auth/auth.json.example](/deploy/compose/auth/auth.json.example)
-
-`make compose-secrets-init` copies those templates to ignored local files without the `.example`
-suffix. Edit the local copies, not the templates.
-
-Useful commands:
-
-```bash
-make compose-down
-make compose-logs SERVICE=q15-agent
-make compose-ps
-```
-
-## Image-First Compose Deployment Example
-
-The canonical downstream image-first Compose example is
-[deploy/compose/docker-compose.image-first.yml](/deploy/compose/docker-compose.image-first.yml).
-Supporting notes live in [deploy/compose/README.md](/deploy/compose/README.md).
-
-This deployment-oriented example:
-
-- uses `image:` only, with no `build:`
-- accepts one `Q15_IMAGE_TAG` for all q15 services and defaults to `stable`
-- mounts persistent named volumes for `/workspace`, `/memory`, `/skills`, `/nix`,
-  `/var/lib/q15/agent`, and `/var/lib/q15/proxy`
-- mounts `agent-config.yaml`, `proxy-policy.yaml`, and `auth.json` at the exact runtime paths the
-  binaries expect
-- mounts provider and proxy secret files and resolves them via the `*_FILE` environment pattern
-- gates dependent services on proxy, executor, and Qdrant readiness checks
-
-Bring it up with:
-
-```bash
-make compose-secrets-init
-Q15_IMAGE_TAG=stable docker compose \
-  -f deploy/compose/docker-compose.image-first.yml up -d
-```
-
-`/workspace` may start empty in this example, but it is expected to persist long-term for one stack.
-For long-running deployments, keep that same storage attached across restarts and redeployments. The
-`/nix` mount is intentionally persistent and should not be treated as scratch space. A Docker named
-volume keeps both the bootstrap Nix runtime and the fetched store paths under `/nix`; an empty bind
-mount at `/nix` would hide the image-provided shell and `nix` installation instead of just clearing
-the cache.
-
-## Kubernetes Base
-
-A reusable Kustomize base lives under [deploy/kubernetes/base](/deploy/kubernetes/base).
-
-It includes:
-
-- Deployments for `q15-agent`, `q15-exec`, and `q15-proxy`
-- Services for `q15-exec` and `q15-proxy`
-- ConfigMap generators for agent config and proxy policy examples
-
-The canonical runtime images are:
-
-- `ghcr.io/q15co/q15-agent`
-- `ghcr.io/q15co/q15-exec`
-- `ghcr.io/q15co/q15-proxy`
-
-The checked-in manifests keep the moving GHCR `:main` tags as placeholders:
-
-- `ghcr.io/q15co/q15-agent:main`
-- `ghcr.io/q15co/q15-exec:main`
-- `ghcr.io/q15co/q15-proxy:main`
-
-It expects a separate deployment repo or overlay to provide:
-
-- image pinning and rollout policy
-- environment-specific namespaces and labels
-- Secrets
-- PVCs
-
-For long-running deployments, use `stable` for normal updates or replace the placeholders with one
-immutable DateVer across all three services. Treat `main` as a moving integration tag only.
-
-The supported Kubernetes model is one namespace per long-running q15 stack. One stack contains:
-
-- one `q15-agent`
-- one `q15-exec`
-- one `q15-proxy`
-- stack-local ConfigMaps and Secrets for agent config, proxy policy, `auth.json`, provider or API
-  keys, and runtime tokens
-- stack-owned persistent volumes for `/workspace`, `/memory`, `/skills`, `/nix`,
-  `/var/lib/q15/agent`, and `/var/lib/q15/proxy`
-
-`q15-workspace` is the durable project and working-state volume for that stack. A newly created
-stack may bind an empty `q15-workspace` PVC on first deployment, and that empty initial state still
-satisfies the runtime contract. Restarts and redeployments are expected to preserve that PVC so
-`/workspace` survives over time.
-
-The checked-in base already reflects that shape with `replicas: 1` for each deployment and
-namespace-scoped Services named `q15-exec` and `q15-proxy`. This matches the current exec session
-model: `q15-exec` supports multiple concurrent sessions within one pod, but session state is
-currently held in memory inside that pod. Keeping one exec pod per stack avoids cross-pod session
-routing complexity and keeps storage ownership local to the stack.
-
-The checked-in exec deployment also seeds a fresh `/nix` PVC from the image in an init container
-when the mounted volume is missing the bootstrap runtime markers. In addition, the `q15-exec`
-process keeps an image-local bootstrap copy outside `/nix` and repairs an empty persisted `/nix` at
-startup before serving exec requests. Together those safeguards keep Kubernetes PVC-backed `/nix`
-storage persistent without losing the image's built-in shell, profile, cert bundle, or `nix` binary
-on first mount.
-
-Validate the base with:
-
-```bash
-kubectl kustomize deploy/kubernetes/base
-```
-
-The intended workflow is:
-
-1. This repo publishes `q15-agent`, `q15-exec`, and `q15-proxy` images to GHCR.
-1. A separate deployment repo pins those images and owns environment-specific overlays.
-1. The deployment repo rolls out the updated pod set.
-
-## Self-Hosted Updates And Rollbacks
-
-For Compose and Kubernetes alike:
-
-- Update by pulling the synchronized `stable` tag and rolling the stack.
-- Roll back by selecting the previous `YYYY.MM.DD.<run-number>` tag across all three services.
-- Preserve the existing persistent storage for `/workspace`, `/memory`, `/skills`, `/nix`,
-  `/var/lib/q15/agent`, and `/var/lib/q15/proxy` during normal upgrades and downgrades.
+`make verify` is the honest local check, and it is the same command the pull request workflow runs.
+For a local stack built from source rather than from published images, use `make compose-up`; see
+[docs/deployment.md](docs/deployment.md). Nix users can also `nix develop` for a convenience shell,
+and `make hooks-install` for a pre-commit hook that runs the changed-file lint.
+
+| Path       | Contents                                                              |
+| ---------- | --------------------------------------------------------------------- |
+| `systems/` | The four services: `agent`, `exec`, `proxy`, `web`.                   |
+| `libs/`    | Shared contracts: `chat-contract`, `exec-contract`, `proxy-contract`. |
+| `deploy/`  | The Compose and Kubernetes examples, and the install assets.          |
+| `docker/`  | The four Dockerfiles.                                                 |
+| `scripts/` | Build, lint, test and tool-pinning helpers, plus CI entry points.     |
+| `Makefile` | Every entry point CI uses.                                            |
+
+## Contributing
+
+Issues and pull requests are welcome. There is no community chat yet: GitHub issues are the only
+channel, and they are read.
+
+Contributions arrive under the repository's own terms and need a DCO sign-off, not a CLA; see
+[CONTRIBUTING.md](CONTRIBUTING.md). If you are an agent, read [AGENTS.md](AGENTS.md) first.
 
 ## Licence
 
 q15 is released under the [MIT licence](LICENSE). You may use it, modify it, and redistribute it,
-including commercially, as long as the copyright notice and the licence text travel with it.
-
-That licence covers the code, not the q15 name: a fork is welcome, and it should carry its own name.
-
-Contributions arrive under the same terms. See [CONTRIBUTING.md](CONTRIBUTING.md) for the sign-off
-and [THIRD-PARTY.md](THIRD-PARTY.md) for the licences of what q15 depends on.
+including commercially, as long as the copyright notice and the licence text travel with it. That
+covers the code, not the q15 name: a fork is welcome, and it should carry its own name. The licences
+of what q15 depends on are inventoried in [THIRD-PARTY.md](THIRD-PARTY.md).
