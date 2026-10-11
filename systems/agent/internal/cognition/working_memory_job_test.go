@@ -2,6 +2,7 @@ package cognition
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -21,6 +22,9 @@ type workingMemoryJobLoader struct {
 	recent          []conversation.Message
 	loadRecentTurns int
 	loadArtifacts   []string
+	archivePath     string
+	archiveErr      error
+	archived        []string
 }
 
 func (l *workingMemoryJobLoader) LoadCoreMemory(context.Context) (agent.CoreMemory, error) {
@@ -94,6 +98,20 @@ func (l *workingMemoryJobLoader) LoadCognitionArtifact(
 		return Artifact{}, nil
 	}
 	return l.artifacts[relativePath], nil
+}
+
+func (l *workingMemoryJobLoader) ArchiveWorkingMemory(
+	_ context.Context,
+	content string,
+) (string, error) {
+	l.archived = append(l.archived, content)
+	if l.archiveErr != nil {
+		return "", l.archiveErr
+	}
+	if l.archivePath == "" {
+		return "/memory/working/archive/WORKING_MEMORY-test.md", nil
+	}
+	return l.archivePath, nil
 }
 
 func (l *workingMemoryJobLoader) StoreCognitionArtifact(
@@ -640,4 +658,148 @@ func findPromptSection(
 		}
 	}
 	return agent.PromptSection{}, false
+}
+
+func TestWorkingMemorySizeState(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		size int
+		want string
+	}{
+		{"well under warning", workingMemoryWarningBytes / 2, "within_budget"},
+		{"below warning", workingMemoryWarningBytes - 1, "within_budget"},
+		{"at warning", workingMemoryWarningBytes, "within_budget"},
+		{"above warning", workingMemoryWarningBytes + 1, "over_warning"},
+		{"at ceiling", workingMemoryCeilingBytes, "over_warning"},
+		{"above ceiling", workingMemoryCeilingBytes + 1, "over_ceiling"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := workingMemorySizeState(tc.size); got != tc.want {
+				t.Fatalf("workingMemorySizeState(%d) = %q, want %q", tc.size, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestWorkingMemoryConsolidationJobArchivesBeforeDemotion(t *testing.T) {
+	t.Parallel()
+
+	content := strings.Repeat("state line\n", workingMemoryCeilingBytes/11+1)
+	if len(content) <= workingMemoryCeilingBytes {
+		t.Fatalf("fixture is %d bytes, want more than the ceiling", len(content))
+	}
+	loader := &workingMemoryJobLoader{
+		working: agent.WorkingMemory{
+			RelativePath: workingMemoryRelativePath,
+			Content:      content,
+		},
+	}
+	job := NewWorkingMemoryConsolidationRegistration().NewJob()
+
+	spec, err := job.Build(context.Background(), loader)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	if len(loader.archived) != 1 {
+		t.Fatalf("archive calls = %d, want 1", len(loader.archived))
+	}
+	if loader.archived[0] != content {
+		t.Fatal("archived content differs from the loaded artifact")
+	}
+
+	section, ok := findPromptSection(spec.PromptSections, "working_memory_size")
+	if !ok {
+		t.Fatal("working_memory_size section missing")
+	}
+	if got, want := section.Attributes["state"], "over_ceiling"; got != want {
+		t.Fatalf("state = %q, want %q", got, want)
+	}
+	if got, want := section.Attributes["bytes"], fmt.Sprint(len(content)); got != want {
+		t.Fatalf("bytes = %q, want %q", got, want)
+	}
+	if got, want := section.Attributes["ceiling_bytes"], fmt.Sprint(workingMemoryCeilingBytes); got != want {
+		t.Fatalf("ceiling_bytes = %q, want %q", got, want)
+	}
+	if got, want := section.Attributes["archived_at"], "/memory/working/archive/WORKING_MEMORY-test.md"; got != want {
+		t.Fatalf("archived_at = %q, want %q", got, want)
+	}
+	if !strings.Contains(section.Body, "/memory/working/archive/WORKING_MEMORY-test.md") {
+		t.Fatalf("body does not name the archive: %q", section.Body)
+	}
+	if !strings.Contains(spec.CompletionContract, "at or under that ceiling") {
+		t.Fatal("completion contract does not carry the ceiling")
+	}
+}
+
+func TestWorkingMemoryConsolidationJobSkipsArchiveWithinBudget(t *testing.T) {
+	t.Parallel()
+
+	loader := &workingMemoryJobLoader{
+		working: agent.WorkingMemory{
+			RelativePath: workingMemoryRelativePath,
+			Content:      "# Working Memory\n\n- one open thread.\n",
+		},
+	}
+	job := NewWorkingMemoryConsolidationRegistration().NewJob()
+
+	spec, err := job.Build(context.Background(), loader)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if len(loader.archived) != 0 {
+		t.Fatalf("archive calls = %d, want 0", len(loader.archived))
+	}
+
+	section, ok := findPromptSection(spec.PromptSections, "working_memory_size")
+	if !ok {
+		t.Fatal("working_memory_size section missing")
+	}
+	if got, want := section.Attributes["state"], "within_budget"; got != want {
+		t.Fatalf("state = %q, want %q", got, want)
+	}
+	if _, ok := section.Attributes["archived_at"]; ok {
+		t.Fatal("archived_at present for an artifact within budget")
+	}
+	if strings.Contains(section.Body, "is not lost") {
+		t.Fatalf("body claims an archive that was not taken: %q", section.Body)
+	}
+}
+
+func TestWorkingMemoryConsolidationJobBlocksDemotionWhenArchiveFails(t *testing.T) {
+	t.Parallel()
+
+	loader := &workingMemoryJobLoader{
+		working: agent.WorkingMemory{
+			RelativePath: workingMemoryRelativePath,
+			Content:      strings.Repeat("state line\n", workingMemoryWarningBytes/11+1),
+		},
+		archiveErr: errors.New("archive store is unavailable"),
+	}
+	job := NewWorkingMemoryConsolidationRegistration().NewJob()
+
+	spec, err := job.Build(context.Background(), loader)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	section, ok := findPromptSection(spec.PromptSections, "working_memory_size")
+	if !ok {
+		t.Fatal("working_memory_size section missing")
+	}
+	if got, want := section.Attributes["state"], "over_warning"; got != want {
+		t.Fatalf("state = %q, want %q", got, want)
+	}
+	if _, ok := section.Attributes["archived_at"]; ok {
+		t.Fatal("archived_at present although archiving failed")
+	}
+	if !strings.Contains(section.Body, "nothing may be deleted") {
+		t.Fatalf("body does not block deletion: %q", section.Body)
+	}
+	if !strings.Contains(section.Body, "archive store is unavailable") {
+		t.Fatalf("body does not name the archive failure: %q", section.Body)
+	}
 }

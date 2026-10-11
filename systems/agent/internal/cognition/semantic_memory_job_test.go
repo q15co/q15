@@ -113,6 +113,10 @@ func (l *semanticMemoryJobLoader) LoadCognitionArtifact(
 	return l.artifacts[relativePath], nil
 }
 
+func (l *semanticMemoryJobLoader) ArchiveWorkingMemory(context.Context, string) (string, error) {
+	return "", nil
+}
+
 func (l *semanticMemoryJobLoader) StoreCognitionArtifact(
 	context.Context,
 	Artifact,

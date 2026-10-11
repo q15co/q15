@@ -35,6 +35,11 @@ type ContextLoader interface {
 	LoadSemanticExtractionCheckpoint(ctx context.Context) (SemanticExtractionCheckpoint, error)
 	LoadCognitionArtifact(ctx context.Context, relativePath string) (Artifact, error)
 	StoreCognitionArtifact(ctx context.Context, artifact Artifact) error
+	// ArchiveWorkingMemory stores one verbatim copy of the working-memory
+	// artifact and returns the runtime path the copy was written to, so a job
+	// that is allowed to shorten the artifact cannot lose live text by
+	// removing it.
+	ArchiveWorkingMemory(ctx context.Context, content string) (string, error)
 }
 
 // Artifact is one job-owned persisted artifact stored under

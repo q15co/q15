@@ -111,6 +111,10 @@ func (l *verificationJobLoader) LoadCognitionArtifact(
 	return l.artifacts[relativePath], nil
 }
 
+func (l *verificationJobLoader) ArchiveWorkingMemory(context.Context, string) (string, error) {
+	return "", nil
+}
+
 func (l *verificationJobLoader) StoreCognitionArtifact(
 	_ context.Context,
 	artifact Artifact,

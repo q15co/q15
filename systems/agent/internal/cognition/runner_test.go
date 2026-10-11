@@ -144,6 +144,10 @@ func (s *spyLoader) LoadCognitionArtifact(
 	return Artifact{}, nil
 }
 
+func (s *spyLoader) ArchiveWorkingMemory(context.Context, string) (string, error) {
+	return "", nil
+}
+
 func (s *spyLoader) StoreCognitionArtifact(
 	context.Context,
 	Artifact,

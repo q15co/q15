@@ -151,6 +151,13 @@ func (s *runtimeStore) StoreCognitionArtifact(
 	return s.memory.StoreCognitionArtifact(ctx, artifact)
 }
 
+func (s *runtimeStore) ArchiveWorkingMemory(
+	ctx context.Context,
+	content string,
+) (string, error) {
+	return s.memory.ArchiveWorkingMemory(ctx, content)
+}
+
 func (s *runtimeStore) LoadHead(ctx context.Context) (int64, time.Time, error) {
 	return s.memory.LoadHead(ctx)
 }

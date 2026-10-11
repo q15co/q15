@@ -3,6 +3,7 @@ package cognition
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
@@ -17,6 +18,17 @@ const (
 	workingMemoryScheduleSpec               = "0 4 * * *"
 	workingMemoryRecentTurns                = 16
 	workingMemoryMinDirtyTurns        int64 = 6
+	// workingMemoryCeilingBytes is the size the prompt-visible working-memory
+	// artifact has to stay at or under. The artifact is injected into every
+	// prompt in full, so its size is both a per-turn cost and a per-turn
+	// attention cost. The ceiling is where a run starts reclaiming space rather
+	// than a write-side limit, because nothing can refuse the model's own
+	// whole-file write.
+	workingMemoryCeilingBytes = 100 * 1024
+	// workingMemoryWarningBytes is where a run is told to trim, before the
+	// artifact reaches the ceiling. Both thresholds are measured against the
+	// loaded content, which the store trims of surrounding whitespace.
+	workingMemoryWarningBytes = 75 * 1024
 )
 
 var workingMemoryAllowedTools = []string{
@@ -86,6 +98,16 @@ func (workingMemoryConsolidationJob) Build(
 	if workingContent == "" {
 		workingContent = "# Working Memory\n\n(working memory is currently empty)\n"
 	}
+	// A run that may shorten the artifact leaves a verbatim copy behind first,
+	// so demotion can never be the thing that loses text that was still live.
+	workingSize := len(working.Content)
+	var (
+		archivePath string
+		archiveErr  error
+	)
+	if workingSize > workingMemoryWarningBytes {
+		archivePath, archiveErr = loader.ArchiveWorkingMemory(ctx, working.Content)
+	}
 	verificationContent := strings.TrimSpace(verificationArtifact.Content)
 	verificationAttrs := map[string]string{"path": VerificationReviewRuntimePath}
 	if verificationContent == "" {
@@ -116,6 +138,7 @@ func (workingMemoryConsolidationJob) Build(
 			"Finish the full consolidation loop before responding: compare the target against the transcript artifact and verification review artifact, update or confirm it with file tools, then emit the short internal summary.",
 			"Call read_file, write_file, edit_file, or apply_patch on the target before your final response. A response without a target-file tool call is invalid.",
 			"If the file needs changes, update it with write_file, edit_file, or apply_patch while preserving the existing section structure.",
+			"When the working_memory_size section reports the artifact is over the ceiling, it must be at or under that ceiling by the time you finish.",
 			"If no change is needed, call read_file on the target and leave the file unchanged.",
 			"Apply supported verification corrections in the working-memory artifact; preserve explicit uncertainty when verification downgraded confidence.",
 			"Do not copy the verification review artifact verbatim into working memory.",
@@ -128,6 +151,7 @@ func (workingMemoryConsolidationJob) Build(
 				Attributes: map[string]string{"path": runtimePath},
 				Body:       workingContent,
 			},
+			workingMemorySizeSection(runtimePath, workingSize, archivePath, archiveErr),
 			{
 				Name:       "verification_review_input",
 				Attributes: verificationAttrs,
@@ -156,6 +180,8 @@ func (workingMemoryConsolidationJob) Build(
 					"- Do not promote guesses from failed lookups or tool errors into settled memory.",
 					"- Recent Progress should capture only the most recent material changes in this active thread, not a long-running historical log or profile recap.",
 					"- Do not copy raw transcript detail into working memory.",
+					"- Keep the artifact at or under the size ceiling reported in the working_memory_size section; when that section reports the artifact is over the ceiling, this run is the run that brings it back down.",
+					"- Never truncate the artifact to reach the ceiling: remove whole resolved, superseded or duplicated entries, and never cut a live thread short.",
 					"- If a detail is durable identity, long-term biography, or general background, do not keep it here even if it was mentioned recently.",
 					"- Do not store durable identity, long-term facts, or generic notebook content here.",
 					"- Do not fill Temporary Context with generic process commentary or boilerplate that does not help with the current thread.",
@@ -321,4 +347,87 @@ func summarizeWorkingMemoryNotes(text string) string {
 
 func compactWorkingMemoryText(text string) string {
 	return compactCognitionText(text)
+}
+
+// workingMemorySizeState classifies the artifact against its budget so the
+// prompt can say what this run has to do about it.
+func workingMemorySizeState(size int) string {
+	switch {
+	case size > workingMemoryCeilingBytes:
+		return "over_ceiling"
+	case size > workingMemoryWarningBytes:
+		return "over_warning"
+	default:
+		return "within_budget"
+	}
+}
+
+// workingMemorySizeSection reports the artifact's size, its budget and - when
+// a copy was taken - where the pre-run text can be recovered, so the ceiling
+// does not depend on the artifact describing its own limit.
+func workingMemorySizeSection(
+	runtimePath string,
+	size int,
+	archivePath string,
+	archiveErr error,
+) agent.PromptSection {
+	state := workingMemorySizeState(size)
+	attributes := map[string]string{
+		"path":          runtimePath,
+		"bytes":         strconv.Itoa(size),
+		"ceiling_bytes": strconv.Itoa(workingMemoryCeilingBytes),
+		"warning_bytes": strconv.Itoa(workingMemoryWarningBytes),
+		"state":         state,
+	}
+	if archivePath != "" {
+		attributes["archived_at"] = archivePath
+	}
+
+	lines := make([]string, 0, 4)
+	switch state {
+	case "over_ceiling":
+		lines = append(lines, fmt.Sprintf(
+			"The artifact is %d bytes against a %d-byte ceiling. This run has to leave it at or under the ceiling.",
+			size,
+			workingMemoryCeilingBytes,
+		))
+	case "over_warning":
+		lines = append(lines, fmt.Sprintf(
+			"The artifact is %d bytes: above the %d-byte warning and still under the %d-byte ceiling. Trim closed material now rather than letting the next runs inherit it.",
+			size,
+			workingMemoryWarningBytes,
+			workingMemoryCeilingBytes,
+		))
+	default:
+		lines = append(lines, fmt.Sprintf(
+			"The artifact is %d bytes, within the %d-byte ceiling. Keep it there as you edit.",
+			size,
+			workingMemoryCeilingBytes,
+		))
+	}
+
+	switch {
+	case archiveErr != nil:
+		lines = append(lines, fmt.Sprintf(
+			"Archiving the current text failed for this run (%v), so nothing may be deleted: tighten wording only, and expect the ceiling to be re-checked on the next run.",
+			archiveErr,
+		))
+	case archivePath != "":
+		lines = append(lines, fmt.Sprintf(
+			"A verbatim copy of the artifact as it stands right now is archived at %s, so text removed in this run is not lost. Demote, never truncate.",
+			archivePath,
+		))
+	}
+
+	lines = append(
+		lines,
+		"Demote by removing whole entries that are closed, superseded or duplicated, and by folding repeated verification detail into one line.",
+		"Durable facts, biography and project state are not this artifact's job - the semantic extraction job owns them - so dropping them here does not lose them.",
+	)
+
+	return agent.PromptSection{
+		Name:       "working_memory_size",
+		Attributes: attributes,
+		Body:       renderPromptLines(lines...),
+	}
 }

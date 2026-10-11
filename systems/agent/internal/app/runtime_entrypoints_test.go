@@ -89,6 +89,10 @@ func (s *spyRuntimeStore) LoadCognitionArtifact(
 	return cognition.Artifact{}, nil
 }
 
+func (s *spyRuntimeStore) ArchiveWorkingMemory(context.Context, string) (string, error) {
+	return "", nil
+}
+
 func (s *spyRuntimeStore) StoreCognitionArtifact(
 	context.Context,
 	cognition.Artifact,
