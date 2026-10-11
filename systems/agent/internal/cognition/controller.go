@@ -16,6 +16,10 @@ const (
 	RunCauseStartup  = "startup"
 	RunCauseSchedule = "schedule"
 	RunCauseState    = "state"
+
+	// maxRunsPerDrainPass bounds how many jobs a single drain pass may run
+	// back to back.
+	maxRunsPerDrainPass = 8
 )
 
 // StateEvaluator decides whether a registered startup or state trigger should
@@ -352,6 +356,7 @@ func (c *Controller) drain(
 	includeSchedule bool,
 	includeState bool,
 ) error {
+	runs := 0
 	for {
 		pending, ok, err := c.nextPendingRun(ctx, includeStartup, includeSchedule, includeState)
 		if err != nil {
@@ -363,6 +368,15 @@ func (c *Controller) drain(
 		includeStartup = false
 		if err := c.runPending(ctx, pending); err != nil {
 			return err
+		}
+		runs++
+		if runs >= maxRunsPerDrainPass {
+			// A job that works through a bounded input window stays eligible
+			// while its backlog lasts, so a long backlog drains over several
+			// passes instead of one pass holding the controller loop for an
+			// unbounded number of model runs.
+			c.NotifyStateChange()
+			return nil
 		}
 	}
 }
@@ -498,6 +512,17 @@ func (c *Controller) runPending(ctx context.Context, pending pendingRun) error {
 	}
 
 	result, runErr := c.runner.Run(ctx, pending.job.newJob(), nil)
+
+	// coveredSeq is the transcript boundary this run actually processed. A job
+	// that windows its input reports the boundary it reached through
+	// ParsedResult.CheckpointSeq, so the checkpoint advances to what was really
+	// consumed instead of the run head, and the job stays eligible to drain the
+	// rest of its backlog.
+	coveredSeq := pending.headSeq
+	if result.CheckpointSeq > 0 && result.CheckpointSeq < coveredSeq {
+		coveredSeq = result.CheckpointSeq
+	}
+
 	var consolidationCheckpoint ConsolidationCheckpoint
 	if runErr == nil && shouldAdvanceConsolidationCheckpoint(pending.job.jobType) {
 		consolidationCheckpoint, runErr = c.store.StoreConsolidationCheckpoint(
@@ -516,7 +541,7 @@ func (c *Controller) runPending(ctx context.Context, pending pendingRun) error {
 		semanticExtractionCheckpoint, runErr = c.store.StoreSemanticExtractionCheckpoint(
 			ctx,
 			SemanticExtractionCheckpoint{
-				LastExtractedSeq: pending.headSeq,
+				LastExtractedSeq: coveredSeq,
 				LastExtractedAt:  pending.headAt,
 			},
 		)
@@ -537,9 +562,15 @@ func (c *Controller) runPending(ctx context.Context, pending pendingRun) error {
 		state = preserveDirtyState(state, pending.headSeq, headSeq, headAt)
 	} else {
 		state.LastSuccessAt = finishedAt
-		state.LastSuccessInputSeq = pending.headSeq
+		state.LastSuccessInputSeq = coveredSeq
 		state.ConsecutiveFailures = 0
-		state = clearOrAdvanceDirtyState(state, pending.headSeq, headSeq, headAt)
+		state = clearOrAdvanceDirtyState(state, coveredSeq, headSeq, headAt)
+		if coveredSeq < pending.headSeq {
+			// The run consumed a bounded window and left transcript turns
+			// unprocessed: keep the run-input marker behind the head so the
+			// state rules keep firing until the backlog drains.
+			state.LastRunInputSeq = coveredSeq
+		}
 	}
 	if err := c.store.StoreJobState(ctx, pending.job.jobType, state); err != nil {
 		return err

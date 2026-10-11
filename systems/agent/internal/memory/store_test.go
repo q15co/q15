@@ -941,6 +941,82 @@ func TestStoreLoadMessagesSinceSeq(t *testing.T) {
 	}
 }
 
+func TestStoreLoadMessagesSinceSeqWindowDrainsInBoundedSteps(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "memory")
+	store := newTestStore(root, &fakeCommitter{})
+
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	for _, pair := range [][2]string{
+		{"one", "first"},
+		{"two", "second"},
+		{"three", "third"},
+	} {
+		if err := store.AppendTurn(context.Background(), []conversation.Message{
+			conversation.UserMessage(pair[0]),
+			conversation.AssistantMessage(conversation.Text(pair[1], "")),
+		}); err != nil {
+			t.Fatalf("AppendTurn(%q) error = %v", pair[0], err)
+		}
+	}
+
+	window, err := store.LoadMessagesSinceSeqWindow(context.Background(), 0, 2)
+	if err != nil {
+		t.Fatalf("LoadMessagesSinceSeqWindow() error = %v", err)
+	}
+	if got, want := window.LastSeq, int64(2); got != want {
+		t.Fatalf("LastSeq = %d, want %d", got, want)
+	}
+	if got, want := window.RemainingTurns, 1; got != want {
+		t.Fatalf("RemainingTurns = %d, want %d", got, want)
+	}
+	if len(window.Messages) != 4 {
+		t.Fatalf("Messages len = %d, want 4", len(window.Messages))
+	}
+	if conversation.TextValue(window.Messages[0]) != "one" ||
+		conversation.TextValue(window.Messages[2]) != "two" {
+		t.Fatalf("Messages = %#v, want the oldest two turns", window.Messages)
+	}
+
+	// Draining from the reported boundary yields the rest of the backlog, which
+	// is what lets a checkpointed caller work through an unbounded backlog in
+	// fixed-size steps.
+	window, err = store.LoadMessagesSinceSeqWindow(context.Background(), window.LastSeq, 2)
+	if err != nil {
+		t.Fatalf("LoadMessagesSinceSeqWindow(after window) error = %v", err)
+	}
+	if got, want := window.LastSeq, int64(3); got != want {
+		t.Fatalf("LastSeq = %d, want %d", got, want)
+	}
+	if window.RemainingTurns != 0 {
+		t.Fatalf("RemainingTurns = %d, want 0", window.RemainingTurns)
+	}
+	if len(window.Messages) != 2 || conversation.TextValue(window.Messages[0]) != "three" {
+		t.Fatalf("Messages = %#v, want the final turn", window.Messages)
+	}
+
+	// At the head there is nothing to window, so the caller can keep its own
+	// advance-to-head behaviour.
+	window, err = store.LoadMessagesSinceSeqWindow(context.Background(), 3, 2)
+	if err != nil {
+		t.Fatalf("LoadMessagesSinceSeqWindow(at head) error = %v", err)
+	}
+	if window.LastSeq != 0 || window.RemainingTurns != 0 || len(window.Messages) != 0 {
+		t.Fatalf("window at head = %#v, want empty", window)
+	}
+
+	// A non-positive cap never loads anything.
+	window, err = store.LoadMessagesSinceSeqWindow(context.Background(), 0, 0)
+	if err != nil {
+		t.Fatalf("LoadMessagesSinceSeqWindow(zero cap) error = %v", err)
+	}
+	if window.LastSeq != 0 || len(window.Messages) != 0 {
+		t.Fatalf("window with a zero cap = %#v, want empty", window)
+	}
+}
+
 func TestStoreAppendAndLoadRecentMessagesPreservesUserTemporalMetadata(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "memory")
 	store := newTestStore(root, &fakeCommitter{})

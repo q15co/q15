@@ -113,6 +113,14 @@ func (s *spyLoader) LoadMessagesSinceSeq(
 	return nil, nil
 }
 
+func (s *spyLoader) LoadMessagesSinceSeqWindow(
+	context.Context,
+	int64,
+	int,
+) (TurnWindow, error) {
+	return TurnWindow{}, nil
+}
+
 func (s *spyLoader) LoadHead(context.Context) (int64, time.Time, error) {
 	return 0, time.Time{}, nil
 }

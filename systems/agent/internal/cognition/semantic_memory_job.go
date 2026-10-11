@@ -21,6 +21,7 @@ const (
 	semanticProjectsRuntimePath     = "/memory/" + semanticProjectsRelativePath
 	semanticMemoryScheduleSpec      = "0 5 * * *"
 	semanticMemoryRecentTurns       = 32
+	semanticMemoryWindowTurns       = 24
 	semanticMemoryMinDirtyTurns     = 12
 )
 
@@ -86,18 +87,22 @@ func (semanticMemoryExtractionJob) Build(
 	}
 	var recentMessages []conversation.Message
 	var transcriptStatus string
+	windowEndSeq := int64(0)
 	if semanticCheckpoint.LastExtractedSeq > 0 {
-		recentMessages, err = loader.LoadMessagesSinceSeq(
+		window, loadErr := loader.LoadMessagesSinceSeqWindow(
 			ctx,
 			semanticCheckpoint.LastExtractedSeq,
+			semanticMemoryWindowTurns,
 		)
-		if err != nil {
-			return Spec{}, fmt.Errorf("load messages since semantic extraction checkpoint: %w", err)
+		if loadErr != nil {
+			return Spec{}, fmt.Errorf(
+				"load messages since semantic extraction checkpoint: %w",
+				loadErr,
+			)
 		}
-		transcriptStatus = renderSemanticExtractionTranscriptScope(
-			semanticCheckpoint,
-			len(recentMessages),
-		)
+		recentMessages = window.Messages
+		windowEndSeq = window.LastSeq
+		transcriptStatus = renderSemanticExtractionTranscriptScope(semanticCheckpoint, window)
 	} else {
 		recentMessages, err = loader.LoadLatestMessages(ctx, semanticMemoryRecentTurns)
 		if err != nil {
@@ -262,6 +267,7 @@ func (semanticMemoryExtractionJob) Build(
 		ExposeTools:        true,
 		RequireToolCalling: true,
 		AllowedTools:       append([]string(nil), semanticMemoryAllowedTools...),
+		CheckpointSeq:      windowEndSeq,
 		ToolCallPolicy: filetools.PathAccessPolicy{
 			ReadPaths:  semanticRuntimePaths(),
 			WritePaths: semanticRuntimePaths(),
@@ -311,8 +317,9 @@ func (semanticMemoryExtractionJob) ApplyResult(
 	}
 
 	return ParsedResult{
-		Summary:  summarizeSemanticMemoryNotes(output.FinalText),
-		Metadata: metadata,
+		Summary:       summarizeSemanticMemoryNotes(output.FinalText),
+		Metadata:      metadata,
+		CheckpointSeq: output.Spec.CheckpointSeq,
 	}, nil
 }
 
@@ -348,19 +355,26 @@ func shouldRunSemanticMemoryExtraction(
 
 func renderSemanticExtractionTranscriptScope(
 	checkpoint SemanticExtractionCheckpoint,
-	loadedMessages int,
+	window TurnWindow,
 ) string {
-	if loadedMessages == 0 {
+	if len(window.Messages) == 0 {
 		return "No transcript messages were loaded for this run."
 	}
 	checkpointSeq := max(0, checkpoint.LastExtractedSeq)
-	return renderPromptLines(
+	lines := []string{
 		fmt.Sprintf(
-			"A semantic extraction replay slice of episodic history after semantic extraction checkpoint seq %d is included below as a transcript artifact.",
+			"A bounded semantic extraction replay window of episodic history after semantic extraction checkpoint seq %d is included below as a transcript artifact.",
 			checkpointSeq,
 		),
 		"Treat it as historical evidence for newly unextracted or still-relevant context, not as the full transcript.",
-	)
+	}
+	if window.RemainingTurns > 0 {
+		lines = append(lines, fmt.Sprintf(
+			"%d later turns remain unprocessed after this window and will be covered by later runs, so keep this run's promotions scoped to the evidence above.",
+			window.RemainingTurns,
+		))
+	}
+	return renderPromptLines(lines...)
 }
 
 type semanticTargetStatus struct {
