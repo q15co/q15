@@ -1,26 +1,30 @@
 # q15 Compose Examples
 
+This directory is the developer path, and it is also the deployment example that runs today. For
+installing q15 on a server, see the [install guide](https://q15.co/install/): it covers the
+supported path, and the `q15` binary that removes the checkout from the reader's way is in
+development. Everything here assumes a clone of this repository.
+
 This directory contains the checked-in Compose-facing config, policy, and secret templates for q15.
 
-- [docker-compose.image-first.yml](/deploy/compose/docker-compose.image-first.yml) is the canonical
-  downstream deployment example. It uses published `ghcr.io/q15co/q15-*` images only, applies one
-  synchronized release tag to all services, and mounts persistent storage for `/workspace`,
-  `/memory`, `/skills`, `/nix`, `/var/lib/q15/agent`, and `/var/lib/q15/proxy`, plus persistent
-  Qdrant storage for embedding collections.
-- [release.env.example](/deploy/compose/release.env.example) selects the moving `stable` release or
-  one immutable DateVer for updates and rollbacks.
-- [docker-compose.yml](/docker-compose.yml) in the repo root is the local-development stack. It
+- [docker-compose.image-first.yml](docker-compose.image-first.yml) is the canonical downstream
+  deployment example. It uses published `ghcr.io/q15co/q15-*` images only, applies one synchronized
+  release tag to all services, and mounts persistent storage for `/workspace`, `/memory`, `/skills`,
+  `/nix`, `/var/lib/q15/agent`, and `/var/lib/q15/proxy`, plus persistent Qdrant storage for
+  embedding collections.
+- [release.env.example](release.env.example) selects the moving `stable` release or one immutable
+  DateVer for updates and rollbacks.
+- [docker-compose.yml](../../docker-compose.yml) in the repo root is the local-development stack. It
   keeps `build:` enabled and uses a named `q15_workspace` volume for `/workspace`; it is not the
   image-first deployment example for downstream consumers.
-- [agent-config.yaml](/deploy/compose/agent-config.yaml) selects the local TEI embeddings backend
-  (the `q15-tei` service present in both Compose stacks); see the migration runbook below.
-- [agent-config.discovery.example.yaml](/deploy/compose/agent-config.discovery.example.yaml),
-  [proxy-policy.yaml](/deploy/compose/proxy-policy.yaml), and
-  [secrets/\*.example](/deploy/compose/secrets) are generic templates that downstream repos can copy
-  or adapt.
-- [auth/auth.json.example](/deploy/compose/auth/auth.json.example) is the OpenAI OAuth credential
-  template. Mount the auth directory, not the `auth.json` file, so atomic credential refreshes and
-  re-authentication updates remain visible to a running container.
+- [agent-config.yaml](agent-config.yaml) selects the local TEI embeddings backend (the `q15-tei`
+  service present in both Compose stacks); see the migration runbook below.
+- [agent-config.discovery.example.yaml](agent-config.discovery.example.yaml),
+  [proxy-policy.yaml](proxy-policy.yaml), and [secrets/\*.example](secrets) are generic templates
+  that downstream repos can copy or adapt.
+- [auth/auth.json.example](auth/auth.json.example) is the OpenAI OAuth credential template. Mount
+  the auth directory, not the `auth.json` file, so atomic credential refreshes and re-authentication
+  updates remain visible to a running container.
 
 For a long-running image-first deployment:
 
@@ -65,6 +69,9 @@ Notes:
   `embed_sources add` with `source_type: chunked_markdown_tree`.
 - The checked-in Compose config reads the Telegram allow-list from `Q15_TELEGRAM_ALLOWED_USER_IDS`
   or `Q15_TELEGRAM_ALLOWED_USER_IDS_FILE`, so local user IDs stay out of tracked YAML.
+- `TZ` is the stack's timezone and defaults to UTC. Set it in `release.env` (or in the environment)
+  to match the local time of the deployment: it reaches prompt-visible timestamps and shell tools
+  inside the containers.
 - Update by pulling `stable`, or roll back by selecting an earlier DateVer, while preserving the
   persistent volumes.
 - GHCR runtime images are intended to be publicly pullable without registry auth for normal
@@ -104,15 +111,15 @@ A provider that is unreachable at startup contributes nothing to the roster (the
 the remaining providers). If the total roster is empty, startup fails. A model that leaves the
 roster (deprecated) stops being selected.
 
-See [agent-config.discovery.example.yaml](/deploy/compose/agent-config.discovery.example.yaml) for a
-working example with include/exclude glob filters.
+See [agent-config.discovery.example.yaml](agent-config.discovery.example.yaml) for a working example
+with include/exclude glob filters.
 
 ## Embeddings backend (TEI)
 
 Both Compose stacks run a local TEI (Hugging Face Text Embeddings Inference) container, `q15-tei`,
-and [agent-config.yaml](/deploy/compose/agent-config.yaml) selects the `openai` embedding provider
-with `base_url_env: Q15_EMBEDDINGS_BASE_URL`. TEI serves no request authentication by default, so
-the agent runs keyless against it. Default model: `Qwen/Qwen3-Embedding-0.6B` served as
+and [agent-config.yaml](agent-config.yaml) selects the `openai` embedding provider with
+`base_url_env: Q15_EMBEDDINGS_BASE_URL`. TEI serves no request authentication by default, so the
+agent runs keyless against it. Default model: `Qwen/Qwen3-Embedding-0.6B` served as
 `qwen3-embedding-0.6b` at 1024 dimensions.
 
 ```bash
@@ -122,10 +129,14 @@ make compose-logs SERVICE=q15-tei
 
 Notes:
 
-- `q15-tei` needs the NVIDIA container toolkit. The default `turing-1.9` image targets Turing GPUs
-  (T4, RTX 2000 series, such as an RTX 2060) and is experimental with Flash Attention off. Ampere or
-  newer: set `TEI_IMAGE=ghcr.io/huggingface/text-embeddings-inference:1.9`. CPU-only hosts:
-  `cpu-1.9` and remove the `deploy.resources` GPU reservation.
+- `q15-tei` is deprecated: the install profile runs ollama for chat and for embeddings, so this
+  service is not part of it (see the install spec, issue #215), and it is removed one release after
+  that profile ships. It stays for existing deployments and for GPU hosts, where it is still the
+  better embeddings backend.
+- The default image is the CPU build, so a host without a GPU needs no extra setup. On a GPU host,
+  set `TEI_IMAGE` to a GPU build (`:turing-1.9` for T4 and RTX 2000-class, `:1.9` for Ampere and
+  newer), keep the NVIDIA container toolkit installed, and add the device reservation back in a
+  local override file.
 - `TEI_MODEL`, `TEI_SERVED_MODEL_NAME`, and `TEI_MAX_CLIENT_BATCH_SIZE` override the served model;
   the served name must match `model` in agent-config.yaml, and `TEI_MAX_CLIENT_BATCH_SIZE` must stay
   \>= the config's `batch_size`.
@@ -136,7 +147,7 @@ Notes:
   so the agent sends the Bearer token.
 - The hosted alternative stays two lines away: set `provider: gemini` with `gemini_api_key_env`,
   model `gemini-embedding-2`, dimensions 768, and wire the `gemini_api_key` secret back into the
-  Compose file (see [secrets/gemini_api_key.example](/deploy/compose/secrets)).
+  Compose file (see [secrets/gemini_api_key.example](secrets)).
 
 ## Migrating from Gemini to TEI Qwen
 
@@ -170,14 +181,15 @@ make compose-up
 ```
 
 Open `http://localhost:8080`, then follow the host CLI enrollment instructions in
-[the web README](/systems/web/README.md#enroll-sign-in-and-revoke). Set `Q15_WEB_ORIGIN` to your
-exact HTTPS origin before enrolling production credentials. The local default is
+[the web README](../../systems/web/README.md#enroll-sign-in-and-revoke). Set `Q15_WEB_ORIGIN` to
+your exact HTTPS origin before enrolling production credentials. The local default is
 `http://localhost:8080`; remote HTTP origins fail startup. Credentials and sessions are bound to the
 configured origin. A session cookie alone grants no access: each HTTP request and socket upgrade
 requires a fresh proof from a separate, non-exportable browser session key. Reloads reuse that key
-without a passkey gesture. See [session policy](/systems/web/README.md#sessions-and-http-policy) for
-proof binding, freshness, replay limits and the IndexedDB exception. Upgrading a version 1 auth
-store preserves devices but invalidates old bearer sessions; users sign in again.
+without a passkey gesture. See
+[session policy](../../systems/web/README.md#sessions-and-http-policy) for proof binding, freshness,
+replay limits and the IndexedDB exception. Upgrading a version 1 auth store preserves devices but
+invalidates old bearer sessions; users sign in again.
 
 The `q15_web_state` named volume mounts at `/var/lib/q15-web` in **q15-web only**. The image seeds
 it with UID 65532, GID 1000 and mode 0700. It holds the 0600 auth state and admin socket. Preserve
@@ -186,10 +198,11 @@ executor or cloudflared. For a bind mount or Podman volume that masks image perm
 the directory with the mapped container UID/GID and mode 0700 before starting; incorrect permissions
 fail startup. Do not use `down -v` on a persistent deployment.
 
-Only `127.0.0.1:8080` is published. On Hermes the existing host cloudflared tunnel can add an
-ingress for the configured chat hostname with `service = "http://127.0.0.1:8080"`. Keep its default
-404 fallback and forward only this public port. Host tunnel configuration and live activation belong
-to the dots deployment and are not changed here. The tunnel is transport, not owner identity;
+Only `127.0.0.1:8080` is published. Put an SSH forward in front of it for private use, or a TLS
+terminator with an identity layer for a public hostname; see the
+[install guide](https://q15.co/install/) and the web tier's own README for the shape. A cloudflared
+tunnel works the same way: one ingress entry pointing at `http://127.0.0.1:8080`, the tunnel's
+default 404 fallback kept, and no other port forwarded. The tunnel is transport, not owner identity;
 Cloudflare Access is optional additional protection. Cloudflare terminates TLS and sees cookies and
 routing metadata; browser-agent sealing hides chat content from passive carriers. It does not defend
 against an active origin or relay replacing JavaScript or key exchange messages; chat is not
