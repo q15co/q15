@@ -693,3 +693,13 @@ For Compose and Kubernetes alike:
 - Roll back by selecting the previous `YYYY.MM.DD.<run-number>` tag across all three services.
 - Preserve the existing persistent storage for `/workspace`, `/memory`, `/skills`, `/nix`,
   `/var/lib/q15/agent`, and `/var/lib/q15/proxy` during normal upgrades and downgrades.
+
+## Licence
+
+q15 is released under the [MIT licence](LICENSE). You may use it, modify it, and redistribute it,
+including commercially, as long as the copyright notice and the licence text travel with it.
+
+That licence covers the code, not the q15 name: a fork is welcome, and it should carry its own name.
+
+Contributions arrive under the same terms. See [CONTRIBUTING.md](CONTRIBUTING.md) for the sign-off
+and [THIRD-PARTY.md](THIRD-PARTY.md) for the licences of what q15 depends on.
