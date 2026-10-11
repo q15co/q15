@@ -7,8 +7,6 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import type { Transport } from "../application/ports";
 import type * as chatModule from "../domain/chat";
-import type { ChatMessage } from "../domain/chat";
-import type * as formatModule from "./format";
 import type * as messageModule from "./message";
 
 import { ChatStore } from "../application/chat-store";
@@ -20,7 +18,7 @@ import { MarkdownView } from "./markdown";
 import { Transcript } from "./transcript";
 import { ReducedMotion } from "./ui/motion-preference";
 
-const counts = vi.hoisted(() => ({ rows: 0, markdown: 0, tool: 0, grouped: 0 }));
+const counts = vi.hoisted(() => ({ rows: 0, markdown: 0, grouped: 0 }));
 vi.mock("react-markdown", async (original) => {
   const actual = await original<typeof markdownModule>();
   return {
@@ -35,7 +33,7 @@ vi.mock("./message", async (original) => {
   const actual = await original<typeof messageModule>();
   return {
     ...actual,
-    MessageView: (props: { message: ChatMessage }) => {
+    MessageView: (props: Parameters<typeof actual.MessageView>[0]) => {
       if (props.message.turn !== "10001") counts.rows++;
       return <actual.MessageView {...props} />;
     },
@@ -51,17 +49,6 @@ vi.mock("../domain/chat", async (original) => {
     },
   };
 });
-vi.mock("./format", async (original) => {
-  const actual = await original<typeof formatModule>();
-  return {
-    ...actual,
-    pretty: (text: string) => {
-      counts.tool++;
-      return actual.pretty(text);
-    },
-  };
-});
-
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
@@ -110,7 +97,6 @@ describe("streaming work", () => {
       const unchanged = required(store.getSnapshot().live).parts.slice(0, 2);
       counts.rows = 0;
       counts.markdown = 0;
-      counts.tool = 0;
       counts.grouped = 0;
       const parse = vi.spyOn(JSON, "parse");
       let full = "Initial answer";
@@ -137,15 +123,14 @@ describe("streaming work", () => {
       expect(required(store.getSnapshot().live).parts[1]).toBe(unchanged[1]);
       expect(counts.rows).toBe(0);
       expect(counts.grouped).toBe(0);
-      expect(counts.tool).toBe(0);
       expect(
         parse.mock.calls.filter(
           ([text]) => text === call.arguments || text.includes('"command":"history'),
         ),
       ).toHaveLength(0);
-      expect(counts.markdown).toBe(12);
+      expect(counts.markdown).toBe(20);
       const reasoning = required(
-        view.container.querySelector<HTMLDetailsElement>("[data-agent-activity]:last-of-type"),
+        [...view.container.querySelectorAll<HTMLDetailsElement>("[data-agent-activity]")].at(-1),
       );
       reasoning.open = true;
       feed(store, "msg.final", { msg, status: "aborted", full_text: full });
@@ -177,10 +162,10 @@ describe("growing Markdown", () => {
         vi.advanceTimersByTime(1);
       });
     }
-    expect(counts.markdown).toBeLessThan(20);
+    expect(counts.markdown).toBeLessThan(24);
     view.rerender(<MarkdownView text={full} />);
     const finished = view.container.innerHTML;
-    expect(counts.markdown).toBeLessThan(21);
+    expect(counts.markdown).toBeLessThan(25);
     view.unmount();
     const reference = render(canonical(full));
     expect(finished).toBe(reference.container.innerHTML);
@@ -196,7 +181,7 @@ describe("growing Markdown", () => {
     const view = render(<MarkdownView text="start" streaming />);
     view.rerender(<MarkdownView text="replaced **snapshot**" streaming />);
     act(() => {
-      vi.advanceTimersByTime(39);
+      vi.advanceTimersByTime(23);
     });
     expect(view.container.textContent).toBe("start");
     act(() => {

@@ -3,6 +3,7 @@ package protocol
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -18,7 +19,7 @@ func TestFrameGoldens(t *testing.T) {
 		kind    string
 		payload any
 	}{
-		{Hello, HelloPayload{Cursor: 41, Binding: "binding", PublicKey: "public"}}, {Sync, Cursor{Cursor: 41}}, {Send, SendRequest{ClientMsgID: "client-1", Text: "hello"}},
+		{Hello, HelloPayload{Cursor: 41, Binding: "binding", PublicKey: "public"}}, {Sync, Cursor{Cursor: 41}}, {Send, SendRequest{ClientMsgID: "client-1", Text: "hello", Parts: []Attachment{{PartType: "media", MediaKind: "document", MediaRef: "media://sha256/" + string(bytes.Repeat([]byte("a"), 64)), Filename: "notes.txt", ContentType: "text/plain; charset=utf-8"}}}},
 		{Abort, AbortRequest{Turn: 42}}, {Ack, AckRequest{Seq: 7}}, {Status, struct{}{}}, {Presence, PresenceRequest{FG: true}}, {Ping, struct{}{}},
 		{Ready, ReadyPayload{HeadSeq: 42, Cursor: 41, DeviceID: "device-1"}}, {TurnStart, TurnStartPayload{Turn: 42, Msg: msg}},
 		{Delta, ProgressPayload{Msg: msg, Seq: 7, Kind: "reasoning", Text: "thinking"}},
@@ -92,4 +93,21 @@ func TestUnknownEventDoesNotInventAFrame(t *testing.T) {
 	if _, ok := FromEvent(&chatpb.SessionEvent{}); ok {
 		t.Fatal("unknown event rendered")
 	}
+}
+
+func TestMediaResultGolden(t *testing.T) {
+	result := MediaResult{Parts: []Attachment{}}
+	for index, value := range []struct{ kind, contentType, filename string }{
+		{"image", "image/png", "photo.png"}, {"audio", "audio/wave", "voice.wav"},
+		{"video", "video/mp4", "video.mp4"}, {"document", "text/html; charset=utf-8", "<script>notes</script>.html"},
+		{"sticker", "image/png", "sticker.png"}, {"animation", "image/gif", "animation.gif"},
+		{"video_note", "video/mp4", "note.mp4"}, {"image", "image/svg+xml", "unsafe.svg"},
+	} {
+		result.Parts = append(result.Parts, Attachment{PartType: "media", MediaKind: value.kind,
+			MediaRef: fmt.Sprintf(
+				"media://sha256/%064x",
+				index,
+			), Filename: value.filename, ContentType: value.contentType})
+	}
+	assertGolden(t, "testdata/media.json", result)
 }

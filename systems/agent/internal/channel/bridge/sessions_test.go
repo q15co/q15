@@ -44,7 +44,7 @@ func (f *fakePublisher) published() []bus.InboundMessage {
 // by calling OpenSession on the messages the rpcs published.
 func newTestEndpoint(publisher *fakePublisher) (*Service, *AgentEndpoint) {
 	endpoint := NewAgentEndpoint(publisher)
-	return NewService(&fakeTurnLister{}, endpoint), endpoint
+	return NewService(&fakeTurnLister{}, endpoint, nil), endpoint
 }
 
 func TestServiceOpenSessionAllocatesIdleSession(t *testing.T) {
@@ -441,7 +441,7 @@ func TestServiceSendMessageAndAbortRejectUnknownSessions(t *testing.T) {
 // TestServiceOpenSessionRecordsOpenedAt pins the contract's opened_at field:
 // the session carries the time it was opened rather than a zero timestamp.
 func TestServiceOpenSessionRecordsOpenedAt(t *testing.T) {
-	service := NewService(nil, NewAgentEndpoint(&fakePublisher{}))
+	service := NewService(nil, NewAgentEndpoint(&fakePublisher{}), nil)
 
 	opened, err := service.OpenSession(
 		context.Background(),
@@ -463,7 +463,7 @@ func TestServiceOpenSessionRecordsOpenedAt(t *testing.T) {
 // with no text produces no message parts, and the worker skips a message with
 // no parts. The rpc must reject it rather than report success.
 func TestServiceSendMessageRejectsEmptyText(t *testing.T) {
-	service := NewService(nil, NewAgentEndpoint(&fakePublisher{}))
+	service := NewService(nil, NewAgentEndpoint(&fakePublisher{}), nil)
 	ctx := context.Background()
 
 	opened, err := service.OpenSession(ctx, &chatpb.OpenSessionRequest{ChatId: "conv-empty"})
@@ -485,7 +485,7 @@ func TestServiceSendMessageRejectsEmptyText(t *testing.T) {
 // because there was no cancel func to invoke yet.
 func TestServiceAbortBeforeSetCancelIsNotLost(t *testing.T) {
 	endpoint := NewAgentEndpoint(&fakePublisher{})
-	service := NewService(nil, endpoint)
+	service := NewService(nil, endpoint, nil)
 	ctx := context.Background()
 
 	opened, err := service.OpenSession(ctx, &chatpb.OpenSessionRequest{ChatId: "conv-window"})

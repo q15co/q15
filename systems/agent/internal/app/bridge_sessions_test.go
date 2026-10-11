@@ -45,7 +45,7 @@ func TestRunAgentWorkerDrivesBridgeRunLifecycle(t *testing.T) {
 	endpoint := bridge.NewAgentEndpoint(messageBus)
 	// The transcript pager is not touched on the run path, so the lister is
 	// left nil on purpose.
-	service := bridge.NewService(nil, endpoint)
+	service := bridge.NewService(nil, endpoint, nil)
 
 	var replyCalls atomic.Int64
 	release := make(chan struct{})
@@ -136,7 +136,7 @@ func TestRunAgentWorkerAbortCancelsBridgeRun(t *testing.T) {
 
 	messageBus := bus.New(8)
 	endpoint := bridge.NewAgentEndpoint(messageBus)
-	service := bridge.NewService(nil, endpoint)
+	service := bridge.NewService(nil, endpoint, nil)
 
 	cancelNoticed := make(chan struct{}, 1)
 	agentImpl := &fakeObservedAgent{
@@ -210,7 +210,7 @@ func TestRunAgentWorkerQueuesSecondBridgeSendBehindFirstRun(t *testing.T) {
 
 	messageBus := bus.New(8)
 	endpoint := bridge.NewAgentEndpoint(messageBus)
-	service := bridge.NewService(nil, endpoint)
+	service := bridge.NewService(nil, endpoint, nil)
 
 	var firstFinished atomic.Bool
 	release := make(chan struct{})

@@ -11,7 +11,7 @@ import (
 )
 
 // Version changes when message identity or part semantics change.
-const Version = 2
+const Version = 3
 
 // Frame types are shared with the browser's golden fixtures.
 const (
@@ -33,6 +33,9 @@ const (
 	Error     = "error"
 	Key       = "key"
 	History   = "history"
+	MediaPut  = "media.put"
+	MediaGet  = "media.get"
+	MediaDone = "media.done"
 )
 
 // Frame is the common envelope. Int64 cursors are decimal strings so JavaScript
@@ -62,8 +65,30 @@ type Cursor struct {
 
 // SendRequest identifies one optimistic browser send.
 type SendRequest struct {
-	ClientMsgID string `json:"client_msg_id"`
-	Text        string `json:"text"`
+	ClientMsgID string       `json:"client_msg_id"`
+	Text        string       `json:"text"`
+	Parts       []Attachment `json:"parts,omitempty"`
+}
+
+// Attachment carries send-time display metadata; transcripts retain canonical refs.
+type Attachment struct {
+	PartType    string `json:"part_type"`
+	MediaKind   string `json:"media_kind"`
+	MediaRef    string `json:"media_ref"`
+	Filename    string `json:"filename"`
+	ContentType string `json:"content_type"`
+}
+
+// MediaFile describes bytes following the bounded, length-prefixed JSON header.
+type MediaFile struct {
+	Filename    string `json:"filename"`
+	ContentType string `json:"content_type"`
+	Size        int    `json:"size"`
+}
+
+// MediaResult is encrypted with the requesting channel's content key.
+type MediaResult struct {
+	Parts []Attachment `json:"parts"`
 }
 
 // AbortRequest names the run rather than accepting a client-chosen session.

@@ -12,6 +12,7 @@ import (
 
 	"github.com/q15co/q15/libs/chat-contract/browser"
 	"github.com/q15co/q15/libs/chat-contract/chatpb"
+	"github.com/q15co/q15/systems/agent/internal/media"
 	"github.com/q15co/q15/systems/agent/internal/memory"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -49,12 +50,13 @@ type Service struct {
 	lister   TurnLister
 	sessions *AgentEndpoint
 	browser  *browser.Endpoint
+	media    media.Store
 }
 
-// NewService constructs a bridge service over one transcript lister and the
-// session endpoint the run rpcs share with the app worker.
-func NewService(lister TurnLister, sessions *AgentEndpoint) *Service {
-	s := &Service{lister: lister, sessions: sessions}
+// NewService constructs a bridge service over the transcript, session endpoint,
+// and runtime-owned media store.
+func NewService(lister TurnLister, sessions *AgentEndpoint, mediaStore media.Store) *Service {
+	s := &Service{lister: lister, sessions: sessions, media: mediaStore}
 	s.browser = browser.NewLocal(s)
 	return s
 }
@@ -79,15 +81,8 @@ func (s *Service) SendMessage(
 	ctx context.Context,
 	req *chatpb.SendMessageRequest,
 ) (*chatpb.SendMessageResponse, error) {
-	if strings.TrimSpace(req.GetText()) == "" {
-		// A message with no text produces no parts, and the worker skips a
-		// message with no parts. Rejecting it here keeps the rpc from
-		// reporting success for a send that would never run. Attachments are
-		// what will make an empty text meaningful, and they are a later layer.
-		return nil, status.Error(
-			codes.InvalidArgument,
-			"send message text is required",
-		)
+	if strings.TrimSpace(req.GetText()) == "" && len(req.GetParts()) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "send message parts are required")
 	}
 	text := req.GetText()
 	if len(text) > maxSendTextLen {
@@ -110,6 +105,11 @@ func (s *Service) SendMessage(
 		)
 	}
 
+	attachments, err := s.sendAttachments(req.GetParts())
+	if err != nil {
+		return nil, err
+	}
+
 	// Read before publishing: the run this send may join is already in flight
 	// exactly when the session is running now.
 	queued := session.isRunning()
@@ -118,6 +118,7 @@ func (s *Service) SendMessage(
 		session,
 		req.GetClientMsgId(),
 		req.GetText(),
+		attachments,
 	); err != nil {
 		return nil, publishSendError(err)
 	}

@@ -11,7 +11,8 @@ import {
   PLAINTEXT_FRAME_TYPES,
 } from "../generated/protocol";
 import { isRecord } from "../shared/type-guards";
-import { encode, sessionSigner } from "./proof";
+import { encode, decode } from "./base64";
+import { sessionSigner } from "./proof";
 
 const chunkSize = ChunkBytes;
 const maxBytes = MaxEnvelopeBytes;
@@ -19,16 +20,6 @@ const jsonType = "application/json";
 const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true });
 const failure = () => new Error("This content could not be decrypted. Reconnect to try again.");
-
-function decode(value: string): Uint8Array<ArrayBuffer> {
-  if (!/^[\w-]*$/u.test(value)) throw failure();
-  const bytes = Uint8Array.from(
-    atob(value.replaceAll("-", "+").replaceAll("_", "/")),
-    (c) => c.codePointAt(0) ?? 0,
-  );
-  if (encode(bytes) !== value) throw failure();
-  return bytes;
-}
 
 function context(frame: Frame): string {
   return [frame.v, frame.id, frame.type, new Date(frame.ts).toISOString(), frame.seq].join("\n");

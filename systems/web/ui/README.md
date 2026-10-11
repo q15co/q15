@@ -5,6 +5,11 @@ provides Vite/Rolldown, Vitest, Oxlint and Oxfmt. Exact Node and pnpm versions l
 `scripts/tool-versions.sh`; package pins are checked against that manifest. No global frontend
 tooling is needed.
 
+Attachment file glyphs are adapted from
+[Catppuccin VSCode Icons](https://github.com/catppuccin/vscode-icons) at revision
+`b6915da9f6889b683a110aa747de96c2820a537d`, using the app's Mocha/Latte tokens. Their MIT notice is
+retained in `src/components/file-icons-LICENSE`.
+
 ## Development
 
 ```bash
@@ -154,20 +159,24 @@ make ui-fixtures-check
 ```
 
 Incoming JSON remains `unknown` until runtime predicates validate the envelope, event payload and
-nested history. Outgoing requests use a discriminated union and a typed constructor that associates
-each request with its payload. Pending-message states require a turn ID only once assigned, and
-activity entries distinguish tool work from commentary. Event handling checks exhaustiveness;
-unknown wire part types remain available to the visible renderer fallback. Shell manifests and
-install events are also checked before use. Type-aware Oxc rules reject unsafe assertions and unsafe
-uses of `any`, while `satisfies` checks configuration without widening literal values.
+nested history. Decoded frames pass directly through the same value-level validator without an
+additional JSON stringify/parse pass. Content and request-proof base64 use native Uint8Array methods
+where supported, with a canonical base64url fallback. Draft limits remain UTF-8 byte limits and
+reject oversized input before clearing the composer. Outgoing requests use a discriminated union and
+a typed constructor that associates each request with its payload. Pending-message states require a
+turn ID only once assigned, and activity entries distinguish tool work from commentary. Event
+handling checks exhaustiveness; unknown wire part types remain available to the visible renderer
+fallback. Shell manifests and install events are also checked before use. Type-aware Oxc rules
+reject unsafe assertions and unsafe uses of `any`, while `satisfies` checks configuration without
+widening literal values.
 
-The socket and history adapters open the version 2 sealed byte envelope before domain validation.
-Fresh non-exportable ECDH/content keys remain in memory; reconnects re-wrap history in the agent.
-The Go protocol generates both byte limits and the plaintext-control whitelist; unknown content
-types default to sealing. Before either directional stream count reaches its 65,536-entry replay
-budget, the transport drains accepted sends and reconnects with fresh keys. This recovery never
-resubmits an uncertain send. History paging is bounded by encoded plaintext bytes as well as turns.
-Failed decryption is visible and does not close the socket. See
+The socket and history adapters open the version 3 browser contract and sealed byte envelope before
+domain validation. Fresh non-exportable ECDH/content keys remain in memory; reconnects re-wrap
+history in the agent. The Go protocol generates both byte limits and the plaintext-control
+whitelist; unknown content types default to sealing. Before either directional stream count reaches
+its 65,536-entry replay budget, the transport drains accepted sends and reconnects with fresh keys.
+This recovery never resubmits an uncertain send. History paging is bounded by encoded plaintext
+bytes as well as turns. Failed decryption is visible and does not close the socket. See
 [content sealing](../README.md#content-sealing) for the byte framing, passive-carrier guarantee and
 trusted-delivery limits.
 
@@ -195,7 +204,8 @@ visible. Message links open containing disclosures. Media parts show their refer
 attachment transfer lands. Unknown parts show their type and raw data. Sending during an active run
 uses the server queue; Stop targets the active run, including its startup. History pages backwards
 automatically near the top, preserves the visible message, and supports `#message-<turn>:<ordinal>`
-links. User bubbles and avatars sit on the right, with left-aligned text and an inset for wrapped
+links. Startup and newest-history refreshes load five complete turns; older pages load ten turns at
+a time. User bubbles and avatars sit on the right, with left-aligned text and an inset for wrapped
 messages. Pending and queued messages use the same layout. The sidebar contains Chat navigation,
 connection status and the theme toggle; it does not list individual recent messages.
 
@@ -215,6 +225,24 @@ the authenticated `/auth/worker` handshake described in
 fake-indexeddb with real WebCrypto; end-to-end tests exercise Chromium's real key storage, passkey
 ceremony, proof replay rejection and navigation across reloads. Existing pages retain their active
 worker until they close, avoiding a forced reload during a response.
+
+Android can share a file straight into the composer. The manifest declares a `share_target` posting
+`multipart/form-data` to `/share`, and the worker answers that path itself: it reads the posted
+files into the `q15-share` cache as `/share-inbox/<arrival>-<index>` entries and redirects to `/`.
+No server route is added, so a share never reaches the web tier and cannot open a new
+unauthenticated surface there, and answering the path keeps a share from ever surfacing as a 404
+page. The composition root hands the composer a collector, which reads the inbox once the composer
+is on screen, clears it, and adds the files to the attachment tray; they upload through the same
+proof-carrying, sealed media route as a picked file. A share is kept whole or refused whole: more
+files than the composer can send, an unreadable body, or a bundle past the 64 MiB storage backstop
+leaves nothing staged and reports it in the app, and a partly written share is removed rather than
+left behind. Byte size is judged again by the composer after image downscaling, so its own limits
+remain the only ones that decide what can be sent. An entry nobody collected is dropped a day after
+it arrived, on every start, and a share arriving while signed out survives the sign-in round trip
+because collection only happens once a session exists. The declared `accept` list is deliberately
+wide: a type it omits makes q15 silently absent from the share sheet. A cross-site post to `/share`
+is another page's form submission rather than the share sheet, so the worker answers it and keeps
+nothing.
 
 ## Appearance
 

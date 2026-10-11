@@ -121,22 +121,26 @@ uncontrolled pages after authenticated precaching; the worker supplies cached sh
 cache misses with the session cookie. Initial navigation can still return 401 as described above;
 subsequent controlled navigation carries a proof and succeeds with 200.
 
-Sessions expire server-side after **12 hours**, with no sliding renewal. Sign out deletes the server
+Sessions expire server-side after **30 days**, with no sliding renewal. Sign out deletes the server
 record and cookie. Sessions grant `chat` only; `console` is refused, including for the owner. A
 future console must implement a fresh, time-boxed assertion before adding that scope. Open sockets
 recheck sessions before dispatch and output, and at least once per second while idle.
 Expiry/revocation closes them with code 4401. The UI stops reconnecting and shows a sign-in link; a
 failed upgrade checks `/auth/session` to distinguish authentication loss from a network failure.
 
-Without a valid session, `/`, `/ws`, `/api/turns`, assets and unknown paths answer 401. `/` serves
-the same compiled React shell with per-response CSP nonces, rendering sign-in before any chat
+Without a valid session, `/`, `/ws`, `/api/turns`, other assets and unknown paths answer 401. `/`
+serves the same compiled React shell with per-response CSP nonces, rendering sign-in before any chat
 adapters are created. Its script, style and fonts are inlined so locked navigation needs no public
 asset exceptions. The shell contains no application data, and this trades separate asset caching for
-one browser entry and consistent presentation. `/healthz` remains the only unauthenticated
-successful resource. The unavoidable proof exchange is `POST /auth/login` (401 plus non-secret
-challenge options) and `POST /auth/login/finish` (204 **only after** a valid enrolled WebAuthn
-assertion). They do not reach the bridge. `GET /auth/session` and `POST /auth/logout` require a
-valid chat session.
+one browser entry and consistent presentation. `/healthz` and the four install assets
+(`/manifest.webmanifest` and the three `/icon-*` files it references) are the only unauthenticated
+successful resources. An install reads the manifest and its icons before any session exists, and a
+WebAPK whose `share_target` cannot be fetched never appears in the Android share sheet, so those
+four files are exempt from the proof requirement; they carry presentation metadata only, and a
+request to any other path still answers 401. The unavoidable proof exchange is `POST /auth/login`
+(401 plus non-secret challenge options) and `POST /auth/login/finish` (204 **only after** a valid
+enrolled WebAuthn assertion). They do not reach the bridge. `GET /auth/session` and
+`POST /auth/logout` require a valid chat session.
 
 All HTTP mutations, including login and logout, require both the exact configured Origin and
 `Sec-Fetch-Site: same-origin`. Native WebSocket upgrades require the exact Origin and reject
@@ -187,7 +191,7 @@ allocates a fresh handle; it does not invalidate the independent browser auth st
 
 ## Browser contract
 
-The browser contract is version 2, independent of the gRPC protocol version. Every frame is
+The browser contract is version 3, independent of the gRPC protocol version. Every frame is
 `{v, id, type, ts, seq, payload}`. `v` is an integer; `ts` is an RFC3339 UTC timestamp. All int64
 sequence and cursor values are **decimal JSON strings**, preserving numbers above JavaScript's safe
 integer limit. Clients should compare them as `BigInt` values.
@@ -352,3 +356,24 @@ Tests exercise a `bufconn` bridge with real `httptest` sockets, a real Unix-sock
 handshake, policy goldens, gate/origin matrices, multiple devices, stream reconnects, sparse replay
 windows, live-turn exclusion, embedded assertions, SPA routing and a disk override containing only
 an index.
+
+## Attachments
+
+The composer holds files in memory until Send. One proof-authorized `POST /api/media` carries a
+sealed batch, capped at 16 files and 8 MiB of decoded file bytes total. Raster images larger than
+2048 pixels are resized before upload. Attachment-only messages are supported. Agent and web must
+upgrade together (bridge and browser protocol version 3).
+
+The agent authenticates the envelope, sniffs bytes, and writes through its runtime media store.
+Neither q15-web nor its volume sees plaintext files or descriptors. `GetMedia` streams the existing
+32 KiB encrypted chunks through `GET /api/media/<sha256>` for the current content session. Filename,
+sniffed type and size are inside the authenticated descriptor; HTTP headers describe only the sealed
+response (`attachment`, `nosniff`, sandbox CSP, `no-store`). The browser creates temporary object
+URLs after complete authenticated decryption and releases them when a part unmounts. Only
+allowlisted raster images and audio render inline; every other kind uses a download link, including
+HTML and SVG. Both live and historical messages use the same renderer.
+
+Each upload/send owns a conversation scope. At startup and hourly, the agent retains scopes named by
+completed transcript parts and calls `ReleaseAll` for unreferenced web scopes older than 24 hours.
+Queuing a previously uploaded ref renews that grace period. Transcript retention therefore controls
+referenced media retention; interrupted uploads are swept without a pending-upload store.

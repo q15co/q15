@@ -22,10 +22,16 @@ import type {
   ToolCall,
   Turn,
   TurnStartPayload,
-} from "../generated/protocol";
+} from "../generated/protocol.ts";
 
-import { VERSION, FRAME_TYPES, MaxChunkDataChars, MaxEnvelopeChunks } from "../generated/protocol";
-import { isRecord } from "../shared/type-guards";
+import {
+  VERSION,
+  FRAME_TYPES,
+  MaxChunkDataChars,
+  MaxEnvelopeChunks,
+} from "../generated/protocol.ts";
+import { isRecord } from "../shared/type-guards.ts";
+import { parseMediaResult } from "./media";
 
 export type Envelope<T extends string, P> = Omit<Frame, "type" | "payload"> & {
   type: T;
@@ -167,7 +173,14 @@ function isClientFrame(f: Frame): f is ClientFrame {
     case "sync":
       return decimal(p.cursor);
     case "msg.send":
-      return typeof p.client_msg_id === "string" && typeof p.text === "string";
+      if (typeof p.client_msg_id !== "string" || typeof p.text !== "string") return false;
+      if (p.parts === undefined) return true;
+      try {
+        parseMediaResult({ parts: p.parts });
+        return true;
+      } catch {
+        return false;
+      }
     case "msg.abort":
       return decimal(p.turn);
     case "msg.ack":
@@ -192,6 +205,10 @@ export function parseClientFrame(data: string): ClientFrame {
 
 export function parseFrame(data: string): ServerFrame {
   const f: unknown = JSON.parse(data);
+  return parseFrameValue(f);
+}
+
+export function parseFrameValue(f: unknown): ServerFrame {
   if (!isEnvelope(f)) {
     throw new Error("The server sent an unsupported chat frame. Refresh after updating q15.");
   }

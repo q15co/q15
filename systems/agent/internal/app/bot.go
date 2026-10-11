@@ -157,7 +157,7 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 	messageBus := bus.New(bus.DefaultBufferSize)
 	bridge, err := bridgeSettings{
 		listenTarget: rt.BridgeListenTarget,
-	}.newChatBridge(memoryStore, messageBus)
+	}.newChatBridge(memoryStore, messageBus, mediaStore)
 	if err != nil {
 		return err
 	}
@@ -507,6 +507,7 @@ type bridgeSettings struct {
 func (s bridgeSettings) newChatBridge(
 	lister bridge.TurnLister,
 	publisher bridge.InboundPublisher,
+	mediaStore q15media.Store,
 ) (*chatBridge, error) {
 	target := strings.TrimSpace(s.listenTarget)
 	if target == "" {
@@ -514,7 +515,10 @@ func (s bridgeSettings) newChatBridge(
 		return nil, nil
 	}
 	endpoint := bridge.NewAgentEndpoint(publisher)
-	server, err := bridge.NewServer(target, bridge.NewService(lister, endpoint))
+	server, err := bridge.NewServer(
+		target,
+		bridge.NewService(lister, endpoint, mediaStore),
+	)
 	if err != nil {
 		return nil, err
 	}

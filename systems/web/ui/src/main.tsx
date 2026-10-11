@@ -10,9 +10,12 @@ import "./styles.css";
 import { MotionProvider } from "./components/ui/motion";
 import { hasSession, ownerAuthentication } from "./infrastructure/auth";
 import { fetchHistory } from "./infrastructure/history";
+import { mediaAdapter } from "./infrastructure/media";
 import { authenticatedFetch, requestProof } from "./infrastructure/proof";
 import { logout } from "./infrastructure/session";
+import { dropExpiredShares, takeSharedFiles } from "./infrastructure/share-inbox";
 import { SocketTransport } from "./infrastructure/transport";
+import { shareNotice } from "./shared/share-inbox";
 
 async function previewStore() {
   const { MockTransport } = await import("./infrastructure/mock-transport");
@@ -29,12 +32,23 @@ function publishManifest() {
 }
 const preview = import.meta.env.DEV && new URLSearchParams(location.search).has("preview");
 const signedIn = preview || (await hasSession());
+const notice = signedIn
+  ? shareNotice(new URLSearchParams(location.search).get("share"))
+  : undefined;
+// A share the reader cannot use yet stays in the service worker's inbox: signing in reloads this
+// page, and the next start collects it. Anything nobody collected is dropped a day after it arrived.
+// Both touch Cache Storage, so neither is awaited: the shell has to reach the reader first.
+const collectShares = signedIn && !preview ? takeSharedFiles : undefined;
+void dropExpiredShares();
+if (notice !== undefined) history.replaceState(null, "", location.pathname);
 const liveTransport = new SocketTransport();
 const store = signedIn
   ? preview
     ? await previewStore()
-    : new ChatStore(liveTransport, (before, signal) =>
-        fetchHistory(before, signal, liveTransport.content),
+    : new ChatStore(
+        liveTransport,
+        (before, signal) => fetchHistory(before, signal, liveTransport.content),
+        mediaAdapter(liveTransport.content),
       )
   : undefined;
 const root = document.querySelector("#root");
@@ -43,7 +57,13 @@ createRoot(root).render(
   <StrictMode>
     <MotionProvider>
       {store ? (
-        <App store={store} preview={preview} {...(preview ? {} : { onLogout: logout })} />
+        <App
+          store={store}
+          preview={preview}
+          {...(preview ? {} : { onLogout: logout })}
+          {...(collectShares === undefined ? {} : { collectShares })}
+          {...(notice === undefined ? {} : { shareNotice: notice })}
+        />
       ) : (
         <Login authentication={ownerAuthentication} />
       )}

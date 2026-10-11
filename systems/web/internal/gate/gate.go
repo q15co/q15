@@ -80,7 +80,7 @@ func CheckOrigin(r *http.Request, origin string) bool {
 // Headers applies policy to successes, failures, assets and upgrades alike.
 func Headers(origin string, next http.Handler) http.Handler {
 	wsOrigin := "ws" + strings.TrimPrefix(origin, "http")
-	csp := "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' " + wsOrigin + "; base-uri 'none'; frame-ancestors 'none'; object-src 'none'"
+	csp := "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self'; connect-src 'self' " + wsOrigin + "; base-uri 'none'; frame-ancestors 'none'; object-src 'none'"
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Security-Policy", csp)
 		w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")

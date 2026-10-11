@@ -82,7 +82,7 @@ func TestRunRuntimeRequiresItsParts(t *testing.T) {
 // unset listen target disables the bridge instead of refusing to boot, so
 // deployments run unchanged until the socket volume exists.
 func TestNewChatBridgeDisabledWithoutTarget(t *testing.T) {
-	bridge, err := bridgeSettings{}.newChatBridge(nil, nil)
+	bridge, err := bridgeSettings{}.newChatBridge(nil, nil, nil)
 	if err != nil {
 		t.Fatalf("newChatBridge() error = %v", err)
 	}
@@ -99,7 +99,7 @@ func TestNewChatBridgeBuildsBothHalves(t *testing.T) {
 		listenTarget: "unix://" + filepath.Join(t.TempDir(), "bridge.sock"),
 	}
 
-	bridge, err := settings.newChatBridge(nil, nil)
+	bridge, err := settings.newChatBridge(nil, nil, nil)
 	if err != nil {
 		// Binding chgrps the socket to the bridge's group, which a test process
 		// that is neither root nor a member of that group cannot do. The bridge
@@ -129,7 +129,7 @@ func TestNewChatBridgeLeavesNoHalfBuiltBridge(t *testing.T) {
 		listenTarget: "unix://" + filepath.Join(t.TempDir(), "missing-dir", "bridge.sock"),
 	}
 
-	bridge, err := settings.newChatBridge(nil, nil)
+	bridge, err := settings.newChatBridge(nil, nil, nil)
 	if err == nil {
 		t.Fatal("newChatBridge() error = nil, want a bind failure")
 	}
@@ -149,7 +149,7 @@ func TestNewChatBridgeSurfacesConfiguredBindFailure(t *testing.T) {
 		listenTarget: "unix://" + filepath.Join(t.TempDir(), "missing-dir", "bridge.sock"),
 	}
 
-	_, err := settings.newChatBridge(nil, nil)
+	_, err := settings.newChatBridge(nil, nil, nil)
 	if err == nil {
 		t.Fatal("newChatBridge() error = nil, want bind failure")
 	}

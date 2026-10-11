@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/q15co/q15/libs/chat-contract/browser/protocol"
 	"github.com/q15co/q15/libs/chat-contract/chatpb"
 	"google.golang.org/grpc"
 )
@@ -92,7 +93,10 @@ func NewServer(target string, service *Service) (*Server, error) {
 		network,
 		address,
 	)
-	server := grpc.NewServer(grpc.MaxConcurrentStreams(serverMaxConcurrentStreams))
+	server := grpc.NewServer(
+		grpc.MaxConcurrentStreams(serverMaxConcurrentStreams),
+		grpc.MaxRecvMsgSize(protocol.MaxMediaWireBytes+1024),
+	)
 	chatpb.RegisterChatServiceServer(server, service)
 	return &Server{listener: listener, server: server, service: service}, nil
 }
@@ -101,6 +105,12 @@ func NewServer(target string, service *Service) (*Server, error) {
 // gRPC server, or until the listener fails. ctx is owned by the caller's
 // runtime worker loop.
 func (s *Server) Serve(ctx context.Context) error {
+	sweepCtx, cancelSweep := context.WithCancel(ctx)
+	defer cancelSweep()
+	if s.service != nil {
+		go s.sweepMedia(sweepCtx)
+	}
+
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- s.server.Serve(s.listener)
@@ -178,4 +188,28 @@ func resolveListenTarget(value string) (string, string, error) {
 			"grpc server sets no credentials and no interceptor",
 		value,
 	)
+}
+
+func (s *Server) sweepMedia(ctx context.Context) {
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+	for {
+		if err := s.service.SweepMedia(ctx, time.Now()); err != nil {
+			log.Printf("q15: media sweep failed: %v", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func newRPCServer(service *Service) *grpc.Server {
+	server := grpc.NewServer(
+		grpc.MaxConcurrentStreams(serverMaxConcurrentStreams),
+		grpc.MaxRecvMsgSize(protocol.MaxMediaWireBytes+1024),
+	)
+	chatpb.RegisterChatServiceServer(server, service)
+	return server
 }

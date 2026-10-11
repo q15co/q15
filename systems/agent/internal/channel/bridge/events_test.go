@@ -447,7 +447,7 @@ func TestServiceWatchEventsRejectsUnknownSessions(t *testing.T) {
 	publisher := &fakePublisher{}
 	client := startEventBridgeClient(
 		t,
-		NewService(&fakeTurnLister{}, NewAgentEndpoint(publisher)),
+		NewService(&fakeTurnLister{}, NewAgentEndpoint(publisher), nil),
 	)
 	for _, sessionID := range []string{"sess-404", "  "} {
 		watch, err := client.WatchEvents(
@@ -476,7 +476,7 @@ func TestServiceWatchEventsRejectsUnknownSessions(t *testing.T) {
 func TestServiceWatchEventsStreamsInOrderAndResumesWithoutGap(t *testing.T) {
 	publisher := &fakePublisher{}
 	endpoint := NewAgentEndpoint(publisher)
-	client := startEventBridgeClient(t, NewService(&fakeTurnLister{}, endpoint))
+	client := startEventBridgeClient(t, NewService(&fakeTurnLister{}, endpoint, nil))
 	ctx := context.Background()
 
 	opened, err := client.OpenSession(ctx, &chatpb.OpenSessionRequest{ChatId: "conv-7"})
@@ -622,7 +622,7 @@ func TestServiceWatchEventsStreamsInOrderAndResumesWithoutGap(t *testing.T) {
 func TestServiceWatchEventsNormalizesMalformedUTF8AtTheWireBoundary(t *testing.T) {
 	publisher := &fakePublisher{}
 	endpoint := NewAgentEndpoint(publisher)
-	client := startEventBridgeClient(t, NewService(&fakeTurnLister{}, endpoint))
+	client := startEventBridgeClient(t, NewService(&fakeTurnLister{}, endpoint, nil))
 	ctx := context.Background()
 
 	opened, err := client.OpenSession(ctx, &chatpb.OpenSessionRequest{ChatId: "conv-bytes"})
@@ -744,7 +744,7 @@ func TestServiceWatchEventsNormalizesMalformedUTF8AtTheWireBoundary(t *testing.T
 func TestServiceWatchEventsNoticesResyncWhenCursorFallsOutOfHistory(t *testing.T) {
 	publisher := &fakePublisher{}
 	endpoint := NewAgentEndpoint(publisher)
-	client := startEventBridgeClient(t, NewService(&fakeTurnLister{}, endpoint))
+	client := startEventBridgeClient(t, NewService(&fakeTurnLister{}, endpoint, nil))
 	ctx := context.Background()
 
 	opened, err := client.OpenSession(ctx, &chatpb.OpenSessionRequest{})
@@ -1477,7 +1477,7 @@ func TestRunSessionFinishClosesTheTerminalGap(t *testing.T) {
 func TestServiceWatchEventsCoalescesADeltaFloodIntoKeyedFrames(t *testing.T) {
 	publisher := &fakePublisher{}
 	endpoint := NewAgentEndpoint(publisher)
-	client := startEventBridgeClient(t, NewService(&fakeTurnLister{}, endpoint))
+	client := startEventBridgeClient(t, NewService(&fakeTurnLister{}, endpoint, nil))
 	ctx := context.Background()
 
 	opened, err := client.OpenSession(ctx, &chatpb.OpenSessionRequest{ChatId: "conv-flood"})

@@ -5,8 +5,9 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 
 import type { ClientFrame } from "../src/domain/protocol";
-import type { Frame, Page } from "../src/generated/protocol";
+import type { Attachment, Frame, Page } from "../src/generated/protocol";
 
+import { parseMediaFiles } from "../src/domain/media";
 import { parseClientFrame, parseSealed, parseWireFrame } from "../src/domain/protocol";
 import { frame } from "../src/infrastructure/envelope";
 import { parseShellManifest } from "../src/shared/shell-manifest";
@@ -77,9 +78,10 @@ async function backend(
   page: BrowserPage,
   history: Page = emptyHistory,
   onSend?: (send: (value: Frame, damage?: boolean) => void) => void,
+  paginate = false,
+  sealers = new Map<string, TestSealer>(),
 ) {
   const requests: ClientFrame[] = [];
-  const sealers = new Map<string, TestSealer>();
   await page.route("**/api/turns?**", (route) => {
     const before = new URL(route.request().url()).searchParams.get("after_seq");
     const response =
@@ -90,9 +92,16 @@ async function backend(
             head_seq: "30",
             has_more: false,
           };
+    const available = history.turns.filter(
+      (item) => before === "0" || Number(item.seq) < Number(before),
+    );
+    const limit = Number(new URL(route.request().url()).searchParams.get("limit"));
+    const selected = paginate
+      ? { ...history, turns: available.slice(0, limit), has_more: available.length > limit }
+      : response;
     const sealer = sealers.get(route.request().headers()["q15-channel"] ?? "");
     if (!sealer) throw new Error("Missing content session");
-    return route.fulfill({ json: sealer.seal(frame("history", response, sealer.channelID)) });
+    return route.fulfill({ json: sealer.seal(frame("history", selected, sealer.channelID)) });
   });
   await page.routeWebSocket("**/ws", (socket) => {
     let sealer: TestSealer | undefined;
@@ -237,6 +246,41 @@ test("prepending history preserves the visible message position and deep links p
   await expect(page.locator('[data-message-key="1:0"]')).toBeInViewport();
 });
 
+test("startup loads five complete turns and older pages load ten without moving the reader", async ({
+  page,
+}) => {
+  const queries: string[] = [];
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (url.pathname === "/api/turns") queries.push(url.search);
+  });
+  await backend(
+    page,
+    {
+      turns: Array.from({ length: 20 }, (_, index) => turn(30 - index)),
+      head_seq: "31",
+      has_more: true,
+    },
+    undefined,
+    true,
+  );
+  await page.goto("/");
+  const messages = page.locator("[data-user-turn], [data-agent-turn] > [data-message-key]");
+  await expect(messages).toHaveCount(10);
+  expect(queries).toEqual(["?after_seq=0&limit=5"]);
+  const anchor = page.locator('[data-message-key="30:1"]');
+  const before = await anchor.evaluate((node) => node.getBoundingClientRect().top);
+  const older = page.getByRole("button", { name: "Earlier messages" });
+  await older.evaluate((node: HTMLButtonElement) => node.click());
+  await expect(messages).toHaveCount(30);
+  expect(queries.at(-1)).toBe("?after_seq=26&limit=10");
+  expect(await anchor.evaluate((node) => node.getBoundingClientRect().top)).toBeCloseTo(before, 0);
+  await older.evaluate((node: HTMLButtonElement) => node.click());
+  await expect(messages).toHaveCount(40);
+  expect(queries.at(-1)).toBe("?after_seq=16&limit=10");
+  await expect(older).toBeHidden();
+});
+
 test("streaming preserves history anchors, deep links and disclosures through completion and resync", async ({
   page,
 }) => {
@@ -266,7 +310,7 @@ test("streaming preserves history anchors, deep links and disclosures through co
   required(deliver)(
     frame("delta", { msg, seq: "3", kind: "text", text: "Growing answer.\n\n".repeat(20) }),
   );
-  const answer = page.locator('article[data-message-key="31:-1"]');
+  const answer = page.locator('[data-agent-turn] > [data-message-key="31:-1"]');
   await expect(answer).toContainText("Growing answer.");
   const scroller = page.getByLabel("Conversation", { exact: true });
   await scroller.evaluate((node) => {
@@ -311,7 +355,7 @@ test("streaming preserves history anchors, deep links and disclosures through co
   required(deliver)(
     frame("msg.final", { msg, status: "completed", full_text: "Final canonical answer." }),
   );
-  await expect(page.locator('article[data-message-key="31:0"]')).toContainText(
+  await expect(page.locator('[data-agent-turn] > [data-message-key="31:0"]')).toContainText(
     "Final canonical answer.",
   );
   await expect(activity).toHaveAttribute("open", "");
@@ -514,17 +558,73 @@ function toolHistory(): Page {
   };
 }
 
-test("tool work is compact, paired, expandable, and separate from the final answer", async ({
+test("speaker turns use user bubbles and plain agent answers below compact tool work", async ({
   page,
 }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await backend(page, toolHistory());
   await page.goto("/");
   const activity = page.locator("[data-agent-activity]");
+  const agent = page.locator("[data-agent-turn]");
+  const expectBubble = async () => {
+    const bubble = await page.locator("[data-user-turn] > div").evaluate((node) => {
+      const user = node.parentElement;
+      const context = document.createElement("canvas").getContext("2d");
+      if (!user || !context) throw new Error("Expected a user bubble and canvas context.");
+      const luminance = (color: string) => {
+        context.fillStyle = color;
+        context.fillRect(0, 0, 1, 1);
+        const [r = 0, g = 0, b = 0] = Array.from(context.getImageData(0, 0, 1, 1).data)
+          .slice(0, 3)
+          .map((channel) => {
+            const value = channel / 255;
+            return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+          });
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      };
+      const style = getComputedStyle(node);
+      const foreground = luminance(style.color);
+      const background = luminance(style.backgroundColor);
+      return {
+        contrast:
+          (Math.max(foreground, background) + 0.05) / (Math.min(foreground, background) + 0.05),
+        rightGap: user.getBoundingClientRect().right - node.getBoundingClientRect().right,
+        width: node.getBoundingClientRect().width / user.getBoundingClientRect().width,
+      };
+    });
+    expect(bubble.contrast).toBeGreaterThanOrEqual(4.5);
+    expect(bubble.rightGap).toBeCloseTo(0, 0);
+    expect(bubble.width).toBeLessThan(1);
+    await expect(agent.locator(":scope > [data-message-key]")).toHaveCSS(
+      "background-color",
+      "rgba(0, 0, 0, 0)",
+    );
+  };
+  await expect(page.locator("[data-turn-identity]")).toHaveCount(0);
+  await expect(page.getByRole("article", { name: "Your message" })).toHaveCount(1);
+  await expect(page.getByRole("article", { name: "Agent response" })).toHaveCount(1);
+  await expect(agent.locator("[data-agent-activity]")).toHaveCount(1);
+  expect(await agent.evaluate((node) => [...node.children].map((child) => child.tagName))).toEqual([
+    "DETAILS",
+    "DIV",
+  ]);
   await expect(page.getByText("Used 2 tools")).toBeVisible();
   await expect(page.getByText("ready", { exact: true })).toBeVisible();
   await expect(page.getByLabel("Copy response")).toHaveCount(1);
   await expect(page.getByText("/workspace", { exact: true })).toBeHidden();
+  const spacing = await agent.evaluate((node) => {
+    const user = node.previousElementSibling;
+    const answer = node.querySelector(":scope > [data-message-key]");
+    const work = node.querySelector("[data-agent-activity]");
+    if (!user || !answer || !work) throw new Error("Expected a complete exchange.");
+    return {
+      betweenTurns: node.getBoundingClientRect().top - user.getBoundingClientRect().bottom,
+      insideTurn: answer.getBoundingClientRect().top - work.getBoundingClientRect().bottom,
+    };
+  });
+  expect(spacing.insideTurn).toBeGreaterThan(0);
+  expect(spacing.betweenTurns).toBeGreaterThan(spacing.insideTurn);
+  await expectBubble();
   await page.screenshot({ path: "test-results/activity-collapsed.png" });
   await page.getByText("Used 2 tools").click();
   await expect(page.getByText("I’ll check both.")).toBeVisible();
@@ -539,10 +639,17 @@ test("tool work is compact, paired, expandable, and separate from the final answ
   await page.screenshot({ path: "test-results/activity-desktop.png" });
   await page.getByRole("button", { name: /Switch to .* theme/u }).click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "latte");
+  await expectBubble();
   await page.setViewportSize({ width: 390, height: 844 });
+  await expectBubble();
   await expect(page.getByRole("complementary", { name: "Chat navigation" })).not.toBeInViewport();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: "test-results/activity-mobile.png" });
+  await activity.locator(":scope > summary").press("Enter");
+  await expect(activity).not.toHaveAttribute("open");
+  await page.screenshot({ path: "test-results/activity-mobile-collapsed.png" });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.screenshot({ path: "test-results/activity-latte-collapsed.png" });
 });
 
 test("deep links reveal completed tool outputs inside both disclosures", async ({ page }) => {
@@ -565,6 +672,9 @@ test("live work stays closed by default and tool updates preserve the reader's c
   await page.getByLabel("Message q15").fill("Check the workspace");
   await page.getByLabel("Send message", { exact: true }).click();
   await expect(page.getByLabel("Stop response")).toBeVisible();
+  const agent = page.locator("[data-agent-turn]");
+  await expect(agent).toHaveCount(1);
+  await expect(agent.locator(":scope > [data-message-key]")).toHaveCount(0);
   const call = { id: "live-command", name: "exec", arguments: '{"command":"pwd"}' };
   required(deliver)(
     frame("snapshot", {
@@ -572,6 +682,7 @@ test("live work stays closed by default and tool updates preserve the reader's c
       kind: "model_start",
       text: "",
       seq: "0",
+      model_ref: "model-a",
     }),
   );
   const activity = page.locator("[data-agent-activity]");
@@ -580,10 +691,20 @@ test("live work stays closed by default and tool updates preserve the reader's c
   required(deliver)(
     frame("delta", {
       msg: { turn: "31", ordinal: -1 },
+      kind: "reasoning",
+      text: "Considering the workspace.",
+      seq: "1",
+    }),
+  );
+  await expect(agent.locator(":scope > [data-message-key]")).toHaveCount(0);
+  await expect(page.locator('[id="message-31:-1"]')).toHaveCount(1);
+  required(deliver)(
+    frame("delta", {
+      msg: { turn: "31", ordinal: -1 },
       kind: "tool_call",
       text: "",
       call,
-      seq: "1",
+      seq: "2",
     }),
   );
   await expect(page.getByText("Using tools…", { exact: true })).toBeVisible();
@@ -605,7 +726,7 @@ test("live work stays closed by default and tool updates preserve the reader's c
       kind: "tool_result",
       text: "/workspace",
       call,
-      seq: "2",
+      seq: "3",
       is_error: false,
     }),
   );
@@ -617,7 +738,7 @@ test("live work stays closed by default and tool updates preserve the reader's c
       kind: "model_start",
       text: "",
       loop_turn: 1,
-      seq: "3",
+      seq: "4",
     }),
   );
   await expect(page.getByText("Completed", { exact: true })).toBeVisible();
@@ -632,6 +753,11 @@ test("live work stays closed by default and tool updates preserve the reader's c
   await expect(page.getByText("The workspace is ready.", { exact: true })).toBeVisible();
   await expect(page.locator("[data-agent-activity]")).not.toHaveAttribute("open");
   await expect(page.getByLabel("Copy response")).toHaveCount(1);
+  await expect(agent).toHaveCount(1);
+  expect(await agent.evaluate((node) => [...node.children].map((child) => child.tagName))).toEqual([
+    "DETAILS",
+    "DIV",
+  ]);
 });
 
 test("enlarged text preserves conversation space, navigation, and keyboard access", async ({
@@ -864,13 +990,98 @@ test("animated tool disclosures follow the latest message without moving a reade
   await expect(page.getByText(/More detail about the workspace/u).first()).toBeAttached();
   expect(await scroller.evaluate((node) => node.scrollTop)).toBeCloseTo(position, 0);
   await page.getByRole("button", { name: "Back to latest" }).click();
-  await expect.poll(gap).toBeLessThan(2);
+  const answerTop = () =>
+    page.locator('[data-agent-turn] > [data-message-key="31:-1"]').evaluate((node) => {
+      const conversation = node.closest('[aria-label="Conversation"]');
+      if (!conversation) throw new Error("Expected the conversation scroller.");
+      return node.getBoundingClientRect().top - conversation.getBoundingClientRect().top;
+    });
+  await expect.poll(answerTop).toBeCloseTo(0, 0);
   await summary.evaluate((node: HTMLElement) => node.click());
   await expect(page.locator('[data-tool-call-id="motion-command"] pre').last()).toBeHidden();
-  await expect.poll(gap).toBeLessThan(2);
+  await expect.poll(answerTop).toBeCloseTo(0, 0);
 });
 
-test("working glow and font axes animate without moving text, and settle with reduced motion", async ({
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 900 },
+  { name: "mobile", width: 390, height: 844 },
+])
+  test(`incoming answers keep their beginning visible on ${viewport.name}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+    const history: Page = {
+      turns: Array.from({ length: 20 }, (_, i) => turn(30 - i)),
+      head_seq: "31",
+      has_more: false,
+    };
+    let deliver: ((value: Frame) => void) | undefined;
+    await backend(page, history, (send) => {
+      deliver = send;
+    });
+    await page.goto("/");
+    await page.getByLabel("Message q15").fill("Explain the workspace");
+    await page.getByLabel("Send message", { exact: true }).click();
+    const msg = { turn: "31", ordinal: -1 };
+    required(deliver)(frame("snapshot", { msg, kind: "model_start", text: "", seq: "0" }));
+    required(deliver)(
+      frame("delta", {
+        msg,
+        kind: "reasoning",
+        text: "Considering the workspace.\n\n".repeat(50),
+        seq: "1",
+      }),
+    );
+    await page.locator("[data-agent-activity] > summary").click();
+    const short = "# Start of answer\n\nA short answer.";
+    required(deliver)(frame("delta", { msg, kind: "text", text: short, seq: "2" }));
+    const answer = page.locator('[data-agent-turn] > [data-message-key="31:-1"]');
+    await expect(answer.getByText("A short answer.", { exact: true })).toBeInViewport();
+    const details = "\n\nMore detail about the workspace and how its services work.".repeat(80);
+    required(deliver)(frame("delta", { msg, kind: "text", text: details, seq: "3" }));
+    const answerTop = () =>
+      page
+        .locator("[data-agent-turn] > [data-message-key]")
+        .last()
+        .evaluate((node) => {
+          const conversation = node.closest('[aria-label="Conversation"]');
+          if (!conversation) throw new Error("Expected the conversation scroller.");
+          return node.getBoundingClientRect().top - conversation.getBoundingClientRect().top;
+        });
+    await expect.poll(answerTop).toBeCloseTo(0, 0);
+    await expect(answer.getByRole("heading", { name: "Start of answer" })).toBeInViewport();
+    await expect(page.getByRole("button", { name: "Back to latest" })).toBeHidden();
+    const scroller = page.getByLabel("Conversation", { exact: true });
+    await scroller.evaluate((node) => {
+      node.scrollTop -= 250;
+    });
+    await expect(page.getByRole("button", { name: "Back to latest" })).toBeVisible();
+    const position = await scroller.evaluate((node) => node.scrollTop);
+    const more = "\n\nFurther detail.".repeat(20);
+    required(deliver)(frame("delta", { msg, kind: "text", text: more, seq: "4" }));
+    await expect(answer).toContainText("Further detail.");
+    expect(await scroller.evaluate((node) => node.scrollTop)).toBeCloseTo(position, 0);
+    await page.getByRole("button", { name: "Back to latest" }).click();
+    await expect.poll(answerTop).toBeCloseTo(0, 0);
+    const completed = `# Start of final answer\n\n${details}${more}`;
+    history.turns.unshift({
+      seq: "31",
+      created_at: "2026-10-01T12:00:00Z",
+      messages: [
+        {
+          ordinal: 0,
+          role: "assistant",
+          parts: [{ ordinal: 0, part_type: "text", disposition: "final", text: completed }],
+        },
+      ],
+    });
+    required(deliver)(frame("msg.final", { msg, status: "completed", full_text: completed }));
+    await expect(page.getByRole("heading", { name: "Start of final answer" })).toBeInViewport();
+    await expect(page.locator('[data-agent-turn] > [data-message-key="31:0"]')).toBeAttached();
+    await expect.poll(answerTop).toBeCloseTo(0, 0);
+    await page.screenshot({ path: `test-results/answer-top-${viewport.name}.png` });
+  });
+
+test("working status uses one surface and a stationary pulse that respects reduced motion", async ({
   page,
 }) => {
   await page.emulateMedia({ reducedMotion: "no-preference" });
@@ -885,31 +1096,38 @@ test("working glow and font axes animate without moving text, and settle with re
   const activity = page.locator("[data-agent-activity]");
   const summary = activity.locator(":scope > summary");
   const label = summary.getByText("Thinking…", { exact: true });
-  const floating = label.locator("..");
+  const icon = summary.locator("svg").first();
   await expect(activity).not.toHaveAttribute("open");
   await expect(activity).toHaveAttribute("data-phase", "thinking");
   const before = await label.evaluate((node) => ({
     axes: getComputedStyle(node).fontVariationSettings,
     width: node.getBoundingClientRect().width,
+    top: node.getBoundingClientRect().top,
   }));
   await expect
-    .poll(() => label.evaluate((node) => getComputedStyle(node).fontVariationSettings))
-    .not.toBe(before.axes);
+    .poll(() => icon.evaluate((node) => Number(getComputedStyle(node).opacity)))
+    .toBeLessThan(0.9);
+  expect(await label.evaluate((node) => getComputedStyle(node).fontVariationSettings)).toBe(
+    before.axes,
+  );
+  expect(await label.evaluate((node) => node.getBoundingClientRect().top)).toBeCloseTo(
+    before.top,
+    1,
+  );
   expect(await label.evaluate((node) => node.getBoundingClientRect().width)).toBeCloseTo(
     before.width,
     1,
   );
   await expect
-    .poll(() => floating.evaluate((node) => getComputedStyle(node).transform))
-    .not.toBe("none");
-  expect(
-    await summary.evaluate((node) => Number(getComputedStyle(node, "::before").opacity)),
-  ).toBeGreaterThan(0);
+    .poll(() => label.locator("..").evaluate((node) => getComputedStyle(node).transform))
+    .toBe("none");
+  await expect(summary).toHaveCSS("border-top-width", "0px");
+  await expect(summary).toHaveCSS("box-shadow", "none");
+  expect(await summary.evaluate((node) => getComputedStyle(node, "::before").content)).toBe("none");
+  await page.screenshot({ path: "test-results/activity-thinking.png" });
   await page.emulateMedia({ reducedMotion: "reduce" });
   await expect.poll(() => page.evaluate(() => document.getAnimations().length)).toBe(0);
-  await expect
-    .poll(() => floating.evaluate((node) => getComputedStyle(node).transform))
-    .toBe("none");
+  await expect.poll(() => icon.evaluate((node) => getComputedStyle(node).opacity)).toBe("1");
   const stationary = await label.evaluate(async (node) => {
     const samples: string[] = [];
     for (let i = 0; i < 6; i++) {
@@ -924,11 +1142,15 @@ test("working glow and font axes animate without moving text, and settle with re
   });
   expect(new Set(stationary).size).toBe(1);
   const msg = { turn: "31", ordinal: -1 };
-  const call = { id: "glow-command", name: "exec", arguments: '{"command":"pwd"}' };
+  const call = { id: "pulse-command", name: "exec", arguments: '{"command":"pwd"}' };
   required(deliver)(frame("delta", { msg, kind: "tool_call", text: "", call, seq: "1" }));
   await expect(activity).toHaveAttribute("data-phase", "tool");
   await expect(activity).not.toHaveAttribute("open");
   await expect(page.getByText("Using tools…", { exact: true })).toBeVisible();
+  await page.screenshot({ path: "test-results/activity-tools.png" });
+  await page.getByRole("button", { name: /Switch to .* theme/u }).click();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({ path: "test-results/activity-tools-mobile.png" });
   await page.emulateMedia({ reducedMotion: "no-preference" });
   await expect
     .poll(() =>
@@ -984,4 +1206,201 @@ test("a damaged sealed frame is visible while later content uses the same socket
   await page.getByRole("button", { name: "Send message", exact: true }).click();
   await expect.poll(() => requests.filter((request) => request.type === "msg.send").length).toBe(2);
   expect(requests.filter((request) => request.type === "hello")).toHaveLength(1);
+});
+
+test("held attachments fit above the message in both palettes and on narrow screens", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const requests = await backend(page);
+  await page.goto("/");
+  await expect(page.getByRole("button", { name: "Attach files" })).toBeEnabled();
+  const pdfName = "2025_komprimierte_druckvorschau_5899504.pdf";
+  await page.getByLabel("Choose attachments").setInputFiles([
+    { name: pdfName, mimeType: "application/pdf", buffer: Buffer.alloc(1536 * 1024) },
+    { name: "holiday-photo.png", mimeType: "image/png", buffer: Buffer.alloc(96 * 1024) },
+    { name: "voice-note.ogg", mimeType: "audio/ogg", buffer: Buffer.alloc(24 * 1024) },
+  ]);
+  const tray = page.getByRole("region", { name: "Selected attachments" });
+  await expect(tray.getByText(pdfName)).toBeVisible();
+  await expect(tray.getByText("PDF · 1.5 MiB")).toBeVisible();
+  await expect(page.getByLabel(`Remove ${pdfName}`)).toBeEnabled();
+  await page.locator("form").screenshot({ path: "test-results/attachments-mocha.png" });
+  await page.getByRole("button", { name: /Switch to .* theme/u }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "latte");
+  await page.locator("form").screenshot({ path: "test-results/attachments-latte.png" });
+  await page.setViewportSize({ width: 320, height: 640 });
+  await expect(page.getByLabel("Message q15")).toBeInViewport();
+  await expect(page.getByRole("button", { name: "Send message", exact: true })).toBeInViewport();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.locator("form").screenshot({ path: "test-results/attachments-mobile.png" });
+  await page.getByLabel(`Remove ${pdfName}`).click();
+  await expect(tray.getByText(pdfName)).toHaveCount(0);
+  await page.getByLabel("Choose attachments").setInputFiles(
+    Array.from({ length: 14 }, (_, index) => ({
+      name: `a-very-long-file-name-to-check-composer-overflow-${index}.txt`,
+      mimeType: "text/plain",
+      buffer: Buffer.alloc(1),
+    })),
+  );
+  await expect(page.getByLabel("Message q15")).toBeInViewport();
+  await expect(page.getByRole("button", { name: "Send message", exact: true })).toBeInViewport();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  expect(requests.filter((request) => request.type === "msg.send")).toHaveLength(0);
+});
+
+test("uploads on send, renders a resized image and preserves sealed media across reload", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const sealers = new Map<string, TestSealer>();
+  const history: Page = { turns: [], head_seq: "0", has_more: false };
+  const files = new Map<string, { filename: string; contentType: string; data: Buffer }>();
+  let uploads = 0;
+  let parts: Attachment[] = [];
+  let completeResponse: (() => void) | undefined;
+  await page.route("**/api/media", async (route) => {
+    uploads++;
+    const headers = route.request().headers();
+    expect(headers["q15-proof"]).toBeDefined();
+    const sealer = required(sealers.get(headers["q15-channel"] ?? ""));
+    const wire = parseWireFrame(required(route.request().postData()));
+    expect(JSON.stringify(wire)).not.toContain("picked.png");
+    const decoded = sealer.openBytes(wire);
+    expect(decoded.contentType).toBe("application/vnd.q15.media");
+    const headerLength = decoded.bytes.readUInt32BE(0);
+    const descriptors: unknown = JSON.parse(decoded.bytes.subarray(4, 4 + headerLength).toString());
+    const metadata = parseMediaFiles(descriptors);
+    let offset = 4 + headerLength;
+    parts = metadata.map((file) => {
+      const data = decoded.bytes.subarray(offset, offset + file.size);
+      offset += file.size;
+      const ref = "media://sha256/" + createHash("sha256").update(data).digest("hex");
+      files.set(ref, { filename: file.filename, contentType: file.content_type, data });
+      return {
+        part_type: "media",
+        media_kind: file.content_type === "image/png" ? "image" : "document",
+        media_ref: ref,
+        filename: file.filename,
+        content_type: file.content_type,
+      };
+    });
+    await route.fulfill({ json: sealer.seal(frame("media.done", { parts }, wire.id)) });
+  });
+  await page.route("**/api/media/*", async (route) => {
+    const sealer = required(sealers.get(route.request().headers()["q15-channel"] ?? ""));
+    const ref = "media://sha256/" + new URL(route.request().url()).pathname.split("/").at(-1);
+    const file = required(files.get(ref));
+    const header = Buffer.from(
+      JSON.stringify([
+        { filename: file.filename, content_type: file.contentType, size: file.data.length },
+      ]),
+    );
+    const prefix = Buffer.alloc(4);
+    prefix.writeUInt32BE(header.length);
+    await route.fulfill({
+      json: sealer.seal(
+        frame("media.get", {}, ref),
+        "application/vnd.q15.media",
+        Buffer.concat([prefix, header, file.data]),
+      ),
+    });
+  });
+  const requests = await backend(
+    page,
+    history,
+    (send) => {
+      send(
+        frame("delta", {
+          msg: { turn: "31", ordinal: -1 },
+          seq: "1",
+          kind: "text",
+          text: "Reading your attachment…",
+        }),
+      );
+      completeResponse = () => {
+        history.head_seq = "31";
+        history.turns = [
+          {
+            seq: "31",
+            created_at: "2026-10-08T00:00:00Z",
+            messages: [
+              {
+                ordinal: 0,
+                role: "user",
+                parts: parts.map((part, ordinal) => ({
+                  ordinal,
+                  part_type: "media",
+                  media_kind: part.media_kind,
+                  media_ref: part.media_ref,
+                })),
+              },
+            ],
+          },
+        ];
+        send(
+          frame("msg.final", {
+            msg: { turn: "31", ordinal: -1 },
+            status: "completed",
+            full_text: "Attachment received.",
+          }),
+        );
+      };
+    },
+    false,
+    sealers,
+  );
+  await page.goto("/");
+  await expect(page.getByRole("button", { name: "Attach files" })).toBeEnabled();
+  const encoded = await page.evaluate(() => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 4096;
+    canvas.height = 2048;
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Canvas unavailable");
+    context.fillStyle = "#a6e3a1";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/png").split(",")[1];
+  });
+  await page.getByLabel("Choose attachments").setInputFiles([
+    {
+      name: "picked.png",
+      mimeType: "image/png",
+      buffer: Buffer.from(required(encoded), "base64"),
+    },
+    { name: "report.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.7\nreport\n") },
+  ]);
+  expect(uploads).toBe(0);
+  await page.getByRole("button", { name: "Send message", exact: true }).click();
+  await expect(page.getByText("Reading your attachment…", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Stop response" })).toBeVisible();
+  const image = page.getByRole("img", { name: "picked.png" });
+  await expect(image).toBeVisible();
+  expect(
+    await image.evaluate((element) =>
+      element instanceof HTMLImageElement ? element.naturalWidth : 0,
+    ),
+  ).toBe(2048);
+  expect(requests.find((request) => request.type === "msg.send")?.payload).toMatchObject({
+    text: "",
+    parts,
+  });
+  expect(uploads).toBe(1);
+  await expect(page.getByText("report.pdf", { exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Download", exact: true })).toHaveCount(2);
+  await page.screenshot({ path: "test-results/attachments-streaming-mocha.png" });
+  await page.getByRole("button", { name: /Switch to .* theme/u }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "latte");
+  await page.screenshot({ path: "test-results/attachments-streaming-latte.png" });
+  await page.setViewportSize({ width: 320, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await expect(page.getByRole("button", { name: "Stop response" })).toBeInViewport();
+  await page.screenshot({ path: "test-results/attachments-streaming-mobile.png" });
+  required(completeResponse)();
+  await expect(page.getByRole("button", { name: "Stop response" })).toHaveCount(0);
+  await expect(image).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole("img", { name: "picked.png" })).toBeVisible();
+  await expect(page.getByText("report.pdf", { exact: true })).toBeVisible();
+  expect(uploads).toBe(1);
 });

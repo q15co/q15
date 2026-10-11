@@ -20,7 +20,7 @@ function useStreamingText(text: string, streaming: boolean) {
       timer.current = setTimeout(() => {
         timer.current = undefined;
         commit();
-      }, 40);
+      }, 24);
     }
   }, [text, rendered, streaming]);
   useEffect(() => () => clearTimeout(timer.current), []);

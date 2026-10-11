@@ -1,6 +1,15 @@
 import type { ShellManifest } from "../src/shared/shell-manifest";
 
 import { requestProof } from "../src/infrastructure/proof";
+import {
+  ShareCacheName,
+  ShareField,
+  ShareFilenameHeader,
+  SharePath,
+  ShareRejected,
+  shareEntryPath,
+  shareFits,
+} from "../src/shared/share-inbox";
 
 declare const self: ServiceWorkerGlobalScope;
 // Vite injects the completed build's exact shell allow-list and content digest.
@@ -70,14 +79,75 @@ async function asset(request: Request, path: string) {
   return (await cache.match(path)) ?? signedFetch(request);
 }
 
+/** The share sheet posts here, so the reader lands in the app with the files already in hand. */
+function isSharePost(request: Request, url: URL): boolean {
+  return (
+    request.method === "POST" && url.origin === self.location.origin && url.pathname === SharePath
+  );
+}
+
+function shareRedirect(request: Request, target: string): Response {
+  return Response.redirect(new URL(target, request.url).href, 303);
+}
+
+/** Keeps the shared files in the app's inbox, and answers whether all of them are there. */
+async function keepShare(request: Request, receivedAt: number): Promise<boolean> {
+  try {
+    const form = await request.formData();
+    const files = form.getAll(ShareField).filter((value): value is File => value instanceof File);
+    if (shareFits(files.map((file) => file.size))) {
+      const inbox = await caches.open(ShareCacheName);
+      const staged = files.map((file, index) => ({
+        path: shareEntryPath(receivedAt, index),
+        file,
+      }));
+      try {
+        await Promise.all(
+          staged.map(({ path, file }) =>
+            inbox.put(
+              path,
+              new Response(file, {
+                headers: { [ShareFilenameHeader]: encodeURIComponent(file.name) },
+              }),
+            ),
+          ),
+        );
+        return true;
+      } catch {
+        // Keep the inbox honest: a share is either all there or not kept at all.
+        await Promise.all(staged.map(({ path }) => inbox.delete(path)));
+        return false;
+      }
+    }
+    return false;
+  } catch {
+    // A share that cannot be read still lands the reader in the app.
+    return false;
+  }
+}
+
+async function receiveShare(request: Request, receivedAt: number): Promise<Response> {
+  // A cross-site post is another page's form submission rather than the share sheet: answer it so no
+  // reader ever meets a 404 page, and keep nothing.
+  if (request.headers.get("sec-fetch-site") === "cross-site") return shareRedirect(request, "/");
+  const kept = await keepShare(request, receivedAt);
+  return shareRedirect(request, kept ? "/" : `/?share=${ShareRejected}`);
+}
+
 self.addEventListener("fetch", (event) => {
   const request = event.request;
   const url = new URL(request.url);
-  const path = request.mode === "navigate" && url.pathname === "/" ? "/index.html" : url.pathname;
+  if (isSharePost(request, url)) {
+    event.respondWith(receiveShare(request, Date.now()));
+    return;
+  }
+  // The app root is the shell, whatever query string the reader arrived with.
+  const navigating = request.mode === "navigate" && url.pathname === "/";
+  const path = navigating ? "/index.html" : url.pathname;
   if (
     request.method !== "GET" ||
     url.origin !== self.location.origin ||
-    url.search !== "" ||
+    (!navigating && url.search !== "") ||
     !shell.has(path)
   )
     return;

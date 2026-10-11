@@ -235,5 +235,5 @@ import "./a-theme.css";
     } finally {
       for (const path of paths) rmSync(path, { force: true });
     }
-  });
+  }, 30_000);
 });

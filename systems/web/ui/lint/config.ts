@@ -288,6 +288,17 @@ export const lint = {
       },
     },
     {
+      files: ["src/testing/content-peer.ts"],
+      rules: {
+        "eslint/no-restricted-imports": imports([
+          "node:crypto",
+          "../generated/**",
+          "../domain/protocol.ts",
+          "../infrastructure/envelope.ts",
+        ]),
+      },
+    },
+    {
       files: ["src/testing/session-key.ts"],
       rules: {
         "eslint/no-restricted-imports": imports([

@@ -23,7 +23,7 @@ import (
 func TestServiceWatchEventsKeyframesAStreamThatNeverPauses(t *testing.T) {
 	publisher := &fakePublisher{}
 	endpoint := NewAgentEndpoint(publisher)
-	client := startEventBridgeClient(t, NewService(&fakeTurnLister{}, endpoint))
+	client := startEventBridgeClient(t, NewService(&fakeTurnLister{}, endpoint, nil))
 	ctx := context.Background()
 
 	opened, err := client.OpenSession(ctx, &chatpb.OpenSessionRequest{ChatId: "conv-relentless"})

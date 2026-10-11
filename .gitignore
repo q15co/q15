@@ -19,6 +19,10 @@ systems/web/ui/playwright-report/
 systems/web/ui/coverage/
 systems/web/ui/benchmark-dist/
 systems/web/ui/benchmark-results/
+# Raw benchmark output is regenerated locally; only the written reports are committed.
+systems/web/ui/benchmark/results/*.json
+systems/web/ui/benchmark/results/*.json.gz
+systems/web/ui/benchmark/results/*-traces/
 deploy/compose/secrets/*
 !deploy/compose/secrets/*.example
 !deploy/compose/secrets/README.md
