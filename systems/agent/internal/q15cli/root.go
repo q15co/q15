@@ -3,57 +3,44 @@
 //
 // The package imports the agent's own configuration type and validation, so a
 // configuration the CLI writes is one the agent accepts; that is why the CLI
-// lives inside the agent module rather than in one of its own. Dispatch stays
-// on the standard library: a verb is looked up and handed its own arguments,
-// and no CLI framework is involved.
+// lives inside the agent module rather than in one of its own. Dispatch stays on
+// the standard library and on the registry in command.go: a verb is looked up
+// there and handed the arguments that follow its name, no CLI framework is
+// involved, and the help is generated from that same list rather than written
+// out beside it.
 package q15cli
 
 import (
-	"fmt"
-	"io"
+	"context"
+
+	"github.com/q15co/q15/systems/agent/internal/cli"
 )
 
 // Run executes a single CLI invocation.
 //
-// release is the identifier the binary was built with, and only `version`
-// reports it, verbatim. stdout carries a command's output. Bare `q15` prints
-// the command list to stdout and reports success, because a bare invocation is
-// a request for help; an unrecognised command prints the same list to stderr
-// and returns an error.
-//
-// Run takes no context on purpose: every command here answers immediately.
-// The verbs that shell out to systemd and podman take one when they arrive.
-func Run(release string, args []string, stdout io.Writer, stderr io.Writer) error {
-	if len(args) == 0 {
-		writeUsage(stdout)
+// env carries the streams and the release the binary was built with, so nothing
+// here reaches a global. Bare `q15` prints the command list to stdout and
+// reports success, because a bare invocation is a request for help; an
+// unrecognised command prints the same list to stderr and returns a usage error,
+// which main turns into exit status 2 rather than the 1 a failed command gets.
+func Run(ctx context.Context, env cli.Env, args []string) error {
+	env = env.WithDefaults()
+
+	if len(args) == 0 || asksForHelp(args[0]) {
+		writeUsage(env.Stdout)
 		return nil
 	}
 
-	switch args[0] {
-	case "version":
-		return runVersion(release, args[1:], stdout)
-	case "help", "-h", "--help":
-		writeUsage(stdout)
-		return nil
-	default:
-		writeUsage(stderr)
-		return fmt.Errorf("unknown command %q", args[0])
+	cmd, ok := lookup(args[0])
+	if !ok {
+		writeUsage(env.Stderr)
+		return cli.Usagef("unknown command %q", args[0])
 	}
+	return cmd.run(ctx, env, args[1:])
 }
 
-// writeUsage prints the command list. It goes to stdout for a requested help
-// and to stderr for an unrecognised command.
-func writeUsage(w io.Writer) {
-	fmt.Fprint(w, `q15 renders and drives a q15 stack.
-
-usage:
-  q15 <command> [arguments]
-
-commands:
-  version   print the release, configuration schema and state layout versions
-  help      print this message
-
-The install commands (init, up, down, status, logs, doctor, secret, origin)
-arrive with the install slice; run 'q15 version' to see what this build is.
-`)
+// asksForHelp reports whether a word asks for the command list rather than
+// naming a verb.
+func asksForHelp(word string) bool {
+	return word == "help" || word == "-h" || word == "--help"
 }

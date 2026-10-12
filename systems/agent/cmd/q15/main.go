@@ -2,9 +2,13 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
+	"github.com/q15co/q15/systems/agent/internal/cli"
 	"github.com/q15co/q15/systems/agent/internal/q15cli"
 )
 
@@ -14,8 +18,21 @@ import (
 var q15Release = "dev"
 
 func main() {
-	if err := q15cli.Run(q15Release, os.Args[1:], os.Stdout, os.Stderr); err != nil {
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	env := cli.Env{
+		Stdin:   os.Stdin,
+		Stdout:  os.Stdout,
+		Stderr:  os.Stderr,
+		Release: q15Release,
+	}
+
+	// main is the only place the process exits, and the status comes from the
+	// error: 2 for a command line that is wrong in shape, 1 for a command that
+	// ran and failed.
+	if err := q15cli.Run(ctx, env, os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		os.Exit(cli.ExitCode(err))
 	}
 }

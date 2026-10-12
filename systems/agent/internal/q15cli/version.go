@@ -1,9 +1,10 @@
 package q15cli
 
 import (
+	"context"
 	"fmt"
-	"io"
 
+	"github.com/q15co/q15/systems/agent/internal/cli"
 	"github.com/q15co/q15/systems/agent/internal/config"
 )
 
@@ -19,13 +20,16 @@ const StateLayoutVersion = 1
 // written configuration changes shape, and the state layout version moves when
 // the state directory does. The order is part of the contract, because a bug
 // report quotes these three lines.
-func runVersion(release string, args []string, stdout io.Writer) error {
+//
+// An argument is refused rather than ignored: a mistyped invocation should fail
+// where the mistake is, not print something plausible.
+func runVersion(_ context.Context, env cli.Env, args []string) error {
 	if len(args) > 0 {
-		return fmt.Errorf("version takes no arguments, got %q", args[0])
+		return cli.Usagef("version takes no arguments, got %q", args[0])
 	}
 
-	fmt.Fprintf(stdout, "release: %s\n", release)
-	fmt.Fprintf(stdout, "config_schema: %d\n", config.SchemaVersion)
-	fmt.Fprintf(stdout, "state_layout: %d\n", StateLayoutVersion)
+	fmt.Fprintf(env.Stdout, "release: %s\n", env.Release)
+	fmt.Fprintf(env.Stdout, "config_schema: %d\n", config.SchemaVersion)
+	fmt.Fprintf(env.Stdout, "state_layout: %d\n", StateLayoutVersion)
 	return nil
 }
