@@ -186,8 +186,12 @@ test("host enrollment, passkey sign-in, protected data and logout use the real g
   }
 
   const capturedProof = required(history.request().headers()["q15-proof"]);
-  for (const path of ["/", "/api/turns", "/ws", "/manifest.webmanifest", "/icon.svg"])
+  for (const path of ["/", "/api/turns", "/ws"])
     expect((await context.request.get(origin + path)).status()).toBe(401);
+  // The install assets are public on purpose: a gated manifest means no WebAPK,
+  // and only a WebAPK can appear in the Android share sheet.
+  for (const path of ["/manifest.webmanifest", "/icon-192.png", "/icon-512.png", "/icon.svg"])
+    expect((await context.request.get(origin + path)).status()).toBe(200);
   expect(
     (
       await context.request.get(history.url(), { headers: { "Q15-Proof": capturedProof } })
