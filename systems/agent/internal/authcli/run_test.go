@@ -20,7 +20,7 @@ func TestRunPrintsUsageWithNoArgs(t *testing.T) {
 	if err := Run(context.Background(), env, nil); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if !strings.Contains(stdout.String(), "q15-auth login") {
+	if !strings.Contains(stdout.String(), "q15 auth login") {
 		t.Fatalf("unexpected usage output: %q", stdout.String())
 	}
 	if stderr.Len() != 0 {
@@ -44,7 +44,7 @@ func TestRunUnknownCommandIsAUsageError(t *testing.T) {
 	if stdout.Len() != 0 {
 		t.Fatalf("stdout = %q, want empty", stdout.String())
 	}
-	if !strings.Contains(stderr.String(), "q15-auth login") {
+	if !strings.Contains(stderr.String(), "q15 auth login") {
 		t.Fatalf("stderr = %q, want the usage", stderr.String())
 	}
 }

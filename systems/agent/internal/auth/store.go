@@ -70,7 +70,7 @@ func defaultAuthStorePath() (string, error) {
 	return q15paths.DefaultAuthPath()
 }
 
-// DefaultStorePath resolves the default auth.json location for q15-auth.
+// DefaultStorePath resolves the default auth.json location for the q15 CLI.
 func DefaultStorePath() (string, error) {
 	return defaultAuthStorePath()
 }

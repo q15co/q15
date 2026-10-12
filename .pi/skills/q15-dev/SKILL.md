@@ -17,7 +17,7 @@ ad hoc commands.
   - `internal/tools/exec/session_tools.go` — exec tool surface (exec_start/read/write/kill).
   - `internal/cognition/` — cognition, triggers, replay/checkpoint logic.
   - `internal/skills/builtins/` — built-in skills (skill-creator, skill-discovery).
-  - `cmd/q15-auth` — bootstrap tool that generates `auth.json` (`make build-auth`).
+  - `cmd/q15` — the management CLI, including the auth verbs that generate `auth.json`.
 - `systems/exec` — exec sandbox service (`internal/service/manager.go` is the core).
 - `systems/proxy` — proxy service.
 - `libs/exec-contract`, `libs/proxy-contract` — shared contracts, tested first by `make test`.
