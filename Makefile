@@ -95,6 +95,7 @@ lint: project-setup
 	SKIP_TYPESCRIPT=1 ./scripts/lint-changed.sh --tracked
 	./scripts/go-static-checks.sh
 	./scripts/check-ui-fixtures.sh
+	./scripts/check-install-key.sh
 
 ui-install: project-setup
 	./scripts/check-ui-tool-versions.sh

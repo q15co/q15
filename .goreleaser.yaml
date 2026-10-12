@@ -37,6 +37,28 @@ checksum:
   name_template: checksums.txt
   algorithm: sha256
 
+signs:
+  # Every archive is signed with minisign, against the release key in
+  # deploy/install/q15.pub, which is the key install.sh embeds. The release job
+  # will not run unless the secret key it signs with derives that public key, so
+  # a published release is always one the installer accepts.
+  #
+  # -W is passed because the key has no password: minisign cannot read one that
+  # is not typed, so a signature job cannot use a protected key.
+  - id: minisign
+    cmd: minisign
+    artifacts: archive
+    signature: "${artifact}.minisig"
+    args:
+      - "-S"
+      - "-W"
+      - "-s"
+      - "{{ .Env.MINISIGN_KEY_PATH }}"
+      - "-x"
+      - "${signature}"
+      - "-m"
+      - "${artifact}"
+
 changelog:
   use: github-native
   sort: asc
