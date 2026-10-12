@@ -1,4 +1,7 @@
-name: Release q15-auth
+# One workflow publishes both release binaries. q15-auth and the q15 CLI come
+# from a single GoReleaser config, so the tag is the version for both and the
+# two can never be published at different versions.
+name: Release
 
 on:
   push:
@@ -9,7 +12,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: release-auth-${{ github.ref }}
+  group: release-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -71,8 +74,8 @@ jobs:
           version: "~> v2"
           args: check
 
-  release-auth:
-    name: Release q15-auth
+  release-binaries:
+    name: Release q15-auth and q15
     needs: verify
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -89,7 +92,7 @@ jobs:
         with:
           go-version-file: go.work
 
-      - name: Release q15-auth archives
+      - name: Release both binaries from one GoReleaser config
         uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser

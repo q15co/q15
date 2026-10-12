@@ -1,5 +1,5 @@
 version: 2
-project_name: q15-auth
+project_name: q15
 
 builds:
   - id: q15-auth
@@ -17,13 +17,41 @@ builds:
     flags:
       - -trimpath
 
+  # The management CLI ships for Linux only: it drives a podman stack through
+  # the user's systemd, so there is no runtime to target elsewhere. The release
+  # identifier is linked in, which is what `q15 version` reports.
+  - id: q15
+    dir: systems/agent
+    main: ./cmd/q15
+    binary: q15
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -X main.q15Release={{ .Version }}
+
 archives:
   - id: q15-auth
     ids:
       - q15-auth
     formats:
       - tar.gz
-    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    name_template: "q15-auth_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+
+  - id: q15
+    ids:
+      - q15
+    formats:
+      - tar.gz
+    name_template: "q15_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - README.md
 
