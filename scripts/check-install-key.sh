@@ -40,3 +40,22 @@ if [[ ${script_pin} != "${workflow_pin}" ]]; then
 fi
 
 log "install.sh embeds the checked-in release key and the release verifier pin"
+
+# macOS is installed from the same release, so the installer's darwin pins and
+# the release matrix have to agree: a platform the installer installs but the
+# config does not build is a 404 for the operator, and a verifier pin with no
+# download behind it is the same hole.
+goreleaser_file="${REPO_ROOT}/.goreleaser.yaml"
+[[ -f ${goreleaser_file} ]] || die "missing .goreleaser.yaml"
+
+for pin in MINISIGN_MACOS_ZIP_SHA256 MINISIGN_MACOS_SHA256; do
+	grep -q -E "^${pin}='[0-9a-f]{64}'$" "${install_script}" ||
+		die "install.sh does not pin ${pin}, which its macOS path needs"
+done
+
+grep -q -E '^ +- darwin$' "${goreleaser_file}" ||
+	die "the release builds no darwin archive, so install.sh has nothing to install on macOS"
+grep -q -F 'name_template: "q15_{{ .Version }}_{{ .Os }}_{{ .Arch }}"' "${goreleaser_file}" ||
+	die "install.sh asks for q15_<version>_<os>_<arch>.tar.gz; keep the archive name template in step"
+
+log "the macOS verifier pins and the release matrix agree"

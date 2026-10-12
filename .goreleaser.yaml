@@ -3,10 +3,12 @@ project_name: q15
 
 builds:
   # One binary ships. It carries the management verbs, the configuration truth
-  # and the provider-credential verbs, and it is Linux only: it drives a podman
-  # stack through the user's systemd, so there is no runtime to target
-  # elsewhere. The release identifier is linked in, which is what `q15 version`
-  # reports.
+  # and the provider-credential verbs. Linux is the platform the stack runs on:
+  # the management verbs drive podman through the user's systemd. macOS on Apple
+  # silicon is in progress and gets the same binary for the verbs that do not
+  # need a stack, which is why darwin is in the matrix; the Go linker ad-hoc
+  # signs darwin/arm64, so that build runs without a developer certificate. The
+  # release identifier is linked in, which is what `q15 version` reports.
   - id: q15
     dir: systems/agent
     main: ./cmd/q15
@@ -15,6 +17,7 @@ builds:
       - CGO_ENABLED=0
     goos:
       - linux
+      - darwin
     goarch:
       - amd64
       - arm64
