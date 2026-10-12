@@ -1,33 +1,33 @@
-package q15cli
+package cli
 
 import (
 	"context"
 	"fmt"
 	"io"
 
-	"github.com/q15co/q15/systems/agent/internal/cli"
+	"github.com/q15co/q15/systems/agent/internal/command"
 )
 
-// command is one verb at the root of the CLI.
-type command struct {
-	// name is the word that selects the verb on the command line.
+// A verb is one thing this command line can do at its root: `version`, `auth`,
+// and later `init`, `up`, `status`, `doctor`, `secret` and `origin`.
+type verb struct {
+	// name is the word that selects it.
 	name string
 	// summary is one line, and the generated help prints exactly this.
 	summary string
 	// run executes the verb with the arguments that follow its name. The Env it
 	// receives is the one Run was given, with the missing streams already
 	// defaulted, and ctx carries the caller's cancellation.
-	run func(ctx context.Context, env cli.Env, args []string) error
+	run func(ctx context.Context, env command.Env, args []string) error
 }
 
-// commands is the registry, in the order the help lists the verbs.
+// verbs is the registry, in the order the help lists them.
 //
 // Dispatch, the generated help and the unknown-command error all read this
 // list, so none of the three can drift from it: a verb is reachable, it is
-// documented, and it is named in the error, or none of those. The install verbs
-// (init, up, down, status, logs, doctor, secret, origin) each add one entry here
-// beside their own file.
-var commands = []command{
+// documented, and it is named in the error, or none of those. Each install verb
+// adds one entry here beside its own file.
+var verbs = []verb{
 	{
 		name:    "version",
 		summary: "print the release, configuration schema and state layout versions",
@@ -36,13 +36,13 @@ var commands = []command{
 }
 
 // lookup finds the verb a word selects.
-func lookup(name string) (command, bool) {
-	for _, cmd := range commands {
-		if cmd.name == name {
-			return cmd, true
+func lookup(name string) (verb, bool) {
+	for _, v := range verbs {
+		if v.name == name {
+			return v, true
 		}
 	}
-	return command{}, false
+	return verb{}, false
 }
 
 // writeUsage prints the command list, generated from the registry so a verb
@@ -57,8 +57,8 @@ usage:
 
 commands:
 `)
-	for _, cmd := range commands {
-		fmt.Fprintf(w, "  %-8s  %s\n", cmd.name, cmd.summary)
+	for _, v := range verbs {
+		fmt.Fprintf(w, "  %-8s  %s\n", v.name, v.summary)
 	}
 	fmt.Fprint(w, `  help      print this message
 

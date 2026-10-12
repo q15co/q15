@@ -7,14 +7,14 @@ import (
 	"os"
 
 	"github.com/q15co/q15/systems/agent/internal/authcli"
-	"github.com/q15co/q15/systems/agent/internal/cli"
+	"github.com/q15co/q15/systems/agent/internal/command"
 )
 
 func main() {
-	env := cli.Env{Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr}
+	env := command.Env{Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr}
 
 	if err := authcli.Run(context.Background(), env, os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(cli.ExitCode(err))
+		os.Exit(command.ExitCode(err))
 	}
 }

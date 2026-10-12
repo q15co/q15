@@ -9,7 +9,7 @@ import (
 	"syscall"
 
 	"github.com/q15co/q15/systems/agent/internal/cli"
-	"github.com/q15co/q15/systems/agent/internal/q15cli"
+	"github.com/q15co/q15/systems/agent/internal/command"
 )
 
 // q15Release is the release identifier the binary was built with, injected at
@@ -21,7 +21,7 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	env := cli.Env{
+	env := command.Env{
 		Stdin:   os.Stdin,
 		Stdout:  os.Stdout,
 		Stderr:  os.Stderr,
@@ -31,8 +31,8 @@ func main() {
 	// main is the only place the process exits, and the status comes from the
 	// error: 2 for a command line that is wrong in shape, 1 for a command that
 	// ran and failed.
-	if err := q15cli.Run(ctx, env, os.Args[1:]); err != nil {
+	if err := cli.Run(ctx, env, os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(cli.ExitCode(err))
+		os.Exit(command.ExitCode(err))
 	}
 }

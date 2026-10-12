@@ -1,4 +1,4 @@
-package q15cli
+package cli
 
 import (
 	"os"

@@ -1,29 +1,29 @@
-// Package q15cli implements the q15 management CLI: the single user-facing
-// entry point that renders and drives a rootless podman stack.
+// Package cli implements the q15 command line: the single user-facing entry
+// point that renders and drives a rootless podman stack.
 //
 // The package imports the agent's own configuration type and validation, so a
 // configuration the CLI writes is one the agent accepts; that is why the CLI
 // lives inside the agent module rather than in one of its own. Dispatch stays on
-// the standard library and on the registry in command.go: a verb is looked up
+// the standard library and on the registry in verbs.go: a verb is looked up
 // there and handed the arguments that follow its name, no CLI framework is
 // involved, and the help is generated from that same list rather than written
 // out beside it.
-package q15cli
+package cli
 
 import (
 	"context"
 
-	"github.com/q15co/q15/systems/agent/internal/cli"
+	"github.com/q15co/q15/systems/agent/internal/command"
 )
 
-// Run executes a single CLI invocation.
+// Run executes a single invocation of the command line.
 //
 // env carries the streams and the release the binary was built with, so nothing
 // here reaches a global. Bare `q15` prints the command list to stdout and
 // reports success, because a bare invocation is a request for help; an
 // unrecognised command prints the same list to stderr and returns a usage error,
 // which main turns into exit status 2 rather than the 1 a failed command gets.
-func Run(ctx context.Context, env cli.Env, args []string) error {
+func Run(ctx context.Context, env command.Env, args []string) error {
 	env = env.WithDefaults()
 
 	if len(args) == 0 || asksForHelp(args[0]) {
@@ -31,12 +31,12 @@ func Run(ctx context.Context, env cli.Env, args []string) error {
 		return nil
 	}
 
-	cmd, ok := lookup(args[0])
+	v, ok := lookup(args[0])
 	if !ok {
 		writeUsage(env.Stderr)
-		return cli.Usagef("unknown command %q", args[0])
+		return command.Usagef("unknown command %q", args[0])
 	}
-	return cmd.run(ctx, env, args[1:])
+	return v.run(ctx, env, args[1:])
 }
 
 // asksForHelp reports whether a word asks for the command list rather than

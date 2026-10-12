@@ -12,7 +12,7 @@ import (
 	"time"
 
 	q15auth "github.com/q15co/q15/systems/agent/internal/auth"
-	"github.com/q15co/q15/systems/agent/internal/cli"
+	"github.com/q15co/q15/systems/agent/internal/command"
 )
 
 const (
@@ -30,7 +30,7 @@ var errHelpRequested = errors.New("help requested")
 // success, because asking what a command can do is a request for help rather
 // than a mistake; an unrecognised verb prints the same usage to stderr and
 // returns a usage error, so the process exits 2 instead of 1.
-func Run(ctx context.Context, env cli.Env, args []string) error {
+func Run(ctx context.Context, env command.Env, args []string) error {
 	env = env.WithDefaults()
 
 	if len(args) == 0 {
@@ -50,11 +50,11 @@ func Run(ctx context.Context, env cli.Env, args []string) error {
 		return nil
 	default:
 		printUsage(env.Stderr)
-		return cli.Usagef("unknown command %q", args[0])
+		return command.Usagef("unknown command %q", args[0])
 	}
 }
 
-func runLogin(ctx context.Context, env cli.Env, args []string) error {
+func runLogin(ctx context.Context, env command.Env, args []string) error {
 	authPath, err := parseAuthPath(loginCommand, args, env.Stderr)
 	if err != nil {
 		if errors.Is(err, errHelpRequested) {
@@ -88,7 +88,7 @@ func runLogin(ctx context.Context, env cli.Env, args []string) error {
 	return nil
 }
 
-func runLogout(env cli.Env, args []string) error {
+func runLogout(env command.Env, args []string) error {
 	authPath, err := parseAuthPath(logoutCommand, args, env.Stderr)
 	if err != nil {
 		if errors.Is(err, errHelpRequested) {
@@ -106,7 +106,7 @@ func runLogout(env cli.Env, args []string) error {
 	return nil
 }
 
-func runStatus(env cli.Env, args []string) error {
+func runStatus(env command.Env, args []string) error {
 	authPath, err := parseAuthPath(statusCommand, args, env.Stderr)
 	if err != nil {
 		if errors.Is(err, errHelpRequested) {
@@ -142,18 +142,18 @@ func runStatus(env cli.Env, args []string) error {
 // rejects is marked as a usage mistake rather than passed through as a failure,
 // so an operator who mistypes a flag gets the same exit status as one who
 // mistypes a verb.
-func parseAuthPath(command string, args []string, stderr io.Writer) (string, error) {
-	fs := flag.NewFlagSet(command, flag.ContinueOnError)
+func parseAuthPath(verb string, args []string, stderr io.Writer) (string, error) {
+	fs := flag.NewFlagSet(verb, flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	authPath := fs.String("auth-path", defaultAuthPath(), "path to auth.json")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return "", errHelpRequested
 		}
-		return "", cli.AsUsage(err)
+		return "", command.AsUsage(err)
 	}
 	if fs.NArg() != 0 {
-		return "", cli.Usagef("%s does not accept positional arguments", command)
+		return "", command.Usagef("%s does not accept positional arguments", verb)
 	}
 	return strings.TrimSpace(*authPath), nil
 }

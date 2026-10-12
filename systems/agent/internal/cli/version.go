@@ -1,10 +1,10 @@
-package q15cli
+package cli
 
 import (
 	"context"
 	"fmt"
 
-	"github.com/q15co/q15/systems/agent/internal/cli"
+	"github.com/q15co/q15/systems/agent/internal/command"
 	"github.com/q15co/q15/systems/agent/internal/config"
 )
 
@@ -23,9 +23,9 @@ const StateLayoutVersion = 1
 //
 // An argument is refused rather than ignored: a mistyped invocation should fail
 // where the mistake is, not print something plausible.
-func runVersion(_ context.Context, env cli.Env, args []string) error {
+func runVersion(_ context.Context, env command.Env, args []string) error {
 	if len(args) > 0 {
-		return cli.Usagef("version takes no arguments, got %q", args[0])
+		return command.Usagef("version takes no arguments, got %q", args[0])
 	}
 
 	fmt.Fprintf(env.Stdout, "release: %s\n", env.Release)

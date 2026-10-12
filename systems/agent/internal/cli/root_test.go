@@ -1,4 +1,4 @@
-package q15cli
+package cli
 
 import (
 	"bytes"
@@ -7,14 +7,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/q15co/q15/systems/agent/internal/cli"
+	"github.com/q15co/q15/systems/agent/internal/command"
 	"github.com/q15co/q15/systems/agent/internal/config"
 )
 
 func TestRunWithoutArgumentsPrintsUsage(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
-	env := cli.Env{Stdout: &stdout, Stderr: &stderr, Release: "dev"}
+	env := command.Env{Stdout: &stdout, Stderr: &stderr, Release: "dev"}
 	if err := Run(context.Background(), env, nil); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -31,7 +31,7 @@ func TestRunHelp(t *testing.T) {
 		t.Run(arg, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
 
-			env := cli.Env{Stdout: &stdout, Stderr: &stderr, Release: "dev"}
+			env := command.Env{Stdout: &stdout, Stderr: &stderr, Release: "dev"}
 			if err := Run(context.Background(), env, []string{arg}); err != nil {
 				t.Fatalf("Run(%q) error = %v", arg, err)
 			}
@@ -48,7 +48,7 @@ func TestRunHelp(t *testing.T) {
 func TestRunUnknownCommandIsAUsageError(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
-	env := cli.Env{Stdout: &stdout, Stderr: &stderr, Release: "dev"}
+	env := command.Env{Stdout: &stdout, Stderr: &stderr, Release: "dev"}
 	err := Run(context.Background(), env, []string{"bogus"})
 	if err == nil {
 		t.Fatal("Run() error = nil, want an unknown-command error")
@@ -56,7 +56,7 @@ func TestRunUnknownCommandIsAUsageError(t *testing.T) {
 	if !strings.Contains(err.Error(), "bogus") {
 		t.Fatalf("error = %q, want it to name the command", err)
 	}
-	if got := cli.ExitCode(err); got != 2 {
+	if got := command.ExitCode(err); got != 2 {
 		t.Fatalf("ExitCode(error) = %d, want 2", got)
 	}
 	if stdout.Len() != 0 {
@@ -73,25 +73,25 @@ func TestRunUnknownCommandIsAUsageError(t *testing.T) {
 func TestHelpListsEveryRegisteredCommand(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
-	if len(commands) == 0 {
+	if len(verbs) == 0 {
 		t.Fatal("the registry is empty, want at least one verb")
 	}
 
-	env := cli.Env{Stdout: &stdout, Stderr: &stderr, Release: "dev"}
+	env := command.Env{Stdout: &stdout, Stderr: &stderr, Release: "dev"}
 	if err := Run(context.Background(), env, []string{"help"}); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 
 	help := stdout.String()
-	for _, cmd := range commands {
-		if !strings.Contains(help, cmd.name) {
-			t.Fatalf("help = %q, want it to list %q", help, cmd.name)
+	for _, v := range verbs {
+		if !strings.Contains(help, v.name) {
+			t.Fatalf("help = %q, want it to list %q", help, v.name)
 		}
-		if !strings.Contains(help, cmd.summary) {
-			t.Fatalf("help = %q, want it to carry the summary of %q", help, cmd.name)
+		if !strings.Contains(help, v.summary) {
+			t.Fatalf("help = %q, want it to carry the summary of %q", help, v.name)
 		}
-		if _, ok := lookup(cmd.name); !ok {
-			t.Fatalf("lookup(%q) = false, want a registered verb to be reachable", cmd.name)
+		if _, ok := lookup(v.name); !ok {
+			t.Fatalf("lookup(%q) = false, want a registered verb to be reachable", v.name)
 		}
 	}
 	if !strings.Contains(help, "help      print this message") {
@@ -104,7 +104,7 @@ func TestHelpListsEveryRegisteredCommand(t *testing.T) {
 func TestRunVersion(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
-	env := cli.Env{Stdout: &stdout, Stderr: &stderr, Release: "v1.2.3"}
+	env := command.Env{Stdout: &stdout, Stderr: &stderr, Release: "v1.2.3"}
 	if err := Run(context.Background(), env, []string{"version"}); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -125,12 +125,12 @@ func TestRunVersion(t *testing.T) {
 func TestRunVersionRejectsArguments(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
-	env := cli.Env{Stdout: &stdout, Stderr: &stderr, Release: "dev"}
+	env := command.Env{Stdout: &stdout, Stderr: &stderr, Release: "dev"}
 	err := Run(context.Background(), env, []string{"version", "extra"})
 	if err == nil {
 		t.Fatal("Run() error = nil, want a rejection")
 	}
-	if got := cli.ExitCode(err); got != 2 {
+	if got := command.ExitCode(err); got != 2 {
 		t.Fatalf("ExitCode(error) = %d, want 2", got)
 	}
 	if stdout.Len() != 0 {

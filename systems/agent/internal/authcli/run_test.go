@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	q15auth "github.com/q15co/q15/systems/agent/internal/auth"
-	"github.com/q15co/q15/systems/agent/internal/cli"
+	"github.com/q15co/q15/systems/agent/internal/command"
 )
 
 // TestRunPrintsUsageWithNoArgs pins the help path: a bare invocation is a
@@ -16,7 +16,7 @@ import (
 func TestRunPrintsUsageWithNoArgs(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
-	env := cli.Env{Stdout: &stdout, Stderr: &stderr}
+	env := command.Env{Stdout: &stdout, Stderr: &stderr}
 	if err := Run(context.Background(), env, nil); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -33,12 +33,12 @@ func TestRunPrintsUsageWithNoArgs(t *testing.T) {
 func TestRunUnknownCommandIsAUsageError(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
-	env := cli.Env{Stdout: &stdout, Stderr: &stderr}
+	env := command.Env{Stdout: &stdout, Stderr: &stderr}
 	err := Run(context.Background(), env, []string{"bogus"})
 	if err == nil {
 		t.Fatal("Run() error = nil, want an unknown-command error")
 	}
-	if got := cli.ExitCode(err); got != 2 {
+	if got := command.ExitCode(err); got != 2 {
 		t.Fatalf("ExitCode(error) = %d, want 2", got)
 	}
 	if stdout.Len() != 0 {
@@ -55,7 +55,7 @@ func TestRunRejectedFlagIsAUsageError(t *testing.T) {
 	authPath := filepath.Join(t.TempDir(), "auth.json")
 
 	var stdout, stderr bytes.Buffer
-	env := cli.Env{Stdout: &stdout, Stderr: &stderr}
+	env := command.Env{Stdout: &stdout, Stderr: &stderr}
 	err := Run(
 		context.Background(),
 		env,
@@ -64,7 +64,7 @@ func TestRunRejectedFlagIsAUsageError(t *testing.T) {
 	if err == nil {
 		t.Fatal("Run() error = nil, want a flag error")
 	}
-	if got := cli.ExitCode(err); got != 2 {
+	if got := command.ExitCode(err); got != 2 {
 		t.Fatalf("ExitCode(error) = %d, want 2", got)
 	}
 	if stdout.Len() != 0 {
@@ -85,7 +85,7 @@ func TestRunStatusReadsConfiguredAuthPath(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	env := cli.Env{Stdout: &stdout, Stderr: &stderr}
+	env := command.Env{Stdout: &stdout, Stderr: &stderr}
 	if err := Run(
 		context.Background(),
 		env,
@@ -111,7 +111,7 @@ func TestRunLogoutDeletesCredentials(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	env := cli.Env{Stdout: &stdout, Stderr: &stderr}
+	env := command.Env{Stdout: &stdout, Stderr: &stderr}
 	if err := Run(
 		context.Background(),
 		env,
