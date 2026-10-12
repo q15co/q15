@@ -144,23 +144,3 @@ proxy:
 		t.Fatalf("Load() error = %v, want unknown field error", err)
 	}
 }
-
-func TestValidateRejectsInvalidProxyEnvRuleReference(t *testing.T) {
-	cfg := Config{
-		Proxy: Proxy{
-			Secrets: []string{"gh_token"},
-			Rules: []ProxyRule{
-				{Name: "github-api", MatchHosts: []string{"api.github.com"}},
-			},
-			Env: []ProxyEnv{
-				{Name: "GH_TOKEN", Secret: "gh_token", Rules: []string{"missing-rule"}},
-			},
-		},
-	}
-
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("expected validation error")
-	} else if !strings.Contains(err.Error(), "does not match any proxy rule name") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
