@@ -33,6 +33,11 @@ var verbs = []verb{
 		summary: "print the release, configuration schema and state layout versions",
 		run:     runVersion,
 	},
+	{
+		name:    "auth",
+		summary: "manage the provider credentials the agent runs with",
+		run:     runAuth,
+	},
 }
 
 // lookup finds the verb a word selects.

@@ -1,4 +1,4 @@
-// Package authcli provides the interactive q15-auth bootstrap commands.
+// Package authcli provides the interactive auth bootstrap commands.
 package authcli
 
 import (
@@ -23,7 +23,7 @@ const (
 
 var errHelpRequested = errors.New("help requested")
 
-// Run executes the q15-auth command-line interface.
+// Run executes the auth command-line interface.
 //
 // env carries the streams, so the package writes where it is told rather than
 // to os.Stdout. A bare invocation prints the usage to stdout and reports
@@ -160,9 +160,9 @@ func parseAuthPath(verb string, args []string, stderr io.Writer) (string, error)
 
 func printUsage(out io.Writer) {
 	fmt.Fprintln(out, "Usage:")
-	fmt.Fprintln(out, "  q15-auth login [--auth-path PATH]")
-	fmt.Fprintln(out, "  q15-auth status [--auth-path PATH]")
-	fmt.Fprintln(out, "  q15-auth logout [--auth-path PATH]")
+	fmt.Fprintln(out, "  q15 auth login [--auth-path PATH]")
+	fmt.Fprintln(out, "  q15 auth status [--auth-path PATH]")
+	fmt.Fprintln(out, "  q15 auth logout [--auth-path PATH]")
 }
 
 func printCredentialStatus(out io.Writer, provider string, cred *q15auth.Credential) {

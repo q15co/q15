@@ -2,24 +2,11 @@ version: 2
 project_name: q15
 
 builds:
-  - id: q15-auth
-    dir: systems/agent
-    main: ./cmd/q15-auth
-    binary: q15-auth
-    env:
-      - CGO_ENABLED=0
-    goos:
-      - linux
-      - darwin
-    goarch:
-      - amd64
-      - arm64
-    flags:
-      - -trimpath
-
-  # The management CLI ships for Linux only: it drives a podman stack through
-  # the user's systemd, so there is no runtime to target elsewhere. The release
-  # identifier is linked in, which is what `q15 version` reports.
+  # One binary ships. It carries the management verbs, the configuration truth
+  # and the provider-credential verbs, and it is Linux only: it drives a podman
+  # stack through the user's systemd, so there is no runtime to target
+  # elsewhere. The release identifier is linked in, which is what `q15 version`
+  # reports.
   - id: q15
     dir: systems/agent
     main: ./cmd/q15
@@ -37,15 +24,6 @@ builds:
       - -X main.q15Release={{ .Version }}
 
 archives:
-  - id: q15-auth
-    ids:
-      - q15-auth
-    formats:
-      - tar.gz
-    name_template: "q15-auth_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-    files:
-      - README.md
-
   - id: q15
     ids:
       - q15

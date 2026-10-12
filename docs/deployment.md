@@ -37,32 +37,31 @@ GHCR runtime images are intended to be publicly pullable without registry auth f
 self-hosted consumption. Maintain the GitHub package visibility for `q15-agent`, `q15-exec`, and
 `q15-proxy` as public outside this repo.
 
-`q15-auth` is published separately as GitHub Release archives on pushed tags that match `v*`, after
-the tagged commit passes verification and is confirmed to be reachable from `main`. The release
-assets are:
+The `q15` management binary is published as GitHub Release archives on pushed tags that match `v*`,
+after the tagged commit passes verification and is confirmed reachable from `main`. The assets are:
 
-- `q15-auth_<version>_linux_amd64.tar.gz`
-- `q15-auth_<version>_linux_arm64.tar.gz`
-- `q15-auth_<version>_darwin_amd64.tar.gz`
-- `q15-auth_<version>_darwin_arm64.tar.gz`
+- `q15_<version>_linux_amd64.tar.gz`
+- `q15_<version>_linux_arm64.tar.gz`
 - `checksums.txt`
 
-## q15-auth
+## q15
 
-`q15-auth` is the interactive bootstrap tool for generating and inspecting `auth.json`. It is
-intended to run on an operator machine, not inside the runtime containers.
+`q15` is the single operator binary: the management verbs, the configuration truth and the
+provider-credential verbs. It is Linux only, because it drives a rootless podman stack through the
+user's systemd, and it runs on the operator machine, not inside the runtime containers.
 
-Examples:
+Its `auth` verbs generate and inspect `auth.json`:
 
 ```bash
-q15-auth login --auth-path ./auth.json
-q15-auth status --auth-path ./auth.json
-q15-auth logout --auth-path ./auth.json
+q15 auth login --auth-path ./auth.json
+q15 auth status --auth-path ./auth.json
+q15 auth logout --auth-path ./auth.json
 ```
 
 For Compose, put the resulting `auth.json` in the directory mounted at `/etc/q15/auth`; do not
-single-file bind-mount `auth.json`, because `q15-auth` and q15-agent write credentials atomically by
-replacing the file. For Kubernetes, store it as the `auth.json` key in the agent auth Secret.
+single-file bind-mount `auth.json`, because `q15 auth login` and q15-agent write credentials
+atomically by replacing the file. For Kubernetes, store it as the `auth.json` key in the agent auth
+Secret.
 
 ## First Startup Inputs
 

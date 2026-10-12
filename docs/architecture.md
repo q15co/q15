@@ -10,7 +10,8 @@ memory are stored on disk, and how the agent keeps local time and reports progre
 - `q15-exec` owns command execution and reports the authoritative model-visible runtime directories:
   `/workspace`, `/memory`, and `/skills`.
 - `q15-proxy` owns policy, egress, and auth-env injection for exec sessions.
-- `q15-auth` is an operator tool that produces `auth.json` outside the runtime containers.
+- `q15` is the operator binary: it drives the stack and produces `auth.json` outside the runtime
+  containers.
 
 This maps directly onto the intended deployment model: one `q15-agent`, one `q15-exec`, and one
 `q15-proxy` running together in Compose or Kubernetes.

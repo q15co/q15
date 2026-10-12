@@ -99,6 +99,22 @@ func TestHelpListsEveryRegisteredCommand(t *testing.T) {
 	}
 }
 
+// TestRunAuthReachesTheAuthCommands keeps the folded-in verbs reachable: the
+// auth surface moved from its own binary into this one, and the usage it prints
+// has to name the command an operator actually typed. A bare group is a request
+// for help, so it goes to stdout.
+func TestRunAuthReachesTheAuthCommands(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+
+	env := command.Env{Stdout: &stdout, Stderr: &stderr, Release: "dev"}
+	if err := Run(context.Background(), env, []string{"auth"}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if !strings.Contains(stdout.String(), "q15 auth login") {
+		t.Fatalf("stdout = %q, want the auth usage", stdout.String())
+	}
+}
+
 // TestRunVersion pins the whole output, not just the release: the three
 // identifiers are what a bug report quotes, and their order is the contract.
 func TestRunVersion(t *testing.T) {

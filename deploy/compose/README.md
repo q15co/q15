@@ -53,7 +53,7 @@ Notes:
 - Compose health checks gate the executor on the proxy and the agent on the executor and Qdrant.
   Keep `--wait` in deployment commands so a successful update means the whole stack is ready.
 - `/etc/q15/auth` must be a writable directory mount containing `auth.json`. A single-file
-  `auth.json` bind mount can keep pointing at an old inode after `q15-auth login` atomically
+  `auth.json` bind mount can keep pointing at an old inode after `q15 auth login` atomically
   replaces the host file.
 - In `agent-config.yaml`, provider discovery is mandatory: provider rosters are the source of truth
   for available models and capabilities. `agent.provider` + `agent.model` seed the current
