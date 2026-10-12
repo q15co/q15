@@ -169,7 +169,7 @@ The repository is a Go workspace (Go 1.26.9, pinned in [go.work](go.work)) with 
 ```bash
 make project-setup   # installs the pinned repo-local toolchain under ./.tools
 make verify          # builds, lints and tests everything; this is the gate CI runs
-make build           # writes ./bin: q15-agent, q15-auth, q15-exec, q15-proxy, q15-web
+make build           # writes ./bin: q15-agent, q15, q15-exec, q15-proxy, q15-web
 make test
 ```
 

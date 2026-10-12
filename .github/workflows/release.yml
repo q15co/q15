@@ -1,4 +1,7 @@
-name: Release q15-auth
+# One workflow publishes the single release binary: the q15 CLI, which carries
+# the management verbs, the configuration truth and the auth verbs. The tag is
+# the version, and there is only one artefact to keep in step with it.
+name: Release
 
 on:
   push:
@@ -9,7 +12,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: release-auth-${{ github.ref }}
+  group: release-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -71,8 +74,8 @@ jobs:
           version: "~> v2"
           args: check
 
-  release-auth:
-    name: Release q15-auth
+  release-binary:
+    name: Release q15
     needs: verify
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -89,7 +92,7 @@ jobs:
         with:
           go-version-file: go.work
 
-      - name: Release q15-auth archives
+      - name: Release q15 from the GoReleaser config
         uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser

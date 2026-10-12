@@ -18,6 +18,10 @@ func (c Config) Validate() error {
 }
 
 func (c Config) validate() error {
+	if err := c.validateSchemaVersion(); err != nil {
+		return err
+	}
+
 	if c.Agent != nil && len(c.Providers) == 0 {
 		return errors.New("providers cannot be empty when agent is configured")
 	}
@@ -86,6 +90,42 @@ func (c Config) validate() error {
 	}
 
 	return nil
+}
+
+// checkSchemaVersion reports whether a configuration that declares `have` is
+// readable by a build whose schema version is `want`. An absent version (0)
+// means the configuration predates the field, and stays legal forever: it is
+// read as the current version. Any other mismatch is refused with the
+// direction named, so a configuration is never read or upgraded silently.
+//
+// The check covers builds that know the field. What stops an older build from
+// receiving a newer configuration is the loader's strict field check, which
+// fails the decode outright rather than reporting a version mismatch: this
+// check is the clear message for every build from here on. A future schema
+// version adds its migration step here rather than loosening the check.
+func checkSchemaVersion(have, want int) error {
+	switch {
+	case have == 0 || have == want:
+		return nil
+	case have > want:
+		return fmt.Errorf(
+			"config schema version %d is newer than this build reads (highest %d)",
+			have,
+			want,
+		)
+	case have < 0:
+		return fmt.Errorf("config schema version %d is not a valid version", have)
+	default:
+		return fmt.Errorf(
+			"config schema version %d is older than this build reads (%d): migrate the configuration before loading it",
+			have,
+			want,
+		)
+	}
+}
+
+func (c Config) validateSchemaVersion() error {
+	return checkSchemaVersion(c.SchemaVersion, SchemaVersion)
 }
 
 // validateTelegram validates the Telegram transport, which is optional: the

@@ -46,3 +46,5 @@ for module_dir in "${modules[@]}"; do
 		golangci-lint run --config "${REPO_ROOT}/.golangci.yml" ./...
 	)
 done
+
+"${SCRIPT_DIR}/check-no-containers-import.sh"

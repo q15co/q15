@@ -24,19 +24,19 @@ COMPOSE_ENV := COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT_NAME)
 
 .DEFAULT_GOAL := build
 
-.PHONY: all build build-agent build-auth build-exec build-proxy build-web build-web-image test-web test-chat test-agent project-setup fmt lint lint-changed vulncheck test verify verify-ci hooks-install hooks-uninstall compose-secrets-init compose-up compose-down compose-logs compose-ps clean help protos protos-check ui-install ui-dev ui-build ui-lint ui-fix ui-test ui-test-coverage ui-e2e ui-clean ui-fixtures-check compose-check
+.PHONY: all build build-agent build-q15 build-exec build-proxy build-web build-web-image test-web test-chat test-agent project-setup fmt lint lint-changed vulncheck test verify verify-ci hooks-install hooks-uninstall compose-secrets-init compose-up compose-down compose-logs compose-ps clean help protos protos-check ui-install ui-dev ui-build ui-lint ui-fix ui-test ui-test-coverage ui-e2e ui-clean ui-fixtures-check compose-check
 
 all: build
 
-build: build-agent build-auth build-exec build-proxy build-web
+build: build-agent build-q15 build-exec build-proxy build-web
 
 build-agent:
 	@mkdir -p $(BIN_DIR)
 	cd $(AGENT_MOD_DIR) && $(GO) build -o ../../$(BIN_DIR)/q15-agent .
 
-build-auth:
+build-q15:
 	@mkdir -p $(BIN_DIR)
-	cd $(AGENT_MOD_DIR) && $(GO) build -o ../../$(BIN_DIR)/q15-auth ./cmd/q15-auth
+	cd $(AGENT_MOD_DIR) && $(GO) build -o ../../$(BIN_DIR)/q15 ./cmd/q15
 
 build-exec:
 	@mkdir -p $(BIN_DIR)
@@ -195,9 +195,9 @@ clean:
 
 help:
 	@echo "Available targets:"
-	@echo "  build         Build q15-agent, q15-auth, q15-exec, q15-proxy, and q15-web into ./bin"
+	@echo "  build         Build q15-agent, q15, q15-exec, q15-proxy, and q15-web into ./bin"
 	@echo "  build-agent   Build ./bin/q15-agent from $(AGENT_MOD_DIR)"
-	@echo "  build-auth    Build ./bin/q15-auth from $(AGENT_MOD_DIR)/cmd/q15-auth"
+	@echo "  build-q15     Build ./bin/q15 from $(AGENT_MOD_DIR)/cmd/q15"
 	@echo "  build-exec    Build ./bin/q15-exec from $(EXEC_MOD_DIR)"
 	@echo "  build-proxy   Build ./bin/q15-proxy from $(PROXY_MOD_DIR)"
 	@echo "  build-web     Build ./bin/q15-web from $(WEB_MOD_DIR)"

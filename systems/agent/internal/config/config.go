@@ -20,8 +20,20 @@ const (
 // disabled, so a stack can run before that volume exists.
 const DefaultBridgeListenTarget = "unix:///run/q15/bridge.sock"
 
+// SchemaVersion is the configuration schema version this build reads and
+// writes. The CLI writes it into every configuration it renders, and loading
+// refuses a configuration written by a build that understands a different
+// shape; see checkSchemaVersion.
+const SchemaVersion = 1
+
 // Config is the top-level structure loaded from config.yaml.
 type Config struct {
+	// SchemaVersion is the configuration schema version. It is optional on
+	// read: a configuration written before the field existed is a version-1
+	// configuration, so an absent value stays legal. See
+	// validateSchemaVersion for what is refused, and why.
+	SchemaVersion int `yaml:"schema_version,omitempty"`
+
 	Providers []Provider `yaml:"providers"`
 	Agent     *Agent     `yaml:"agent"`
 }
