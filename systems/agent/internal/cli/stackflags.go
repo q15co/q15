@@ -1,10 +1,7 @@
 package cli
 
 import (
-	"context"
 	"flag"
-	"fmt"
-	"strings"
 
 	"github.com/q15co/q15/systems/agent/internal/command"
 	"github.com/q15co/q15/systems/agent/internal/stack"
@@ -62,28 +59,4 @@ func (f stackFlags) profile(release string) (stack.Profile, error) {
 	profile := stack.DefaultProfile(release, stateDir)
 	profile.AgentName = f.agentName
 	return profile, nil
-}
-
-// processRunner runs a verb's external programs through the process seam it was
-// handed, so reloading the user's systemd is exercised by a test rather than
-// only on a real machine. Both streams go to stderr: what systemd says about a
-// reload is a diagnostic, and stdout belongs to the verb's own output.
-type processRunner struct{ env command.Env }
-
-// Run implements stack.Runner.
-func (r processRunner) Run(ctx context.Context, program string, args ...string) error {
-	return r.env.Exec(ctx, program, args, nil, r.env.Stderr, r.env.Stderr)
-}
-
-// systemctlOutput runs one read-only systemctl query and returns what it wrote
-// to standard output. systemctl reports state through its exit status as well as
-// through its output, and "inactive" is an answer rather than a failure, so the
-// caller reads the output and decides what to make of a non-zero status.
-func systemctlOutput(ctx context.Context, env command.Env, args ...string) (string, error) {
-	var out strings.Builder
-	err := env.Exec(ctx, "systemctl", args, nil, &out, env.Stderr)
-	if err != nil && command.NotInstalled(err) {
-		return "", fmt.Errorf("systemctl is not installed: %w", err)
-	}
-	return out.String(), err
 }

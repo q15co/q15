@@ -2,17 +2,10 @@ package cli
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/q15co/q15/systems/agent/internal/command"
 )
 
-// runDown stops the stack. It is up's mirror image, and it does not render or
-// reload: stopping what is running is not a moment to change what is declared,
-// and a daemon-reload here would be a change the operator did not ask for.
-//
-// Stopping every unit in one call lets systemd unwind them in dependency order,
-// so the containers go before the network they joined. Running it twice is safe.
 func runDown(ctx context.Context, env command.Env, args []string) error {
 	flags := stackFlags{}
 	fs := newStackFlagSet("down", env, &flags)
@@ -27,11 +20,5 @@ func runDown(ctx context.Context, env command.Env, args []string) error {
 	if err != nil {
 		return err
 	}
-	units := profile.ServiceNames()
-
-	fmt.Fprintf(env.Stderr, "stopping %d units\n", len(units))
-	if err := switchUnits(ctx, processRunner{env: env}, "stop", units); err != nil {
-		return fmt.Errorf("stop the stack: %w", err)
-	}
-	return nil
+	return lifecycleFor(profile, env).Stop(ctx)
 }
