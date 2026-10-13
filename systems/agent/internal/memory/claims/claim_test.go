@@ -43,7 +43,12 @@ func TestParseRenderParseIsIdentityForValidClaims(t *testing.T) {
 		// The claims must be the whole claim content: render them plus the
 		// unparsed remainder and the source must survive byte for byte.
 		if rebuilt := RenderMarkdown(claims, unparsed); rebuilt != markdown {
-			t.Fatalf("iteration %d: round trip changed bytes\n got %q\nwant %q", iteration, rebuilt, markdown)
+			t.Fatalf(
+				"iteration %d: round trip changed bytes\n got %q\nwant %q",
+				iteration,
+				rebuilt,
+				markdown,
+			)
 		}
 
 		var rendered strings.Builder
