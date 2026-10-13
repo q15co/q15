@@ -361,16 +361,14 @@ func TestAgentPreparesNoCredentialTheProfileDoesNotDeclare(t *testing.T) {
 }
 
 // TestHostedProfilePreparesTheCredentialsItNames is the other half of the rule
-// about credentials: every key the profile declares gets a pointer in the unit,
-// under the secrets directory an operator drops the value into. The default
-// profile declares none, so the two tests together state the whole rule.
+// about credentials: every declared key gets a pointer and a Podman secret mount.
 func TestHostedProfilePreparesTheCredentialsItNames(t *testing.T) {
 	agent := rendered(t, hostedProfile())["q15-agent.container"]
 
 	want := map[string]string{
-		"Q15_CHAT_API_KEY_FILE":  "/run/q15-secrets/q15_chat_api_key",
-		"Q15_EMBED_API_KEY_FILE": "/run/q15-secrets/q15_embed_api_key",
-		"QDRANT_API_KEY_FILE":    "/run/q15-secrets/qdrant_api_key",
+		"Q15_CHAT_API_KEY_FILE":  "/run/secrets/q15_chat_api_key",
+		"Q15_EMBED_API_KEY_FILE": "/run/secrets/q15_embed_api_key",
+		"QDRANT_API_KEY_FILE":    "/run/secrets/qdrant_api_key",
 	}
 	for name, want := range want {
 		if got := environment(t, agent, name); got != want {
@@ -395,19 +393,15 @@ func TestHostedProfilePreparesTheCredentialsItNames(t *testing.T) {
 		t.Fatalf("%s = %q, want %q", qdrantURLEnv, got, want)
 	}
 
-	// The secrets directory is mounted where the value is dropped in. Whether
-	// that mount is genuinely read-only is issue #277 - the renderer writes the
-	// suffix in -v syntax, which is not the syntax a Mount= option list uses - so
-	// this test asserts the path and says nothing about the mode.
-	mounted := false
-	for _, mount := range agent["Mount"] {
-		if strings.Contains(mount, "destination=/run/q15-secrets") {
-			mounted = true
-		}
+	wantSecrets := []string{
+		"q15_chat_api_key,type=mount,uid=0,gid=0,mode=0400",
+		"q15_embed_api_key,type=mount,uid=0,gid=0,mode=0400",
+		"qdrant_api_key,type=mount,uid=0,gid=0,mode=0400",
 	}
-	if !mounted {
-		t.Fatalf("the agent is not mounted the secrets directory: %v", agent["Mount"])
+	if got := agent["Secret"]; strings.Join(got, "\n") != strings.Join(wantSecrets, "\n") {
+		t.Fatalf("agent secrets = %v, want %v", got, wantSecrets)
 	}
+
 }
 
 // resourceNames is every name one stack owns: its units, the containers inside

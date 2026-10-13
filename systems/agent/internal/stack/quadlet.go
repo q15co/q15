@@ -215,8 +215,8 @@ func (p Profile) containers() []container {
 		// The endpoints are named once, here, and the agent's configuration reads
 		// them from the environment rather than repeating the URLs. A credential
 		// gets the same treatment: the profile declares the variable, the unit
-		// points <NAME>_FILE at the secrets directory, and the operator drops the
-		// value in. A profile that declares no credential prepares none.
+		// points <NAME>_FILE at its Podman secret mount. A profile that declares
+		// no credential prepares none.
 		environment: append(
 			[][2]string{
 				{"HOME", "/root"},
@@ -240,6 +240,7 @@ func (p Profile) containers() []container {
 			p.hostPath("agent-config.yaml", agentConfigTarget).readOnlyMount(),
 			p.hostPath("auth", authDirTarget),
 		},
+		secrets:  p.credentialSecrets(),
 		requires: agentRequires,
 	})
 
@@ -268,6 +269,15 @@ func (p Profile) containers() []container {
 		enabled:      true,
 	})
 	return containers
+}
+
+func (p Profile) credentialSecrets() []string {
+	pointers := p.credentialPointers()
+	names := make([]string, 0, len(pointers))
+	for _, pointer := range pointers {
+		names = append(names, strings.TrimPrefix(pointer[1], secretsDirTarget+"/"))
+	}
+	return names
 }
 
 // renderContainer writes one container unit. The header says where the file came
@@ -361,9 +371,8 @@ func readOnlySuffix(m mount) string {
 
 // credentialPointers renders every credential the profile declares as the
 // <NAME>_FILE variable the agent resolves it from, pointing into the secrets
-// directory the agent mounts read-only. The file name is the variable name in
-// lower case, so the place to put a value is the one a person would guess from
-// the message that named the variable.
+// directory Podman mounts them under. The secret name is the variable name in
+// lower case, matching the name supplied to q15 secret set.
 func (p Profile) credentialPointers() [][2]string {
 	declared := []string{p.Chat.KeyEnv, p.Embeddings.KeyEnv, p.Vectors.KeyEnv}
 	pointers := make([][2]string, 0, len(declared))
