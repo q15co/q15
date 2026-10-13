@@ -12,7 +12,7 @@ import (
 
 func TestOpenAIClient_DiscoverSuccess(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/models", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/models", func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer secret-key" {
 			t.Errorf("missing/incorrect Authorization: %q", r.Header.Get("Authorization"))
 		}
@@ -49,9 +49,40 @@ func TestOpenAIClient_DiscoverSuccess(t *testing.T) {
 	}
 }
 
+// The roster is a relative path joined onto the configured API root, so a base
+// URL that already carries a versioned path is asked for that path plus
+// /models. Appending a version segment here would ask for /v1/v1/models on a
+// base like https://api.moonshot.ai/v1 and 404 every request.
+func TestOpenAIClient_DiscoverHonoursBaseURLPath(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/models", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			t.Errorf("path = %q, want %q", r.URL.Path, "/v1/models")
+		}
+		_ = json.NewEncoder(w).Encode(openaiModelsResponse{
+			Data: []openaiModelsEntry{{ID: "deepseek-ai/DeepSeek-V4-Flash"}},
+		})
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	client := NewRosterClient(server.Client())
+	models, err := client.Discover(context.Background(), modelcatalog.Provider{
+		Type:    "openai-compatible",
+		BaseURL: server.URL + "/v1",
+		APIKey:  "secret-key",
+	})
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if len(models) != 1 || models[0].ProviderModel != "deepseek-ai/DeepSeek-V4-Flash" {
+		t.Fatalf("models = %+v, want the single model the API root publishes", models)
+	}
+}
+
 func TestOpenAIClient_AuthError(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/models", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/models", func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 	})
 	server := httptest.NewServer(mux)
@@ -70,7 +101,7 @@ func TestOpenAIClient_AuthError(t *testing.T) {
 
 func TestOpenAIClient_EmptyModels(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/models", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/models", func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(openaiModelsResponse{})
 	})
 	server := httptest.NewServer(mux)

@@ -135,7 +135,7 @@ func TestNewCatalog_OpenAICompatibleWithoutEnrichment(t *testing.T) {
 	catalog := NewCatalog(server.Client())
 	models, err := catalog.Discover(context.Background(), Provider{
 		Type:    "openai-compatible",
-		BaseURL: server.URL,
+		BaseURL: server.URL + "/v1",
 		APIKey:  "secret",
 		Options: Options{},
 	})
