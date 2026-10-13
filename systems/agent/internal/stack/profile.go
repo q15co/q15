@@ -4,9 +4,13 @@
 // A stack is a deployment, not a process. The profile names the containers, the
 // images and the models they run, the network and the volumes they own, and the
 // port a person reaches them on. The units are rendered from that profile, and
-// so is the agent's configuration, so the models a stack pulls and the models
-// it is configured to use cannot drift apart. That import is why the command
-// line lives inside the agent module rather than in one of its own.
+// so are the two files a stack consumes, the agent's configuration and the
+// proxy's policy, so the models a stack pulls and the models it is configured to
+// use cannot drift apart. That last import is why the command line lives inside
+// the agent module rather than in one of its own: it builds the agent's real
+// configuration type, and the proxy's policy comes from the contract package
+// both sides share, because Go's internal/ rule would otherwise put the
+// proxy's own config out of this module's reach.
 package stack
 
 import (
