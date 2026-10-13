@@ -99,3 +99,36 @@ func collectionInfoForTest(
 		},
 	}
 }
+
+// TestQdrantConnectionConfigCarriesTheAPIKey covers the one credential a hosted
+// vector store adds. The key's only observable effect is a gRPC header the SDK
+// appends, so the connection configuration the client is built from is the
+// closest seam: it is what decides whether the header is sent at all.
+func TestQdrantConnectionConfigCarriesTheAPIKey(t *testing.T) {
+	cfg, err := qdrantConfigFromURL("https://vectors.example.net:6334", "hosted-vector-key")
+	if err != nil {
+		t.Fatalf("qdrantConfigFromURL() error = %v", err)
+	}
+	if got, want := cfg.APIKey, "hosted-vector-key"; got != want {
+		t.Fatalf("APIKey = %q, want %q", got, want)
+	}
+	if got, want := cfg.Host, "vectors.example.net"; got != want {
+		t.Fatalf("Host = %q, want %q", got, want)
+	}
+	if got, want := cfg.Port, 6334; got != want {
+		t.Fatalf("Port = %d, want %d", got, want)
+	}
+	if !cfg.UseTLS {
+		t.Fatal("UseTLS = false, want a https endpoint to connect over TLS")
+	}
+}
+
+func TestQdrantConnectionConfigWithoutAKeyStaysKeyless(t *testing.T) {
+	cfg, err := qdrantConfigFromURL("http://q15-qdrant:6334", "")
+	if err != nil {
+		t.Fatalf("qdrantConfigFromURL() error = %v", err)
+	}
+	if cfg.APIKey != "" {
+		t.Fatalf("APIKey = %q, want none for a local vector store", cfg.APIKey)
+	}
+}

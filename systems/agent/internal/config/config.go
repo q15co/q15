@@ -92,8 +92,14 @@ type WebSearchTool struct {
 // configurations keep working unchanged) or "openai" for any OpenAI-compatible
 // /embeddings endpoint. The api_key_env/base_url_env fields belong to the
 // openai provider; base_url_env alone selects a local unauthenticated endpoint.
+// The vector store is addressed separately: qdrant_url_env names its endpoint
+// and qdrant_api_key_env the credential a hosted one authenticates with, which
+// is empty for a local one.
 type EmbeddingsTool struct {
-	QdrantURLEnv    string `yaml:"qdrant_url_env"`
+	QdrantURLEnv string `yaml:"qdrant_url_env"`
+	// QdrantAPIKeyEnv names the credential a hosted vector store authenticates
+	// with. Empty for a local one, which takes no key.
+	QdrantAPIKeyEnv string `yaml:"qdrant_api_key_env"`
 	Provider        string `yaml:"provider"`
 	GeminiAPIKeyEnv string `yaml:"gemini_api_key_env"`
 	APIKeyEnv       string `yaml:"api_key_env"`
@@ -150,6 +156,7 @@ type WebSearchToolRuntime struct {
 type EmbeddingsToolRuntime struct {
 	Enabled      bool
 	QdrantURL    string
+	QdrantAPIKey string
 	Provider     string
 	GeminiAPIKey string
 	APIKey       string

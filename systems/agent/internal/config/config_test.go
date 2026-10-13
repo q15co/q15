@@ -1198,3 +1198,79 @@ func TestComposeAgentConfigResolvesTEIEmbeddings(t *testing.T) {
 		t.Fatalf("Embeddings.BatchSize = %d, want 128", rt.Tools.Embeddings.BatchSize)
 	}
 }
+
+// TestLoadAgentRuntimeYAMLResolvesHostedVectorStoreKey covers the one credential
+// a hosted vector store adds: the embeddings tool names a key environment
+// variable, and the value arrives through the standard NAME or NAME_FILE pair
+// like every other secret in this configuration.
+func TestLoadAgentRuntimeYAMLResolvesHostedVectorStoreKey(t *testing.T) {
+	t.Setenv("Q15_TELEGRAM_TOKEN", "tg")
+	t.Setenv("Q15_QDRANT_URL", "https://vectors.example.net")
+	t.Setenv("Q15_EMBED_API_KEY", "embed-key")
+	t.Setenv("Q15_EMBED_BASE_URL", "https://embeddings.example.net/v1")
+
+	keyFile := filepath.Join(t.TempDir(), "qdrant-key")
+	if err := os.WriteFile(keyFile, []byte("file-vector-key"), 0o600); err != nil {
+		t.Fatalf("write key file: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		variable string
+		value    string
+		want     string
+	}{
+		{
+			name:     "the variable itself",
+			variable: "QDRANT_API_KEY",
+			value:    "inline-vector-key",
+			want:     "inline-vector-key",
+		},
+		{
+			name:     "a file the variable names",
+			variable: "QDRANT_API_KEY_FILE",
+			value:    keyFile,
+			want:     "file-vector-key",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv(test.variable, test.value)
+
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(`
+providers:
+  - name: p
+    type: ollama
+agent:
+  name: a
+  tools:
+    embeddings:
+      qdrant_url_env: Q15_QDRANT_URL
+      qdrant_api_key_env: QDRANT_API_KEY
+      provider: openai
+      api_key_env: Q15_EMBED_API_KEY
+      base_url_env: Q15_EMBED_BASE_URL
+      model: text-embedding-3-small
+      dimensions: 1024
+  telegram:
+    token_env: Q15_TELEGRAM_TOKEN
+    allowed_user_ids: [1]
+`), 0o644); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+
+			rt, err := LoadAgentRuntime(path)
+			if err != nil {
+				t.Fatalf("LoadAgentRuntime() error = %v", err)
+			}
+			if got := rt.Tools.Embeddings.QdrantAPIKey; got != test.want {
+				t.Fatalf("Embeddings.QdrantAPIKey = %q, want %q", got, test.want)
+			}
+			if got, want := rt.Tools.Embeddings.QdrantURL, "https://vectors.example.net"; got != want {
+				t.Fatalf("Embeddings.QdrantURL = %q, want %q", got, want)
+			}
+		})
+	}
+}
