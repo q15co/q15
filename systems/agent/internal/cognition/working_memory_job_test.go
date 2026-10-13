@@ -98,6 +98,18 @@ func (l *workingMemoryJobLoader) LoadSemanticExtractionCheckpoint(
 	return SemanticExtractionCheckpoint{}, nil
 }
 
+func (l *workingMemoryJobLoader) LoadSemanticFileSizes(context.Context) (map[string]int64, error) {
+	return nil, nil
+}
+
+func (l *workingMemoryJobLoader) LoadOpenLoops(context.Context) (string, error) {
+	return "", nil
+}
+
+func (l *workingMemoryJobLoader) LoadWorkingLedger(context.Context) (string, error) {
+	return "", nil
+}
+
 func (l *workingMemoryJobLoader) LoadCognitionArtifact(
 	_ context.Context,
 	relativePath string,

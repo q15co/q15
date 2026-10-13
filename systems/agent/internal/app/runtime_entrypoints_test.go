@@ -89,6 +89,18 @@ func (s *spyRuntimeStore) LoadCognitionArtifact(
 	return cognition.Artifact{}, nil
 }
 
+func (s *spyRuntimeStore) LoadSemanticFileSizes(context.Context) (map[string]int64, error) {
+	return nil, nil
+}
+
+func (s *spyRuntimeStore) LoadOpenLoops(context.Context) (string, error) {
+	return "", nil
+}
+
+func (s *spyRuntimeStore) LoadWorkingLedger(context.Context) (string, error) {
+	return "", nil
+}
+
 func (s *spyRuntimeStore) StoreCognitionArtifact(
 	context.Context,
 	cognition.Artifact,

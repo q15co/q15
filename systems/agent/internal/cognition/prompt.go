@@ -22,6 +22,10 @@ type Spec struct {
 	// when the job processed a bounded window of the backlog. The zero value
 	// means the run covered everything up to the run head.
 	CheckpointSeq int64
+	// Baseline carries pre-run file content captured during Build, keyed by
+	// runtime path, so ApplyResult can diff what the run changed. Content is
+	// as returned by the loader (whitespace-trimmed).
+	Baseline map[string]string
 }
 
 func renderPrompt(jobType string, spec Spec) (string, error) {

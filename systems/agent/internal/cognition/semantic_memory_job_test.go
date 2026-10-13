@@ -26,6 +26,9 @@ type semanticMemoryJobLoader struct {
 	windowRemaining         int
 	loadCheckpointCalls     int
 	loadArtifacts           []string
+	semanticSizes           map[string]int64
+	openLoops               string
+	ledger                  string
 }
 
 func (l *semanticMemoryJobLoader) LoadCoreMemory(context.Context) (agent.CoreMemory, error) {
@@ -41,6 +44,18 @@ func (l *semanticMemoryJobLoader) LoadSemanticMemory(
 
 func (l *semanticMemoryJobLoader) LoadWorkingMemory(context.Context) (agent.WorkingMemory, error) {
 	return l.working, nil
+}
+
+func (l *semanticMemoryJobLoader) LoadSemanticFileSizes(context.Context) (map[string]int64, error) {
+	return l.semanticSizes, nil
+}
+
+func (l *semanticMemoryJobLoader) LoadOpenLoops(context.Context) (string, error) {
+	return l.openLoops, nil
+}
+
+func (l *semanticMemoryJobLoader) LoadWorkingLedger(context.Context) (string, error) {
+	return l.ledger, nil
 }
 
 func (l *semanticMemoryJobLoader) LoadSkillCatalog(context.Context) (agent.SkillCatalog, error) {

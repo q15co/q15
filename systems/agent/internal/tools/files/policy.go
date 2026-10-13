@@ -9,13 +9,20 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/agent"
 )
 
-// PathAccessPolicy restricts file tools to exact runtime-visible paths.
+// PathAccessPolicy restricts file tools to exact runtime-visible paths, plus
+// the direct children of explicitly listed directories.
 //
 // Empty allowlists deny that access mode. Leave the policy nil when no file
 // path restriction is intended.
 type PathAccessPolicy struct {
 	ReadPaths  []string
 	WritePaths []string
+	// ReadDirs and WriteDirs allow any file directly inside one of the listed
+	// directories. Matching compares the cleaned parent directory for
+	// equality, so it never matches nested subdirectories, sibling paths that
+	// share a string prefix, or the directory itself.
+	ReadDirs  []string
+	WriteDirs []string
 }
 
 // FileToolAccess describes the paths one file-tool call attempts to access.
@@ -39,17 +46,36 @@ func (p PathAccessPolicy) CheckToolCall(call agent.ToolCall) error {
 
 	readAllowed := normalizedPathSet(p.ReadPaths)
 	writeAllowed := normalizedPathSet(p.WritePaths)
+	readDirs := normalizedPathSet(p.ReadDirs)
+	writeDirs := normalizedPathSet(p.WriteDirs)
 	for _, candidate := range access.ReadPaths {
-		if _, ok := readAllowed[cleanToolPath(candidate)]; !ok {
+		if !pathAllowed(candidate, readAllowed, readDirs) {
 			return fmt.Errorf("%s path %q is outside allowed read paths", name, candidate)
 		}
 	}
 	for _, candidate := range access.WritePaths {
-		if _, ok := writeAllowed[cleanToolPath(candidate)]; !ok {
+		if !pathAllowed(candidate, writeAllowed, writeDirs) {
 			return fmt.Errorf("%s path %q is outside allowed write paths", name, candidate)
 		}
 	}
 	return nil
+}
+
+// pathAllowed reports whether candidate is an exact allowed path or a direct
+// child file of an allowed directory.
+func pathAllowed(candidate string, exact, dirs map[string]struct{}) bool {
+	cleaned := cleanToolPath(candidate)
+	if cleaned == "" {
+		return false
+	}
+	if _, ok := exact[cleaned]; ok {
+		return true
+	}
+	if !path.IsAbs(cleaned) || cleaned == "/" {
+		return false
+	}
+	_, ok := dirs[path.Dir(cleaned)]
+	return ok
 }
 
 // InspectToolCallAccess extracts file path access from a supported file-tool
