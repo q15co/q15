@@ -38,6 +38,26 @@ var verbs = []verb{
 		summary: "manage the provider credentials the agent runs with",
 		run:     runAuth,
 	},
+	{
+		name:    "up",
+		summary: "reload the user's systemd and start the stack",
+		run:     runUp,
+	},
+	{
+		name:    "down",
+		summary: "stop the stack",
+		run:     runDown,
+	},
+	{
+		name:    "status",
+		summary: "report what each unit and container of the stack is doing",
+		run:     runStatus,
+	},
+	{
+		name:    "logs",
+		summary: "print the journal of the stack, or of one service in it",
+		run:     runLogs,
+	},
 }
 
 // lookup finds the verb a word selects.
@@ -67,7 +87,7 @@ commands:
 	}
 	fmt.Fprint(w, `  help      print this message
 
-The install commands (init, up, down, status, logs, doctor, secret, origin)
-arrive with the install slice; run 'q15 version' to see what this build is.
+The remaining install commands (init, doctor, secret, origin) arrive with the
+install slice; run 'q15 version' to see what this build is.
 `)
 }
