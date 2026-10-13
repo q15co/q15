@@ -145,8 +145,11 @@ Notes:
   load.
 - `ollama` defaults to local `http://localhost:11434` when `base_url` is omitted; set
   `base_url: https://ollama.com` plus `key_env: OLLAMA_API_KEY` for direct Ollama Cloud API access
-- This file is read once, at agent startup. Editing a provider, its `base_url` in particular, takes
-  effect on restart; the roster then refreshes on its own every 10 minutes.
+- This file is re-read on every roster tick, every 10 minutes. An edited provider list is applied
+  without a restart once it loads, its keys resolve, and it discovers at least one model. An edit
+  that fails any of those is refused whole: the previous providers keep running, and
+  `list_providers` reports why under `config_reload`. A rotated secret file on its own is not a
+  change to this file, so it still needs a restart.
 - For Ollama Cloud, create an API key from the Ollama account settings, expose it as
   `OLLAMA_API_KEY` or `OLLAMA_API_KEY_FILE`, and use native Ollama model names such as
   `gpt-oss:120b`; browse the current cloud model catalog at `https://ollama.com/search`

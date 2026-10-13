@@ -192,6 +192,38 @@ func TestListProvidersReportsWhyAProviderHasNoModels(t *testing.T) {
 	}
 }
 
+func TestListProvidersReportsTheLastConfigReload(t *testing.T) {
+	registry := testRegistry(t)
+
+	out, err := NewListProviders(registry, nil).Run(context.Background(), `{}`)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if strings.Contains(out, "config_reload") {
+		t.Error("no reload has been attempted, so config_reload should be absent")
+	}
+
+	at := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
+	registry.SetReloadStatus(modelcatalog.ReloadStatus{
+		CheckedAt: at,
+		Err:       "the edited providers discovered no models",
+	})
+
+	out, err = NewListProviders(registry, nil).Run(context.Background(), `{}`)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	for _, want := range []string{
+		`"checked_at": "2026-10-13T12:00:00Z"`,
+		`"applied": false`,
+		`"error": "the edited providers discovered no models"`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("list_providers missing %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestListModelsFiltersByCapabilityAndContext(t *testing.T) {
 	registry := testRegistry(t)
 	selection := modelcatalog.NewSelection(registry, "ollama-cloud", "kimi-k2.7-code")

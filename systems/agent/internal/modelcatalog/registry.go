@@ -2,6 +2,7 @@ package modelcatalog
 
 import (
 	"context"
+	"errors"
 	"log"
 	"strings"
 	"sync"
@@ -21,18 +22,24 @@ const (
 // skipped (no last-known-good cache), and a roster change is visible to the
 // next turn without restart.
 type Registry struct {
-	providers []Provider
-	catalog   Catalog
-	interval  time.Duration
-	timeout   time.Duration
+	catalog  Catalog
+	interval time.Duration
+	timeout  time.Duration
 
-	mu    sync.RWMutex
-	snap  []Model          // flat current roster
-	byRef map[string]Model // ref → Model (first provider wins on duplicate)
+	mu sync.RWMutex
+	// providers is the list discovery runs against. SetProviders replaces it
+	// wholesale when an edited config is applied, so every read takes the lock
+	// and every reader works from the reference it took.
+	providers []Provider
+	snap      []Model          // flat current roster
+	byRef     map[string]Model // ref → Model (first provider wins on duplicate)
 	// status is the last discovery outcome per provider, keyed by provider
 	// name. It exists because the roster alone cannot say why a provider has no
 	// models: a failed fetch and an empty listing both leave it with nothing.
 	status map[string]Status
+	// reload is the most recent attempt to apply an edited provider list, nil
+	// until one runs.
+	reload *ReloadStatus
 }
 
 // Status is the outcome of the most recent discovery attempt for one provider.
@@ -63,6 +70,23 @@ func (s Status) Reason() string {
 	}
 }
 
+// ReloadStatus is the outcome of the most recent attempt to apply an edited
+// provider list to a running agent.
+//
+// It exists for the same reason Status does: an edit that is refused must be
+// visible where the operator is already looking, not only in a log line. A
+// refused edit leaves the previously configured providers running, so without
+// this the agent would go on serving an old base URL with nothing on the surface
+// to say why the new one was never picked up.
+type ReloadStatus struct {
+	// CheckedAt is when the edit was applied or refused.
+	CheckedAt time.Time
+	// Applied is true when the attempt replaced the provider list.
+	Applied bool
+	// Err is why the attempt was refused, empty when it was applied.
+	Err string
+}
+
 // New builds a live roster registry. providers is the immutable provider list
 // (with resolved API keys). interval and timeout default to 24h / 60s when zero;
 // callers should pass explicit values (app.Start uses 10m / 10s).
@@ -85,14 +109,21 @@ func New(providers []Provider, catalog Catalog, interval, timeout time.Duration)
 // It never returns an error — provider failures are logged and skipped. The
 // previous snapshot is replaced atomically.
 func (r *Registry) Refresh(ctx context.Context) {
-	if r.catalog == nil || len(r.providers) == 0 {
+	if r.catalog == nil {
+		return
+	}
+
+	r.mu.RLock()
+	providers := r.providers
+	r.mu.RUnlock()
+	if len(providers) == 0 {
 		return
 	}
 
 	checkedAt := time.Now().UTC()
-	status := make(map[string]Status, len(r.providers))
+	status := make(map[string]Status, len(providers))
 	var combined []Model
-	for _, p := range r.providers {
+	for _, p := range providers {
 		pctx, cancel := context.WithTimeout(ctx, r.timeout)
 		models, err := r.catalog.Discover(pctx, p)
 		cancel()
@@ -149,7 +180,13 @@ func (r *Registry) Run(ctx context.Context) error {
 // concurrent use. Provider API keys are intentionally redacted from the copy so
 // callers can safely use this for model-facing summaries.
 func (r *Registry) Providers() []Provider {
-	if r == nil || len(r.providers) == 0 {
+	if r == nil {
+		return nil
+	}
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if len(r.providers) == 0 {
 		return nil
 	}
 	out := make([]Provider, len(r.providers))
@@ -158,6 +195,42 @@ func (r *Registry) Providers() []Provider {
 		out[i].APIKey = ""
 	}
 	return out
+}
+
+// SetProviders replaces the provider list discovery runs against. It refuses an
+// empty list: a running agent must keep something to discover, which is the rule
+// startup applies too. The caller refreshes afterwards to act on the change, so
+// until then the current roster and its resolved keys stay live. Safe for
+// concurrent use.
+func (r *Registry) SetProviders(providers []Provider) error {
+	if len(providers) == 0 {
+		return errors.New("refusing to apply an empty provider list")
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.providers = providers
+	return nil
+}
+
+// SetReloadStatus records the outcome of one attempt to apply an edited provider
+// list. It is called by the composition root, which owns the config file. Safe
+// for concurrent use.
+func (r *Registry) SetReloadStatus(s ReloadStatus) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.reload = &s
+}
+
+// ReloadStatus returns the outcome of the most recent config-reload attempt, and
+// whether one has run. Safe for concurrent use.
+func (r *Registry) ReloadStatus() (ReloadStatus, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.reload == nil {
+		return ReloadStatus{}, false
+	}
+	return *r.reload, true
 }
 
 // Snapshot returns the current flat roster. Safe for concurrent use.

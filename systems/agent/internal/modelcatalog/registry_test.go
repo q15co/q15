@@ -33,6 +33,62 @@ func (c *callCountingCatalog) Discover(ctx context.Context, p Provider) ([]Model
 	return c.fakeCatalog.Discover(ctx, p)
 }
 
+func TestRegistry_SetProvidersSwapsTheDiscoveryTargets(t *testing.T) {
+	cat := &fakeCatalog{models: map[string][]Model{
+		"a": {{ProviderModel: "one"}},
+		"b": {{ProviderModel: "two"}},
+	}}
+	reg := New([]Provider{{Name: "a", Type: "ollama"}}, cat, time.Hour, time.Second)
+	reg.Refresh(context.Background())
+
+	if err := reg.SetProviders(nil); err == nil {
+		t.Error(
+			"SetProviders(nil) should refuse an empty list: a running agent keeps something to discover",
+		)
+	}
+
+	if err := reg.SetProviders([]Provider{{Name: "b", Type: "ollama"}}); err != nil {
+		t.Fatalf("SetProviders: %v", err)
+	}
+	// The roster is whatever the last refresh found, until the next one.
+	if !reg.ProviderHasModels("a") {
+		t.Error("the roster should still hold the previous providers until the next refresh")
+	}
+
+	reg.Refresh(context.Background())
+	if !reg.ProviderHasModels("b") {
+		t.Error("the roster should follow the new provider list after a refresh")
+	}
+	if reg.ProviderHasModels("a") {
+		t.Error("a provider that is no longer configured should not be in the roster")
+	}
+	if _, ok := reg.ProviderStatus("a"); ok {
+		t.Error("a provider that is no longer configured should not report a status")
+	}
+}
+
+func TestRegistry_ReloadStatusIsAbsentUntilAnAttempt(t *testing.T) {
+	reg := New([]Provider{{Name: "a", Type: "ollama"}}, &fakeCatalog{}, time.Hour, time.Second)
+
+	if _, ok := reg.ReloadStatus(); ok {
+		t.Error("no reload has been attempted, so there should be no status")
+	}
+
+	at := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
+	reg.SetReloadStatus(ReloadStatus{CheckedAt: at, Err: "decode config: nope"})
+	status, ok := reg.ReloadStatus()
+	if !ok || status.Applied || status.Err != "decode config: nope" ||
+		!status.CheckedAt.Equal(at) {
+		t.Fatalf("reload status = %+v (found=%v), want the recorded refusal", status, ok)
+	}
+
+	reg.SetReloadStatus(ReloadStatus{CheckedAt: at.Add(time.Minute), Applied: true})
+	status, _ = reg.ReloadStatus()
+	if !status.Applied || status.Err != "" {
+		t.Fatalf("reload status = %+v, want the applied reload", status)
+	}
+}
+
 func TestRegistry_ProviderStatusSeparatesFailureFromEmptyRoster(t *testing.T) {
 	cat := &fakeCatalog{
 		models: map[string][]Model{

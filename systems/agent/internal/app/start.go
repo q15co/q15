@@ -81,10 +81,9 @@ func Start(ctx context.Context) error {
 		)
 	}
 
-	// Background refresh: keep the roster live without restart.
-	go func() {
-		_ = registry.Run(ctx)
-	}()
+	// Background: keep the roster live, and apply an edited provider config
+	// without a restart.
+	go watchConfig(ctx, registry, ConfigPath, providers, registryRefreshInterval)
 
 	return runBot(ctx, *runtime, registry)
 }

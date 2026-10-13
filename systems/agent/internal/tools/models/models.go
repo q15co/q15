@@ -59,6 +59,13 @@ type providerInfo struct {
 	Current   bool   `json:"current,omitempty"`
 }
 
+// configReloadInfo reports the last attempt to apply an edited config file.
+type configReloadInfo struct {
+	CheckedAt string `json:"checked_at"`
+	Applied   bool   `json:"applied"`
+	Error     string `json:"error,omitempty"`
+}
+
 type modelInfo struct {
 	Provider         string             `json:"provider"`
 	ProviderType     string             `json:"provider_type"`
@@ -139,6 +146,7 @@ func (t *ListProviders) Definition() agent.ToolDefinition {
 			"Use before switching providers when you need to know which provider rosters are currently reachable.",
 			"A provider is reachable when it has at least one model in the current live roster.",
 			"An unreachable provider carries a reason: either the discovery attempt failed, with its error, or it succeeded and the provider listed no models. Report the reason rather than guessing.",
+			"config_reload reports the last attempt to apply an edited config file: when it ran, whether it was applied, and why it was refused. A refused edit leaves the previous providers running.",
 		},
 		Parameters: map[string]any{
 			"type":       "object",
@@ -182,10 +190,19 @@ func (t *ListProviders) Run(_ context.Context, _ string) (string, error) {
 		out = append(out, info)
 	}
 
-	return jsonOutput(map[string]any{
+	payload := map[string]any{
 		"current_provider": currentProvider,
 		"providers":        out,
-	})
+	}
+	if status, ok := t.registry.ReloadStatus(); ok {
+		payload["config_reload"] = configReloadInfo{
+			CheckedAt: status.CheckedAt.UTC().Format(time.RFC3339),
+			Applied:   status.Applied,
+			Error:     status.Err,
+		}
+	}
+
+	return jsonOutput(payload)
 }
 
 // Definition returns the list_models schema exposed to the model.
