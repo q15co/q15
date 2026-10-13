@@ -363,12 +363,14 @@ func (semanticMemoryExtractionJob) ApplyResult(
 	}
 
 	metadata := map[string]string{
-		"facts_path":            semanticFactsRuntimePath,
-		"preferences_path":      semanticPreferencesRuntimePath,
-		"projects_path":         semanticProjectsRuntimePath,
-		"changed":               strconv.FormatBool(changed),
-		"facts_changed":         strconv.FormatBool(targets[semanticFactsRuntimePath].mutated),
-		"preferences_changed":   strconv.FormatBool(targets[semanticPreferencesRuntimePath].mutated),
+		"facts_path":       semanticFactsRuntimePath,
+		"preferences_path": semanticPreferencesRuntimePath,
+		"projects_path":    semanticProjectsRuntimePath,
+		"changed":          strconv.FormatBool(changed),
+		"facts_changed":    strconv.FormatBool(targets[semanticFactsRuntimePath].mutated),
+		"preferences_changed": strconv.FormatBool(
+			targets[semanticPreferencesRuntimePath].mutated,
+		),
 		"projects_changed":      strconv.FormatBool(targets[semanticProjectsRuntimePath].mutated),
 		"working_items_exited":  strconv.Itoa(removed),
 		"ledger_lines_appended": strconv.Itoa(appended),
