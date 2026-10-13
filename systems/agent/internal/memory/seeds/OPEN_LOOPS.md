@@ -1,7 +1,7 @@
 # Open Loops
 
-Prospective memory: unfinished intentions with a trigger. Every entry is actionable or
-waiting; a closed loop leaves this file and records a line in `working/LEDGER.md`.
+Prospective memory: unfinished intentions with a trigger. Every entry is actionable or waiting; a
+closed loop leaves this file and records a line in `working/LEDGER.md`.
 
 <!--
 Loop format (one entry per loop):
