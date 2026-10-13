@@ -24,7 +24,10 @@ const (
 // Runtime paths derived from the semantic root constant so every path the
 // conversion pass is scoped to shares one runtime prefix.
 var (
-	memoryRuntimePrefix      = strings.TrimSuffix(semanticFactsRuntimePath, semanticFactsRelativePath)
+	memoryRuntimePrefix = strings.TrimSuffix(
+		semanticFactsRuntimePath,
+		semanticFactsRelativePath,
+	)
 	semanticTopicsRuntimeDir = memoryRuntimePrefix + "semantic/topics"
 	openLoopsRuntimePath     = memoryRuntimePrefix + "working/OPEN_LOOPS.md"
 	workingLedgerRuntimePath = memoryRuntimePrefix + "working/LEDGER.md"

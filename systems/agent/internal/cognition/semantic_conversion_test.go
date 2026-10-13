@@ -39,7 +39,11 @@ func conversionRunMessages(writes ...string) []conversation.Message {
 		id := fmt.Sprintf("write-%d", i)
 		messages = append(messages,
 			conversation.AssistantMessage(
-				conversation.ToolCall(id, "write_file", fmt.Sprintf(`{"path":%q,"content":"x"}`, target)),
+				conversation.ToolCall(
+					id,
+					"write_file",
+					fmt.Sprintf(`{"path":%q,"content":"x"}`, target),
+				),
 			),
 			conversation.ToolResultMessage(id, "Path: "+target, false),
 		)
@@ -233,7 +237,10 @@ func TestSemanticConversionPolicyScopesFileTools(t *testing.T) {
 		workingLedgerRuntimePath,
 	} {
 		for _, name := range []string{"read_file", "write_file"} {
-			call := agent.ToolCall{Name: name, Arguments: fmt.Sprintf(`{"path":%q,"content":"x"}`, target)}
+			call := agent.ToolCall{
+				Name:      name,
+				Arguments: fmt.Sprintf(`{"path":%q,"content":"x"}`, target),
+			}
 			if err := policy.CheckToolCall(call); err != nil {
 				t.Fatalf("CheckToolCall(%s %s) error = %v", name, target, err)
 			}
@@ -246,7 +253,10 @@ func TestSemanticConversionPolicyScopesFileTools(t *testing.T) {
 		memoryRuntimePrefix + "working/other.md",
 		memoryRuntimePrefix + "history/turns/1.json",
 	} {
-		call := agent.ToolCall{Name: "write_file", Arguments: fmt.Sprintf(`{"path":%q,"content":"x"}`, target)}
+		call := agent.ToolCall{
+			Name:      "write_file",
+			Arguments: fmt.Sprintf(`{"path":%q,"content":"x"}`, target),
+		}
 		if err := policy.CheckToolCall(call); err == nil {
 			t.Fatalf("CheckToolCall(write %s) error = nil, want rejection", target)
 		}
@@ -256,16 +266,26 @@ func TestSemanticConversionPolicyScopesFileTools(t *testing.T) {
 func TestSemanticConversionOverbudgetStateRule(t *testing.T) {
 	t.Parallel()
 
-	under := &semanticMemoryJobLoader{working: agent.WorkingMemory{Content: strings.Repeat("x", workingMemoryBudgetBytes)}}
-	if run, _, err := evaluateWorkingMemoryOverbudget(context.Background(), Snapshot{Loader: under}, JobState{}); err != nil || run {
+	under := &semanticMemoryJobLoader{
+		working: agent.WorkingMemory{Content: strings.Repeat("x", workingMemoryBudgetBytes)},
+	}
+	if run, _, err := evaluateWorkingMemoryOverbudget(context.Background(), Snapshot{Loader: under}, JobState{}); err != nil ||
+		run {
 		t.Fatalf("at budget: run=%v err=%v, want false nil", run, err)
 	}
-	over := &semanticMemoryJobLoader{working: agent.WorkingMemory{Content: strings.Repeat("x", workingMemoryBudgetBytes+1)}}
-	run, reason, err := evaluateWorkingMemoryOverbudget(context.Background(), Snapshot{Loader: over}, JobState{})
+	over := &semanticMemoryJobLoader{
+		working: agent.WorkingMemory{Content: strings.Repeat("x", workingMemoryBudgetBytes+1)},
+	}
+	run, reason, err := evaluateWorkingMemoryOverbudget(
+		context.Background(),
+		Snapshot{Loader: over},
+		JobState{},
+	)
 	if err != nil || !run || !strings.Contains(reason, "budget=8192") {
 		t.Fatalf("over budget: run=%v reason=%q err=%v", run, reason, err)
 	}
-	if run, _, err := evaluateWorkingMemoryOverbudget(context.Background(), Snapshot{}, JobState{}); err != nil || run {
+	if run, _, err := evaluateWorkingMemoryOverbudget(context.Background(), Snapshot{}, JobState{}); err != nil ||
+		run {
 		t.Fatalf("nil loader: run=%v err=%v, want false nil", run, err)
 	}
 }
@@ -274,11 +294,14 @@ func TestSemanticConversionBuildStashesBaseline(t *testing.T) {
 	t.Parallel()
 
 	loader := goldenSemanticLoader()
-	spec, err := NewSemanticMemoryExtractionRegistration().NewJob().Build(context.Background(), loader)
+	spec, err := NewSemanticMemoryExtractionRegistration().NewJob().
+		Build(context.Background(), loader)
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
-	if got := spec.Baseline[workingMemoryRuntimePath]; got != strings.TrimSpace(loader.working.Content) {
+	if got := spec.Baseline[workingMemoryRuntimePath]; got != strings.TrimSpace(
+		loader.working.Content,
+	) {
 		t.Fatalf("Baseline[working] = %q", got)
 	}
 	if got := spec.Baseline[workingLedgerRuntimePath]; got != strings.TrimSpace(loader.ledger) {
@@ -293,13 +316,25 @@ func goldenSemanticLoader() *semanticMemoryJobLoader {
 		windowRemaining: 3,
 		semantic: agent.SemanticMemory{
 			Files: []agent.SemanticMemoryFile{
-				{RelativePath: semanticFactsRelativePath, Content: "# Semantic Facts\n\n## Confirmed Facts\n\n- None\n\n## Grounded Inferences\n\n- None\n"},
-				{RelativePath: semanticPreferencesRelativePath, Content: "# Semantic Preferences\n\n## User Preferences\n\n- None\n\n## Collaboration Preferences\n\n- None\n"},
-				{RelativePath: semanticProjectsRelativePath, Content: "# Semantic Projects\n\n## Active Projects\n\n- None\n\n## Durable Project Knowledge\n\n- None\n"},
+				{
+					RelativePath: semanticFactsRelativePath,
+					Content:      "# Semantic Facts\n\n## Confirmed Facts\n\n- None\n\n## Grounded Inferences\n\n- None\n",
+				},
+				{
+					RelativePath: semanticPreferencesRelativePath,
+					Content:      "# Semantic Preferences\n\n## User Preferences\n\n- None\n\n## Collaboration Preferences\n\n- None\n",
+				},
+				{
+					RelativePath: semanticProjectsRelativePath,
+					Content:      "# Semantic Projects\n\n## Active Projects\n\n- None\n\n## Durable Project Knowledge\n\n- None\n",
+				},
 			},
 		},
-		working: agent.WorkingMemory{RelativePath: workingMemoryRelativePath, Content: conversionWorkingBefore},
-		ledger:  conversionLedgerBefore,
+		working: agent.WorkingMemory{
+			RelativePath: workingMemoryRelativePath,
+			Content:      conversionWorkingBefore,
+		},
+		ledger: conversionLedgerBefore,
 		recent: []conversation.Message{
 			conversation.UserMessage("We moved the deploy target after the staging issue."),
 			conversation.AssistantMessage(conversation.Text("Noted.", "")),
@@ -329,7 +364,7 @@ func TestSemanticConversionPromptGolden(t *testing.T) {
 		if err := os.MkdirAll("testdata", 0o755); err != nil {
 			t.Fatalf("MkdirAll(testdata) error = %v", err)
 		}
-		if err := os.WriteFile(golden, []byte(prompt), 0o644); err != nil {
+		if err := os.WriteFile(golden, []byte(prompt+"\n"), 0o644); err != nil {
 			t.Fatalf("WriteFile(golden) error = %v", err)
 		}
 	}
@@ -337,7 +372,11 @@ func TestSemanticConversionPromptGolden(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile(golden) error = %v (run with -update to create)", err)
 	}
-	if prompt != string(want) {
-		t.Fatalf("prompt drifted from %s; rerun with -update and review the diff\n--- got ---\n%s", golden, prompt)
+	if string(want) != prompt+"\n" {
+		t.Fatalf(
+			"prompt drifted from %s; rerun with -update and review the diff\n--- got ---\n%s",
+			golden,
+			prompt,
+		)
 	}
 }
