@@ -245,9 +245,9 @@ func (s *Store) Lookup(ctx context.Context, id string) ([]byte, error) {
 		}
 		return value, nil
 	default:
-		var out strings.Builder
-		if err := s.runCrypto(ctx, "decrypt", s.decryptArgs(id), nil, &out, io.Discard); err != nil {
-			return nil, s.cryptoError("decrypt", id, err)
+		var out, stderr strings.Builder
+		if err := s.runCrypto(ctx, "decrypt", s.decryptArgs(id), nil, &out, &stderr); err != nil {
+			return nil, s.cryptoError("decrypt", id, err, stderr.String())
 		}
 		return []byte(out.String()), nil
 	}
@@ -284,9 +284,10 @@ func (s *Store) seal(ctx context.Context, id string, value []byte, dst *os.File)
 	// systemd-creds is told to read the plaintext from standard input and write
 	// the ciphertext to the file, so the value never enters an argument list and
 	// never appears in a process listing.
+	var stderr strings.Builder
 	if err := s.runCrypto(ctx, "encrypt", s.encryptArgs(id, dst.Name()),
-		strings.NewReader(string(value)), io.Discard, io.Discard); err != nil {
-		return s.cryptoError("encrypt", id, err)
+		strings.NewReader(string(value)), io.Discard, &stderr); err != nil {
+		return s.cryptoError("encrypt", id, err, stderr.String())
 	}
 	return nil
 }
@@ -352,8 +353,11 @@ func (s *Store) credsProgram() string {
 
 // cryptoError turns a failure of the sealing program into a sentence an
 // operator can act on. A missing program and a program that ran and refused are
-// different problems with different fixes.
-func (s *Store) cryptoError(verb, id string, err error) error {
+// different problems with different fixes, and a program that refused says why
+// on its error stream: that reason is carried into the sentence, because the
+// exit status alone names neither the option it rejected nor the key it could
+// not reach.
+func (s *Store) cryptoError(verb, id string, err error, detail string) error {
 	if command.NotInstalled(err) {
 		return fmt.Errorf(
 			"secret: %s is not installed, and this store seals payloads with it: %w",
@@ -361,7 +365,11 @@ func (s *Store) cryptoError(verb, id string, err error) error {
 			err,
 		)
 	}
-	return fmt.Errorf("secret: %s %s: %w", verb, id, err)
+	detail = strings.TrimSpace(detail)
+	if detail == "" {
+		return fmt.Errorf("secret: %s %s: %w", verb, id, err)
+	}
+	return fmt.Errorf("secret: %s %s: %w: %s", verb, id, err, detail)
 }
 
 // credentialName is the name a payload is bound to. It is derived from the
@@ -419,7 +427,12 @@ func SupportsSystemdCreds(
 		}
 		return false, "", fmt.Errorf("secret: %s --version: %w", program, err)
 	}
+	// The first line is the version; everything after it is the feature list,
+	// which a caller naming the release it found does not want in its message.
 	version := strings.TrimSpace(out.String())
+	if line, _, found := strings.Cut(version, "\n"); found {
+		version = strings.TrimSpace(line)
+	}
 	major, ok := systemdMajor(version)
 	if !ok {
 		return false, version, nil

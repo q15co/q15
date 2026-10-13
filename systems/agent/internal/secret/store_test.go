@@ -3,6 +3,7 @@ package secret
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -18,6 +19,9 @@ type recorder struct {
 	calls  [][]string
 	stdin  string
 	result string
+	// stderr is what the stand-in program writes to its error stream, which is
+	// where systemd-creds reports a reason it cannot put in a status alone.
+	stderr string
 	err    error
 }
 
@@ -26,7 +30,7 @@ func (r *recorder) exec(
 	program string,
 	args []string,
 	stdin io.Reader,
-	stdout, _ io.Writer,
+	stdout, stderr io.Writer,
 ) error {
 	r.calls = append(r.calls, append([]string{program}, args...))
 	if stdin != nil {
@@ -35,6 +39,9 @@ func (r *recorder) exec(
 			return err
 		}
 		r.stdin += string(value)
+	}
+	if r.stderr != "" && stderr != nil {
+		_, _ = io.WriteString(stderr, r.stderr)
 	}
 	if r.err != nil {
 		return r.err
@@ -489,4 +496,33 @@ func TestSealedPayloadIsWrittenPrivatelyAndAtomically(t *testing.T) {
 // exercised rather than imitated.
 func notInstalled() error {
 	return &exec.Error{Name: "systemd-creds", Err: exec.ErrNotFound}
+}
+
+// TestAFailureCarriesWhatTheSealingProgramSaid is the difference between an
+// operator knowing what to fix and reading "exit status 1". systemd-creds
+// reports the reason on its error stream - an unrecognised option, a key type it
+// does not know, a credential bound to another name - and a store that discards
+// that stream leaves nothing behind for either a person or a CI log.
+func TestAFailureCarriesWhatTheSealingProgramSaid(t *testing.T) {
+	rec := &recorder{
+		err:    errors.New("exit status 1"),
+		stderr: "Unknown key type: null\n",
+	}
+	store := openTestStore(t, KindSystemdCreds, rec)
+
+	err := store.Set(context.Background(), "slot-one", []byte("value"))
+	if err == nil {
+		t.Fatal("Set() error = nil, want the failure the program reported")
+	}
+	for _, want := range []string{"exit status 1", "Unknown key type: null"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("Set() error = %v, want it to carry %q", err, want)
+		}
+	}
+
+	if _, err := store.Lookup(context.Background(), "slot-one"); err == nil {
+		t.Fatal("Lookup() error = nil, want the failure the program reported")
+	} else if !strings.Contains(err.Error(), "Unknown key type: null") {
+		t.Fatalf("Lookup() error = %v, want the program's own message", err)
+	}
 }

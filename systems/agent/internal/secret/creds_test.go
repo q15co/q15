@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -22,12 +21,29 @@ import (
 // key itself: a real key is the host's business, and the store is deliberately
 // built so that failing to reach one is a loud error rather than a silent
 // fallback.
+//
+// The program has to be new enough, and when it is not the test says which
+// release it found rather than failing: --user and --with-key=null both arrive
+// in systemd 256 (measured: 255.9 answers "unrecognized option '--user'" and
+// "Unknown key type: null"), so an older runner has nothing here to exercise,
+// and a host without the program at all is a skip for the same reason.
 func TestSealedPayloadIsBoundToItsSlot(t *testing.T) {
-	if _, err := exec.LookPath("systemd-creds"); err != nil {
-		t.Skip("systemd-creds is not installed")
+	ctx := context.Background()
+	ok, version, err := SupportsSystemdCreds(ctx, command.DefaultExec, "")
+	if err != nil {
+		t.Fatalf("SupportsSystemdCreds() error = %v", err)
+	}
+	if !ok {
+		if version == "" {
+			t.Skip("systemd-creds is not installed")
+		}
+		t.Skipf(
+			"systemd-creds %s is older than %d, the first release with the sealing this store uses",
+			version,
+			SystemdFloor,
+		)
 	}
 
-	ctx := context.Background()
 	store, err := Open(Options{
 		Dir:     t.TempDir(),
 		KeyArgs: []string{"--with-key=null"},
