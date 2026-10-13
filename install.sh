@@ -19,8 +19,8 @@ set -eu
 
 # The release public key, copied verbatim from deploy/install/q15.pub. A
 # release this key does not accept is never installed.
-Q15_PUBLIC_KEY='untrusted comment: q15 release key placeholder - replace before the first release
-RWSBN2JDxnmJhIsifh/j9gKGOG6VJo5bYDNcAV5maQ63HxA8hLgzYfPY'
+Q15_PUBLIC_KEY='untrusted comment: minisign public key FB777393219F54FA
+RWT6VJ8hk3N3+z0UvoNZdjzv3c5hRdQSJ0AVneARqwdeapv3rT5tX+cQ'
 
 # The signature verifier, pinned by hash rather than by version, because the
 # download is the thing that has to be right. minisign publishes a single Linux

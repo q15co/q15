@@ -4,10 +4,10 @@
 in `install.sh`: the installer refuses a release this key does not accept.
 `scripts/check-install-key.sh` fails the build if the two copies stop matching.
 
-## Before the first release
+## Provisioning or rotating the key
 
-The committed key is a placeholder. Its secret half was generated and then destroyed, so nothing can
-sign with it and no release can be installed from it. Replace it the day you cut the first release:
+The public key is committed here and embedded in the installer. The private key belongs in the
+repository secret `MINISIGN_SECRET_KEY`. To generate a replacement pair:
 
 ```bash
 minisign -G -W -p deploy/install/q15.pub -s ~/.minisign/q15.key
