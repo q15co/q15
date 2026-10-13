@@ -29,6 +29,16 @@ type Env struct {
 	// Release is the identifier the binary was built with, injected at link
 	// time by the release workflow. Only `version` reports it, verbatim.
 	Release string
+	// Exec runs a program. A zero Env leaves it nil and WithDefaults fills it
+	// in, so a command always has one and never reaches os/exec itself.
+	Exec ExecFunc
+	// LookupEnv reads one environment variable. The driver commands are handed
+	// their secret identifier in SECRET_ID, so this is how they read it without
+	// reaching os.Getenv.
+	LookupEnv func(name string) (string, bool)
+	// IsTerminal reports whether standard input is a terminal, which is the one
+	// question standing between a hidden prompt and reading a value from a pipe.
+	IsTerminal func() bool
 }
 
 // WithDefaults returns the Env with a missing stream replaced by an empty one,
@@ -44,6 +54,15 @@ func (e Env) WithDefaults() Env {
 	}
 	if e.Stderr == nil {
 		e.Stderr = io.Discard
+	}
+	if e.Exec == nil {
+		e.Exec = DefaultExec
+	}
+	if e.LookupEnv == nil {
+		e.LookupEnv = DefaultLookupEnv
+	}
+	if e.IsTerminal == nil {
+		e.IsTerminal = DefaultIsTerminal
 	}
 	return e
 }

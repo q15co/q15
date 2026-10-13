@@ -18,9 +18,12 @@ type QdrantStore struct {
 	dimensions int
 }
 
-// NewQdrantStore constructs a Qdrant-backed vector store.
-func NewQdrantStore(rawURL string, dimensions int) (*QdrantStore, error) {
-	cfg, err := qdrantConfigFromURL(rawURL)
+// NewQdrantStore constructs a Qdrant-backed vector store. apiKey is empty for a
+// local vector store and carries the credential a hosted one authenticates with;
+// either way it is a value that has already been resolved from the environment,
+// never a name this package looks up itself.
+func NewQdrantStore(rawURL, apiKey string, dimensions int) (*QdrantStore, error) {
+	cfg, err := qdrantConfigFromURL(rawURL, apiKey)
 	if err != nil {
 		return nil, err
 	}
@@ -444,7 +447,10 @@ func (s *QdrantStore) Close() error {
 	return s.client.Close()
 }
 
-func qdrantConfigFromURL(raw string) (*qdrant.Config, error) {
+// qdrantConfigFromURL turns the configured endpoint and credential into the
+// client's own connection configuration. The SDK only warns about plaintext
+// credentials, so this boundary rejects them before a connection is created.
+func qdrantConfigFromURL(raw, apiKey string) (*qdrant.Config, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return nil, fmt.Errorf("qdrant URL is required")
@@ -458,6 +464,10 @@ func qdrantConfigFromURL(raw string) (*qdrant.Config, error) {
 	}
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
 		return nil, fmt.Errorf("qdrant URL scheme %q is not supported", parsed.Scheme)
+	}
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey != "" && parsed.Scheme != "https" {
+		return nil, fmt.Errorf("a Qdrant API key requires an https URL")
 	}
 	host := parsed.Hostname()
 	if host == "" {
@@ -478,6 +488,7 @@ func qdrantConfigFromURL(raw string) (*qdrant.Config, error) {
 	return &qdrant.Config{
 		Host:   host,
 		Port:   port,
+		APIKey: apiKey,
 		UseTLS: parsed.Scheme == "https",
 	}, nil
 }

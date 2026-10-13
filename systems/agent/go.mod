@@ -12,6 +12,7 @@ require (
 	github.com/openai/openai-go/v3 v3.22.0
 	github.com/q15co/q15/libs/chat-contract v0.0.0
 	github.com/q15co/q15/libs/exec-contract v0.0.0
+	github.com/q15co/q15/libs/proxy-contract v0.0.0
 	github.com/qdrant/go-client v1.17.1
 	github.com/yuin/goldmark v1.7.16
 	github.com/yuin/goldmark-meta v1.1.0
@@ -83,3 +84,5 @@ require (
 replace github.com/q15co/q15/libs/exec-contract => ../../libs/exec-contract
 
 replace github.com/q15co/q15/libs/chat-contract => ../../libs/chat-contract
+
+replace github.com/q15co/q15/libs/proxy-contract => ../../libs/proxy-contract

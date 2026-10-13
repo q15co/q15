@@ -123,6 +123,17 @@ func (a Agent) EmbeddingsRuntime() (EmbeddingsToolRuntime, error) {
 	runtime.QdrantURL = qdrantURL
 	runtime.Enabled = true
 
+	// A hosted vector store authenticates with its own credential, which is
+	// independent of the embedding provider's: the two endpoints are separate
+	// services, and either can be the one that needs a key.
+	if keyEnv := strings.TrimSpace(tool.QdrantAPIKeyEnv); keyEnv != "" {
+		key, err := resolveEmbeddingsSecretValue(keyEnv, "Qdrant API key")
+		if err != nil {
+			return EmbeddingsToolRuntime{}, err
+		}
+		runtime.QdrantAPIKey = key
+	}
+
 	if provider == embed.ProviderOpenAI {
 		apiKeyEnv := strings.TrimSpace(tool.APIKeyEnv)
 		baseURLEnv := strings.TrimSpace(tool.BaseURLEnv)

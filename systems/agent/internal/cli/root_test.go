@@ -84,6 +84,17 @@ func TestHelpListsEveryRegisteredCommand(t *testing.T) {
 
 	help := stdout.String()
 	for _, v := range verbs {
+		// A hidden verb is reachable on purpose and unlisted on purpose: the
+		// contract is the other way round for it, and the test below pins that.
+		if v.hidden {
+			if strings.Contains(help, v.name) {
+				t.Fatalf("help = %q, want it to leave %q unlisted", help, v.name)
+			}
+			if _, ok := lookup(v.name); !ok {
+				t.Fatalf("lookup(%q) = false, want a hidden verb to stay reachable", v.name)
+			}
+			continue
+		}
 		if !strings.Contains(help, v.name) {
 			t.Fatalf("help = %q, want it to list %q", help, v.name)
 		}

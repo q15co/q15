@@ -250,9 +250,17 @@ completed batches and the next `embed_sync` re-embeds only the remainder.
 
 Keep the proxy file focused on policy and secret-backed request mutation.
 
+The file's schema is defined once, in `libs/proxy-contract/policy`, and both sides of it use that
+package: the proxy reads and resolves a policy, and the CLI renders one for a stack from the same
+deployment profile it renders the units and the agent config from. The file declares its shape with
+`schema_version`; an absent field reads as version 1, and a version this build does not understand
+is refused rather than partly applied.
+
 Example:
 
 ```yaml
+schema_version: 1
+
 proxy:
   no_proxy:
     - localhost
