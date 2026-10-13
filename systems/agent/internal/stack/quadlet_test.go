@@ -360,6 +360,56 @@ func TestAgentPreparesNoCredentialTheProfileDoesNotDeclare(t *testing.T) {
 	}
 }
 
+// TestHostedProfilePreparesTheCredentialsItNames is the other half of the rule
+// about credentials: every key the profile declares gets a pointer in the unit,
+// under the secrets directory an operator drops the value into. The default
+// profile declares none, so the two tests together state the whole rule.
+func TestHostedProfilePreparesTheCredentialsItNames(t *testing.T) {
+	agent := rendered(t, hostedProfile())["q15-agent.container"]
+
+	want := map[string]string{
+		"Q15_CHAT_API_KEY_FILE":  "/run/q15-secrets/q15_chat_api_key",
+		"Q15_EMBED_API_KEY_FILE": "/run/q15-secrets/q15_embed_api_key",
+		"QDRANT_API_KEY_FILE":    "/run/q15-secrets/qdrant_api_key",
+	}
+	for name, want := range want {
+		if got := environment(t, agent, name); got != want {
+			t.Fatalf("%s = %q, want %q", name, got, want)
+		}
+	}
+
+	// The endpoints arrive the way a local stack's do: named once, in the unit,
+	// and read out of the environment by the agent.
+	if got, want := environment(
+		t,
+		agent,
+		embeddingsURLEnv,
+	), "https://embeddings.example.net/v1"; got != want {
+		t.Fatalf("%s = %q, want %q", embeddingsURLEnv, got, want)
+	}
+	if got, want := environment(
+		t,
+		agent,
+		qdrantURLEnv,
+	), "https://vectors.example.net:6334"; got != want {
+		t.Fatalf("%s = %q, want %q", qdrantURLEnv, got, want)
+	}
+
+	// The secrets directory is mounted where the value is dropped in. Whether
+	// that mount is genuinely read-only is issue #277 - the renderer writes the
+	// suffix in -v syntax, which is not the syntax a Mount= option list uses - so
+	// this test asserts the path and says nothing about the mode.
+	mounted := false
+	for _, mount := range agent["Mount"] {
+		if strings.Contains(mount, "destination=/run/q15-secrets") {
+			mounted = true
+		}
+	}
+	if !mounted {
+		t.Fatalf("the agent is not mounted the secrets directory: %v", agent["Mount"])
+	}
+}
+
 // resourceNames is every name one stack owns: its units, the containers inside
 // them, its network and its volumes.
 func resourceNames(t *testing.T, profile Profile) []string {

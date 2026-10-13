@@ -108,6 +108,65 @@ const (
 	unReleasedBuild = "dev"
 )
 
+// The kinds of model source a profile can name. A stack runs the server itself
+// when the kind is local and reaches one it does not run when the kind is
+// external, which is the whole of what the container set is derived from.
+const (
+	// SourceOllamaLocal is an ollama this stack runs.
+	SourceOllamaLocal = "ollama-local"
+	// SourceOllamaExternal is an ollama somebody else runs, reached at the
+	// endpoint the profile names.
+	SourceOllamaExternal = "ollama-external"
+	// SourceOpenAICompatible is any hosted OpenAI-compatible endpoint.
+	SourceOpenAICompatible = "openai-compatible"
+
+	// VectorStoreQdrantLocal is a Qdrant this stack runs.
+	VectorStoreQdrantLocal = "qdrant-local"
+	// VectorStoreQdrantExternal is a Qdrant somebody else runs, which
+	// authenticates with a key.
+	VectorStoreQdrantExternal = "qdrant-external"
+)
+
+// ChatSource names the endpoint the agent chats through.
+type ChatSource struct {
+	// Kind is one of the source kinds above.
+	Kind string
+	// Model is the chat model this endpoint serves.
+	Model string
+	// BaseURL is the endpoint when the kind is external. It is empty for a local
+	// kind, whose endpoint is derived from the stack's name, and refused beside
+	// one: an endpoint named next to a container that runs here is two answers
+	// to one question.
+	BaseURL string
+	// KeyEnv is the environment variable the agent reads this endpoint's
+	// credential from. Empty when the endpoint needs none.
+	KeyEnv string
+}
+
+// EmbeddingSource names the endpoint the agent embeds through. It has the shape
+// of a chat source plus the vector width and the batch size, which belong to the
+// embedding model rather than to the endpoint.
+type EmbeddingSource struct {
+	Kind       string
+	Model      string
+	BaseURL    string
+	KeyEnv     string
+	Dimensions int
+	BatchSize  int
+}
+
+// VectorStore names where the vectors live.
+type VectorStore struct {
+	// Kind is one of the vector store kinds above.
+	Kind string
+	// URL is the endpoint when the kind is external, on the same terms as a
+	// model source's BaseURL.
+	URL string
+	// KeyEnv is the environment variable holding the store's credential. Empty
+	// for a local store, which takes none.
+	KeyEnv string
+}
+
 // Profile is the deployment-shaped input a stack is created from. It carries no
 // secrets: every credential stays the name of a file, so rendering never writes
 // one to disk.
@@ -127,16 +186,16 @@ type Profile struct {
 	StateDir string
 	// HostPort is the loopback port the browser client publishes.
 	HostPort int
-	// ChatModel is the model the stack pulls for chat.
-	ChatModel string
-	// EmbeddingModel and EmbeddingDimensions are the model the stack pulls for
-	// embeddings and the dimension the collection is created at.
-	EmbeddingModel      string
-	EmbeddingDimensions int
-	// EmbeddingBatchSize is the batch size the agent asks the embedding server
-	// for.
-	EmbeddingBatchSize int
-	// VectorStoreImage and OllamaImage are pinned by version.
+	// Chat, Embeddings and Vectors name where the models and the vectors are
+	// served, each one local or external. The container set is derived from these
+	// three values, and the agent's configuration is rendered from the same ones,
+	// so the endpoint a stack pulls a model on and the endpoint it is configured
+	// to use cannot disagree.
+	Chat       ChatSource
+	Embeddings EmbeddingSource
+	Vectors    VectorStore
+	// VectorStoreImage and OllamaImage are pinned by version, and are required
+	// only for the servers this profile runs itself.
 	VectorStoreImage string
 	OllamaImage      string
 	// BridgeListenTarget is the unix socket the chat bridge listens on.
@@ -148,17 +207,21 @@ type Profile struct {
 // four q15 images at the CLI's own release.
 func DefaultProfile(release, stateDir string) Profile {
 	return Profile{
-		AgentName:           DefaultAgentName,
-		Release:             release,
-		StateDir:            stateDir,
-		HostPort:            DefaultHostPort,
-		ChatModel:           DefaultChatModel,
-		EmbeddingModel:      DefaultEmbeddingModel,
-		EmbeddingDimensions: DefaultEmbeddingDimensions,
-		EmbeddingBatchSize:  DefaultEmbeddingBatchSize,
-		VectorStoreImage:    VectorStoreImage,
-		OllamaImage:         OllamaImage,
-		BridgeListenTarget:  config.DefaultBridgeListenTarget,
+		AgentName: DefaultAgentName,
+		Release:   release,
+		StateDir:  stateDir,
+		HostPort:  DefaultHostPort,
+		Chat:      ChatSource{Kind: SourceOllamaLocal, Model: DefaultChatModel},
+		Embeddings: EmbeddingSource{
+			Kind:       SourceOllamaLocal,
+			Model:      DefaultEmbeddingModel,
+			Dimensions: DefaultEmbeddingDimensions,
+			BatchSize:  DefaultEmbeddingBatchSize,
+		},
+		Vectors:            VectorStore{Kind: VectorStoreQdrantLocal},
+		VectorStoreImage:   VectorStoreImage,
+		OllamaImage:        OllamaImage,
+		BridgeListenTarget: config.DefaultBridgeListenTarget,
 	}
 }
 
@@ -183,25 +246,73 @@ func (p Profile) ResourceName() string {
 	return strings.Trim(b.String(), "-")
 }
 
-// OllamaBaseURL is where the agent reaches the model server. The install
-// profile runs ollama inside the stack, so this is the container's name on the
-// stack's network, which is why every container carries an explicit name. A
-// host's own ollama is a different endpoint and belongs to the setup that
-// adopts it, not to a rename.
-func (p Profile) OllamaBaseURL() string {
+// localOllamaURL is where a model server this stack runs is reached. The install
+// profile runs ollama beside the agent, so this is the container's name on the
+// stack's network, which is why every container carries an explicit name.
+func (p Profile) localOllamaURL() string {
 	return "http://" + p.resource("ollama") + ":11434"
 }
 
-// EmbeddingsBaseURL is the OpenAI-compatible embeddings endpoint the agent
-// calls. It ends in /v1 because the client appends only /embeddings, which is
-// where ollama serves the OpenAI shape.
-func (p Profile) EmbeddingsBaseURL() string {
-	return p.OllamaBaseURL() + "/v1"
+// ChatBaseURL is where the agent chats: the container this stack runs for a
+// local source, and whatever the profile named for an external one. The kinds
+// are exhaustive over a validated profile; an unvalidated one has no endpoint to
+// report and gets an empty string.
+func (p Profile) ChatBaseURL() string {
+	switch p.Chat.Kind {
+	case SourceOllamaLocal:
+		return p.localOllamaURL()
+	case SourceOllamaExternal, SourceOpenAICompatible:
+		return endpoint(p.Chat.BaseURL)
+	}
+	return ""
 }
 
-// QdrantURL is the vector store's endpoint on the stack's network.
+// EmbeddingsBaseURL is the OpenAI-compatible embeddings endpoint the agent
+// calls. Either ollama kind ends in /v1, because that is where ollama serves the
+// OpenAI shape and the client appends only /embeddings to what it is given: a
+// model server this stack runs and one somebody else runs are addressed the same
+// way. A hosted OpenAI-compatible endpoint is whatever the profile named, as it
+// named it.
+func (p Profile) EmbeddingsBaseURL() string {
+	switch p.Embeddings.Kind {
+	case SourceOllamaLocal:
+		return p.localOllamaURL() + "/v1"
+	case SourceOllamaExternal:
+		return endpoint(p.Embeddings.BaseURL) + "/v1"
+	case SourceOpenAICompatible:
+		return endpoint(p.Embeddings.BaseURL)
+	}
+	return ""
+}
+
+// QdrantURL is where the vectors live: the container this stack runs, or the
+// endpoint the profile named.
 func (p Profile) QdrantURL() string {
-	return "http://" + p.resource("qdrant") + ":6334"
+	switch p.Vectors.Kind {
+	case VectorStoreQdrantLocal:
+		return "http://" + p.resource("qdrant") + ":6334"
+	case VectorStoreQdrantExternal:
+		return endpoint(p.Vectors.URL)
+	}
+	return ""
+}
+
+// runsOllama reports whether this stack runs the model server. Two sources can
+// share one, so either of them being local is enough.
+func (p Profile) runsOllama() bool {
+	return p.Chat.Kind == SourceOllamaLocal || p.Embeddings.Kind == SourceOllamaLocal
+}
+
+// runsVectorStore reports whether this stack runs the vector store. One source
+// owns it, so there is nothing to combine.
+func (p Profile) runsVectorStore() bool {
+	return p.Vectors.Kind == VectorStoreQdrantLocal
+}
+
+// endpoint is an endpoint a profile named, without the trailing slash people
+// type out of habit: the clients append a path to what they are given.
+func endpoint(raw string) string {
+	return strings.TrimRight(strings.TrimSpace(raw), "/")
 }
 
 // resource returns the stack's name for one service, for example q15-web.
@@ -257,28 +368,40 @@ func (p Profile) AgentConfig() (config.Config, error) {
 		return config.Config{}, err
 	}
 
+	// The provider is named after what it is, because a stack has one chat
+	// source and the profile does not name a provider: either ollama kind is the
+	// ollama API, and only the hosted one changes type. A key is passed through
+	// when the source declared one, which validation allows only for an external
+	// source.
+	provider := config.Provider{
+		Name:    "ollama",
+		Type:    providertypes.Ollama,
+		BaseURL: p.ChatBaseURL(),
+		KeyEnv:  p.Chat.KeyEnv,
+		// A model server this stack runs has no models.dev entry to be enriched
+		// with, so discovery stays offline for either ollama kind.
+		Discovery: config.ProviderDiscovery{ModelsDev: false},
+	}
+	if p.Chat.Kind == SourceOpenAICompatible {
+		provider.Name = providertypes.OpenAICompatible
+		provider.Type = providertypes.OpenAICompatible
+	}
+
 	cfg := config.Config{
 		SchemaVersion: config.SchemaVersion,
-		Providers: []config.Provider{
-			{
-				Name:    "ollama",
-				Type:    providertypes.Ollama,
-				BaseURL: p.OllamaBaseURL(),
-				// A locally served model has no models.dev entry to be
-				// enriched with, so discovery stays offline.
-				Discovery: config.ProviderDiscovery{ModelsDev: false},
-			},
-		},
+		Providers:     []config.Provider{provider},
 		Agent: &config.Agent{
 			Name: p.AgentName,
 			Tools: config.Tools{
 				Embeddings: config.EmbeddingsTool{
-					QdrantURLEnv: qdrantURLEnv,
-					Provider:     embed.ProviderOpenAI,
-					BaseURLEnv:   embeddingsURLEnv,
-					Model:        p.EmbeddingModel,
-					Dimensions:   p.EmbeddingDimensions,
-					BatchSize:    p.EmbeddingBatchSize,
+					QdrantURLEnv:    qdrantURLEnv,
+					QdrantAPIKeyEnv: p.Vectors.KeyEnv,
+					Provider:        embed.ProviderOpenAI,
+					BaseURLEnv:      embeddingsURLEnv,
+					APIKeyEnv:       p.Embeddings.KeyEnv,
+					Model:           p.Embeddings.Model,
+					Dimensions:      p.Embeddings.Dimensions,
+					BatchSize:       p.Embeddings.BatchSize,
 				},
 			},
 			Bridge: config.Bridge{ListenTarget: p.BridgeListenTarget},
@@ -336,28 +459,135 @@ func (p Profile) Validate() error {
 		return errors.New("stack: a state directory is required")
 	case p.HostPort < 1 || p.HostPort > 65535:
 		return fmt.Errorf("stack: host port %d is not a port", p.HostPort)
-	case strings.TrimSpace(p.ChatModel) == "":
-		return errors.New("stack: a chat model is required")
-	case strings.TrimSpace(p.EmbeddingModel) == "":
-		return errors.New("stack: an embedding model is required")
-	case p.EmbeddingDimensions < 1:
-		return fmt.Errorf("stack: embedding dimensions %d must be positive", p.EmbeddingDimensions)
-	case p.EmbeddingBatchSize < 1:
-		return fmt.Errorf("stack: embedding batch size %d must be positive", p.EmbeddingBatchSize)
 	case strings.TrimSpace(p.BridgeListenTarget) == "":
 		return errors.New("stack: a bridge listen target is required")
+	}
+
+	if err := validateSource(
+		"chat",
+		p.Chat.Kind,
+		p.Chat.Model,
+		p.Chat.BaseURL,
+		p.Chat.KeyEnv,
+	); err != nil {
+		return err
+	}
+	// A hosted chat endpoint has no keyless mode: the agent's own validation
+	// refuses an openai-compatible provider with no key_env, so the profile says
+	// so first, where the message can name the profile rather than the field.
+	if p.Chat.Kind == SourceOpenAICompatible && strings.TrimSpace(p.Chat.KeyEnv) == "" {
+		return errors.New(
+			"stack: a hosted chat source needs the credential environment variable it authenticates with",
+		)
+	}
+	if err := validateSource(
+		"embedding",
+		p.Embeddings.Kind,
+		p.Embeddings.Model,
+		p.Embeddings.BaseURL,
+		p.Embeddings.KeyEnv,
+	); err != nil {
+		return err
+	}
+	switch {
+	case p.Embeddings.Dimensions < 1:
+		return fmt.Errorf(
+			"stack: embedding dimensions %d must be positive",
+			p.Embeddings.Dimensions,
+		)
+	case p.Embeddings.BatchSize < 1:
+		return fmt.Errorf(
+			"stack: embedding batch size %d must be positive",
+			p.Embeddings.BatchSize,
+		)
+	}
+	if err := validateVectorStore(p.Vectors); err != nil {
+		return err
 	}
 
 	for _, pin := range []struct {
 		what  string
 		image string
+		runs  bool
 	}{
-		{what: "vector store image", image: p.VectorStoreImage},
-		{what: "ollama image", image: p.OllamaImage},
+		{what: "vector store image", image: p.VectorStoreImage, runs: p.runsVectorStore()},
+		{what: "ollama image", image: p.OllamaImage, runs: p.runsOllama()},
 	} {
+		// A server this profile does not run is a server whose image it does not
+		// need: demanding the pin would be demanding it for nothing.
+		if !pin.runs {
+			continue
+		}
 		if err := validatePinnedImage(pin.what, pin.image); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// validateSource checks one model source: a kind a renderer understands, an
+// endpoint for the kinds that do not run here, neither an endpoint nor a
+// credential for the kind that does, and a model whichever it is.
+func validateSource(what, kind, model, baseURL, keyEnv string) error {
+	switch kind {
+	case SourceOllamaLocal:
+		if endpoint(baseURL) != "" {
+			return fmt.Errorf(
+				"stack: the %s source runs in this stack, so its endpoint is derived from the stack's name; %q is unreachable",
+				what,
+				baseURL,
+			)
+		}
+		if strings.TrimSpace(keyEnv) != "" {
+			return fmt.Errorf(
+				"stack: the %s source runs in this stack and takes no credential, so %q would be prepared for nothing",
+				what,
+				keyEnv,
+			)
+		}
+	case SourceOllamaExternal, SourceOpenAICompatible:
+		if endpoint(baseURL) == "" {
+			return fmt.Errorf(
+				"stack: the %s source is %s, so it needs the endpoint it is reached at",
+				what,
+				kind,
+			)
+		}
+	default:
+		return fmt.Errorf("stack: %q is not a source kind for the %s", kind, what)
+	}
+	if strings.TrimSpace(model) == "" {
+		return fmt.Errorf("stack: a model is required for the %s source", what)
+	}
+	return nil
+}
+
+// validateVectorStore is the same shape for the one store: the local kind is
+// derived and keyless, and the external one names both.
+func validateVectorStore(store VectorStore) error {
+	switch store.Kind {
+	case VectorStoreQdrantLocal:
+		if endpoint(store.URL) != "" {
+			return fmt.Errorf(
+				"stack: the vector store runs in this stack, so its endpoint is derived from the stack's name; %q is unreachable",
+				store.URL,
+			)
+		}
+		if strings.TrimSpace(store.KeyEnv) != "" {
+			return fmt.Errorf(
+				"stack: the vector store runs in this stack and takes no credential, so %q would be prepared for nothing",
+				store.KeyEnv,
+			)
+		}
+	case VectorStoreQdrantExternal:
+		if endpoint(store.URL) == "" {
+			return fmt.Errorf(
+				"stack: the vector store is %s, so it needs the endpoint it is reached at",
+				store.Kind,
+			)
+		}
+	default:
+		return fmt.Errorf("stack: %q is not a vector store kind", store.Kind)
 	}
 	return nil
 }
