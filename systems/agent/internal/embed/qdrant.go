@@ -448,9 +448,8 @@ func (s *QdrantStore) Close() error {
 }
 
 // qdrantConfigFromURL turns the configured endpoint and credential into the
-// client's own connection configuration. A key is only ever sent with a TLS
-// connection: the client warns when asked to send one in plaintext, and a hosted
-// vector store is the only case that has a key at all.
+// client's own connection configuration. The SDK only warns about plaintext
+// credentials, so this boundary rejects them before a connection is created.
 func qdrantConfigFromURL(raw, apiKey string) (*qdrant.Config, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -465,6 +464,10 @@ func qdrantConfigFromURL(raw, apiKey string) (*qdrant.Config, error) {
 	}
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
 		return nil, fmt.Errorf("qdrant URL scheme %q is not supported", parsed.Scheme)
+	}
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey != "" && parsed.Scheme != "https" {
+		return nil, fmt.Errorf("a Qdrant API key requires an https URL")
 	}
 	host := parsed.Hostname()
 	if host == "" {
@@ -485,7 +488,7 @@ func qdrantConfigFromURL(raw, apiKey string) (*qdrant.Config, error) {
 	return &qdrant.Config{
 		Host:   host,
 		Port:   port,
-		APIKey: strings.TrimSpace(apiKey),
+		APIKey: apiKey,
 		UseTLS: parsed.Scheme == "https",
 	}, nil
 }

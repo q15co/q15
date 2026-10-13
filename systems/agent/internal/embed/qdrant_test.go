@@ -132,3 +132,11 @@ func TestQdrantConnectionConfigWithoutAKeyStaysKeyless(t *testing.T) {
 		t.Fatalf("APIKey = %q, want none for a local vector store", cfg.APIKey)
 	}
 }
+
+func TestQdrantConnectionConfigRefusesAKeyWithoutTLS(t *testing.T) {
+	for _, endpoint := range []string{"http://vectors.example.net:6334", "vectors.example.net:6334"} {
+		if _, err := qdrantConfigFromURL(endpoint, "vector-key"); err == nil {
+			t.Errorf("qdrantConfigFromURL(%q) accepts a credential without TLS", endpoint)
+		}
+	}
+}
