@@ -474,6 +474,11 @@ func TestProviderSlug(t *testing.T) {
 			"openai",
 		},
 		{
+			"openai-compatible deepinfra",
+			Provider{Type: "openai-compatible", BaseURL: "https://api.deepinfra.com/v1/openai"},
+			"deepinfra",
+		},
+		{
 			"openai-compatible unknown host no slug",
 			Provider{Type: "openai-compatible", BaseURL: "https://internal.corp/v1"},
 			"",

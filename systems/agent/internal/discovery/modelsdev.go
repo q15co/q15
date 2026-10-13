@@ -406,6 +406,7 @@ var openAICompatibleHostToSlug = map[string]string{
 	"api.x.ai":          "xai",
 	"api.deepseek.com":  "deepseek",
 	"api.requesty.ai":   "requesty",
+	"api.deepinfra.com": "deepinfra",
 }
 
 func openAICompatibleSlug(host string) string {

@@ -139,6 +139,9 @@ Notes:
   `NAME` or `NAME_FILE`
 - `openai-codex` uses `/etc/q15/auth/auth.json` from `q15 auth login`; `openai-compatible` providers
   use `key_env`
+- `openai-compatible` `base_url` must include the versioned path the provider documents, such as
+  `https://api.deepinfra.com/v1/openai`. The chat endpoint is joined onto it, so a scheme and host
+  alone is refused at load.
 - `ollama` defaults to local `http://localhost:11434` when `base_url` is omitted; set
   `base_url: https://ollama.com` plus `key_env: OLLAMA_API_KEY` for direct Ollama Cloud API access
 - For Ollama Cloud, create an API key from the Ollama account settings, expose it as
