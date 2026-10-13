@@ -21,7 +21,7 @@ const (
 	semanticProjectsRuntimePath     = "/memory/" + semanticProjectsRelativePath
 	semanticMemoryScheduleSpec      = "0 5 * * *"
 	semanticMemoryRecentTurns       = 32
-	semanticMemoryWindowTurns       = 24
+	semanticMemoryWindowTurns       = 16
 	semanticMemoryMinDirtyTurns     = 12
 )
 
@@ -30,6 +30,7 @@ var semanticMemoryAllowedTools = []string{
 	"write_file",
 	"edit_file",
 	"apply_patch",
+	"embed_search",
 }
 
 // NewSemanticMemoryExtractionRegistration returns the built-in semantic-memory
@@ -44,10 +45,16 @@ func NewSemanticMemoryExtractionRegistration() JobRegistration {
 				ID:   "daily_refresh",
 				Spec: semanticMemoryScheduleSpec,
 			}},
-			State: []StateRule{{
-				ID:       "dirty_tail_threshold",
-				Evaluate: evaluateSemanticMemoryState,
-			}},
+			State: []StateRule{
+				{
+					ID:       "dirty_tail_threshold",
+					Evaluate: evaluateSemanticMemoryState,
+				},
+				{
+					ID:       "working_memory_overbudget",
+					Evaluate: evaluateWorkingMemoryOverbudget,
+				},
+			},
 		},
 	}
 }
@@ -73,6 +80,10 @@ func (semanticMemoryExtractionJob) Build(
 	working, err := loader.LoadWorkingMemory(ctx)
 	if err != nil {
 		return Spec{}, fmt.Errorf("load working memory: %w", err)
+	}
+	ledger, err := loader.LoadWorkingLedger(ctx)
+	if err != nil {
+		return Spec{}, fmt.Errorf("load working ledger: %w", err)
 	}
 	verificationArtifact, err := loader.LoadCognitionArtifact(
 		ctx,
@@ -149,12 +160,19 @@ func (semanticMemoryExtractionJob) Build(
 	return Spec{
 		Objective: renderPromptLines(
 			"This is a background maintenance job, not a user-facing reply.",
-			"Extract conservative durable knowledge into the canonical semantic-memory files.",
+			"Run the conversion pass from working memory to semantic memory: every item that leaves working memory is converted into a semantic claim, moved to open loops, or dropped, and every exit is recorded in the conversion ledger.",
 			fmt.Sprintf(
-				"The target files are %s, %s, and %s.",
+				"The semantic root files are %s, %s, and %s; topic files live directly under %s/ as <slug>.md.",
 				semanticFactsRuntimePath,
 				semanticPreferencesRuntimePath,
 				semanticProjectsRuntimePath,
+				semanticTopicsRuntimeDir,
+			),
+			fmt.Sprintf(
+				"Working memory is %s, open loops are %s, and the conversion ledger is %s.",
+				workingMemoryRuntimePath,
+				openLoopsRuntimePath,
+				workingLedgerRuntimePath,
 			),
 			"Use current semantic memory, working memory, recent transcript context, and the latest verification review artifact as evidence.",
 			"Treat durable user-profile knowledge as first-class semantic memory, not just active project context.",
@@ -170,6 +188,16 @@ func (semanticMemoryExtractionJob) Build(
 			),
 			"If a target file needs changes, update only that file with write_file, edit_file, or apply_patch while preserving the existing section structure.",
 			"If a target file does not need changes, call read_file on it and leave it unchanged.",
+			fmt.Sprintf(
+				"Every working-memory bullet you remove or rewrite is an exit and needs its own ledger line appended to %s in this run. A run that removes more working-memory bullets than it appends ledger lines fails validation.",
+				workingLedgerRuntimePath,
+			),
+			"Only append to the ledger: add new lines at the end with edit_file or apply_patch and never edit, reorder, or delete existing ledger lines. A run that does not preserve the existing ledger as a prefix fails validation.",
+			fmt.Sprintf(
+				"Keep every semantic root file at or under %d bytes and every topic file at or under %d bytes. A run that leaves a file it wrote over its cap fails validation.",
+				semanticRootCapBytes,
+				semanticTopicCapBytes,
+			),
 			"Keep the semantic-memory update bounded, structured, and auditable.",
 			"Do not copy transcript detail or verification-review prose verbatim into semantic memory.",
 			"Do not answer the transcript directly in your final response.",
@@ -235,15 +263,32 @@ func (semanticMemoryExtractionJob) Build(
 				),
 			},
 			{
+				Name: "conversion_rules",
+				Body: renderPromptLines(
+					"- Exit candidates are working-memory items that are resolved, stale, or durable but no longer live. Live problem state stays in working memory untouched.",
+					"- Each exit has exactly one outcome: converted (rewritten as a self-contained semantic claim), moved (an unfinished intention written to open loops), or dropped (no information survives the episode).",
+					"- Retrieve before writing: for each candidate, call embed_search against the semantic collection when that tool is available, and read the target root or topic file. State what you found before deciding.",
+					"- No match: add a new claim to the correct section, respecting the cap.",
+					"- Consistent match: merge into the existing claim, append the new src seq, and bump rev. Never add a second bullet for the same claim.",
+					"- Contradicting match: mark the old claim status: conflicted, add the new claim also as conflicted, and cross-reference both IDs. Never flatten the conflict.",
+					"- Supersession (the new claim is the acknowledged replacement): write the new claim as active, delete the old claim, and record superseded c-old -> c-new in the ledger.",
+					"- Claim format: `- [c-YYYY-NNNN] <self-contained statement>` followed by an indented `{status: active|conflicted, kind: fact|inference|preference, confidence: confirmed|likely|uncertain, src: t<seq>[, t<seq>], rev: YYYY-MM-DD}` line. Claim IDs are never reused.",
+					"- Open-loop format: `- [l-YYYY-NNNN] <intention>` followed by an indented `{trigger: date:YYYY-MM-DD | event:\"<description>\" | next-session, owner: agent|user, src: t<seq>}` line.",
+					"- Ledger format: one line per exit, `YYYY-MM-DDTHH:MMZ run=semantic_memory.extract src=t<a>..t<b> <outcome> \"<working-memory item>\" → <claim-or-loop-id> (<file>)`. For a drop, omit the target and give the reason in parentheses.",
+					"- Caps: when a file is near its cap, revise before adding: merge, supersede, or split project detail into a topic file and leave a one-line index entry in projects.md (`- [<slug>] <summary> → topics/<slug>.md`).",
+				),
+			},
+			{
 				Name: "semantic_memory_execution_order",
 				Body: renderPromptLines(
-					"1. Inspect all three semantic-memory targets, the working-memory snapshot, the verification review artifact, and the transcript artifact.",
-					"2. Identify durable promotions across both user-profile knowledge and project knowledge, stale entries to remove or rewrite, and uncertainty that must stay explicit.",
-					"3. Normalize any non-canonical semantic headings back into the fixed target sections before finalizing content.",
-					"4. Use file tools on each semantic target, editing only the files that need updates and reading the rest.",
-					"5. Run a cross-file de-duplication pass: remove fact side clauses from preferences.md and preference phrasing from facts.md before finalizing.",
-					"6. Re-check every target against the semantic_memory_rules before finalizing.",
-					"7. Only then emit the short internal summary.",
+					"1. Inspect all three semantic-memory targets, the working-memory snapshot, the verification review artifact, and the transcript artifact; read the open-loops file and the ledger.",
+					"2. Identify exit candidates in working memory and durable knowledge in the transcript, across both user-profile and project knowledge, and note uncertainty that must stay explicit.",
+					"3. For each candidate, retrieve before writing and decide: new, merge, conflict, supersede, move to open loops, or drop.",
+					"4. Write the semantic changes to the root or topic files, and write moved intentions to the open-loops file.",
+					"5. Remove each exited item from working memory, and append one ledger line per exit.",
+					"6. Normalize any non-canonical semantic headings back into the fixed target sections.",
+					"7. Run a cross-file de-duplication pass: remove fact side clauses from preferences.md and preference phrasing from facts.md before finalizing.",
+					"8. Re-check every written file against the caps, the semantic_memory_rules, and the conversion_rules; then emit the short internal summary.",
 				),
 			},
 			{
@@ -268,16 +313,17 @@ func (semanticMemoryExtractionJob) Build(
 		RequireToolCalling: true,
 		AllowedTools:       append([]string(nil), semanticMemoryAllowedTools...),
 		CheckpointSeq:      windowEndSeq,
-		ToolCallPolicy: filetools.PathAccessPolicy{
-			ReadPaths:  semanticRuntimePaths(),
-			WritePaths: semanticRuntimePaths(),
+		Baseline: map[string]string{
+			workingMemoryRuntimePath: strings.TrimSpace(working.Content),
+			workingLedgerRuntimePath: strings.TrimSpace(ledger),
 		},
+		ToolCallPolicy: semanticConversionPolicy(),
 	}, nil
 }
 
 func (semanticMemoryExtractionJob) ApplyResult(
-	_ context.Context,
-	_ ContextLoader,
+	ctx context.Context,
+	loader ContextLoader,
 	output JobOutput,
 ) (ParsedResult, error) {
 	targets := semanticTargetCoverage(
@@ -305,15 +351,27 @@ func (semanticMemoryExtractionJob) ApplyResult(
 			compactSemanticMemoryText(output.FinalText),
 		)
 	}
+	if loader == nil {
+		return ParsedResult{}, fmt.Errorf("context loader is required")
+	}
+	if err := checkSemanticCaps(ctx, loader, output.Messages); err != nil {
+		return ParsedResult{}, err
+	}
+	removed, appended, err := checkLedgerCompleteness(ctx, loader, output.Spec.Baseline)
+	if err != nil {
+		return ParsedResult{}, err
+	}
 
 	metadata := map[string]string{
-		"facts_path":          semanticFactsRuntimePath,
-		"preferences_path":    semanticPreferencesRuntimePath,
-		"projects_path":       semanticProjectsRuntimePath,
-		"changed":             strconv.FormatBool(changed),
-		"facts_changed":       strconv.FormatBool(targets[semanticFactsRuntimePath].mutated),
-		"preferences_changed": strconv.FormatBool(targets[semanticPreferencesRuntimePath].mutated),
-		"projects_changed":    strconv.FormatBool(targets[semanticProjectsRuntimePath].mutated),
+		"facts_path":            semanticFactsRuntimePath,
+		"preferences_path":      semanticPreferencesRuntimePath,
+		"projects_path":         semanticProjectsRuntimePath,
+		"changed":               strconv.FormatBool(changed),
+		"facts_changed":         strconv.FormatBool(targets[semanticFactsRuntimePath].mutated),
+		"preferences_changed":   strconv.FormatBool(targets[semanticPreferencesRuntimePath].mutated),
+		"projects_changed":      strconv.FormatBool(targets[semanticProjectsRuntimePath].mutated),
+		"working_items_exited":  strconv.Itoa(removed),
+		"ledger_lines_appended": strconv.Itoa(appended),
 	}
 
 	return ParsedResult{
