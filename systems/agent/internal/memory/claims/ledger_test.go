@@ -55,7 +55,8 @@ func TestAppendLedgerIsConcurrencySafeUnderParallelWriters(t *testing.T) {
 
 	seen := make(map[string]struct{}, wantLines)
 	for _, line := range lines {
-		if !strings.HasPrefix(line, "20") || !strings.Contains(line, " run=semantic_memory.extract ") {
+		if !strings.HasPrefix(line, "20") ||
+			!strings.Contains(line, " run=semantic_memory.extract ") {
 			t.Fatalf("torn or malformed ledger line: %q", line)
 		}
 		if !strings.Contains(line, " → c-2026-0001 (semantic/topics/writer.md)") {
@@ -133,7 +134,11 @@ func TestAppendLedgerCreatesFileAndParents(t *testing.T) {
 
 	err = AppendLedger(path, []LedgerEntry{
 		{Outcome: OutcomeMoved, Description: "follow up on thing", TargetID: "l-2026-0031"},
-		{Outcome: OutcomeDropped, Description: "transient staging noise", Note: "(no durable content)"},
+		{
+			Outcome:     OutcomeDropped,
+			Description: "transient staging noise",
+			Note:        "(no durable content)",
+		},
 	})
 	if err != nil {
 		t.Fatalf("AppendLedger() error = %v", err)
