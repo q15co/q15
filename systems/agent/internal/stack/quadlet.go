@@ -46,6 +46,7 @@ type container struct {
 	// volumes and hostMounts are what the container sees, in this order.
 	volumes    []mount
 	hostMounts []mount
+	secrets    []string
 	// publishPorts are host bindings; all of them are loopback.
 	publishPorts []string
 	// requires are the services this one needs running first.
@@ -148,8 +149,8 @@ func (p Profile) containers() []container {
 			},
 			hostMounts: []mount{
 				p.hostPath("proxy-policy.yaml", proxyPolicyTarget).readOnlyMount(),
-				p.hostPath("secrets", secretsDirTarget).readOnlyMount(),
 			},
+			secrets: []string{githubTokenFile},
 		},
 		{
 			service:     "exec",
@@ -215,7 +216,6 @@ func (p Profile) containers() []container {
 			hostMounts: []mount{
 				p.hostPath("agent-config.yaml", agentConfigTarget).readOnlyMount(),
 				p.hostPath("auth", authDirTarget),
-				p.hostPath("secrets", secretsDirTarget).readOnlyMount(),
 			},
 			requires: []string{"exec", "qdrant", "ollama"},
 		},
@@ -279,6 +279,9 @@ func (p Profile) renderContainer(c container) []byte {
 			b.WriteString(",ro")
 		}
 		b.WriteByte('\n')
+	}
+	for _, name := range c.secrets {
+		fmt.Fprintf(&b, "Secret=%s,type=mount,uid=0,gid=0,mode=0400\n", name)
 	}
 	for _, port := range c.publishPorts {
 		fmt.Fprintf(&b, "PublishPort=%s\n", port)

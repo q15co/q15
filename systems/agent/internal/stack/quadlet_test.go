@@ -14,8 +14,8 @@ import (
 func TestBindMountsAreReadOnlyAtConfiguredPaths(t *testing.T) {
 	units := rendered(t, testProfile())
 	want := map[string][]string{
-		"q15-proxy.container": {"/etc/q15/proxy/policy.yaml", "/run/q15-secrets"},
-		"q15-agent.container": {"/etc/q15/agent/config.yaml", "/run/q15-secrets"},
+		"q15-proxy.container": {"/etc/q15/proxy/policy.yaml"},
+		"q15-agent.container": {"/etc/q15/agent/config.yaml"},
 	}
 	for name, targets := range want {
 		mounts := units[name]["Mount"]
@@ -39,6 +39,28 @@ func TestBindMountsAreReadOnlyAtConfiguredPaths(t *testing.T) {
 			}
 			if !found {
 				t.Errorf("%s has no read-only bind at %s: %v", name, target, mounts)
+			}
+		}
+	}
+}
+
+func TestUnitsMountSecretsThroughPodman(t *testing.T) {
+	units := rendered(t, testProfile())
+	proxy := units["q15-proxy.container"]
+	if got := proxy["Secret"]; len(got) != 1 ||
+		got[0] != "github_token,type=mount,uid=0,gid=0,mode=0400" {
+		t.Fatalf("proxy secrets = %v, want its token as a private Podman secret mount", got)
+	}
+	if got := environment(t, proxy, "GITHUB_TOKEN_FILE"); got != "/run/secrets/github_token" {
+		t.Fatalf("GITHUB_TOKEN_FILE = %q, want the Podman secret path", got)
+	}
+	if got := units["q15-agent.container"]["Secret"]; len(got) != 0 {
+		t.Fatalf("keyless agent secrets = %v, want none", got)
+	}
+	for name, unit := range units {
+		for _, mount := range unit["Mount"] {
+			if strings.Contains(mount, "/secrets,") {
+				t.Errorf("%s bind-mounts the payload store: %s", name, mount)
 			}
 		}
 	}
@@ -333,7 +355,7 @@ func TestAgentPreparesNoCredentialTheProfileDoesNotDeclare(t *testing.T) {
 		t,
 		units["q15-proxy.container"],
 		"GITHUB_TOKEN_FILE",
-	); got != "/run/q15-secrets/github_token" {
+	); got != "/run/secrets/github_token" {
 		t.Fatalf("proxy GITHUB_TOKEN_FILE = %q, want it under the secrets directory", got)
 	}
 }

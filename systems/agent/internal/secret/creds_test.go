@@ -3,6 +3,7 @@ package secret
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,23 +11,9 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/command"
 )
 
-// TestSealedPayloadIsBoundToItsSlot is the one test that runs the real sealing
-// program, because the property it checks belongs to systemd-creds rather than
-// to this package: the credential name is embedded in the ciphertext, so a
-// payload copied from one slot into another refuses to decrypt.
-//
-// It runs with a null key, which is the one key option that needs no key
-// material and therefore works where there is no user manager and no TPM. That
-// means it exercises the plumbing, the file modes and the binding, and not the
-// key itself: a real key is the host's business, and the store is deliberately
-// built so that failing to reach one is a loud error rather than a silent
-// fallback.
-//
-// The program has to be new enough, and when it is not the test says which
-// release it found rather than failing: --user and --with-key=null both arrive
-// in systemd 256 (measured: 255.9 answers "unrecognized option '--user'" and
-// "Unknown key type: null"), so an older runner has nothing here to exercise,
-// and a host without the program at all is a skip for the same reason.
+// The null key tests the credential envelope and slot binding without touching
+// host keys. A private user namespace avoids the privileged credentials service,
+// and --allow-null permits the test on hosts with TPM and Secure Boot enabled.
 func TestSealedPayloadIsBoundToItsSlot(t *testing.T) {
 	ctx := context.Background()
 	ok, version, err := SupportsSystemdCreds(ctx, command.DefaultExec, "")
@@ -44,10 +31,14 @@ func TestSealedPayloadIsBoundToItsSlot(t *testing.T) {
 		)
 	}
 
+	keyArgs := []string{"--with-key=null"}
+	if major, _ := systemdMajor(version); major >= 259 {
+		keyArgs = append(keyArgs, "--allow-null")
+	}
 	store, err := Open(Options{
 		Dir:     t.TempDir(),
-		KeyArgs: []string{"--with-key=null"},
-		Exec:    command.DefaultExec,
+		KeyArgs: keyArgs,
+		Exec:    nullKeyExec,
 	})
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
@@ -103,4 +94,18 @@ func TestSealedPayloadIsBoundToItsSlot(t *testing.T) {
 	if len(ids) != 1 || ids[0].ID != "slot-two" {
 		t.Fatalf("IDs() = %v, want only the copied slot left", ids)
 	}
+}
+
+func nullKeyExec(
+	ctx context.Context,
+	program string,
+	args []string,
+	stdin io.Reader,
+	stdout, stderr io.Writer,
+) error {
+	if os.Geteuid() != 0 {
+		args = append([]string{"--user", "--map-root-user", "--", program}, args...)
+		program = "unshare"
+	}
+	return command.DefaultExec(ctx, program, args, stdin, stdout, stderr)
 }
