@@ -140,6 +140,7 @@ The repository keeps its own reference next to the code:
 | [docs/architecture.md](docs/architecture.md)   | The services, the transcript and memory layout, and how the agent reports progress.                |
 | [docs/configuration.md](docs/configuration.md) | Config strategy, agent config and proxy policy, and the canonical storage contract.                |
 | [docs/deployment.md](docs/deployment.md)       | Releases and image tags, first-start inputs, the three checked-in deployment paths, and rollbacks. |
+| [docs/adr/](docs/adr/)                         | The decisions behind the design, one file each, with the trade-off and the evidence.               |
 | [AGENTS.md](AGENTS.md)                         | The working conventions for this repository, including how agent sessions are expected to behave.  |
 
 An agent-readable digest of the manual is served at [q15.co/llms.txt](https://q15.co/llms.txt), with
