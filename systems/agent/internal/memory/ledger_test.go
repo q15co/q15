@@ -57,8 +57,14 @@ func TestStoreInitCreatesWorkingMemoryFiles(t *testing.T) {
 	if !strings.Contains(string(ledger), "Conversion Ledger") {
 		t.Fatalf("LEDGER.md missing header:\n%s", string(ledger))
 	}
-	if paragraphs := strings.Split(strings.TrimSpace(string(ledger)), "\n\n"); len(paragraphs) != 2 {
-		t.Fatalf("LEDGER.md = %d paragraphs, want title plus one-line header:\n%s", len(paragraphs), string(ledger))
+	if paragraphs := strings.Split(strings.TrimSpace(string(ledger)), "\n\n"); len(
+		paragraphs,
+	) != 2 {
+		t.Fatalf(
+			"LEDGER.md = %d paragraphs, want title plus one-line header:\n%s",
+			len(paragraphs),
+			string(ledger),
+		)
 	}
 }
 
@@ -99,10 +105,16 @@ func TestStoreInitIsIdempotentForWorkingMemoryFiles(t *testing.T) {
 		}
 	}
 	if !strings.Contains(after[filepath.Join(root, "working", "OPEN_LOOPS.md")], marker) {
-		t.Fatalf("second Init overwrote OPEN_LOOPS.md:\n%s", after[filepath.Join(root, "working", "OPEN_LOOPS.md")])
+		t.Fatalf(
+			"second Init overwrote OPEN_LOOPS.md:\n%s",
+			after[filepath.Join(root, "working", "OPEN_LOOPS.md")],
+		)
 	}
 	if !strings.Contains(after[filepath.Join(root, "working", "LEDGER.md")], marker) {
-		t.Fatalf("second Init overwrote LEDGER.md:\n%s", after[filepath.Join(root, "working", "LEDGER.md")])
+		t.Fatalf(
+			"second Init overwrote LEDGER.md:\n%s",
+			after[filepath.Join(root, "working", "LEDGER.md")],
+		)
 	}
 }
 
@@ -133,7 +145,10 @@ func TestStoreRotatesOversizedLedger(t *testing.T) {
 	}
 
 	ledgerPath := filepath.Join(root, "working", "LEDGER.md")
-	oversized := strings.Repeat("2026-10-14T05:02Z src=t4391..t4414 run=semantic_memory.extract\n", 6144)
+	oversized := strings.Repeat(
+		"2026-10-14T05:02Z src=t4391..t4414 run=semantic_memory.extract\n",
+		6144,
+	)
 	if int64(len(oversized)) <= ledgerRotationThresholdByte {
 		t.Fatalf("fixture is %d bytes, want > %d", len(oversized), ledgerRotationThresholdByte)
 	}
@@ -190,7 +205,11 @@ func TestStoreRotatesOversizedLedger(t *testing.T) {
 		t.Fatalf("ReadFile(%q) error = %v", archivePath, err)
 	}
 	if string(afterSecond) != oversized {
-		t.Fatalf("second rotation changed the archive, length = %d, want %d", len(afterSecond), len(oversized))
+		t.Fatalf(
+			"second rotation changed the archive, length = %d, want %d",
+			len(afterSecond),
+			len(oversized),
+		)
 	}
 }
 
