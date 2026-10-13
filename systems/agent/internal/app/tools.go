@@ -144,7 +144,7 @@ func newEmbeddingService(
 	if err != nil {
 		return nil, err
 	}
-	vectors, err := embed.NewQdrantStore(tool.QdrantURL, tool.Dimensions)
+	vectors, err := embed.NewQdrantStore(tool.QdrantURL, tool.QdrantAPIKey, tool.Dimensions)
 	if err != nil {
 		_ = state.Close()
 		return nil, err

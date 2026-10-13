@@ -184,6 +184,7 @@ func validateBridgeListenTarget(value string) error {
 
 func (e EmbeddingsTool) configured() bool {
 	return strings.TrimSpace(e.QdrantURLEnv) != "" ||
+		strings.TrimSpace(e.QdrantAPIKeyEnv) != "" ||
 		strings.TrimSpace(e.Provider) != "" ||
 		strings.TrimSpace(e.GeminiAPIKeyEnv) != "" ||
 		strings.TrimSpace(e.APIKeyEnv) != "" ||
