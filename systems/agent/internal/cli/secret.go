@@ -130,21 +130,48 @@ func (f secretFlags) store(env command.Env) (*secret.Store, error) {
 	return secret.Open(secret.Options{Dir: dir, Kind: kind, Exec: env.Exec})
 }
 
-// driverArgs are the flags the registered driver command has to carry, so that
-// the command podman runs opens the same store the operator wrote to rather
-// than whatever the defaults happen to be at the time.
-func (f secretFlags) driverArgs() []string {
-	args := []string{"--stack", f.agentName}
-	if f.stateDir != "" {
-		args = append(args, "--state-dir", f.stateDir)
+// ensureSeal checks that this host can actually seal a payload before one is
+// read, and offers the fallback when it cannot. Discovering at the first write
+// that the host is too old is the failure the fallback exists to prevent, so the
+// offer is made here rather than left to the documentation.
+func (f secretFlags) ensureSeal(ctx context.Context, env command.Env) error {
+	if secret.Kind(f.seal) != secret.KindSystemdCreds {
+		return nil
 	}
-	if f.storeDir != "" {
-		args = append(args, "--store-dir", f.storeDir)
+
+	ok, version, err := secret.SupportsSystemdCreds(ctx, env.Exec, "")
+	if err != nil {
+		return err
 	}
-	if f.seal != "" {
-		args = append(args, "--seal", f.seal)
+	if ok {
+		return nil
 	}
-	return args
+	detail := version
+	if detail == "" {
+		detail = "systemd-creds could not be found or did not report a version"
+	}
+	return fmt.Errorf(
+		"secret: this host cannot seal a payload (%s), because that needs systemd %d or newer; pass --seal %s to store it as a plain file at mode 0600 instead",
+		detail,
+		secret.SystemdFloor,
+		secret.KindFile,
+	)
+}
+
+// driverCommandPrefix is the command podman runs for each driver verb: this
+// binary, the driver's own verb group, and the flags that name this store.
+//
+// It is built in one place because two things read it: the drop-in podman
+// loads, and the options a `podman secret create` command line carries. Those
+// two describing different stores is precisely how a payload ends up sealed
+// somewhere nobody is looking, so what they name is the store that was
+// actually opened rather than whatever the defaults happen to be.
+func driverCommandPrefix(store *secret.Store, flags secretFlags) []string {
+	prefix := []string{selfPath(), "secret-driver", "--stack", flags.agentName}
+	if flags.stateDir != "" {
+		prefix = append(prefix, "--state-dir", flags.stateDir)
+	}
+	return append(prefix, "--store-dir", store.Dir(), "--seal", string(store.Kind()))
 }
 
 // registerDriver writes the drop-in that makes podman route its secret store
@@ -152,15 +179,8 @@ func (f secretFlags) driverArgs() []string {
 // command carries the store's location and kind: a command that described a
 // different store than the one just written to would seal the next payload
 // somewhere nobody is looking.
-func registerDriver(env command.Env, flags secretFlags) error {
-	self, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("secret: locate the running binary: %w", err)
-	}
-	contents, err := secret.DriverDropIn(
-		[]string{self, "secret-driver"},
-		flags.driverArgs()...,
-	)
+func registerDriver(env command.Env, store *secret.Store, flags secretFlags) error {
+	contents, err := secret.DriverDropIn(driverCommandPrefix(store, flags))
 	if err != nil {
 		return err
 	}
@@ -207,11 +227,14 @@ func runSecretSet(ctx context.Context, env command.Env, args []string) error {
 		path = words[1]
 	}
 
+	if err := flags.ensureSeal(ctx, env); err != nil {
+		return err
+	}
 	store, err := flags.store(env)
 	if err != nil {
 		return err
 	}
-	if err := registerDriver(env, flags); err != nil {
+	if err := registerDriver(env, store, flags); err != nil {
 		return err
 	}
 
@@ -274,11 +297,14 @@ func runSecretProvision(ctx context.Context, env command.Env, args []string) err
 	}
 
 	names := fs.Args()
+	if err := flags.ensureSeal(ctx, env); err != nil {
+		return err
+	}
 	store, err := flags.store(env)
 	if err != nil {
 		return err
 	}
-	if err := registerDriver(env, flags); err != nil {
+	if err := registerDriver(env, store, flags); err != nil {
 		return err
 	}
 
@@ -292,6 +318,15 @@ func runSecretProvision(ctx context.Context, env command.Env, args []string) err
 				"secret: nothing to provision: name the secrets, or create them through podman first",
 			)
 		}
+		// podman keeps one secret database per user, not per stack, so the
+		// names it knows are every stack's. Saying so is the difference between
+		// an operator recognising a name they did not expect and wondering what
+		// else this command knows about.
+		fmt.Fprintf(
+			env.Stderr,
+			"secret: podman's list is per user rather than per stack; re-provisioning its %d names\n",
+			len(names),
+		)
 	}
 
 	// Provisioning re-prompts for every value, and a single pipe cannot say
@@ -386,31 +421,20 @@ func trimmedValue(name string, value []byte) ([]byte, error) {
 }
 
 // driverOpts is what podman is told on this command line, so a secret created
-// here reaches this store whether or not podman picked up the drop-in.
+// here reaches this store whether or not podman picked up the drop-in. Podman
+// splits these on commas and runs each value through a shell, so every word is
+// quoted and nothing in the list may contain a comma.
 func driverOpts(store *secret.Store, flags secretFlags) string {
-	prefix := append([]string{selfPath(), "secret-driver"}, driverArgsFor(store, flags)...)
-	parts := make([]string, 0, 4)
-	for _, verb := range []string{secret.DriverList, secret.DriverLookup, secret.DriverStore, secret.DriverDelete} {
-		parts = append(
-			parts,
-			verb+"="+strings.Join(append(append([]string(nil), prefix...), verb), " "),
-		)
+	prefix := driverCommandPrefix(store, flags)
+	parts := make([]string, 0, len(secret.DriverVerbs))
+	for _, verb := range secret.DriverVerbs {
+		words := append(append([]string(nil), prefix...), verb)
+		for i, word := range words {
+			words[i] = secret.ShellWord(word)
+		}
+		parts = append(parts, verb+"="+strings.Join(words, " "))
 	}
 	return strings.Join(parts, ",")
-}
-
-// driverArgsFor is the flags the driver command needs to open this store,
-// written the way a shell has to see them.
-func driverArgsFor(store *secret.Store, flags secretFlags) []string {
-	args := []string{"--stack", flags.agentName, "--store-dir", store.Dir()}
-	if store.Kind() != secret.KindSystemdCreds {
-		args = append(args, "--seal", string(store.Kind()))
-	}
-	quoted := make([]string, 0, len(args))
-	for _, arg := range args {
-		quoted = append(quoted, shellWord(arg))
-	}
-	return quoted
 }
 
 // selfPath is the running binary's own path, which is what podman has to be
@@ -421,12 +445,6 @@ func selfPath() string {
 		return "q15"
 	}
 	return self
-}
-
-// shellWord quotes one word for the shell podman runs a driver command
-// through.
-func shellWord(word string) string {
-	return "'" + strings.ReplaceAll(word, "'", `'\''`) + "'"
 }
 
 // createPodmanSecret hands the value to podman, which records the name and

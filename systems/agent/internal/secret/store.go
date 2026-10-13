@@ -61,8 +61,8 @@ const (
 	fileSuffix         = ".secret"
 )
 
-// systemdFloor is the first systemd release with `systemd-creds --user`.
-const systemdFloor = 256
+// SystemdFloor is the first systemd release with `systemd-creds --user`.
+const SystemdFloor = 256
 
 // storeDirMode and payloadMode are the permissions the criteria name: the
 // directory is private to the user, and the payload is readable only by its
@@ -424,7 +424,7 @@ func SupportsSystemdCreds(
 	if !ok {
 		return false, version, nil
 	}
-	return major >= systemdFloor, version, nil
+	return major >= SystemdFloor, version, nil
 }
 
 // systemdMajor reads the version number out of what systemd prints, which looks

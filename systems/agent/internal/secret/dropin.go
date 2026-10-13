@@ -54,14 +54,14 @@ func DriverDropIn(prefix []string, extra ...string) ([]byte, error) {
 
 	driver := make([]string, 0, len(prefix)+len(extra)+1)
 	for _, word := range append(append([]string(nil), prefix...), extra...) {
-		driver = append(driver, shellQuote(word))
+		driver = append(driver, ShellWord(word))
 	}
 	registered := strings.Join(driver, " ")
 
 	var out bytes.Buffer
 	out.WriteString(dropInHeader)
 	out.WriteString("\n[secrets]\ndriver = \"shell\"\n\n[secrets.opts]\n")
-	for _, verb := range []string{DriverList, DriverLookup, DriverStore, DriverDelete} {
+	for _, verb := range DriverVerbs {
 		fmt.Fprintf(&out, "%s = \"%s %s\"\n", verb, registered, verb)
 	}
 	return out.Bytes(), nil

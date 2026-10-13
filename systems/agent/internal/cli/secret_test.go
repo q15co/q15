@@ -83,6 +83,16 @@ func TestSecretDriverKeepsStandardOutputPure(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
 
+	// A store that holds nothing prints nothing, which is the state podman meets
+	// on a host that has no secrets yet.
+	env, stdout, _ := driverEnv(t, &fakeExec{}, "", "")
+	if err := Run(ctx, env, driverArgs(dir, secret.DriverList)); err != nil {
+		t.Fatalf("list on an empty store error = %v", err)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("list on an empty store wrote %q, want nothing", stdout.String())
+	}
+
 	env, stdout, stderr := driverEnv(t, &fakeExec{}, "sentinel-value", "abc123")
 	if err := Run(ctx, env, driverArgs(dir, secret.DriverStore)); err != nil {
 		t.Fatalf("store error = %v", err)
@@ -139,6 +149,17 @@ func TestSecretDriverKeepsStandardOutputPure(t *testing.T) {
 	}
 	if stdout.Len() != 0 {
 		t.Fatalf("list wrote %q after the delete, want nothing", stdout.String())
+	}
+
+	// Reading a slot that is not there fails without writing anything: an error
+	// sentence on standard output would become a value to podman.
+	stdout.Reset()
+	env, stdout, _ = driverEnv(t, &fakeExec{}, "", "abc123")
+	if err := Run(ctx, env, driverArgs(dir, secret.DriverLookup)); err == nil {
+		t.Fatal("lookup of an absent slot error = nil, want a failure")
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("lookup of an absent slot wrote %q, want nothing", stdout.String())
 	}
 }
 
@@ -315,12 +336,45 @@ func TestSecretListReportsTheStoreAndPassesPodmanThrough(t *testing.T) {
 func TestSecretProvisionNeedsATerminal(t *testing.T) {
 	env, _, _ := secretEnv(t, &fakeExec{}, "value")
 
-	err := Run(context.Background(), env, []string{"secret", "provision", "my_api_key"})
+	err := Run(
+		context.Background(),
+		env,
+		[]string{"secret", "provision", "--seal", "file", "my_api_key"},
+	)
 	if err == nil {
 		t.Fatal("error = nil, want a refusal")
 	}
 	if !strings.Contains(err.Error(), "secret set") {
 		t.Fatalf("error = %q, want it to name the scripted route", err)
+	}
+}
+
+// TestSecretSetOffersTheFallbackWhenTheHostCannotSeal is the offer the criteria
+// name: a host that cannot seal is told before a value is read, and the sentence
+// names the flag that works rather than leaving the operator to find it.
+func TestSecretSetOffersTheFallbackWhenTheHostCannotSeal(t *testing.T) {
+	fake := &fakeExec{handler: func(program string, _ []string) (string, string, error) {
+		if program == "systemd-creds" {
+			return "systemd 255 (255.4)\n", "", nil
+		}
+		return "", "", nil
+	}}
+	env, _, _ := secretEnv(t, fake, "sentinel-value")
+
+	err := Run(context.Background(), env, []string{"secret", "set", "my_api_key"})
+	if err == nil {
+		t.Fatal("error = nil, want a refusal")
+	}
+	if !strings.Contains(err.Error(), "--seal file") {
+		t.Fatalf("error = %q, want it to name the fallback", err)
+	}
+	if !strings.Contains(err.Error(), "255.4") {
+		t.Fatalf("error = %q, want it to say which version it found", err)
+	}
+	for _, call := range fake.calls {
+		if call.program == "podman" {
+			t.Fatalf("podman ran on a host that cannot seal: %v", fake.calls)
+		}
 	}
 }
 

@@ -22,6 +22,13 @@ const (
 	DriverDelete = "delete"
 )
 
+// DriverVerbs is the four commands, in the order podman is told about them.
+// They are listed once because two things render them - the drop-in podman
+// loads and the options a `podman secret create` command line carries - and a
+// verb missing from one of those is a driver that answers three of podman's
+// four questions.
+var DriverVerbs = []string{DriverList, DriverLookup, DriverStore, DriverDelete}
+
 // SecretIDEnv is the environment variable podman passes a secret's identifier
 // in.
 const SecretIDEnv = "SECRET_ID"

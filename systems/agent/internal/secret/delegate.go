@@ -159,7 +159,7 @@ func (s *Store) pathOf(ctx context.Context, program string) (string, bool) {
 	err := s.exec(
 		ctx,
 		"sh",
-		[]string{"-c", "command -v " + shellQuote(program)},
+		[]string{"-c", "command -v " + ShellWord(program)},
 		nil,
 		&out,
 		io.Discard,
@@ -174,8 +174,8 @@ func (s *Store) pathOf(ctx context.Context, program string) (string, bool) {
 	return path, true
 }
 
-// shellQuote wraps a word in single quotes, which is how a name survives a trip
+// ShellWord wraps a word in single quotes, which is how a name survives a trip
 // through the shell unchanged.
-func shellQuote(word string) string {
+func ShellWord(word string) string {
 	return "'" + strings.ReplaceAll(word, "'", `'\''`) + "'"
 }
