@@ -32,7 +32,14 @@ type routedModelAdapter struct {
 	selection  *modelcatalog.Selection
 	mediaStore q15media.Store
 	factory    modelClientFactory
-	clients    sync.Map // providerName → agent.ModelClient
+	clients    sync.Map // providerClientKey → agent.ModelClient
+}
+
+type providerClientKey struct {
+	name         string
+	providerType string
+	baseURL      string
+	apiKey       string
 }
 
 // modelClientFactory builds a provider client for one discovered model.
@@ -187,7 +194,7 @@ func (r *routedModelAdapter) completeModel(
 	onDelta func(string),
 	onReasoning func(string),
 ) (agent.ModelClientResult, error) {
-	client, err := r.getOrCreateClient(m)
+	client, err := r.clientFor(m)
 	if err != nil {
 		return agent.ModelClientResult{}, err
 	}
@@ -235,19 +242,25 @@ func (r *routedModelAdapter) lookupModel(ref string) (modelcatalog.Model, bool) 
 	return r.registry.LookupByRef(ref)
 }
 
-// getOrCreateClient returns a cached provider client or builds one.
-func (r *routedModelAdapter) getOrCreateClient(
+// clientFor returns a cached provider client or builds one.
+func (r *routedModelAdapter) clientFor(
 	m modelcatalog.Model,
 ) (agent.ModelClient, error) {
-	if cached, ok := r.clients.Load(m.ProviderName); ok {
+	key := providerClientKey{
+		name:         m.ProviderName,
+		providerType: m.ProviderType,
+		baseURL:      m.ProviderBaseURL,
+		apiKey:       m.ProviderAPIKey,
+	}
+	if cached, ok := r.clients.Load(key); ok {
 		return cached.(agent.ModelClient), nil
 	}
 	client, err := r.factory(m, r.mediaStore)
 	if err != nil {
 		return nil, fmt.Errorf("configure provider %q: %w", m.ProviderName, err)
 	}
-	r.clients.Store(m.ProviderName, client)
-	return client, nil
+	cached, _ := r.clients.LoadOrStore(key, client)
+	return cached.(agent.ModelClient), nil
 }
 
 // newModelAdapterWithFactory builds a routed adapter without a selection (so

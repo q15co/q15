@@ -219,8 +219,10 @@ func TestValidateRejectsUnsupportedProviderType(t *testing.T) {
 
 func TestValidateRequiresKeyEnvForOpenAICompatible(t *testing.T) {
 	cfg := Config{
-		Providers: []Provider{{Name: "p", Type: "openai-compatible", BaseURL: "https://x"}},
-		Agent:     testAgent("a"),
+		Providers: []Provider{
+			{Name: "p", Type: "openai-compatible", BaseURL: "https://x.example/v1"},
+		},
+		Agent: testAgent("a"),
 	}
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected error for missing key_env")
@@ -234,6 +236,65 @@ func TestValidateRequiresBaseURLForOpenAICompatible(t *testing.T) {
 	}
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected error for missing base_url")
+	}
+}
+
+func TestValidateOpenAICompatibleBaseURL(t *testing.T) {
+	tests := []struct {
+		name    string
+		baseURL string
+		wantErr bool
+	}{
+		{"documented pathless root", "https://api.deepseek.com", false},
+		{"root with a slash", "https://api.deepseek.com/", false},
+		{"missing host", "https:///v1", true},
+		{"unsupported scheme", "ftp://api.example.com/v1", true},
+		{"malformed URL", "https://api.example.com/%zz", true},
+		{"no scheme at all", "api.deepinfra.com", true},
+		{"documented base with a path", "https://api.deepinfra.com/v1/openai", false},
+		{"versioned base with a port", "http://localhost:8080/v1", false},
+		{"plain v1 base", "https://api.moonshot.ai/v1", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Config{
+				Providers: []Provider{{
+					Name:    "p",
+					Type:    "openai-compatible",
+					BaseURL: tt.baseURL,
+					KeyEnv:  "K",
+				}},
+				Agent: testAgent("a"),
+			}
+			err := cfg.Validate()
+			if tt.wantErr && err == nil {
+				t.Fatalf("expected an error for base_url %q", tt.baseURL)
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("unexpected error for base_url %q: %v", tt.baseURL, err)
+			}
+		})
+	}
+}
+
+// TestValidateAcceptsPathlessBaseURLForOllama pins the scope of the shape
+// check: an Ollama provider names a host its own client resolves, so a
+// pathless base_url stays legal there.
+func TestValidateAcceptsPathlessBaseURLForOllama(t *testing.T) {
+	cfg := Config{
+		Providers: []Provider{
+			{Name: "local", Type: "ollama", BaseURL: "http://localhost:11434"},
+			{
+				Name:    "cloud",
+				Type:    "ollama",
+				BaseURL: "https://ollama.com",
+				KeyEnv:  "OLLAMA_API_KEY",
+			},
+		},
+		Agent: testAgent("a"),
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("unexpected error for ollama providers: %v", err)
 	}
 }
 

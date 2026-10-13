@@ -82,8 +82,24 @@ Notes:
 
 Provider discovery is **mandatory**: the provider roster IS the model config. There is no hand-typed
 `models:` list. The agent queries each provider's roster endpoint at startup (Ollama `/api/tags` +
-`/api/show`, OpenAI-compatible `/v1/models`), enriches models from [models.dev](https://models.dev),
-and refreshes periodically so roster changes are picked up without restart.
+`/api/show`, OpenAI-compatible `{base_url}/models`), enriches models from
+[models.dev](https://models.dev), and refreshes periodically so roster changes are picked up without
+restart. A provider that ends up with no models is reported with the reason (the discovery attempt
+failed, with its error, or it succeeded and the provider listed no models) and when the attempt ran,
+so an unreachable provider is diagnosable from `list_providers` alone. The agent re-reads its config
+on the same ten-minute tick, so an edited provider list (a corrected `base_url`, say) is applied
+without a restart. An edit is applied whole or not at all: if it cannot load, if a key will not
+resolve, or if it discovers no models at all, the previous providers keep running and
+`list_providers` reports why under `config_reload`.
+
+For DeepInfra, mount `deploy/compose/secrets/deepinfra_api_key` and configure a provider with
+`type: openai-compatible`, `base_url: https://api.deepinfra.com/v1/openai`, and
+`key_env: DEEPINFRA_API_KEY`. The local Compose stack mounts that key as `DEEPINFRA_API_KEY_FILE`.
+Enable `discovery.models_dev: true` to enrich chat models with capabilities, context limits, and
+pricing. Provider matching uses models.dev's `api` and `doc` URLs;
+`discovery.models_dev_provider: deepinfra` can override it for a proxy. Entries tagged for non-chat
+tasks are excluded. Models without capability metadata report `capabilities_known: false`, and
+unknown structured-output support is `null`.
 
 `agent.name` and `agent.memory_recent_turns` are the only agent fields. The current model is runtime
 state, not config: on first run q15 auto-selects a first-eligible roster model (preferring a

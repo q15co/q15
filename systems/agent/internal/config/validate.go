@@ -51,6 +51,11 @@ func (c Config) validate() error {
 				i,
 			)
 		}
+		if normalizedType == providertypes.OpenAICompatible {
+			if err := validateOpenAICompatibleBaseURL(provider.BaseURL); err != nil {
+				return fmt.Errorf("providers[%d].base_url: %w", i, err)
+			}
+		}
 		if normalizedType == providertypes.OpenAICompatible &&
 			strings.TrimSpace(provider.KeyEnv) == "" {
 			return fmt.Errorf("providers[%d].key_env is required", i)
@@ -273,6 +278,24 @@ func isOllamaCloudBaseURL(raw string) bool {
 		return false
 	}
 	return strings.EqualFold(base.Hostname(), "ollama.com")
+}
+
+// validateOpenAICompatibleBaseURL checks URL syntax. The provider's documented
+// API root may include a path (DeepInfra) or be pathless (DeepSeek); startup
+// discovery checks whether the configured endpoint actually serves models.
+func validateOpenAICompatibleBaseURL(raw string) error {
+	raw = strings.TrimSpace(raw)
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("%q is not a valid URL: %w", raw, err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return fmt.Errorf("%q must be an http or https URL", raw)
+	}
+	if parsed.Hostname() == "" {
+		return fmt.Errorf("%q has no host", raw)
+	}
+	return nil
 }
 
 func normalizeAllowedUserIDs(ids []int64) ([]int64, error) {

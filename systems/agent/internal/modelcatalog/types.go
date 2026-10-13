@@ -14,6 +14,9 @@ const (
 
 // Capabilities is the normalized capability set discovered for one model.
 type Capabilities struct {
+	// Known distinguishes reported capability metadata from a text-only
+	// fallback when discovery could not obtain it.
+	Known       bool
 	Text        bool
 	ImageInput  bool
 	AudioInput  bool
@@ -83,13 +86,17 @@ type Model struct {
 	// StructuredOutput reports whether the model supports structured/JSON output
 	// (from models.dev top-level structured_output bool).
 	StructuredOutput bool
+	// StructuredOutputKnown distinguishes absent metadata from a reported false.
+	StructuredOutputKnown bool
 }
 
 // Options controls discovery behavior for one provider.
 type Options struct {
-	// ModelsDev selects whether roster entries are enriched from the models.dev
-	// catalog.
+	// ModelsDev selects whether roster entries are enriched from models.dev.
 	ModelsDev bool
+	// ModelsDevProvider overrides automatic catalog matching for proxies or
+	// endpoints whose provider identity is ambiguous.
+	ModelsDevProvider string
 	// Include is an optional whitelist of glob patterns (path.Match syntax)
 	// applied to ProviderModel. Empty means keep all.
 	Include []string

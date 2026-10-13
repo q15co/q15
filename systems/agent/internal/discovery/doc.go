@@ -2,9 +2,10 @@
 // enrichment.
 //
 // Provider packages own provider-specific roster protocol adapters (for
-// example Ollama /api/tags and OpenAI-compatible /v1/models). This package is
-// the catalog composition layer: it dispatches to those adapters, enriches the
-// returned roster with models.dev metadata, and applies include/exclude filters.
+// example Ollama /api/tags and OpenAI-compatible {base_url}/models). This
+// package is the catalog composition layer: it dispatches to those adapters,
+// enriches the returned roster with models.dev metadata, and applies
+// include/exclude filters.
 // Neutral catalog types and helpers live in internal/modelcatalog so provider
 // adapters do not import this orchestration package.
 //

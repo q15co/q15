@@ -23,6 +23,16 @@ func Load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("read config %q: %w", path, err)
 	}
 
+	cfg, err := Parse(data)
+	if err != nil {
+		return Config{}, fmt.Errorf("config %q: %w", path, err)
+	}
+	return cfg, nil
+}
+
+// Parse validates configuration from one file snapshot. Callers that track
+// changes can hash the same bytes they apply without reopening the file.
+func Parse(data []byte) (Config, error) {
 	var cfg Config
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
@@ -30,13 +40,13 @@ func Load(path string) (Config, error) {
 		if errors.Is(err, io.EOF) {
 			return Config{}, nil
 		}
-		return Config{}, fmt.Errorf("decode config %q: %w", path, err)
+		return Config{}, fmt.Errorf("decode config: %w", err)
 	}
 	if err := ensureSingleDocument(dec); err != nil {
-		return Config{}, fmt.Errorf("decode config %q: %w", path, err)
+		return Config{}, fmt.Errorf("decode config: %w", err)
 	}
 	if err := cfg.Validate(); err != nil {
-		return Config{}, fmt.Errorf("invalid config %q: %w", path, err)
+		return Config{}, fmt.Errorf("invalid config: %w", err)
 	}
 	return cfg, nil
 }

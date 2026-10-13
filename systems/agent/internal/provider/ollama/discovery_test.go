@@ -166,6 +166,7 @@ func TestCapabilitiesFromOllamaShow(t *testing.T) {
 	}{
 		{"all", []string{"completion", "tools", "vision", "thinking", "audio"},
 			modelcatalog.Capabilities{
+				Known:       true,
 				Text:        true,
 				ToolCalling: true,
 				ImageInput:  true,
@@ -173,7 +174,8 @@ func TestCapabilitiesFromOllamaShow(t *testing.T) {
 				AudioInput:  true,
 			}},
 		{"unknown-ignored", []string{"completion", "embeddings", "unknown-cap"},
-			modelcatalog.Capabilities{Text: true}},
+			modelcatalog.Capabilities{Known: true, Text: true}},
+		{"reported empty", []string{}, modelcatalog.Capabilities{Known: true, Text: true}},
 		{"empty", nil, modelcatalog.Capabilities{Text: true}},
 	}
 	for _, tc := range tests {

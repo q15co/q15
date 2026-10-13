@@ -100,6 +100,44 @@ func openTestSelectionStore(t *testing.T) *selectionstore.Store {
 
 // --- routed model adapter tests ---
 
+func TestRoutedModelAdapterUsesReloadedProviderSettings(t *testing.T) {
+	ctx := context.Background()
+	watcher, registry, _, path := reloadFixture(t)
+	var created []modelcatalog.Model
+	adapter, err := newModelAdapterWithFactory(registry, nil,
+		func(m modelcatalog.Model, _ q15media.Store) (agent.ModelClient, error) {
+			created = append(created, m)
+			return &fakeModelClient{}, nil
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bound, err := adapter.BindProviderModel("local", "first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adapter.Complete(ctx, "first", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	writeConfigFile(t, path, "http://two.test:11434")
+	watcher.tick(ctx)
+	if _, err := adapter.Complete(ctx, "second", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(created) != 2 || created[1].ProviderBaseURL != "http://two.test:11434" {
+		t.Fatalf(
+			"client configurations = %+v, want a new client for the reloaded endpoint",
+			created,
+		)
+	}
+	if _, err := bound.Complete(ctx, "first", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(created) != 2 {
+		t.Fatalf("bound client recreated: %d factories, want 2", len(created))
+	}
+}
+
 func TestRoutedModelAdapterRoutesModelsAndSuppressesTools(t *testing.T) {
 	clients := make(map[string]*fakeModelClient)
 	factoryCalls := make(map[string]int)
@@ -607,5 +645,51 @@ func TestSwitchCognitionModelPersistsAndResolverFallsBack(t *testing.T) {
 	}
 	if refs := resolver("working_memory.consolidate"); len(refs) == 0 || refs[0] != "beta" {
 		t.Fatalf("override resolver refs = %v, want beta first", refs)
+	}
+}
+
+func TestRoutedModelAdapterCacheIncludesProviderConnectionSettings(t *testing.T) {
+	tests := []struct {
+		name   string
+		change func(*modelcatalog.Model)
+	}{
+		{"name", func(m *modelcatalog.Model) { m.ProviderName = "another" }},
+		{"type", func(m *modelcatalog.Model) { m.ProviderType = "ollama" }},
+		{"url", func(m *modelcatalog.Model) { m.ProviderBaseURL = "https://new.test/v1" }},
+		{"key", func(m *modelcatalog.Model) { m.ProviderAPIKey = "rotated" }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			creates := 0
+			adapter := &routedModelAdapter{
+				factory: func(_ modelcatalog.Model, _ q15media.Store) (agent.ModelClient, error) {
+					creates++
+					return &fakeModelClient{}, nil
+				},
+			}
+			original := modelcatalog.Model{
+				ProviderName:    "p",
+				ProviderType:    "openai-compatible",
+				ProviderBaseURL: "https://old.test/v1",
+				ProviderAPIKey:  "original",
+			}
+			first, err := adapter.clientFor(original)
+			if err != nil {
+				t.Fatal(err)
+			}
+			changed := original
+			tt.change(&changed)
+			second, err := adapter.clientFor(changed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			reused, err := adapter.clientFor(original)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if first == second || reused != first || creates != 2 {
+				t.Errorf("cache failed to separate %s changes: factories=%d", tt.name, creates)
+			}
+		})
 	}
 }

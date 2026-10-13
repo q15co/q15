@@ -54,6 +54,9 @@ type ProviderDiscovery struct {
 	// ModelsDev selects whether discovered models are enriched with
 	// cost/context/benchmark metadata from the models.dev catalog.
 	ModelsDev bool `yaml:"models_dev"`
+	// ModelsDevProvider overrides automatic catalog matching for proxies or
+	// endpoints whose provider identity is ambiguous.
+	ModelsDevProvider string `yaml:"models_dev_provider,omitempty"`
 	// Include is an optional whitelist of glob patterns (path.Match syntax)
 	// applied to discovered provider model IDs. Empty means keep all.
 	Include []string `yaml:"include"`

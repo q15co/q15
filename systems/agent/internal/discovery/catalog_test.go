@@ -76,13 +76,14 @@ func TestNewCatalog_OllamaEndToEndWithEnrichment(t *testing.T) {
 		catalog := NewCatalog(ollamaServer.Client())
 		models, err := catalog.Discover(context.Background(), Provider{
 			Type:    "ollama",
-			Name:    "ollama-cloud",   // name contains "cloud" → slug "ollama-cloud"
+			Name:    "ollama-cloud",
 			BaseURL: ollamaServer.URL, // mock roster endpoint
 			APIKey:  "test-key",
 			Options: Options{
-				ModelsDev: true,
-				Include:   []string{"kimi-*", "nemotron:*"},
-				Exclude:   []string{"*:latest"},
+				ModelsDev:         true,
+				ModelsDevProvider: "ollama-cloud",
+				Include:           []string{"kimi-*", "nemotron:*"},
+				Exclude:           []string{"*:latest"},
 			},
 		})
 		if err != nil {
@@ -135,7 +136,7 @@ func TestNewCatalog_OpenAICompatibleWithoutEnrichment(t *testing.T) {
 	catalog := NewCatalog(server.Client())
 	models, err := catalog.Discover(context.Background(), Provider{
 		Type:    "openai-compatible",
-		BaseURL: server.URL,
+		BaseURL: server.URL + "/v1",
 		APIKey:  "secret",
 		Options: Options{},
 	})
@@ -201,5 +202,66 @@ func TestNewCatalog_NilHTTPClient(t *testing.T) {
 	}
 	if models != nil {
 		t.Fatalf("expected nil for codex, got %d models", len(models))
+	}
+}
+
+func TestNewCatalog_DeepInfraChatRosterWithEnrichment(t *testing.T) {
+	newCacheDir(t)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/openai/models", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"data":[
+            {"id":"openai/gpt-oss-20b","metadata":{"tags":["chat","reasoning"]}},
+			{"id":"Qwen/Qwen3-235B-A22B-Instruct-2507","metadata":{"tags":["chat"]}},
+            {"id":"uncatalogued/chat","metadata":{"tags":["chat"]}},
+            {"id":"BAAI/bge-m3","metadata":{"tags":["embed"]}}
+        ]}`))
+	})
+	mux.HandleFunc("/api.json", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(modelsDevFile{
+			"deepinfra": {
+				Doc: "https://deepinfra.com/models",
+				Models: map[string]modelsDevModel{
+					"Qwen/Qwen3-235B-A22B-Instruct-2507": {ToolCall: true},
+					"openai/gpt-oss-20b": {
+						ToolCall: true, StructuredOutput: true,
+						Limit: modelsDevLimit{Context: 131072, Output: 16384},
+						Cost:  modelsDevCost{Input: 0.03, Output: 0.14},
+					},
+				},
+			},
+		})
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	old := defaultCatalogModelsDevURL
+	defaultCatalogModelsDevURL = server.URL + "/api.json"
+	t.Cleanup(func() { defaultCatalogModelsDevURL = old })
+	catalog := NewCatalog(server.Client())
+	models, err := catalog.Discover(context.Background(), Provider{
+		Type: "openai-compatible", BaseURL: server.URL + "/v1/openai",
+		Options: Options{ModelsDev: true, ModelsDevProvider: "deepinfra"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(models) != 3 {
+		t.Fatalf("roster = %+v, want only the three chat models", models)
+	}
+	known := models[0]
+	if !known.Capabilities.Known || !known.Capabilities.ToolCalling ||
+		!known.StructuredOutputKnown ||
+		!known.StructuredOutput {
+		t.Errorf("catalogued model lost capability metadata: %+v", known)
+	}
+	if known.MaxContextTokens != 131072 || known.MaxOutputTokens != 16384 ||
+		known.CostPerMTokIn != 0.03 {
+		t.Errorf("catalogued model lost limits or cost: %+v", known)
+	}
+	if !models[1].Capabilities.Known || !models[1].Capabilities.ToolCalling ||
+		models[1].ProviderModel != "Qwen/Qwen3-235B-A22B-Instruct-2507" {
+		t.Errorf("mixed-case model lost metadata or its provider ID: %+v", models[1])
+	}
+	if models[2].Capabilities.Known || models[2].StructuredOutputKnown {
+		t.Errorf("unmatched model claims known metadata: %+v", models[2])
 	}
 }

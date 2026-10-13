@@ -25,6 +25,7 @@ func sampleModelsDevPayload() modelsDevFile {
 	return modelsDevFile{
 		"ollama-cloud": {
 			Name: "Ollama Cloud",
+			Doc:  "https://ollama.com/blog/cloud",
 			Models: map[string]modelsDevModel{
 				"kimi-k2.7-code": {
 					Name:        "kimi-k2.7-code",
@@ -65,6 +66,7 @@ func sampleModelsDevPayload() modelsDevFile {
 		// A provider with cost data (for testing the cost parsing path).
 		"requesty": {
 			Name: "Requesty",
+			Doc:  "https://requesty.ai/solution/llm-routing/models",
 			Models: map[string]modelsDevModel{
 				"xai/grok-4": {
 					Name:  "grok-4",
@@ -259,6 +261,9 @@ func TestModelsDevClient_EnrichRealOllamaCloudShape(t *testing.T) {
 	if !e.Capabilities.ToolCalling {
 		t.Error("expected ToolCalling from top-level tool_call=true")
 	}
+	if !e.Capabilities.Known || !e.StructuredOutputKnown {
+		t.Error("matched catalog entry should have known capability and structured-output metadata")
+	}
 	if !e.Capabilities.Reasoning {
 		t.Error("expected Reasoning from top-level reasoning=true")
 	}
@@ -437,6 +442,13 @@ func TestDeriveCostTier(t *testing.T) {
 }
 
 func TestProviderSlug(t *testing.T) {
+	file := modelsDevFile{
+		"ollama-cloud": {Doc: "https://ollama.com/blog/cloud"},
+		"moonshotai":   {API: "https://api.moonshot.ai/v1"},
+		"zai":          {API: "https://api.z.ai/api/paas/v4"},
+		"openai":       {Doc: "https://platform.openai.com/docs/models"},
+		"deepinfra":    {Doc: "https://deepinfra.com/models"},
+	}
 	tests := []struct {
 		name string
 		p    Provider
@@ -448,9 +460,9 @@ func TestProviderSlug(t *testing.T) {
 			"ollama-cloud",
 		},
 		{
-			"ollama cloud by name only",
-			Provider{Type: "ollama", Name: "ollama-cloud", BaseURL: ""},
-			"ollama-cloud",
+			"provider name does not identify the endpoint",
+			Provider{Type: "ollama", Name: "ollama-cloud", BaseURL: "http://localhost:11434"},
+			"",
 		},
 		{
 			"local ollama no slug",
@@ -474,6 +486,11 @@ func TestProviderSlug(t *testing.T) {
 			"openai",
 		},
 		{
+			"openai-compatible deepinfra",
+			Provider{Type: "openai-compatible", BaseURL: "https://api.deepinfra.com/v1/openai"},
+			"deepinfra",
+		},
+		{
 			"openai-compatible unknown host no slug",
 			Provider{Type: "openai-compatible", BaseURL: "https://internal.corp/v1"},
 			"",
@@ -482,7 +499,7 @@ func TestProviderSlug(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := providerSlug(tc.p)
+			got := providerSlug(tc.p, file)
 			if got != tc.want {
 				t.Errorf("providerSlug() = %q, want %q", got, tc.want)
 			}
@@ -523,5 +540,41 @@ func TestWriteCache_Atomic(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, data) {
 		t.Errorf("data mismatch: got %q, want %q", got, data)
+	}
+}
+
+func TestCatalogProviderSlug(t *testing.T) {
+	file := modelsDevFile{
+		"vendor": {API: "https://api.vendor.test/v1", Doc: "https://docs.vendor.test"},
+		"coding": {API: "https://api.vendor.test/coding/v1", Doc: "https://docs.vendor.test"},
+		"hosted": {Doc: "https://hosted.example.co.uk/models"},
+		"other":  {API: "https://api.other.test/v1"},
+	}
+	tests := []struct{ url, want string }{
+		{"https://api.vendor.test/v1/", "vendor"},
+		{"https://API.VENDOR.TEST/coding/v1", "coding"},
+		{"https://api.vendor.test/custom", ""},
+		{"https://proxy.vendor.test/v1", ""},
+		{"https://api.hosted.example.co.uk/v1/openai", "hosted"},
+		{"https://api.other.test/v1", "other"},
+		{"https://other.test.evil.example/v1", ""},
+		{"http://127.0.0.1:8080/v1", ""},
+		{"http://localhost:8080/v1", ""},
+		{"://", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.url, func(t *testing.T) {
+			if got := catalogProviderSlug(tt.url, file); got != tt.want {
+				t.Errorf("slug = %q, want %q", got, tt.want)
+			}
+		})
+	}
+	p := Provider{
+		Type:    "openai-compatible",
+		BaseURL: "https://proxy.test/v1",
+		Options: Options{ModelsDevProvider: "vendor"},
+	}
+	if got := providerSlug(p, file); got != "vendor" {
+		t.Errorf("explicit slug = %q, want vendor", got)
 	}
 }

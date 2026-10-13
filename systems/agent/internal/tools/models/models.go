@@ -51,28 +51,41 @@ type providerInfo struct {
 	Type      string `json:"type"`
 	BaseURL   string `json:"base_url,omitempty"`
 	Reachable bool   `json:"reachable"`
+	// Reason and CheckedAt are set only for a provider that currently has no
+	// models, so "reachable: false" comes with its cause instead of standing
+	// alone.
+	Reason    string `json:"reason,omitempty"`
+	CheckedAt string `json:"checked_at,omitempty"`
 	Current   bool   `json:"current,omitempty"`
 }
 
+// configReloadInfo reports the last attempt to apply an edited config file.
+type configReloadInfo struct {
+	CheckedAt string `json:"checked_at"`
+	Applied   bool   `json:"applied"`
+	Error     string `json:"error,omitempty"`
+}
+
 type modelInfo struct {
-	Provider         string             `json:"provider"`
-	ProviderType     string             `json:"provider_type"`
-	ProviderModel    string             `json:"provider_model"`
-	Ref              string             `json:"ref"`
-	Name             string             `json:"name,omitempty"`
-	Current          bool               `json:"current,omitempty"`
-	Modalities       []string           `json:"modalities"`
-	Capabilities     []string           `json:"capabilities"`
-	StructuredOutput bool               `json:"structured_output"`
-	Params           int64              `json:"params,omitempty"`
-	Context          int                `json:"context,omitempty"`
-	Output           int                `json:"output,omitempty"`
-	ReleaseDate      string             `json:"release_date,omitempty"`
-	CostTier         string             `json:"cost_tier,omitempty"`
-	CostPerMTokIn    *float64           `json:"cost_per_mtok_in,omitempty"`
-	CostPerMTokOut   *float64           `json:"cost_per_mtok_out,omitempty"`
-	Benchmarks       map[string]float64 `json:"benchmarks,omitempty"`
-	Source           string             `json:"source,omitempty"`
+	Provider          string             `json:"provider"`
+	ProviderType      string             `json:"provider_type"`
+	ProviderModel     string             `json:"provider_model"`
+	Ref               string             `json:"ref"`
+	Name              string             `json:"name,omitempty"`
+	Current           bool               `json:"current,omitempty"`
+	Modalities        []string           `json:"modalities"`
+	Capabilities      []string           `json:"capabilities"`
+	CapabilitiesKnown bool               `json:"capabilities_known"`
+	StructuredOutput  *bool              `json:"structured_output"`
+	Params            int64              `json:"params,omitempty"`
+	Context           int                `json:"context,omitempty"`
+	Output            int                `json:"output,omitempty"`
+	ReleaseDate       string             `json:"release_date,omitempty"`
+	CostTier          string             `json:"cost_tier,omitempty"`
+	CostPerMTokIn     *float64           `json:"cost_per_mtok_in,omitempty"`
+	CostPerMTokOut    *float64           `json:"cost_per_mtok_out,omitempty"`
+	Benchmarks        map[string]float64 `json:"benchmarks,omitempty"`
+	Source            string             `json:"source,omitempty"`
 }
 
 // NewListProviders constructs the list_providers tool.
@@ -129,10 +142,12 @@ func NewSwitchCognitionModel(
 func (t *ListProviders) Definition() agent.ToolDefinition {
 	return agent.ToolDefinition{
 		Name:        "list_providers",
-		Description: "List configured model providers and whether each currently has reachable live models.",
+		Description: "List configured model providers, whether each currently has reachable live models, and for a provider that has none, the reason and when discovery last ran.",
 		PromptGuidance: []string{
 			"Use before switching providers when you need to know which provider rosters are currently reachable.",
 			"A provider is reachable when it has at least one model in the current live roster.",
+			"An unreachable provider carries a reason: either the discovery attempt failed, with its error, or it succeeded and the provider listed no models. Report the reason rather than guessing.",
+			"config_reload reports the last attempt to apply an edited config file: when it ran, whether it was applied, and why it was refused. A refused edit leaves the previous providers running.",
 		},
 		Parameters: map[string]any{
 			"type":       "object",
@@ -158,19 +173,37 @@ func (t *ListProviders) Run(_ context.Context, _ string) (string, error) {
 		if name == "" {
 			continue
 		}
-		out = append(out, providerInfo{
+		info := providerInfo{
 			Name:      name,
 			Type:      strings.TrimSpace(provider.Type),
 			BaseURL:   strings.TrimSpace(provider.BaseURL),
 			Reachable: t.registry.ProviderHasModels(name),
 			Current:   name == currentProvider,
-		})
+		}
+		if !info.Reachable {
+			if status, ok := t.registry.ProviderStatus(name); ok {
+				info.Reason = status.Reason()
+				info.CheckedAt = status.CheckedAt.UTC().Format(time.RFC3339)
+			} else {
+				info.Reason = "discovery has not run yet"
+			}
+		}
+		out = append(out, info)
 	}
 
-	return jsonOutput(map[string]any{
+	payload := map[string]any{
 		"current_provider": currentProvider,
 		"providers":        out,
-	})
+	}
+	if status, ok := t.registry.ReloadStatus(); ok {
+		payload["config_reload"] = configReloadInfo{
+			CheckedAt: status.CheckedAt.UTC().Format(time.RFC3339),
+			Applied:   status.Applied,
+			Error:     status.Error,
+		}
+	}
+
+	return jsonOutput(payload)
 }
 
 // Definition returns the list_models schema exposed to the model.
@@ -181,6 +214,7 @@ func (t *ListModels) Definition() agent.ToolDefinition {
 		PromptGuidance: []string{
 			"Use when deciding whether the current model is appropriate for a task, or before switch_model.",
 			"Filter by provider, capability, min_context, or limit when the roster is large.",
+			"capabilities_known=false means capability metadata is unavailable; an empty list does not prove the model lacks tools. Capability filters return confirmed matches only. structured_output=null means that support is unknown.",
 			"Do not switch just because alternatives exist; switch when you have a specific capability, context, freshness, or cost reason.",
 		},
 		Parameters: map[string]any{
@@ -468,21 +502,25 @@ func (t *SwitchCognitionModel) Run(_ context.Context, arguments string) (string,
 
 func describeModel(m modelcatalog.Model, current bool) modelInfo {
 	info := modelInfo{
-		Provider:         m.ProviderName,
-		ProviderType:     m.ProviderType,
-		ProviderModel:    m.ProviderModel,
-		Ref:              m.Ref,
-		Name:             m.Name,
-		Current:          current,
-		Modalities:       modelModalities(m),
-		Capabilities:     modelCapabilities(m),
-		StructuredOutput: m.StructuredOutput,
-		Params:           m.ParameterCount,
-		Context:          m.MaxContextTokens,
-		Output:           m.MaxOutputTokens,
-		CostTier:         m.CostTier,
-		Benchmarks:       m.BenchmarkScores,
-		Source:           m.Source,
+		Provider:          m.ProviderName,
+		ProviderType:      m.ProviderType,
+		ProviderModel:     m.ProviderModel,
+		Ref:               m.Ref,
+		Name:              m.Name,
+		Current:           current,
+		Modalities:        modelModalities(m),
+		Capabilities:      modelCapabilities(m),
+		CapabilitiesKnown: m.Capabilities.Known,
+		Params:            m.ParameterCount,
+		Context:           m.MaxContextTokens,
+		Output:            m.MaxOutputTokens,
+		CostTier:          m.CostTier,
+		Benchmarks:        m.BenchmarkScores,
+		Source:            m.Source,
+	}
+	if m.StructuredOutputKnown || m.StructuredOutput {
+		value := m.StructuredOutput
+		info.StructuredOutput = &value
 	}
 	if !m.ReleaseDate.IsZero() {
 		info.ReleaseDate = m.ReleaseDate.Format(time.DateOnly)
