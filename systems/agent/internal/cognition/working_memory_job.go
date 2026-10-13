@@ -16,6 +16,7 @@ const (
 	workingMemoryRuntimePath                = "/memory/" + workingMemoryRelativePath
 	workingMemoryScheduleSpec               = "0 4 * * *"
 	workingMemoryRecentTurns                = 16
+	workingMemoryWindowTurns                = 16
 	workingMemoryMinDirtyTurns        int64 = 6
 )
 
@@ -76,9 +77,41 @@ func (workingMemoryConsolidationJob) Build(
 	if err != nil {
 		return Spec{}, fmt.Errorf("load verification review artifact: %w", err)
 	}
-	recentMessages, err := loader.LoadRecentMessages(ctx, workingMemoryRecentTurns)
+	consolidationCheckpoint, err := loader.LoadConsolidationCheckpoint(ctx)
 	if err != nil {
-		return Spec{}, fmt.Errorf("load recent messages: %w", err)
+		return Spec{}, fmt.Errorf("load consolidation checkpoint: %w", err)
+	}
+	var recentMessages []conversation.Message
+	var transcriptStatus string
+	windowEndSeq := int64(0)
+	if consolidationCheckpoint.LastConsolidatedSeq > 0 {
+		window, loadErr := loader.LoadMessagesSinceSeqWindow(
+			ctx,
+			consolidationCheckpoint.LastConsolidatedSeq,
+			workingMemoryWindowTurns,
+		)
+		if loadErr != nil {
+			return Spec{}, fmt.Errorf(
+				"load messages since consolidation checkpoint: %w",
+				loadErr,
+			)
+		}
+		recentMessages = window.Messages
+		windowEndSeq = window.LastSeq
+		transcriptStatus = renderWorkingMemoryTranscriptScope(
+			consolidationCheckpoint,
+			window,
+		)
+	} else {
+		recentMessages, err = loader.LoadRecentMessages(ctx, workingMemoryRecentTurns)
+		if err != nil {
+			return Spec{}, fmt.Errorf("load recent messages: %w", err)
+		}
+		transcriptStatus = renderTranscriptScopeWithPolicy(
+			"selected by the initial working-memory replay fallback window independent of the consolidation checkpoint",
+			workingMemoryRecentTurns,
+			len(recentMessages),
+		)
 	}
 
 	runtimePath := workingMemoryPath(working)
@@ -95,7 +128,6 @@ func (workingMemoryConsolidationJob) Build(
 		verificationAttrs["present"] = "true"
 	}
 
-	transcriptStatus := renderTranscriptScope(workingMemoryRecentTurns, len(recentMessages))
 	transcriptArtifact := renderTranscriptArtifact(recentMessages)
 
 	return Spec{
@@ -192,6 +224,7 @@ func (workingMemoryConsolidationJob) Build(
 		ExposeTools:        true,
 		RequireToolCalling: true,
 		AllowedTools:       append([]string(nil), workingMemoryAllowedTools...),
+		CheckpointSeq:      windowEndSeq,
 		ToolCallPolicy: filetools.PathAccessPolicy{
 			ReadPaths:  []string{workingMemoryRuntimePath},
 			WritePaths: []string{workingMemoryRuntimePath},
@@ -219,6 +252,7 @@ func (workingMemoryConsolidationJob) ApplyResult(
 		Metadata: map[string]string{
 			"path": workingMemoryRuntimePath,
 		},
+		CheckpointSeq: output.Spec.CheckpointSeq,
 	}, nil
 }
 
@@ -259,6 +293,30 @@ func shouldRunWorkingMemoryConsolidation(
 		state.DirtySinceSeq,
 		snapshot.HeadLastSeq,
 	)
+}
+
+func renderWorkingMemoryTranscriptScope(
+	checkpoint ConsolidationCheckpoint,
+	window TurnWindow,
+) string {
+	if len(window.Messages) == 0 {
+		return "No transcript messages were loaded for this run."
+	}
+	checkpointSeq := max(0, checkpoint.LastConsolidatedSeq)
+	lines := []string{
+		fmt.Sprintf(
+			"A bounded working-memory replay window of episodic history after the working-memory consolidation checkpoint seq %d is included below as a transcript artifact.",
+			checkpointSeq,
+		),
+		"Treat it as historical evidence for still-unconsolidated context, not as the full transcript.",
+	}
+	if window.RemainingTurns > 0 {
+		lines = append(lines, fmt.Sprintf(
+			"%d later turns remain unconsolidated after this window and will be covered by later runs, so keep this run's updates scoped to the evidence above.",
+			window.RemainingTurns,
+		))
+	}
+	return renderPromptLines(lines...)
 }
 
 func workingMemoryPath(working agent.WorkingMemory) string {

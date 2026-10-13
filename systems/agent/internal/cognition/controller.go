@@ -517,7 +517,9 @@ func (c *Controller) runPending(ctx context.Context, pending pendingRun) error {
 	// that windows its input reports the boundary it reached through
 	// ParsedResult.CheckpointSeq, so the checkpoint advances to what was really
 	// consumed instead of the run head, and the job stays eligible to drain the
-	// rest of its backlog.
+	// rest of its backlog. Both checkpoint-advancing jobs persist this
+	// boundary: the semantic extraction checkpoint, and the consolidation
+	// checkpoint that the working-memory job windows its next input from.
 	coveredSeq := pending.headSeq
 	if result.CheckpointSeq > 0 && result.CheckpointSeq < coveredSeq {
 		coveredSeq = result.CheckpointSeq
@@ -528,7 +530,7 @@ func (c *Controller) runPending(ctx context.Context, pending pendingRun) error {
 		consolidationCheckpoint, runErr = c.store.StoreConsolidationCheckpoint(
 			ctx,
 			ConsolidationCheckpoint{
-				LastConsolidatedSeq: pending.headSeq,
+				LastConsolidatedSeq: coveredSeq,
 				LastConsolidatedAt:  pending.headAt,
 			},
 		)
