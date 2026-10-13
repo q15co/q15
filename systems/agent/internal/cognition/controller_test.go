@@ -791,6 +791,75 @@ func TestControllerPartialSemanticRunAdvancesCheckpointToCoveredWindow(t *testin
 	}
 }
 
+func TestControllerPartialWorkingMemoryRunAdvancesConsolidationCheckpointToCoveredWindow(
+	t *testing.T,
+) {
+	store := newFakeControllerStore()
+	store.setHead(100, time.Date(2026, time.April, 8, 9, 30, 0, 0, time.UTC))
+
+	controller := newControllerForTest(t, store, JobRegistration{
+		NewJob: func() JobDefinition {
+			return fakeJob{
+				jobType: workingMemoryConsolidationJobType,
+				build: func(context.Context, ContextLoader) (Spec, error) {
+					return Spec{
+						Objective:          "Consolidate working memory.",
+						CompletionContract: "Return `status: ok`.",
+					}, nil
+				},
+				apply: func(context.Context, ContextLoader, JobOutput) (ParsedResult, error) {
+					return ParsedResult{Summary: "window", CheckpointSeq: 24}, nil
+				},
+			}
+		},
+		Policy: TriggerPolicy{
+			State: []StateRule{{
+				ID: "dirty",
+				Evaluate: func(_ context.Context, _ Snapshot, state JobState) (bool, string, error) {
+					return state.DirtySinceSeq > 0, "dirty", nil
+				},
+			}},
+		},
+	})
+	controller.started = time.Now().UTC()
+
+	pending, ok, err := controller.nextPendingRun(context.Background(), false, false, true)
+	if err != nil {
+		t.Fatalf("nextPendingRun() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("nextPendingRun() ok = false, want true")
+	}
+	if err := controller.runPending(context.Background(), pending); err != nil {
+		t.Fatalf("runPending() error = %v", err)
+	}
+
+	// The consolidation checkpoint is the working-memory job's window cursor. A
+	// windowed run must leave it at the boundary it covered, not at the run head,
+	// or the next run windows past the backlog the design exists to drain.
+	checkpoint := store.consolidationCheckpoint()
+	if checkpoint.LastConsolidatedSeq != 24 {
+		t.Fatalf(
+			"checkpoint.LastConsolidatedSeq = %d, want the covered window boundary 24",
+			checkpoint.LastConsolidatedSeq,
+		)
+	}
+
+	state := store.state(workingMemoryConsolidationJobType)
+	if state.LastRunInputSeq != 24 {
+		t.Fatalf(
+			"state.LastRunInputSeq = %d, want 24 so the backlog keeps draining",
+			state.LastRunInputSeq,
+		)
+	}
+
+	if _, ok, err := controller.nextPendingRun(context.Background(), false, false, true); err != nil {
+		t.Fatalf("nextPendingRun() (second) error = %v", err)
+	} else if !ok {
+		t.Fatal("nextPendingRun() (second) ok = false, want the backlog to stay eligible")
+	}
+}
+
 func TestControllerFailedWorkingMemoryRunLeavesCheckpointUnchanged(t *testing.T) {
 	store := newFakeControllerStore()
 	store.setHead(1, time.Now().UTC())
