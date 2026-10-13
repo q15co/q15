@@ -29,6 +29,9 @@ type Env struct {
 	// Release is the identifier the binary was built with, injected at link
 	// time by the release workflow. Only `version` reports it, verbatim.
 	Release string
+	// Exec runs a program. A zero Env leaves it nil and WithDefaults fills it
+	// in, so a command always has one and never reaches os/exec itself.
+	Exec ExecFunc
 }
 
 // WithDefaults returns the Env with a missing stream replaced by an empty one,
@@ -44,6 +47,9 @@ func (e Env) WithDefaults() Env {
 	}
 	if e.Stderr == nil {
 		e.Stderr = io.Discard
+	}
+	if e.Exec == nil {
+		e.Exec = DefaultExec
 	}
 	return e
 }

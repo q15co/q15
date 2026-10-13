@@ -6,8 +6,7 @@ import (
 	"strings"
 )
 
-// Unit is one rendered Quadlet file: the name it is written under, which is the
-// unit name systemd reports, and its contents.
+// Unit is one rendered Quadlet file and its contents.
 type Unit struct {
 	Name     string
 	Contents []byte
@@ -93,7 +92,19 @@ func (p Profile) UnitNames() []string {
 	return names
 }
 
-// unitName is the file name, and therefore the unit name, of one service.
+// ServiceNames returns the systemd services generated from the Quadlet files.
+func (p Profile) ServiceNames() []string {
+	names := make([]string, 0, len(p.containers())+1)
+	for _, c := range p.containers() {
+		names = append(names, p.resource(c.service)+".service")
+	}
+	// Quadlet adds a type suffix to generated network services.
+	names = append(names, p.NetworkName()+"-network.service")
+	sort.Strings(names)
+	return names
+}
+
+// unitName is the Quadlet file name of one container.
 func (p Profile) unitName(service string) string {
 	return p.resource(service) + ".container"
 }
