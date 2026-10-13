@@ -29,6 +29,38 @@ type Registry struct {
 	mu    sync.RWMutex
 	snap  []Model          // flat current roster
 	byRef map[string]Model // ref → Model (first provider wins on duplicate)
+	// status is the last discovery outcome per provider, keyed by provider
+	// name. It exists because the roster alone cannot say why a provider has no
+	// models: a failed fetch and an empty listing both leave it with nothing.
+	status map[string]Status
+}
+
+// Status is the outcome of the most recent discovery attempt for one provider.
+//
+// It separates a failed fetch from a provider that answered with an empty
+// roster. Both leave the provider with no models in the live roster, so without
+// this a caller cannot tell "the provider is down" from "the provider lists
+// nothing", and the operator looking at the roster cannot tell either.
+type Status struct {
+	// Models is how many models the provider contributed on the last attempt.
+	Models int
+	// Err is the discovery failure, empty when the attempt succeeded.
+	Err string
+	// CheckedAt is when the attempt ran.
+	CheckedAt time.Time
+}
+
+// Reason explains why the provider contributed no models. It is empty when the
+// provider contributed at least one.
+func (s Status) Reason() string {
+	switch {
+	case s.Err != "":
+		return "discovery failed: " + s.Err
+	case s.Models == 0:
+		return "discovery succeeded but the provider listed no models"
+	default:
+		return ""
+	}
 }
 
 // New builds a live roster registry. providers is the immutable provider list
@@ -57,6 +89,8 @@ func (r *Registry) Refresh(ctx context.Context) {
 		return
 	}
 
+	checkedAt := time.Now().UTC()
+	status := make(map[string]Status, len(r.providers))
 	var combined []Model
 	for _, p := range r.providers {
 		pctx, cancel := context.WithTimeout(ctx, r.timeout)
@@ -64,8 +98,10 @@ func (r *Registry) Refresh(ctx context.Context) {
 		cancel()
 		if err != nil {
 			log.Printf("q15: discovery provider %q: %v; skipping this cycle", p.Name, err)
+			status[p.Name] = Status{Err: err.Error(), CheckedAt: checkedAt}
 			continue
 		}
+		status[p.Name] = Status{Models: len(models), CheckedAt: checkedAt}
 		for i := range models {
 			// Annotate with provider metadata so consumers (adapter, factory)
 			// have everything they need without a separate lookup.
@@ -88,6 +124,7 @@ func (r *Registry) Refresh(ctx context.Context) {
 	r.mu.Lock()
 	r.snap = combined
 	r.byRef = byRef
+	r.status = status
 	r.mu.Unlock()
 }
 
@@ -178,6 +215,21 @@ func (r *Registry) ProviderHasModels(providerName string) bool {
 		}
 	}
 	return false
+}
+
+// ProviderStatus returns the outcome of the most recent discovery attempt for
+// providerName, and whether that provider has been queried yet. Safe for
+// concurrent use.
+func (r *Registry) ProviderStatus(providerName string) (Status, bool) {
+	providerName = strings.TrimSpace(providerName)
+	if providerName == "" {
+		return Status{}, false
+	}
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	st, ok := r.status[providerName]
+	return st, ok
 }
 
 // IsEmpty reports whether the current roster has zero models.

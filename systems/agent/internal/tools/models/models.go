@@ -51,6 +51,11 @@ type providerInfo struct {
 	Type      string `json:"type"`
 	BaseURL   string `json:"base_url,omitempty"`
 	Reachable bool   `json:"reachable"`
+	// Reason and CheckedAt are set only for a provider that currently has no
+	// models, so "reachable: false" comes with its cause instead of standing
+	// alone.
+	Reason    string `json:"reason,omitempty"`
+	CheckedAt string `json:"checked_at,omitempty"`
 	Current   bool   `json:"current,omitempty"`
 }
 
@@ -129,10 +134,11 @@ func NewSwitchCognitionModel(
 func (t *ListProviders) Definition() agent.ToolDefinition {
 	return agent.ToolDefinition{
 		Name:        "list_providers",
-		Description: "List configured model providers and whether each currently has reachable live models.",
+		Description: "List configured model providers, whether each currently has reachable live models, and for a provider that has none, the reason and when discovery last ran.",
 		PromptGuidance: []string{
 			"Use before switching providers when you need to know which provider rosters are currently reachable.",
 			"A provider is reachable when it has at least one model in the current live roster.",
+			"An unreachable provider carries a reason: either the discovery attempt failed, with its error, or it succeeded and the provider listed no models. Report the reason rather than guessing.",
 		},
 		Parameters: map[string]any{
 			"type":       "object",
@@ -158,13 +164,22 @@ func (t *ListProviders) Run(_ context.Context, _ string) (string, error) {
 		if name == "" {
 			continue
 		}
-		out = append(out, providerInfo{
+		info := providerInfo{
 			Name:      name,
 			Type:      strings.TrimSpace(provider.Type),
 			BaseURL:   strings.TrimSpace(provider.BaseURL),
 			Reachable: t.registry.ProviderHasModels(name),
 			Current:   name == currentProvider,
-		})
+		}
+		if !info.Reachable {
+			if status, ok := t.registry.ProviderStatus(name); ok {
+				info.Reason = status.Reason()
+				info.CheckedAt = status.CheckedAt.UTC().Format(time.RFC3339)
+			} else {
+				info.Reason = "discovery has not run yet"
+			}
+		}
+		out = append(out, info)
 	}
 
 	return jsonOutput(map[string]any{

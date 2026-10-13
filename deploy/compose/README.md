@@ -84,7 +84,9 @@ Provider discovery is **mandatory**: the provider roster IS the model config. Th
 `models:` list. The agent queries each provider's roster endpoint at startup (Ollama `/api/tags` +
 `/api/show`, OpenAI-compatible `{base_url}/models`), enriches models from
 [models.dev](https://models.dev), and refreshes periodically so roster changes are picked up without
-restart.
+restart. A provider that ends up with no models is reported with the reason (the discovery attempt
+failed, with its error, or it succeeded and the provider listed no models) and when the attempt ran,
+so an unreachable provider is diagnosable from `list_providers` alone.
 
 `agent.name` and `agent.memory_recent_turns` are the only agent fields. The current model is runtime
 state, not config: on first run q15 auto-selects a first-eligible roster model (preferring a

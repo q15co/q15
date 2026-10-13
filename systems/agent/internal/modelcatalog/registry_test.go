@@ -3,6 +3,7 @@ package modelcatalog
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -30,6 +31,72 @@ type callCountingCatalog struct {
 func (c *callCountingCatalog) Discover(ctx context.Context, p Provider) ([]Model, error) {
 	atomic.AddInt64(&c.calls, 1)
 	return c.fakeCatalog.Discover(ctx, p)
+}
+
+func TestRegistry_ProviderStatusSeparatesFailureFromEmptyRoster(t *testing.T) {
+	cat := &fakeCatalog{
+		models: map[string][]Model{
+			"ok":    {{ProviderModel: "good"}},
+			"quiet": {},
+		},
+		errs: map[string]error{
+			"down": errors.New("openai models: unexpected status 404 Not Found"),
+		},
+	}
+	reg := New(
+		[]Provider{
+			{Name: "ok", Type: "ollama"},
+			{Name: "quiet", Type: "ollama"},
+			{Name: "down", Type: "openai-compatible"},
+		},
+		cat,
+		time.Hour,
+		time.Second,
+	)
+	reg.Refresh(context.Background())
+
+	// A provider with models says so and carries no reason.
+	if ok, found := reg.ProviderStatus("ok"); !found || ok.Models != 1 || ok.Reason() != "" {
+		t.Fatalf("status(ok) = %+v (found=%v), want 1 model and no reason", ok, found)
+	}
+
+	// A provider that answered with an empty roster and a provider whose fetch
+	// failed must not read the same: the roster cannot tell them apart, and the
+	// operator has to be able to.
+	quiet, found := reg.ProviderStatus("quiet")
+	if !found {
+		t.Fatal("status(quiet) not recorded")
+	}
+	if !strings.Contains(quiet.Reason(), "listed no models") {
+		t.Errorf("reason(quiet) = %q, want it to say the provider listed no models", quiet.Reason())
+	}
+
+	down, found := reg.ProviderStatus("down")
+	if !found {
+		t.Fatal("status(down) not recorded")
+	}
+	if down.Models != 0 {
+		t.Errorf("status(down).Models = %d, want 0", down.Models)
+	}
+	if !strings.Contains(down.Reason(), "404 Not Found") {
+		t.Errorf("reason(down) = %q, want the discovery error", down.Reason())
+	}
+	if quiet.Reason() == down.Reason() {
+		t.Error("a failed fetch and an empty roster read identically")
+	}
+	if down.CheckedAt.IsZero() {
+		t.Error("status(down).CheckedAt is zero, want the time of the attempt")
+	}
+
+	if _, found := reg.ProviderStatus("never-configured"); found {
+		t.Error("status for an unconfigured provider should not be found")
+	}
+	if len(reg.Snapshot()) != 1 {
+		t.Errorf(
+			"snapshot len = %d, want 1: only the reachable provider contributes",
+			len(reg.Snapshot()),
+		)
+	}
 }
 
 func TestRegistry_SnapshotReflectsSuccesses(t *testing.T) {

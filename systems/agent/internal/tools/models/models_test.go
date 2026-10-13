@@ -2,6 +2,8 @@ package models
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -97,6 +99,96 @@ func TestListProvidersReportsReachabilityAndCurrent(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Fatalf("list_providers missing %q:\n%s", want, out)
 		}
+	}
+}
+
+type failingCatalog struct {
+	models map[string][]modelcatalog.Model
+	errs   map[string]error
+}
+
+func (c failingCatalog) Discover(
+	_ context.Context,
+	p modelcatalog.Provider,
+) ([]modelcatalog.Model, error) {
+	if err, ok := c.errs[p.Name]; ok {
+		return nil, err
+	}
+	return c.models[p.Name], nil
+}
+
+// A provider that fails discovery and a provider that answers with an empty
+// roster both leave the roster without models. list_providers has to say which
+// one happened, or "reachable: false" is the only thing an operator ever sees.
+func TestListProvidersReportsWhyAProviderHasNoModels(t *testing.T) {
+	registry := modelcatalog.New(
+		[]modelcatalog.Provider{
+			{Name: "ollama-cloud", Type: "ollama", BaseURL: "https://ollama.com"},
+			{
+				Name:    "deepinfra",
+				Type:    "openai-compatible",
+				BaseURL: "https://api.deepinfra.com/v1/openai",
+			},
+			{Name: "quiet", Type: "openai-compatible", BaseURL: "https://quiet.example.test/v1"},
+		},
+		failingCatalog{
+			models: map[string][]modelcatalog.Model{
+				"ollama-cloud": {{ProviderModel: "kimi-k2.7-code:cloud"}},
+			},
+			errs: map[string]error{
+				"deepinfra": errors.New("openai models: unexpected status 404 Not Found"),
+			},
+		},
+		time.Hour,
+		time.Second,
+	)
+	registry.Refresh(context.Background())
+
+	out, err := NewListProviders(registry, nil).Run(context.Background(), `{}`)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	var payload struct {
+		Providers []struct {
+			Name      string `json:"name"`
+			Reachable bool   `json:"reachable"`
+			Reason    string `json:"reason"`
+			CheckedAt string `json:"checked_at"`
+		} `json:"providers"`
+	}
+	if err := json.Unmarshal([]byte(out), &payload); err != nil {
+		t.Fatalf("list_providers output is not JSON: %v\n%s", err, out)
+	}
+
+	reasons := map[string]string{}
+	checkedAt := map[string]string{}
+	for _, p := range payload.Providers {
+		reasons[p.Name] = p.Reason
+		checkedAt[p.Name] = p.CheckedAt
+		if p.Name == "quiet" && p.Reachable {
+			t.Error("a provider that listed no models should not be reported reachable")
+		}
+	}
+
+	if reasons["ollama-cloud"] != "" {
+		t.Errorf("a reachable provider should carry no reason, got %q", reasons["ollama-cloud"])
+	}
+	if !strings.Contains(reasons["deepinfra"], "discovery failed") ||
+		!strings.Contains(reasons["deepinfra"], "404 Not Found") {
+		t.Errorf("deepinfra reason = %q, want the discovery error", reasons["deepinfra"])
+	}
+	if !strings.Contains(reasons["quiet"], "listed no models") {
+		t.Errorf(
+			"quiet reason = %q, want it to say the provider listed no models",
+			reasons["quiet"],
+		)
+	}
+	if reasons["deepinfra"] == reasons["quiet"] {
+		t.Error("a failed fetch and an empty roster read identically")
+	}
+	if checkedAt["deepinfra"] == "" {
+		t.Error("an unreachable provider should report when discovery last ran")
 	}
 }
 
