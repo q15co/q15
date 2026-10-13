@@ -135,8 +135,12 @@ func (p Profile) hostPath(path, target string) mount {
 }
 
 // containers is the profile's container set, in start order.
+//
+// The two model servers belong to the set only when this profile runs them. An
+// external source is a server somebody else runs, and a stack that rendered one
+// anyway would start a container nothing talks to.
 func (p Profile) containers() []container {
-	return []container{
+	containers := []container{
 		{
 			service:     "proxy",
 			description: "q15 egress proxy",
@@ -168,36 +172,53 @@ func (p Profile) containers() []container {
 			},
 			requires: []string{"proxy"},
 		},
-		{
+	}
+
+	if p.runsVectorStore() {
+		containers = append(containers, container{
 			service:     "qdrant",
 			description: "q15 vector store",
 			image:       p.VectorStoreImage,
 			volumes: []mount{
 				p.volume("qdrant_storage", "/qdrant/storage"),
 			},
-		},
-		{
+		})
+	}
+	if p.runsOllama() {
+		containers = append(containers, container{
 			service:     "ollama",
 			description: "q15 model server",
 			image:       p.OllamaImage,
 			volumes: []mount{
 				p.volume("ollama_models", "/root/.ollama"),
 			},
-		},
-		{
-			service:     "agent",
-			description: "q15 agent",
-			image:       p.image("agent"),
-			// The bridge socket is owned by the host user's group, and the agent
-			// writes into it, so it needs that group inside the container.
-			groupAdd: []string{"1000"},
-			// No credential pointer: the profile declares one provider, the
-			// model server beside it, and a local model server takes no key. A
-			// stack configured with a hosted provider gets
-			// <KEY_ENV>_FILE for that provider once the profile says which one it
-			// is, which is what keeps the units and the configuration from
-			// describing two different stacks.
-			environment: [][2]string{
+		})
+	}
+
+	// The agent waits only for what is there: a requirement on a unit the
+	// renderer did not write is a stack that will not start.
+	agentRequires := []string{"exec"}
+	if p.runsVectorStore() {
+		agentRequires = append(agentRequires, "qdrant")
+	}
+	if p.runsOllama() {
+		agentRequires = append(agentRequires, "ollama")
+	}
+
+	containers = append(containers, container{
+		service:     "agent",
+		description: "q15 agent",
+		image:       p.image("agent"),
+		// The bridge socket is owned by the host user's group, and the agent
+		// writes into it, so it needs that group inside the container.
+		groupAdd: []string{"1000"},
+		// The endpoints are named once, here, and the agent's configuration reads
+		// them from the environment rather than repeating the URLs. A credential
+		// gets the same treatment: the profile declares the variable, the unit
+		// points <NAME>_FILE at its Podman secret mount. A profile that declares
+		// no credential prepares none.
+		environment: append(
+			[][2]string{
 				{"HOME", "/root"},
 				{"GODEBUG", "updatemaxprocs=0"},
 				{"GOMAXPROCS", "1"},
@@ -205,45 +226,58 @@ func (p Profile) containers() []container {
 				{qdrantURLEnv, p.QdrantURL()},
 				{embeddingsURLEnv, p.EmbeddingsBaseURL()},
 			},
-			volumes: []mount{
-				p.volume("workspace", "/workspace"),
-				p.volume("memory", "/memory"),
-				p.volume("media", "/media"),
-				p.volume("skills", "/skills"),
-				p.volume("agent_state", "/var/lib/q15/agent"),
-				p.volume("bridge", "/run/q15"),
-			},
-			hostMounts: []mount{
-				p.hostPath("agent-config.yaml", agentConfigTarget).readOnlyMount(),
-				p.hostPath("auth", authDirTarget),
-			},
-			requires: []string{"exec", "qdrant", "ollama"},
+			p.credentialPointers()...,
+		),
+		volumes: []mount{
+			p.volume("workspace", "/workspace"),
+			p.volume("memory", "/memory"),
+			p.volume("media", "/media"),
+			p.volume("skills", "/skills"),
+			p.volume("agent_state", "/var/lib/q15/agent"),
+			p.volume("bridge", "/run/q15"),
 		},
-		{
-			service:     "web",
-			description: "q15 browser client",
-			image:       p.image("web"),
-			// The web tier holds no credential and owns no writable data outside
-			// its own state, so it runs as the unprivileged image user in the
-			// host user's group, which is what lets it use the bridge socket.
-			user: "65532:1000",
-			environment: [][2]string{
-				{"Q15_WEB_LISTEN", "0.0.0.0:8080"},
-				{"Q15_WEB_BRIDGE", p.BridgeListenTarget},
-				{"Q15_WEB_ORIGIN", fmt.Sprintf("http://localhost:%d", p.HostPort)},
-				{"Q15_WEB_STATE_DIR", "/var/lib/q15-web"},
-			},
-			volumes: []mount{
-				p.volume("web_state", "/var/lib/q15-web"),
-				// Read-only: the bridge socket is the agent's, and the browser
-				// client only speaks over it.
-				p.volume("bridge", "/run/q15").readOnlyMount(),
-			},
-			publishPorts: []string{fmt.Sprintf("127.0.0.1:%d:8080", p.HostPort)},
-			requires:     []string{"agent"},
-			enabled:      true,
+		hostMounts: []mount{
+			p.hostPath("agent-config.yaml", agentConfigTarget).readOnlyMount(),
+			p.hostPath("auth", authDirTarget),
 		},
+		secrets:  p.credentialSecrets(),
+		requires: agentRequires,
+	})
+
+	containers = append(containers, container{
+		service:     "web",
+		description: "q15 browser client",
+		image:       p.image("web"),
+		// The web tier holds no credential and owns no writable data outside
+		// its own state, so it runs as the unprivileged image user in the
+		// host user's group, which is what lets it use the bridge socket.
+		user: "65532:1000",
+		environment: [][2]string{
+			{"Q15_WEB_LISTEN", "0.0.0.0:8080"},
+			{"Q15_WEB_BRIDGE", p.BridgeListenTarget},
+			{"Q15_WEB_ORIGIN", fmt.Sprintf("http://localhost:%d", p.HostPort)},
+			{"Q15_WEB_STATE_DIR", "/var/lib/q15-web"},
+		},
+		volumes: []mount{
+			p.volume("web_state", "/var/lib/q15-web"),
+			// Read-only: the bridge socket is the agent's, and the browser
+			// client only speaks over it.
+			p.volume("bridge", "/run/q15").readOnlyMount(),
+		},
+		publishPorts: []string{fmt.Sprintf("127.0.0.1:%d:8080", p.HostPort)},
+		requires:     []string{"agent"},
+		enabled:      true,
+	})
+	return containers
+}
+
+func (p Profile) credentialSecrets() []string {
+	pointers := p.credentialPointers()
+	names := make([]string, 0, len(pointers))
+	for _, pointer := range pointers {
+		names = append(names, strings.TrimPrefix(pointer[1], secretsDirTarget+"/"))
 	}
+	return names
 }
 
 // renderContainer writes one container unit. The header says where the file came
@@ -333,4 +367,46 @@ func readOnlySuffix(m mount) string {
 		return ":ro"
 	}
 	return ""
+}
+
+// credentialPointers renders every credential the profile declares as the
+// <NAME>_FILE variable the agent resolves it from, pointing into the secrets
+// directory Podman mounts them under. The secret name is the variable name in
+// lower case, matching the name supplied to q15 secret set.
+func (p Profile) credentialPointers() [][2]string {
+	declared := []string{p.Chat.KeyEnv, p.Embeddings.KeyEnv, p.Vectors.KeyEnv}
+	pointers := make([][2]string, 0, len(declared))
+	seen := make(map[string]bool, len(declared))
+	for _, keyEnv := range declared {
+		keyEnv = strings.TrimSpace(keyEnv)
+		if keyEnv == "" {
+			continue
+		}
+		// One variable named twice is one pointer, not two identical ones.
+		if seen[keyEnv] {
+			continue
+		}
+		seen[keyEnv] = true
+		pointers = append(pointers, [2]string{
+			keyEnv + "_FILE",
+			secretsDirTarget + "/" + secretFileName(keyEnv),
+		})
+	}
+	return pointers
+}
+
+// secretFileName is the file one credential's value is read from: the variable
+// name in lower case, with anything that is not a letter or a digit turned into
+// an underscore, so the name is safe as a file name wherever it lands.
+func secretFileName(keyEnv string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(strings.TrimSpace(keyEnv)) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+	}
+	return b.String()
 }

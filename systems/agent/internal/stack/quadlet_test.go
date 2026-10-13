@@ -360,6 +360,50 @@ func TestAgentPreparesNoCredentialTheProfileDoesNotDeclare(t *testing.T) {
 	}
 }
 
+// TestHostedProfilePreparesTheCredentialsItNames is the other half of the rule
+// about credentials: every declared key gets a pointer and a Podman secret mount.
+func TestHostedProfilePreparesTheCredentialsItNames(t *testing.T) {
+	agent := rendered(t, hostedProfile())["q15-agent.container"]
+
+	want := map[string]string{
+		"Q15_CHAT_API_KEY_FILE":  "/run/secrets/q15_chat_api_key",
+		"Q15_EMBED_API_KEY_FILE": "/run/secrets/q15_embed_api_key",
+		"QDRANT_API_KEY_FILE":    "/run/secrets/qdrant_api_key",
+	}
+	for name, want := range want {
+		if got := environment(t, agent, name); got != want {
+			t.Fatalf("%s = %q, want %q", name, got, want)
+		}
+	}
+
+	// The endpoints arrive the way a local stack's do: named once, in the unit,
+	// and read out of the environment by the agent.
+	if got, want := environment(
+		t,
+		agent,
+		embeddingsURLEnv,
+	), "https://embeddings.example.net/v1"; got != want {
+		t.Fatalf("%s = %q, want %q", embeddingsURLEnv, got, want)
+	}
+	if got, want := environment(
+		t,
+		agent,
+		qdrantURLEnv,
+	), "https://vectors.example.net:6334"; got != want {
+		t.Fatalf("%s = %q, want %q", qdrantURLEnv, got, want)
+	}
+
+	wantSecrets := []string{
+		"q15_chat_api_key,type=mount,uid=0,gid=0,mode=0400",
+		"q15_embed_api_key,type=mount,uid=0,gid=0,mode=0400",
+		"qdrant_api_key,type=mount,uid=0,gid=0,mode=0400",
+	}
+	if got := agent["Secret"]; strings.Join(got, "\n") != strings.Join(wantSecrets, "\n") {
+		t.Fatalf("agent secrets = %v, want %v", got, wantSecrets)
+	}
+
+}
+
 // resourceNames is every name one stack owns: its units, the containers inside
 // them, its network and its volumes.
 func resourceNames(t *testing.T, profile Profile) []string {
