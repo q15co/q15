@@ -83,6 +83,7 @@ func mergeModel(base, enriched Model) Model {
 	if enriched.StructuredOutput {
 		base.StructuredOutput = true
 	}
+	base.StructuredOutputKnown = base.StructuredOutputKnown || enriched.StructuredOutputKnown
 	return base
 }
 
@@ -90,6 +91,7 @@ func mergeModel(base, enriched Model) Model {
 // add capabilities (e.g. ImageInput from models.dev) without clearing any the
 // roster already reported.
 func mergeCapabilities(base, enriched Capabilities) Capabilities {
+	base.Known = base.Known || enriched.Known
 	if enriched.Text {
 		base.Text = true
 	}

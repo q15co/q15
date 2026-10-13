@@ -67,24 +67,25 @@ type configReloadInfo struct {
 }
 
 type modelInfo struct {
-	Provider         string             `json:"provider"`
-	ProviderType     string             `json:"provider_type"`
-	ProviderModel    string             `json:"provider_model"`
-	Ref              string             `json:"ref"`
-	Name             string             `json:"name,omitempty"`
-	Current          bool               `json:"current,omitempty"`
-	Modalities       []string           `json:"modalities"`
-	Capabilities     []string           `json:"capabilities"`
-	StructuredOutput bool               `json:"structured_output"`
-	Params           int64              `json:"params,omitempty"`
-	Context          int                `json:"context,omitempty"`
-	Output           int                `json:"output,omitempty"`
-	ReleaseDate      string             `json:"release_date,omitempty"`
-	CostTier         string             `json:"cost_tier,omitempty"`
-	CostPerMTokIn    *float64           `json:"cost_per_mtok_in,omitempty"`
-	CostPerMTokOut   *float64           `json:"cost_per_mtok_out,omitempty"`
-	Benchmarks       map[string]float64 `json:"benchmarks,omitempty"`
-	Source           string             `json:"source,omitempty"`
+	Provider          string             `json:"provider"`
+	ProviderType      string             `json:"provider_type"`
+	ProviderModel     string             `json:"provider_model"`
+	Ref               string             `json:"ref"`
+	Name              string             `json:"name,omitempty"`
+	Current           bool               `json:"current,omitempty"`
+	Modalities        []string           `json:"modalities"`
+	Capabilities      []string           `json:"capabilities"`
+	CapabilitiesKnown bool               `json:"capabilities_known"`
+	StructuredOutput  *bool              `json:"structured_output"`
+	Params            int64              `json:"params,omitempty"`
+	Context           int                `json:"context,omitempty"`
+	Output            int                `json:"output,omitempty"`
+	ReleaseDate       string             `json:"release_date,omitempty"`
+	CostTier          string             `json:"cost_tier,omitempty"`
+	CostPerMTokIn     *float64           `json:"cost_per_mtok_in,omitempty"`
+	CostPerMTokOut    *float64           `json:"cost_per_mtok_out,omitempty"`
+	Benchmarks        map[string]float64 `json:"benchmarks,omitempty"`
+	Source            string             `json:"source,omitempty"`
 }
 
 // NewListProviders constructs the list_providers tool.
@@ -198,7 +199,7 @@ func (t *ListProviders) Run(_ context.Context, _ string) (string, error) {
 		payload["config_reload"] = configReloadInfo{
 			CheckedAt: status.CheckedAt.UTC().Format(time.RFC3339),
 			Applied:   status.Applied,
-			Error:     status.Err,
+			Error:     status.Error,
 		}
 	}
 
@@ -213,6 +214,7 @@ func (t *ListModels) Definition() agent.ToolDefinition {
 		PromptGuidance: []string{
 			"Use when deciding whether the current model is appropriate for a task, or before switch_model.",
 			"Filter by provider, capability, min_context, or limit when the roster is large.",
+			"capabilities_known=false means capability metadata is unavailable; an empty list does not prove the model lacks tools. Capability filters return confirmed matches only. structured_output=null means that support is unknown.",
 			"Do not switch just because alternatives exist; switch when you have a specific capability, context, freshness, or cost reason.",
 		},
 		Parameters: map[string]any{
@@ -500,21 +502,25 @@ func (t *SwitchCognitionModel) Run(_ context.Context, arguments string) (string,
 
 func describeModel(m modelcatalog.Model, current bool) modelInfo {
 	info := modelInfo{
-		Provider:         m.ProviderName,
-		ProviderType:     m.ProviderType,
-		ProviderModel:    m.ProviderModel,
-		Ref:              m.Ref,
-		Name:             m.Name,
-		Current:          current,
-		Modalities:       modelModalities(m),
-		Capabilities:     modelCapabilities(m),
-		StructuredOutput: m.StructuredOutput,
-		Params:           m.ParameterCount,
-		Context:          m.MaxContextTokens,
-		Output:           m.MaxOutputTokens,
-		CostTier:         m.CostTier,
-		Benchmarks:       m.BenchmarkScores,
-		Source:           m.Source,
+		Provider:          m.ProviderName,
+		ProviderType:      m.ProviderType,
+		ProviderModel:     m.ProviderModel,
+		Ref:               m.Ref,
+		Name:              m.Name,
+		Current:           current,
+		Modalities:        modelModalities(m),
+		Capabilities:      modelCapabilities(m),
+		CapabilitiesKnown: m.Capabilities.Known,
+		Params:            m.ParameterCount,
+		Context:           m.MaxContextTokens,
+		Output:            m.MaxOutputTokens,
+		CostTier:          m.CostTier,
+		Benchmarks:        m.BenchmarkScores,
+		Source:            m.Source,
+	}
+	if m.StructuredOutputKnown || m.StructuredOutput {
+		value := m.StructuredOutput
+		info.StructuredOutput = &value
 	}
 	if !m.ReleaseDate.IsZero() {
 		info.ReleaseDate = m.ReleaseDate.Format(time.DateOnly)

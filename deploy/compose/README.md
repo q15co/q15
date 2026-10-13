@@ -92,6 +92,15 @@ without a restart. An edit is applied whole or not at all: if it cannot load, if
 resolve, or if it discovers no models at all, the previous providers keep running and
 `list_providers` reports why under `config_reload`.
 
+For DeepInfra, mount `deploy/compose/secrets/deepinfra_api_key` and configure a provider with
+`type: openai-compatible`, `base_url: https://api.deepinfra.com/v1/openai`, and
+`key_env: DEEPINFRA_API_KEY`. The local Compose stack mounts that key as `DEEPINFRA_API_KEY_FILE`.
+Enable `discovery.models_dev: true` to enrich chat models with capabilities, context limits, and
+pricing. Provider matching uses models.dev's `api` and `doc` URLs;
+`discovery.models_dev_provider: deepinfra` can override it for a proxy. Entries tagged for non-chat
+tasks are excluded. Models without capability metadata report `capabilities_known: false`, and
+unknown structured-output support is `null`.
+
 `agent.name` and `agent.memory_recent_turns` are the only agent fields. The current model is runtime
 state, not config: on first run q15 auto-selects a first-eligible roster model (preferring a
 tool-calling model) and persists it; the agent/user then changes it with `list_providers`,

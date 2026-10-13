@@ -206,7 +206,7 @@ func TestListProvidersReportsTheLastConfigReload(t *testing.T) {
 	at := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
 	registry.SetReloadStatus(modelcatalog.ReloadStatus{
 		CheckedAt: at,
-		Err:       "the edited providers discovered no models",
+		Error:     "the edited providers discovered no models",
 	})
 
 	out, err = NewListProviders(registry, nil).Run(context.Background(), `{}`)
@@ -341,5 +341,51 @@ func TestSwitchCognitionModelRejectsUnknownAction(t *testing.T) {
 	}
 	if overrides := store.CognitionSelections(); len(overrides) != 0 {
 		t.Fatalf("unknown action persisted an override: %+v", overrides)
+	}
+}
+
+func TestDescribeModelDistinguishesUnknownCapabilities(t *testing.T) {
+	tests := []struct {
+		name           string
+		model          modelcatalog.Model
+		wantKnown      bool
+		wantStructured string
+	}{
+		{name: "unknown", model: modelcatalog.Model{}, wantStructured: "null"},
+		{name: "known without tools", model: modelcatalog.Model{
+			Capabilities:          modelcatalog.Capabilities{Known: true, Text: true},
+			StructuredOutputKnown: true,
+		}, wantKnown: true, wantStructured: "false"},
+		{name: "known with tools", model: modelcatalog.Model{
+			Capabilities: modelcatalog.Capabilities{
+				Known:       true,
+				Text:        true,
+				ToolCalling: true,
+			},
+			StructuredOutputKnown: true, StructuredOutput: true,
+		}, wantKnown: true, wantStructured: "true"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data, err := json.Marshal(describeModel(tt.model, false))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var output struct {
+				Known      bool            `json:"capabilities_known"`
+				Structured json.RawMessage `json:"structured_output"`
+			}
+			if err := json.Unmarshal(data, &output); err != nil {
+				t.Fatal(err)
+			}
+			if output.Known != tt.wantKnown || string(output.Structured) != tt.wantStructured {
+				t.Errorf(
+					"output = %s, want known=%v structured=%s",
+					data,
+					tt.wantKnown,
+					tt.wantStructured,
+				)
+			}
+		})
 	}
 }

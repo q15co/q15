@@ -13,6 +13,7 @@ Rules:
   - `moonshot_api_key.example`
   - `ollama_api_key.example`
   - `zai_api_key.example`
+  - `deepinfra_api_key.example`
   - `brave_api_key.example`
   - `gemini_api_key.example`
   - `q15_telegram_token.example`

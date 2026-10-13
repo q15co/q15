@@ -14,8 +14,9 @@ import (
 // baseURLCatalog answers discovery by base URL, so a test can see exactly which
 // provider list the registry is discovering against, and count the attempts.
 type baseURLCatalog struct {
-	models map[string][]modelcatalog.Model
-	asked  []string
+	models     map[string][]modelcatalog.Model
+	asked      []string
+	onDiscover func(string)
 }
 
 func (c *baseURLCatalog) Discover(
@@ -23,6 +24,9 @@ func (c *baseURLCatalog) Discover(
 	p modelcatalog.Provider,
 ) ([]modelcatalog.Model, error) {
 	c.asked = append(c.asked, p.BaseURL)
+	if c.onDiscover != nil {
+		c.onDiscover(p.BaseURL)
+	}
 	return c.models[p.BaseURL], nil
 }
 
@@ -63,10 +67,11 @@ func reloadFixture(t *testing.T) (*configWatcher, *modelcatalog.Registry, *baseU
 	registry := modelcatalog.New(providers, catalog, time.Hour, time.Second)
 	registry.Refresh(context.Background())
 
-	watcher, err := newConfigWatcher(registry, path, providers)
+	initial, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("newConfigWatcher: %v", err)
+		t.Fatal(err)
 	}
+	watcher := newConfigWatcher(registry, path, initial)
 	return watcher, registry, catalog, path
 }
 
@@ -97,7 +102,7 @@ func TestConfigWatcher_AppliesAnEditedProviderList(t *testing.T) {
 		t.Errorf("the new base URL was asked %d times, want 1", got)
 	}
 	status, ok := registry.ReloadStatus()
-	if !ok || !status.Applied || status.Err != "" {
+	if !ok || !status.Applied || status.Error != "" {
 		t.Fatalf("reload status = %+v (found=%v), want an applied reload", status, ok)
 	}
 	if _, ok := registry.ProviderStatus("local"); !ok {
@@ -125,8 +130,8 @@ func TestConfigWatcher_RefusesAnEditItCannotLoad(t *testing.T) {
 	if status.Applied {
 		t.Error("a refused edit must not report as applied")
 	}
-	if !strings.Contains(status.Err, "not supported") {
-		t.Errorf("reload error = %q, want the config error", status.Err)
+	if !strings.Contains(status.Error, "not supported") {
+		t.Errorf("reload error = %q, want the config error", status.Error)
 	}
 
 	// The same bad file is neither retried nor re-reported on every tick.
@@ -159,13 +164,22 @@ func TestConfigWatcher_RefusesAnEditWhoseSecretDisappeared(t *testing.T) {
 	if !ok || status.Applied {
 		t.Fatalf("reload status = %+v (found=%v), want a refusal", status, ok)
 	}
-	if !strings.Contains(status.Err, "Q15_TEST_RELOAD_KEY") {
-		t.Errorf("reload error = %q, want it to name the missing secret", status.Err)
+	if !strings.Contains(status.Error, "Q15_TEST_RELOAD_KEY") {
+		t.Errorf("reload error = %q, want it to name the missing secret", status.Error)
 	}
 }
 
 func TestConfigWatcher_RefusesAnEditThatDiscoversNothing(t *testing.T) {
-	watcher, registry, _, path := reloadFixture(t)
+	watcher, registry, catalog, path := reloadFixture(t)
+	catalog.onDiscover = func(baseURL string) {
+		if providers := registry.Providers(); len(providers) != 1 ||
+			providers[0].BaseURL != "http://one.test:11434" {
+			t.Errorf("discovery of %q published unverified providers: %+v", baseURL, providers)
+		}
+		if models := registry.Snapshot(); len(models) != 1 || models[0].ProviderModel != "first" {
+			t.Errorf("discovery of %q replaced the working roster: %+v", baseURL, models)
+		}
+	}
 
 	// A config that loads and resolves but has nothing behind it: applying it
 	// would leave the agent with no models, which is what startup refuses too.
@@ -180,15 +194,46 @@ func TestConfigWatcher_RefusesAnEditThatDiscoversNothing(t *testing.T) {
 	if !ok || status.Applied {
 		t.Fatalf("reload status = %+v (found=%v), want a refusal", status, ok)
 	}
-	if !strings.Contains(status.Err, "discovered no models") {
-		t.Errorf("reload error = %q, want it to say the edit discovered nothing", status.Err)
+	if !strings.Contains(status.Error, "discovered no models") {
+		t.Errorf("reload error = %q, want it to say the edit discovered nothing", status.Error)
 	}
 
 	// And the corrected file applies afterwards, so a refusal is not a latch.
+	catalog.onDiscover = nil
 	writeConfigFile(t, path, "http://two.test:11434")
 	watcher.tick(context.Background())
 	models = registry.Snapshot()
 	if len(models) != 1 || models[0].ProviderModel != "second" {
 		t.Fatalf("snapshot = %+v, want the corrected edit applied", models)
+	}
+}
+
+func TestConfigWatcher_SeesEditsDuringStartupDiscovery(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	const first = "http://one.test:11434"
+	const second = "http://two.test:11434"
+	writeConfigFile(t, path, first)
+	initial, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog := &baseURLCatalog{models: map[string][]modelcatalog.Model{
+		first: {{ProviderModel: "first"}}, second: {{ProviderModel: "second"}},
+	}, onDiscover: func(baseURL string) {
+		if baseURL == first {
+			writeConfigFile(t, path, second)
+		}
+	}}
+	registry := modelcatalog.New(
+		[]modelcatalog.Provider{{Name: "local", Type: "ollama", BaseURL: first}},
+		catalog,
+		time.Hour,
+		time.Second,
+	)
+	registry.Refresh(context.Background())
+	watcher := newConfigWatcher(registry, path, initial)
+	watcher.tick(context.Background())
+	if models := registry.Snapshot(); len(models) != 1 || models[0].ProviderModel != "second" {
+		t.Fatalf("startup edit was missed: %+v", models)
 	}
 }

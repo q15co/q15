@@ -26,33 +26,23 @@ type Registry struct {
 	interval time.Duration
 	timeout  time.Duration
 
-	mu sync.RWMutex
-	// providers is the list discovery runs against. SetProviders replaces it
-	// wholesale when an edited config is applied, so every read takes the lock
-	// and every reader works from the reference it took.
-	providers []Provider
-	snap      []Model          // flat current roster
-	byRef     map[string]Model // ref → Model (first provider wins on duplicate)
-	// status is the last discovery outcome per provider, keyed by provider
-	// name. It exists because the roster alone cannot say why a provider has no
-	// models: a failed fetch and an empty listing both leave it with nothing.
-	status map[string]Status
+	refreshMu        sync.Mutex
+	mu               sync.RWMutex
+	providers        []Provider
+	snap             []Model          // flat current roster
+	byRef            map[string]Model // ref → Model (first provider wins on duplicate)
+	statusByProvider map[string]Status
 	// reload is the most recent attempt to apply an edited provider list, nil
 	// until one runs.
 	reload *ReloadStatus
 }
 
-// Status is the outcome of the most recent discovery attempt for one provider.
-//
-// It separates a failed fetch from a provider that answered with an empty
-// roster. Both leave the provider with no models in the live roster, so without
-// this a caller cannot tell "the provider is down" from "the provider lists
-// nothing", and the operator looking at the roster cannot tell either.
+// Status distinguishes discovery failures from successful empty rosters.
 type Status struct {
-	// Models is how many models the provider contributed on the last attempt.
-	Models int
-	// Err is the discovery failure, empty when the attempt succeeded.
-	Err string
+	// ModelCount is the number of models contributed by the provider.
+	ModelCount int
+	// Error is the discovery failure, empty when the attempt succeeded.
+	Error string
 	// CheckedAt is when the attempt ran.
 	CheckedAt time.Time
 }
@@ -61,33 +51,27 @@ type Status struct {
 // provider contributed at least one.
 func (s Status) Reason() string {
 	switch {
-	case s.Err != "":
-		return "discovery failed: " + s.Err
-	case s.Models == 0:
+	case s.Error != "":
+		return "discovery failed: " + s.Error
+	case s.ModelCount == 0:
 		return "discovery succeeded but the provider listed no models"
 	default:
 		return ""
 	}
 }
 
-// ReloadStatus is the outcome of the most recent attempt to apply an edited
-// provider list to a running agent.
-//
-// It exists for the same reason Status does: an edit that is refused must be
-// visible where the operator is already looking, not only in a log line. A
-// refused edit leaves the previously configured providers running, so without
-// this the agent would go on serving an old base URL with nothing on the surface
-// to say why the new one was never picked up.
+// ReloadStatus records whether the most recent provider configuration edit
+// was applied, and explains a refusal.
 type ReloadStatus struct {
 	// CheckedAt is when the edit was applied or refused.
 	CheckedAt time.Time
 	// Applied is true when the attempt replaced the provider list.
 	Applied bool
-	// Err is why the attempt was refused, empty when it was applied.
-	Err string
+	// Error is why the attempt was refused, empty when it was applied.
+	Error string
 }
 
-// New builds a live roster registry. providers is the immutable provider list
+// New builds a live roster registry. providers is the initial provider list
 // (with resolved API keys). interval and timeout default to 24h / 60s when zero;
 // callers should pass explicit values (app.Start uses 10m / 10s).
 func New(providers []Provider, catalog Catalog, interval, timeout time.Duration) *Registry {
@@ -109,19 +93,29 @@ func New(providers []Provider, catalog Catalog, interval, timeout time.Duration)
 // It never returns an error — provider failures are logged and skipped. The
 // previous snapshot is replaced atomically.
 func (r *Registry) Refresh(ctx context.Context) {
+	r.refreshMu.Lock()
+	defer r.refreshMu.Unlock()
 	if r.catalog == nil {
 		return
 	}
-
 	r.mu.RLock()
 	providers := r.providers
 	r.mu.RUnlock()
 	if len(providers) == 0 {
 		return
 	}
+	r.publish(providers, r.discover(ctx, providers))
+}
 
+type rosterSnapshot struct {
+	models           []Model
+	byRef            map[string]Model
+	statusByProvider map[string]Status
+}
+
+func (r *Registry) discover(ctx context.Context, providers []Provider) rosterSnapshot {
 	checkedAt := time.Now().UTC()
-	status := make(map[string]Status, len(providers))
+	statusByProvider := make(map[string]Status, len(providers))
 	var combined []Model
 	for _, p := range providers {
 		pctx, cancel := context.WithTimeout(ctx, r.timeout)
@@ -129,10 +123,11 @@ func (r *Registry) Refresh(ctx context.Context) {
 		cancel()
 		if err != nil {
 			log.Printf("q15: discovery provider %q: %v; skipping this cycle", p.Name, err)
-			status[p.Name] = Status{Err: err.Error(), CheckedAt: checkedAt}
+			statusByProvider[p.Name] = Status{Error: err.Error(), CheckedAt: checkedAt}
 			continue
 		}
-		status[p.Name] = Status{Models: len(models), CheckedAt: checkedAt}
+		statusByProvider[p.Name] = Status{ModelCount: len(models), CheckedAt: checkedAt}
+		models = append([]Model(nil), models...)
 		for i := range models {
 			// Annotate with provider metadata so consumers (adapter, factory)
 			// have everything they need without a separate lookup.
@@ -152,11 +147,16 @@ func (r *Registry) Refresh(ctx context.Context) {
 		}
 	}
 
+	return rosterSnapshot{models: combined, byRef: byRef, statusByProvider: statusByProvider}
+}
+
+func (r *Registry) publish(providers []Provider, roster rosterSnapshot) {
 	r.mu.Lock()
-	r.snap = combined
-	r.byRef = byRef
-	r.status = status
-	r.mu.Unlock()
+	defer r.mu.Unlock()
+	r.providers = providers
+	r.snap = roster.models
+	r.byRef = roster.byRef
+	r.statusByProvider = roster.statusByProvider
 }
 
 // Run ticks at the configured interval, refreshing the roster until ctx is
@@ -176,7 +176,7 @@ func (r *Registry) Run(ctx context.Context) error {
 	}
 }
 
-// Providers returns the immutable configured provider descriptors. Safe for
+// Providers returns the current configured provider descriptors. Safe for
 // concurrent use. Provider API keys are intentionally redacted from the copy so
 // callers can safely use this for model-facing summaries.
 func (r *Registry) Providers() []Provider {
@@ -197,19 +197,28 @@ func (r *Registry) Providers() []Provider {
 	return out
 }
 
-// SetProviders replaces the provider list discovery runs against. It refuses an
-// empty list: a running agent must keep something to discover, which is the rule
-// startup applies too. The caller refreshes afterwards to act on the change, so
-// until then the current roster and its resolved keys stay live. Safe for
-// concurrent use.
-func (r *Registry) SetProviders(providers []Provider) error {
+// ReplaceProviders discovers the candidate providers before publishing them
+// together with their roster. A failed replacement leaves the running providers
+// and models intact. Refresh and replacement are serialized so an older fetch
+// cannot overwrite a newly applied configuration.
+func (r *Registry) ReplaceProviders(ctx context.Context, providers []Provider) error {
 	if len(providers) == 0 {
 		return errors.New("refusing to apply an empty provider list")
 	}
-
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.providers = providers
+	r.refreshMu.Lock()
+	defer r.refreshMu.Unlock()
+	if r.catalog == nil {
+		return errors.New("model catalog is not configured")
+	}
+	providers = append([]Provider(nil), providers...)
+	roster := r.discover(ctx, providers)
+	if len(roster.models) == 0 {
+		return errors.New("the edited providers discovered no models")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	r.publish(providers, roster)
 	return nil
 }
 
@@ -301,7 +310,7 @@ func (r *Registry) ProviderStatus(providerName string) (Status, bool) {
 
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	st, ok := r.status[providerName]
+	st, ok := r.statusByProvider[providerName]
 	return st, ok
 }
 

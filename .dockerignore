@@ -12,3 +12,6 @@ systems/web/ui/.vite
 systems/web/ui/.vp
 systems/web/ui/test-results
 systems/web/ui/playwright-report
+
+deploy/compose/secrets
+deploy/compose/auth

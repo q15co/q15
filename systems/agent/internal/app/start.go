@@ -42,7 +42,7 @@ func Start(ctx context.Context) error {
 		return fmt.Errorf("configure auth store: %w", err)
 	}
 
-	cfg, err := config.Load(ConfigPath)
+	cfg, configData, err := readConfig(ConfigPath)
 	if err != nil {
 		return err
 	}
@@ -83,7 +83,8 @@ func Start(ctx context.Context) error {
 
 	// Background: keep the roster live, and apply an edited provider config
 	// without a restart.
-	go watchConfig(ctx, registry, ConfigPath, providers, registryRefreshInterval)
+	watcher := newConfigWatcher(registry, ConfigPath, configData)
+	go watcher.run(ctx, registryRefreshInterval)
 
 	return runBot(ctx, *runtime, registry)
 }
@@ -107,9 +108,10 @@ func buildProviderDescriptors(configProviders []config.Provider) ([]modelcatalog
 			BaseURL: strings.TrimSpace(p.BaseURL),
 			APIKey:  apiKey,
 			Options: modelcatalog.Options{
-				ModelsDev: p.Discovery.ModelsDev,
-				Include:   p.Discovery.Include,
-				Exclude:   p.Discovery.Exclude,
+				ModelsDev:         p.Discovery.ModelsDev,
+				ModelsDevProvider: strings.TrimSpace(p.Discovery.ModelsDevProvider),
+				Include:           p.Discovery.Include,
+				Exclude:           p.Discovery.Exclude,
 			},
 		})
 	}

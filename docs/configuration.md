@@ -139,17 +139,28 @@ Notes:
   `NAME` or `NAME_FILE`
 - `openai-codex` uses `/etc/q15/auth/auth.json` from `q15 auth login`; `openai-compatible` providers
   use `key_env`
-- `openai-compatible` `base_url` must include the versioned path the provider documents, such as
-  `https://api.deepinfra.com/v1/openai`. The chat endpoint and the model roster are both relative
-  paths joined onto it (the roster is `{base_url}/models`), so a scheme and host alone is refused at
-  load.
+- `openai-compatible` `base_url` must be the provider's documented HTTP(S) API root. Include the
+  versioned path when required, such as `https://api.deepinfra.com/v1/openai`. Providers such as
+  DeepSeek serve the API at a pathless root. Chat and discovery join relative paths onto this value
+  (`chat/completions` and `models`); startup discovery reports an unroutable endpoint through
+  `list_providers`.
 - `ollama` defaults to local `http://localhost:11434` when `base_url` is omitted; set
   `base_url: https://ollama.com` plus `key_env: OLLAMA_API_KEY` for direct Ollama Cloud API access
+- With `discovery.models_dev: true`, Providers are matched against the catalog's `api` URL first,
+  then a unique provider domain from `api` or `doc`. Ambiguous matches leave metadata unknown. Set
+  `discovery.models_dev_provider` to a models.dev provider ID (for example `deepinfra`) when using a
+  proxy or an ambiguous endpoint.
+- `list_models` reports `capabilities_known: false` when capability metadata is unavailable; an
+  empty capability list then makes no claim about tool support. `structured_output: null` means that
+  support is unknown. Capability filters include confirmed matches only.
+- DeepInfra's roster tags identify chat models. Entries tagged only for embeddings, images, audio,
+  or video are excluded from the chat roster, even when enrichment is disabled.
 - This file is re-read on every roster tick, every 10 minutes. An edited provider list is applied
   without a restart once it loads, its keys resolve, and it discovers at least one model. An edit
   that fails any of those is refused whole: the previous providers keep running, and
   `list_providers` reports why under `config_reload`. A rotated secret file on its own is not a
   change to this file, so it still needs a restart.
+- Only the `providers` section reloads; changes to `agent` settings require a restart.
 - For Ollama Cloud, create an API key from the Ollama account settings, expose it as
   `OLLAMA_API_KEY` or `OLLAMA_API_KEY_FILE`, and use native Ollama model names such as
   `gpt-oss:120b`; browse the current cloud model catalog at `https://ollama.com/search`

@@ -279,16 +279,9 @@ func isOllamaCloudBaseURL(raw string) bool {
 	return strings.EqualFold(base.Hostname(), "ollama.com")
 }
 
-// validateOpenAICompatibleBaseURL requires a base URL that carries a path, not
-// just a scheme and a host. The provider joins a relative request path onto
-// this value, so a base of `https://api.deepinfra.com` asks for
-// `https://api.deepinfra.com/chat/completions`, which no provider serves: an
-// OpenAI-compatible API is published under a versioned path (`/v1`,
-// `/v1/openai`, and so on). Checking the shape here turns a 404 at the first
-// message into a message at config load, which is where the mistake is made.
-//
-// Ollama providers are exempt: their client resolves a bare host on its own,
-// and `http://localhost:11434` is the documented default.
+// validateOpenAICompatibleBaseURL checks URL syntax. The provider's documented
+// API root may include a path (DeepInfra) or be pathless (DeepSeek); startup
+// discovery checks whether the configured endpoint actually serves models.
 func validateOpenAICompatibleBaseURL(raw string) error {
 	raw = strings.TrimSpace(raw)
 	parsed, err := url.Parse(raw)
@@ -298,15 +291,8 @@ func validateOpenAICompatibleBaseURL(raw string) error {
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
 		return fmt.Errorf("%q must be an http or https URL", raw)
 	}
-	if parsed.Host == "" {
+	if parsed.Hostname() == "" {
 		return fmt.Errorf("%q has no host", raw)
-	}
-	if strings.Trim(parsed.Path, "/") == "" {
-		return fmt.Errorf(
-			"%q has no path: the chat endpoint is joined onto this value, so include the "+
-				"versioned path the provider documents, for example https://api.deepinfra.com/v1/openai",
-			raw,
-		)
 	}
 	return nil
 }

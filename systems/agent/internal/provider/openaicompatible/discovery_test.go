@@ -130,3 +130,29 @@ func TestOpenAIClient_MissingBaseURL(t *testing.T) {
 		t.Fatal("expected error for missing base_url")
 	}
 }
+
+func TestOpenAIClient_DiscoverFiltersNonChatModels(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"data":[
+			{"id":"openai/gpt-oss-20b","metadata":{"tags":["chat","reasoning"]}},
+			{"id":"BAAI/bge-m3","metadata":{"tags":["embed"]}},
+			{"id":"flux","metadata":{"tags":["image-gen"]}},
+			{"id":"speech","metadata":{"tags":["tts"]}},
+			{"id":"transcribe","metadata":{"tags":["stt"]}},
+			{"id":"video","metadata":{"tags":["video-gen"]}},
+			{"id":"plain-openai-model"},
+			{"id":"unknown-tags","metadata":{"tags":["custom-tag"]}}
+		]}`))
+	}))
+	defer server.Close()
+	models, err := NewRosterClient(
+		server.Client(),
+	).Discover(context.Background(), modelcatalog.Provider{BaseURL: server.URL + "/v1/openai/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(models) != 3 || models[0].ProviderModel != "openai/gpt-oss-20b" ||
+		models[1].ProviderModel != "plain-openai-model" || models[2].ProviderModel != "unknown-tags" {
+		t.Fatalf("roster = %+v, want chat and unclassified models only", models)
+	}
+}

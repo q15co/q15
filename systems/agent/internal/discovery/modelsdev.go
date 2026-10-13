@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/q15co/q15/systems/agent/internal/modelcatalog"
 	"github.com/q15co/q15/systems/agent/internal/providertypes"
+	"golang.org/x/net/publicsuffix"
 )
 
 const (
@@ -77,7 +79,14 @@ type modelsDevFile map[string]modelsDevProvider
 
 type modelsDevProvider struct {
 	Name   string                    `json:"name"`
+	API    string                    `json:"api"`
+	Doc    string                    `json:"doc"`
 	Models map[string]modelsDevModel `json:"models"`
+}
+
+type modelsDevEntry struct {
+	modelID string
+	model   modelsDevModel
 }
 
 type modelsDevModel struct {
@@ -130,27 +139,37 @@ func (c *modelsDevClient) Enrich(ctx context.Context, p Provider, base []Model) 
 	if err != nil || len(file) == 0 {
 		return nil, nil
 	}
-	slug := providerSlug(p)
+	slug := providerSlug(p, file)
 	providerData, ok := file[slug]
 	if !ok || len(providerData.Models) == 0 {
 		return nil, nil
 	}
+	byKey := make(map[string]modelsDevEntry, len(providerData.Models))
+	for id, md := range providerData.Models {
+		key := strings.ToLower(strings.TrimSpace(id))
+		if _, exists := byKey[key]; exists {
+			// Case-folding must not choose arbitrarily between distinct IDs.
+			byKey[key] = modelsDevEntry{}
+			continue
+		}
+		byKey[key] = modelsDevEntry{modelID: id, model: md}
+	}
 
 	enriched := make([]Model, 0, len(base))
 	for _, b := range base {
-		var matchedKey string
+		var matchedID string
 		var matchedModel modelsDevModel
 		for _, key := range modelcatalog.CandidateKeys(b.ProviderModel) {
-			if md, ok := providerData.Models[key]; ok {
-				matchedKey = key
-				matchedModel = md
+			if entry, ok := byKey[key]; ok && entry.modelID != "" {
+				matchedID = entry.modelID
+				matchedModel = entry.model
 				break
 			}
 		}
-		if matchedKey == "" {
+		if matchedID == "" {
 			continue
 		}
-		enriched = append(enriched, modelFromModelsDev(matchedKey, matchedModel))
+		enriched = append(enriched, modelFromModelsDev(matchedID, matchedModel))
 	}
 	return enriched, nil
 }
@@ -257,7 +276,7 @@ func parseModelsDevFile(data []byte) (modelsDevFile, error) {
 // bool) → StructuredOutput. Cost comes from the cost block (already USD per
 // million tokens). models.dev publishes no benchmarks.
 func modelFromModelsDev(id string, md modelsDevModel) Model {
-	caps := Capabilities{}
+	caps := Capabilities{Known: true}
 	for _, modality := range md.Modalities.Input {
 		switch strings.ToLower(strings.TrimSpace(modality)) {
 		case "text":
@@ -312,18 +331,19 @@ func modelFromModelsDev(id string, md modelsDevModel) Model {
 	}
 
 	return Model{
-		ProviderModel:    id,
-		Name:             name,
-		Capabilities:     caps,
-		CostTier:         deriveCostTier(costIn, costOut),
-		CostPerMTokIn:    costIn,
-		CostPerMTokOut:   costOut,
-		MaxContextTokens: md.Limit.Context,
-		MaxOutputTokens:  md.Limit.Output,
-		ReleaseDate:      releaseDate,
-		VideoInput:       videoInput,
-		StructuredOutput: md.StructuredOutput,
-		Source:           sourceModelsDev,
+		ProviderModel:         id,
+		Name:                  name,
+		Capabilities:          caps,
+		CostTier:              deriveCostTier(costIn, costOut),
+		CostPerMTokIn:         costIn,
+		CostPerMTokOut:        costOut,
+		MaxContextTokens:      md.Limit.Context,
+		MaxOutputTokens:       md.Limit.Output,
+		ReleaseDate:           releaseDate,
+		VideoInput:            videoInput,
+		StructuredOutput:      md.StructuredOutput,
+		StructuredOutputKnown: true,
+		Source:                sourceModelsDev,
 	}
 }
 
@@ -344,36 +364,84 @@ func deriveCostTier(costInPerMTok, costOutPerMTok float64) string {
 	}
 }
 
-// providerSlug maps a discovery Provider to the models.dev provider slug
-// used as the top-level key in api.json. It is a best-effort heuristic; a miss
-// simply means no enrichment — it is never fatal.
-//
-// Verified mapping (2026-06-21):
-//   - There is NO generic "ollama" slug in models.dev. Only "ollama-cloud"
-//     exists (for the ollama.com hosted service). Local/other Ollama providers
-//     have no models.dev entry → slug "" (enrichment skipped).
-//   - openai-compatible providers derive a slug from the base URL host using a
-//     heuristic table (e.g. api.moonshot.ai → "moonshotai", api.z.ai → "zai").
-//     Unknown hosts return "".
-func providerSlug(p Provider) string {
-	name := strings.ToLower(strings.TrimSpace(p.Name))
-	baseHost := baseURLHost(p.BaseURL)
-
+// providerSlug resolves catalog metadata without treating the operator's
+// provider name as an identity. Explicit aliases support proxies; otherwise
+// endpoint matches take precedence over a unique documented domain.
+func providerSlug(p Provider, catalog modelsDevFile) string {
+	if slug := strings.TrimSpace(p.Options.ModelsDevProvider); slug != "" {
+		return slug
+	}
 	switch providertypes.NormalizeOrEmpty(p.Type) {
-	case providertypes.Ollama:
-		// Ollama Cloud (ollama.com host or name containing "cloud") maps to the
-		// "ollama-cloud" slug. Local Ollama (localhost / other hosts) has no
-		// models.dev entry at all.
-		if baseHost == "ollama.com" || strings.Contains(name, "cloud") {
-			return "ollama-cloud"
-		}
-		return ""
 	case providertypes.OpenAICodex:
 		return "openai"
-	case providertypes.OpenAICompatible:
-		return openAICompatibleSlug(baseHost)
+	case providertypes.Ollama, providertypes.OpenAICompatible:
+		return catalogProviderSlug(p.BaseURL, catalog)
 	}
 	return ""
+}
+
+func catalogProviderSlug(baseURL string, catalog modelsDevFile) string {
+	base, err := url.Parse(strings.TrimSpace(baseURL))
+	if err != nil || base.Hostname() == "" {
+		return ""
+	}
+	matchedSlug, bestScore, ambiguous := "", 0, false
+	for slug, provider := range catalog {
+		score := catalogEndpointScore(base, provider.API)
+		if score == 0 {
+			continue
+		}
+		if score > bestScore {
+			matchedSlug, bestScore, ambiguous = slug, score, false
+		} else if score == bestScore {
+			ambiguous = true
+		}
+	}
+	if bestScore > 0 {
+		if ambiguous {
+			return ""
+		}
+		return matchedSlug
+	}
+	domain := registeredDomain(baseURL)
+	if domain == "" {
+		return ""
+	}
+	for slug, provider := range catalog {
+		if registeredDomain(provider.Doc) != domain && registeredDomain(provider.API) != domain {
+			continue
+		}
+		if matchedSlug != "" {
+			return ""
+		}
+		matchedSlug = slug
+	}
+	return matchedSlug
+}
+
+func catalogEndpointScore(base *url.URL, raw string) int {
+	api, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || api.Host == "" || !strings.EqualFold(api.Host, base.Host) {
+		return 0
+	}
+	apiPath := strings.TrimRight(api.Path, "/")
+	basePath := strings.TrimRight(base.Path, "/")
+	if basePath == apiPath || strings.HasPrefix(basePath, apiPath+"/") {
+		return len(apiPath) + 2
+	}
+	return 1
+}
+
+func registeredDomain(raw string) string {
+	host := baseURLHost(raw)
+	if net.ParseIP(host) != nil {
+		return ""
+	}
+	domain, err := publicsuffix.EffectiveTLDPlusOne(host)
+	if err != nil {
+		return ""
+	}
+	return domain
 }
 
 // baseURLHost extracts the hostname from a base URL string. Returns "" on
@@ -387,30 +455,6 @@ func baseURLHost(raw string) string {
 		return strings.ToLower(strings.TrimSpace(u.Hostname()))
 	}
 	return ""
-}
-
-// openAICompatibleSlug maps a base URL hostname to a models.dev provider slug
-// using a best-effort heuristic table. Returns "" when the host is unknown —
-// in that case enrichment is simply skipped (never fatal).
-//
-// models.dev slugs do not follow a strict naming convention, so this table is
-// maintained manually. Add entries here as new providers are verified against
-// the live catalog.
-var openAICompatibleHostToSlug = map[string]string{
-	"api.moonshot.ai":   "moonshotai",
-	"api.moonshot.cn":   "moonshotai-cn",
-	"api.z.ai":          "zai",
-	"open.bigmodel.cn":  "zhipuai",
-	"api.openai.com":    "openai",
-	"api.anthropic.com": "anthropic",
-	"api.x.ai":          "xai",
-	"api.deepseek.com":  "deepseek",
-	"api.requesty.ai":   "requesty",
-	"api.deepinfra.com": "deepinfra",
-}
-
-func openAICompatibleSlug(host string) string {
-	return openAICompatibleHostToSlug[host]
 }
 
 // --- cache helpers ---

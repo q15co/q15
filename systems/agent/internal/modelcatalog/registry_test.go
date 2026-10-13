@@ -33,7 +33,7 @@ func (c *callCountingCatalog) Discover(ctx context.Context, p Provider) ([]Model
 	return c.fakeCatalog.Discover(ctx, p)
 }
 
-func TestRegistry_SetProvidersSwapsTheDiscoveryTargets(t *testing.T) {
+func TestRegistry_ReplaceProvidersSwapsTheDiscoveryTargets(t *testing.T) {
 	cat := &fakeCatalog{models: map[string][]Model{
 		"a": {{ProviderModel: "one"}},
 		"b": {{ProviderModel: "two"}},
@@ -41,21 +41,15 @@ func TestRegistry_SetProvidersSwapsTheDiscoveryTargets(t *testing.T) {
 	reg := New([]Provider{{Name: "a", Type: "ollama"}}, cat, time.Hour, time.Second)
 	reg.Refresh(context.Background())
 
-	if err := reg.SetProviders(nil); err == nil {
+	if err := reg.ReplaceProviders(context.Background(), nil); err == nil {
 		t.Error(
-			"SetProviders(nil) should refuse an empty list: a running agent keeps something to discover",
+			"ReplaceProviders(nil) should refuse an empty list: a running agent keeps something to discover",
 		)
 	}
 
-	if err := reg.SetProviders([]Provider{{Name: "b", Type: "ollama"}}); err != nil {
-		t.Fatalf("SetProviders: %v", err)
+	if err := reg.ReplaceProviders(context.Background(), []Provider{{Name: "b", Type: "ollama"}}); err != nil {
+		t.Fatalf("ReplaceProviders: %v", err)
 	}
-	// The roster is whatever the last refresh found, until the next one.
-	if !reg.ProviderHasModels("a") {
-		t.Error("the roster should still hold the previous providers until the next refresh")
-	}
-
-	reg.Refresh(context.Background())
 	if !reg.ProviderHasModels("b") {
 		t.Error("the roster should follow the new provider list after a refresh")
 	}
@@ -75,16 +69,16 @@ func TestRegistry_ReloadStatusIsAbsentUntilAnAttempt(t *testing.T) {
 	}
 
 	at := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
-	reg.SetReloadStatus(ReloadStatus{CheckedAt: at, Err: "decode config: nope"})
+	reg.SetReloadStatus(ReloadStatus{CheckedAt: at, Error: "decode config: nope"})
 	status, ok := reg.ReloadStatus()
-	if !ok || status.Applied || status.Err != "decode config: nope" ||
+	if !ok || status.Applied || status.Error != "decode config: nope" ||
 		!status.CheckedAt.Equal(at) {
 		t.Fatalf("reload status = %+v (found=%v), want the recorded refusal", status, ok)
 	}
 
 	reg.SetReloadStatus(ReloadStatus{CheckedAt: at.Add(time.Minute), Applied: true})
 	status, _ = reg.ReloadStatus()
-	if !status.Applied || status.Err != "" {
+	if !status.Applied || status.Error != "" {
 		t.Fatalf("reload status = %+v, want the applied reload", status)
 	}
 }
@@ -112,7 +106,7 @@ func TestRegistry_ProviderStatusSeparatesFailureFromEmptyRoster(t *testing.T) {
 	reg.Refresh(context.Background())
 
 	// A provider with models says so and carries no reason.
-	if ok, found := reg.ProviderStatus("ok"); !found || ok.Models != 1 || ok.Reason() != "" {
+	if ok, found := reg.ProviderStatus("ok"); !found || ok.ModelCount != 1 || ok.Reason() != "" {
 		t.Fatalf("status(ok) = %+v (found=%v), want 1 model and no reason", ok, found)
 	}
 
@@ -131,8 +125,8 @@ func TestRegistry_ProviderStatusSeparatesFailureFromEmptyRoster(t *testing.T) {
 	if !found {
 		t.Fatal("status(down) not recorded")
 	}
-	if down.Models != 0 {
-		t.Errorf("status(down).Models = %d, want 0", down.Models)
+	if down.ModelCount != 0 {
+		t.Errorf("status(down).ModelCount = %d, want 0", down.ModelCount)
 	}
 	if !strings.Contains(down.Reason(), "404 Not Found") {
 		t.Errorf("reason(down) = %q, want the discovery error", down.Reason())

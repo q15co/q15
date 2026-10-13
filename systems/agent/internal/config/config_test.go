@@ -239,18 +239,17 @@ func TestValidateRequiresBaseURLForOpenAICompatible(t *testing.T) {
 	}
 }
 
-// TestValidateRejectsOpenAICompatibleBaseURLWithoutPath covers the shape check
-// on base_url: the provider joins a relative request path onto this value, so
-// a scheme+host base asks for a route no provider serves, and the mistake
-// otherwise survives validation and dies as a 404 at the first message.
-func TestValidateRejectsOpenAICompatibleBaseURLWithoutPath(t *testing.T) {
+func TestValidateOpenAICompatibleBaseURL(t *testing.T) {
 	tests := []struct {
 		name    string
 		baseURL string
 		wantErr bool
 	}{
-		{"scheme and host only", "https://api.deepinfra.com", true},
-		{"empty path after a slash", "https://api.deepinfra.com/", true},
+		{"documented pathless root", "https://api.deepseek.com", false},
+		{"root with a slash", "https://api.deepseek.com/", false},
+		{"missing host", "https:///v1", true},
+		{"unsupported scheme", "ftp://api.example.com/v1", true},
+		{"malformed URL", "https://api.example.com/%zz", true},
 		{"no scheme at all", "api.deepinfra.com", true},
 		{"documented base with a path", "https://api.deepinfra.com/v1/openai", false},
 		{"versioned base with a port", "http://localhost:8080/v1", false},

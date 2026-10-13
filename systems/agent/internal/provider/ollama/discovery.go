@@ -167,7 +167,7 @@ type ollamaShowRequest struct {
 // capabilitiesFromOllamaShow maps Ollama's capability vocabulary onto the
 // normalized Capabilities struct. Unknown capability names are ignored.
 func capabilitiesFromOllamaShow(names []string) modelcatalog.Capabilities {
-	caps := modelcatalog.Capabilities{Text: true} // completion-capable by default
+	caps := modelcatalog.Capabilities{Known: names != nil, Text: true}
 	for _, raw := range names {
 		switch strings.ToLower(strings.TrimSpace(raw)) {
 		case "completion":

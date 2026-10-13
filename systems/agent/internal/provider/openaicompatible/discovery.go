@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/q15co/q15/systems/agent/internal/modelcatalog"
@@ -37,12 +38,15 @@ type openaiModelsResponse struct {
 }
 
 type openaiModelsEntry struct {
-	ID string `json:"id"`
+	ID       string `json:"id"`
+	Metadata struct {
+		Tags []string `json:"tags"`
+	} `json:"metadata"`
 }
 
 // Discover lists the provider's models from GET {base_url}/models. A non-empty
-// base URL is required. base_url is the provider's API root, its versioned path
-// included (for example https://api.moonshot.ai/v1); the relative path `models`
+// base URL is required. base_url is the provider's documented API root
+// (for example https://api.moonshot.ai/v1 or https://api.deepseek.com); the relative path `models`
 // is joined onto it, exactly as the chat client joins `chat/completions`, so no
 // version segment is appended here.
 func (c *RosterClient) Discover(
@@ -67,7 +71,11 @@ func (c *RosterClient) Discover(
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("openai models: unexpected status %s", resp.Status)
+		return nil, fmt.Errorf(
+			"openai models: unexpected status %s at %s; check base_url against the provider's documented API root (including its path)",
+			resp.Status,
+			req.URL.Redacted(),
+		)
 	}
 
 	var body openaiModelsResponse
@@ -77,6 +85,11 @@ func (c *RosterClient) Discover(
 
 	models := make([]modelcatalog.Model, 0, len(body.Data))
 	for _, entry := range body.Data {
+		// DeepInfra classifies its mixed roster with tags. Standard OpenAI
+		// rosters omit them, so retain unclassified entries.
+		if nonChatModel(entry.Metadata.Tags) {
+			continue
+		}
 		id := strings.TrimSpace(entry.ID)
 		if id == "" {
 			continue
@@ -89,6 +102,19 @@ func (c *RosterClient) Discover(
 		})
 	}
 	return models, nil
+}
+
+func nonChatModel(tags []string) bool {
+	if slices.Contains(tags, "chat") {
+		return false
+	}
+	return slices.ContainsFunc(tags, func(tag string) bool {
+		switch tag {
+		case "embed", "image-gen", "video-gen", "tts", "stt":
+			return true
+		}
+		return false
+	})
 }
 
 // setRosterBearerAuth adds an Authorization: Bearer header when apiKey is non-empty.
