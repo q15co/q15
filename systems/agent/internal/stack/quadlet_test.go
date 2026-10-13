@@ -11,6 +11,39 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
+func TestBindMountsAreReadOnlyAtConfiguredPaths(t *testing.T) {
+	units := rendered(t, testProfile())
+	want := map[string][]string{
+		"q15-proxy.container": {"/etc/q15/proxy/policy.yaml", "/run/q15-secrets"},
+		"q15-agent.container": {"/etc/q15/agent/config.yaml", "/run/q15-secrets"},
+	}
+	for name, targets := range want {
+		mounts := units[name]["Mount"]
+		for _, target := range targets {
+			found := false
+			for _, mount := range mounts {
+				options := strings.Split(mount, ",")
+				var destination string
+				readOnly := false
+				for _, option := range options {
+					if value, ok := strings.CutPrefix(option, "destination="); ok {
+						destination = value
+					}
+					if option == "ro" {
+						readOnly = true
+					}
+				}
+				if destination == target && readOnly {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("%s has no read-only bind at %s: %v", name, target, mounts)
+			}
+		}
+	}
+}
+
 // TestUnitsCoverTheStackAndCarryItsName is the naming contract: every unit, the
 // container inside it and the network they join carry the stack's name, so two
 // stacks on one host cannot collide.

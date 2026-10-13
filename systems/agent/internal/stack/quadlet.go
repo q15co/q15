@@ -263,8 +263,11 @@ func (p Profile) renderContainer(c container) []byte {
 		fmt.Fprintf(&b, "Volume=%s\n", formatMount(m))
 	}
 	for _, m := range c.hostMounts {
-		fmt.Fprintf(&b, "Mount=type=bind,source=%s,destination=%s%s\n",
-			m.source, m.target, readOnlySuffix(m))
+		fmt.Fprintf(&b, "Mount=type=bind,source=%s,destination=%s", m.source, m.target)
+		if m.readOnly {
+			b.WriteString(",ro")
+		}
+		b.WriteByte('\n')
 	}
 	for _, port := range c.publishPorts {
 		fmt.Fprintf(&b, "PublishPort=%s\n", port)
