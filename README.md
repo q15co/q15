@@ -80,9 +80,12 @@ AND THIS
 · 2 GB RAM for the stack, plus room for the models you pick
 · A model provider: an Ollama API key, your own Ollama server, or any OpenAI-compatible endpoint
 · A passkey-capable authenticator, bound to a device
+
+AND IN PROGRESS
+· macOS on Apple silicon, for the q15 command and the auth verbs, not the stack
 ```
 
-Three of those are worth reading twice.
+Four of those are worth reading twice.
 
 **Synced passkeys are refused.** q15 needs a credential it can revoke for one device, so iCloud
 Keychain and password-manager passkeys do not enrol. Use a security key with PIN verification, or a
@@ -94,6 +97,11 @@ fails startup by design; there is a re-enrolment path, but decide the name befor
 **The sizing numbers are still in development.** The stack is light: about 2 GB of RAM, and roughly
 1.2 GB of embedding weights on the first start. Tested minimum CPU, RAM and disk figures are not
 published yet.
+
+**macOS support is in progress.** The `q15` command and the provider-credential verbs run on Apple
+silicon, and the installer puts them there. `init`, `up` and `status` do not: they render systemd
+units, so they belong on the Linux server. Intel Macs are not offered at all, because the pinned
+signature verifier has no build for them.
 
 ## How it fits together
 

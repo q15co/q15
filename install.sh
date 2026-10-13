@@ -15,6 +15,11 @@
 # `--print-public-key` prints the key below and exits, so that CI can assert
 # this copy still matches deploy/install/q15.pub.
 #
+# Linux is the platform the stack runs on. macOS on Apple silicon is in
+# progress: this installs the binary and the auth verbs there, and not the
+# stack verbs, which render systemd units. Intel Macs are refused rather than
+# half-supported, because no pinned signature verifier has a build for them.
+#
 set -eu
 
 # The release public key, copied verbatim from deploy/install/q15.pub. A
@@ -31,6 +36,12 @@ MINISIGN_VERSION='0.12'
 MINISIGN_TARBALL_SHA256='9a599b48ba6eb7b1e80f12f36b94ceca7c00b7a5173c95c3efc88d9822957e73'
 MINISIGN_SHA256_X86_64='2c74dffcc1c9a5ee55957c60971998ace2b89f22585631594ec2152c588af8db'
 MINISIGN_SHA256_AARCH64='cec9f88be8c975af76854a53b4d49c3d257feae38d916edb0d16fb55aacd3000'
+# macOS differs: minisign publishes one archive there holding a single arm64
+# binary, so that platform has one pin and no architecture to choose, and an
+# Intel Mac has no verifier at all. That is why the script refuses that platform
+# rather than running something it cannot check.
+MINISIGN_MACOS_ZIP_SHA256='89000b19535765f9cffc65a65d64a820f433ef6db8020667f7570e06bf6aac63'
+MINISIGN_MACOS_SHA256='d41cde458303d45c95b00473e2455a7f45f95b550931f1f0cc98ef1f61b2a8ff'
 MINISIGN_URL='https://github.com/jedisct1/minisign/releases/download'
 
 # Where the release comes from. Q15_RELEASE_BASE_URL points the script at a
@@ -63,6 +74,13 @@ usage: install.sh [options]
                  tag is the one on the release, for example v0.1.0
   -y, --yes      do not ask before running the guided setup
   -h, --help     print this message
+
+Platforms:
+
+  Linux (amd64, arm64) is where the stack runs. macOS on Apple silicon is in
+  progress and installs the q15 command and its provider-credential verbs; the
+  stack verbs need systemd and belong on the Linux server. macOS on Intel is not
+  installed by this script.
 
 Environment:
 
@@ -102,7 +120,7 @@ fetch() {
 }
 
 # resolve_release fills release_tag and release_version. The tag is vX.Y.Z and
-# the archive inside the release is q15_X.Y.Z_linux_ARCH.tar.gz, because
+# the archive inside the release is q15_X.Y.Z_OS_ARCH.tar.gz, because
 # GoReleaser's version template carries the tag with the v prefix trimmed.
 resolve_release() {
 	if [ -n "${version_option}" ]; then
@@ -126,13 +144,31 @@ resolve_release() {
 }
 
 install_verifier() {
+	mkdir -p "${work_dir}/verifier"
+
+	if [ "${platform}" = 'darwin' ]; then
+		command -v unzip >/dev/null 2>&1 ||
+			die 'unzip is needed to unpack the signature verifier on macOS'
+		verifier_archive="${work_dir}/minisign-${MINISIGN_VERSION}-macos.zip"
+		fetch "${MINISIGN_URL}/${MINISIGN_VERSION}/minisign-${MINISIGN_VERSION}-macos.zip" \
+			"${verifier_archive}"
+		[ "$(sha256_of "${verifier_archive}")" = "${MINISIGN_MACOS_ZIP_SHA256}" ] ||
+			die 'the signature verifier download does not match its pinned hash'
+		unzip -o -q "${verifier_archive}" -d "${work_dir}/verifier" ||
+			die 'the signature verifier archive is not shaped as expected'
+		verifier="${work_dir}/verifier/minisign"
+		[ "$(sha256_of "${verifier}")" = "${MINISIGN_MACOS_SHA256}" ] ||
+			die 'the signature verifier does not match its pinned hash'
+		chmod 0755 "${verifier}"
+		return 0
+	fi
+
 	verifier_tarball="${work_dir}/minisign-${MINISIGN_VERSION}-linux.tar.gz"
 	fetch "${MINISIGN_URL}/${MINISIGN_VERSION}/minisign-${MINISIGN_VERSION}-linux.tar.gz" \
 		"${verifier_tarball}"
 	[ "$(sha256_of "${verifier_tarball}")" = "${MINISIGN_TARBALL_SHA256}" ] ||
 		die 'the signature verifier download does not match its pinned hash'
 
-	mkdir -p "${work_dir}/verifier"
 	tar -xzf "${verifier_tarball}" -C "${work_dir}/verifier" \
 		"minisign-linux/${arch_dir}/minisign" >/dev/null 2>&1 ||
 		die 'the signature verifier archive is not shaped as expected'
@@ -156,6 +192,13 @@ verify_release() {
 }
 
 run_guided_setup() {
+	if [ "${platform}" = 'darwin' ]; then
+		printf '\nmacOS support is in progress: the q15 command and the auth verbs run here, while the\n'
+		printf 'stack verbs (init, up, down, status) render systemd units and need the Linux server.\n'
+		printf 'Run those on the server, not on this Mac:\n  q15 auth login\n'
+		return 0
+	fi
+
 	if [ "${assume_yes}" = 'no' ]; then
 		if ! has_terminal; then
 			printf '\nRun the guided setup when you are ready:\n  q15 init\n'
@@ -211,7 +254,17 @@ while [ $# -gt 0 ]; do
 	esac
 done
 
-[ "$(uname -s)" = 'Linux' ] || die "q15 runs on Linux, not on $(uname -s)"
+case "$(uname -s)" in
+Linux)
+	platform='linux'
+	;;
+Darwin)
+	platform='darwin'
+	;;
+*)
+	die "there is no q15 release for $(uname -s)"
+	;;
+esac
 
 case "$(uname -m)" in
 x86_64 | amd64)
@@ -229,6 +282,13 @@ aarch64 | arm64)
 	;;
 esac
 
+# Both macOS architectures have a release, but only Apple silicon can be
+# installed here: the verifier this script trusts has no Intel build, and
+# running an unpinned one would defeat the point of pinning it.
+if [ "${platform}" = 'darwin' ] && [ "${arch}" = 'amd64' ]; then
+	die 'no pinned signature verifier has an Intel macOS build, so this script will not install there. Fetch q15_<version>_darwin_amd64.tar.gz from the release and verify it with minisign.'
+fi
+
 [ -n "${HOME:-}" ] || die 'HOME is not set'
 bin_dir="${HOME}/.local/bin"
 target="${bin_dir}/q15"
@@ -238,11 +298,11 @@ resolve_release
 work_dir="$(mktemp -d)" || die 'could not create a temporary directory'
 trap 'cleanup' EXIT INT TERM HUP
 
-archive_name="q15_${release_version}_linux_${arch}.tar.gz"
+archive_name="q15_${release_version}_${platform}_${arch}.tar.gz"
 archive="${work_dir}/${archive_name}"
 release_url="${Q15_RELEASE_BASE_URL}/${release_tag}/${archive_name}"
 
-printf 'Installing q15 %s for linux/%s\n' "${release_version}" "${arch}"
+printf 'Installing q15 %s for %s/%s\n' "${release_version}" "${platform}" "${arch}"
 
 install_verifier
 fetch "${release_url}" "${archive}"

@@ -27,3 +27,8 @@ copies agree.
 The public key is embedded in the script rather than fetched, so the download cannot choose its own
 verification key. The verifier it runs, minisign, is pinned by hash: the tarball, and both of the
 binaries inside it, are checked before either is executed.
+
+macOS takes its own verifier: minisign publishes one archive there holding a single arm64 binary, so
+`install.sh` pins the archive and that binary, and nothing can be selected by architecture. An Intel
+Mac has no pinned verifier at all, which is why the script refuses that platform instead of running
+something it cannot check.
