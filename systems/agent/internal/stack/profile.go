@@ -84,9 +84,7 @@ const (
 	qdrantURLEnv     = "Q15_QDRANT_URL"
 
 	// The paths inside the containers, and the one credential file the shipped
-	// proxy policy names. The secrets directory is mounted where the Compose
-	// example mounts it, so an existing deployment's secrets are already in the
-	// right place.
+	// proxy policy names. Podman delivers each declared secret under /run/secrets.
 	//
 	// Only the proxy's token appears here, because the stock policy declares that
 	// secret and the proxy refuses to start without it. A provider key is a
@@ -94,7 +92,7 @@ const (
 	// provider that needs one, and the default profile declares a local ollama,
 	// which needs none. Preparing a credential nothing reads is how an operator
 	// ends up asking why their stack is waiting for somebody else's key.
-	secretsDirTarget  = "/run/q15-secrets"
+	secretsDirTarget  = "/run/secrets"
 	agentConfigTarget = "/etc/q15/agent/config.yaml"
 	authDirTarget     = "/etc/q15/auth"
 	proxyPolicyTarget = "/etc/q15/proxy/policy.yaml"

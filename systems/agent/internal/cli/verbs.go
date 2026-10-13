@@ -19,6 +19,10 @@ type verb struct {
 	// receives is the one Run was given, with the missing streams already
 	// defaulted, and ctx carries the caller's cancellation.
 	run func(ctx context.Context, env command.Env, args []string) error
+	// hidden keeps a verb out of the command list. It is for the surface podman
+	// calls rather than a person: reachable, because something has to reach it,
+	// and unlisted, because nobody should be told to type it.
+	hidden bool
 }
 
 // verbs is the registry, in the order the help lists them.
@@ -58,6 +62,17 @@ var verbs = []verb{
 		summary: "print the journal of the stack, or of one service in it",
 		run:     runLogs,
 	},
+	{
+		name:    "secret",
+		summary: "add a stack secret, list what podman knows, or re-provision a store",
+		run:     runSecret,
+	},
+	{
+		name:    "secret-driver",
+		summary: "the four commands podman's shell secret driver calls",
+		run:     runSecretDriver,
+		hidden:  true,
+	},
 }
 
 // lookup finds the verb a word selects.
@@ -83,11 +98,14 @@ usage:
 commands:
 `)
 	for _, v := range verbs {
+		if v.hidden {
+			continue
+		}
 		fmt.Fprintf(w, "  %-8s  %s\n", v.name, v.summary)
 	}
 	fmt.Fprint(w, `  help      print this message
 
-The remaining install commands (init, doctor, secret, origin) arrive with the
-install slice; run 'q15 version' to see what this build is.
+The remaining install commands (init, doctor, origin) arrive with the install
+slice; run 'q15 version' to see what this build is.
 `)
 }

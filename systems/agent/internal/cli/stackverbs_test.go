@@ -32,6 +32,9 @@ func wantUnits() []string {
 type execCall struct {
 	program string
 	args    []string
+	// stdin is what the program was handed to read. It is recorded because the
+	// secret verbs promise that a value travels only this way.
+	stdin string
 }
 
 // fakeExec records what a verb ran and answers with whatever the test says. It
@@ -45,10 +48,18 @@ func (f *fakeExec) run(
 	_ context.Context,
 	program string,
 	args []string,
-	_ io.Reader,
+	stdin io.Reader,
 	stdout, stderr io.Writer,
 ) error {
-	f.calls = append(f.calls, execCall{program: program, args: append([]string(nil), args...)})
+	call := execCall{program: program, args: append([]string(nil), args...)}
+	if stdin != nil {
+		read, err := io.ReadAll(stdin)
+		if err != nil {
+			return err
+		}
+		call.stdin = string(read)
+	}
+	f.calls = append(f.calls, call)
 	if f.handler == nil {
 		return nil
 	}
