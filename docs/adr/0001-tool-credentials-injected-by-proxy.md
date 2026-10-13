@@ -2,18 +2,24 @@
 
 Status: accepted
 
-The agent executes model output, so anything in its own environment is one prompt injection away
-from disclosure. Credentials for hosts the agent reaches through the shell are therefore held by
-`q15-proxy`, which injects them into the request at egress for the hosts the deployment's policy
-names. The agent's environment does not carry them, so neither its prompt nor its transcript has
-anything to leak for those hosts.
+The agent executes model output, so a secret that generated code can read is a secret one prompt
+injection away from disclosure. The boundary is therefore drawn as an access rule rather than as a
+rule about which process happens to hold what:
 
-Both limits are load-bearing and are stated rather than hidden:
+- Credentials for hosts the agent reaches through the shell are held by `q15-proxy` and injected
+  into the request at egress, for the hosts the deployment's policy names. The sandbox that runs
+  generated code carries a placeholder for each of them and no value, and the proxy substitutes the
+  value only in a request that matches a rule. The sandbox can name a secret and cannot read it.
+- The model provider's key is in the container that runs the agent loop, because that process is the
+  one that calls the provider. Generated code never runs there: it runs in the sandbox, where that
+  key does not exist. No tool route reaches it.
 
-- The agent does hold the key for the model provider it calls, because it is the process that calls
-  the provider. A hosted provider sees the prompt either way.
+Two things the boundary does not claim:
+
 - The agent can still use an injected credential, by asking for a host the policy matches. There is
   nothing to steal and plenty to abuse, so the policy is the boundary and it has to be narrow.
+- A hosted provider sees the prompt either way. This boundary is about what the agent can reach, not
+  about what leaves the machine.
 
 ## Considered options
 
@@ -30,6 +36,9 @@ Both limits are load-bearing and are stated rather than hidden:
 - The proxy is on the critical path for any request that needs a credential.
 - Credentials are provisioned per deployment and are never read back: the operator-facing secret
   verbs are write-only.
+- The boundary is not network isolation. The sandbox is a peer on the stack's network and can
+  resolve the other services. What holds is that the container running the agent loop accepts no
+  connection from it.
 
 Evidence: [docs/architecture.md](../architecture.md), `deploy/compose/proxy-policy.yaml`,
 [#215](https://github.com/q15co/q15/issues/215).
