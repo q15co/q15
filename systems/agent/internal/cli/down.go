@@ -27,7 +27,7 @@ func runDown(ctx context.Context, env command.Env, args []string) error {
 	if err != nil {
 		return err
 	}
-	units := profile.UnitNames()
+	units := profile.ServiceNames()
 
 	fmt.Fprintf(env.Stderr, "stopping %d units\n", len(units))
 	if err := switchUnits(ctx, processRunner{env: env}, "stop", units); err != nil {

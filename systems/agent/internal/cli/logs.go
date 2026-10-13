@@ -45,7 +45,7 @@ func runLogs(ctx context.Context, env command.Env, args []string) error {
 	if err != nil {
 		return err
 	}
-	units := profile.UnitNames()
+	units := profile.ServiceNames()
 
 	if len(words) == 1 {
 		unit, err := resolveUnit(profile, units, words[0])
@@ -79,9 +79,14 @@ func runLogs(ctx context.Context, env command.Env, args []string) error {
 // works too, because that is what status prints and what an operator pastes
 // back.
 func resolveUnit(profile stack.Profile, units []string, word string) (string, error) {
+	if stem, ok := strings.CutSuffix(word, ".container"); ok {
+		word = stem + ".service"
+	} else if stem, ok := strings.CutSuffix(word, ".network"); ok {
+		word = stem + "-network.service"
+	}
 	prefix := profile.ResourceName() + "-"
 	for _, unit := range units {
-		stem := strings.TrimSuffix(strings.TrimSuffix(unit, ".container"), ".network")
+		stem := strings.TrimSuffix(strings.TrimSuffix(unit, "-network.service"), ".service")
 		switch {
 		case unit == word, stem == word, stem == prefix+word:
 			return unit, nil
@@ -99,7 +104,7 @@ func serviceWords(profile stack.Profile, units []string) []string {
 	prefix := profile.ResourceName() + "-"
 	words := make([]string, 0, len(units))
 	for _, unit := range units {
-		stem := strings.TrimSuffix(strings.TrimSuffix(unit, ".container"), ".network")
+		stem := strings.TrimSuffix(strings.TrimSuffix(unit, "-network.service"), ".service")
 		words = append(words, strings.TrimPrefix(stem, prefix))
 	}
 	return words

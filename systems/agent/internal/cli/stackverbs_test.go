@@ -13,19 +13,19 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/command"
 )
 
-// wantUnits pins the seven units the default profile renders. It is written out
+// wantUnits pins the seven services Quadlet generates for the default profile. It is written out
 // rather than derived from the profile on purpose: the CLI's words for the stack
 // are a contract an operator types, and a rename should fail a test rather than
 // quietly change what every verb acts on.
 func wantUnits() []string {
 	return []string{
-		"q15-agent.container",
-		"q15-exec.container",
-		"q15-net.network",
-		"q15-ollama.container",
-		"q15-proxy.container",
-		"q15-qdrant.container",
-		"q15-web.container",
+		"q15-agent.service",
+		"q15-exec.service",
+		"q15-net-network.service",
+		"q15-ollama.service",
+		"q15-proxy.service",
+		"q15-qdrant.service",
+		"q15-web.service",
 	}
 }
 
@@ -274,7 +274,7 @@ func TestStatusReportsEveryUnitAndFailsWhenPartlyUp(t *testing.T) {
 	for _, unit := range wantUnits() {
 		states[unit] = "active"
 	}
-	states["q15-web.container"] = "inactive"
+	states["q15-web.service"] = "inactive"
 
 	env, stdout, _ := newEnv(statusExec(states, runningContainers()))
 	err := Run(context.Background(), env, []string{"status"})
@@ -284,7 +284,7 @@ func TestStatusReportsEveryUnitAndFailsWhenPartlyUp(t *testing.T) {
 	if got := command.ExitCode(err); got != 1 {
 		t.Fatalf("ExitCode(error) = %d, want 1", got)
 	}
-	if !strings.Contains(err.Error(), "q15-web.container is inactive") {
+	if !strings.Contains(err.Error(), "q15-web.service is inactive") {
 		t.Fatalf("error = %q, want it to name the stopped unit", err)
 	}
 
@@ -297,11 +297,11 @@ func TestStatusReportsEveryUnitAndFailsWhenPartlyUp(t *testing.T) {
 			t.Fatalf("stdout = %q, want a row for %s", out, unit)
 		}
 	}
-	if !strings.Contains(collapse(out), "q15-web.container inactive running") {
+	if !strings.Contains(collapse(out), "q15-web.service inactive running") {
 		t.Fatalf("stdout = %q, want the stopped unit reported beside its running container", out)
 	}
 	// The network unit owns no container, and a dash is what says so.
-	if !strings.Contains(collapse(out), "q15-net.network active -") {
+	if !strings.Contains(collapse(out), "q15-net-network.service active -") {
 		t.Fatalf("stdout = %q, want the network row to carry no container", out)
 	}
 }
@@ -324,7 +324,7 @@ func TestStatusReportsAMissingContainer(t *testing.T) {
 	if !strings.Contains(err.Error(), "q15-qdrant has no container") {
 		t.Fatalf("error = %q, want it to name the missing container", err)
 	}
-	if !strings.Contains(collapse(stdout.String()), "q15-qdrant.container active absent") {
+	if !strings.Contains(collapse(stdout.String()), "q15-qdrant.service active absent") {
 		t.Fatalf("stdout = %q, want the absent container reported", stdout.String())
 	}
 }
@@ -339,7 +339,7 @@ func TestStatusWhenEverythingRuns(t *testing.T) {
 	if err := Run(context.Background(), env, []string{"status"}); err != nil {
 		t.Fatalf("Run(status) error = %v", err)
 	}
-	if !strings.Contains(collapse(stdout.String()), "q15-agent.container active running") {
+	if !strings.Contains(collapse(stdout.String()), "q15-agent.service active running") {
 		t.Fatalf("stdout = %q, want the running stack reported", stdout.String())
 	}
 }
@@ -407,6 +407,7 @@ func TestLogsSelectsOneService(t *testing.T) {
 	for _, args := range [][]string{
 		{"logs", "agent"},
 		{"logs", "q15-agent"},
+		{"logs", "q15-agent.service"},
 		{"logs", "q15-agent.container"},
 		{"logs", "q15-agent", "-f"},
 	} {
@@ -418,7 +419,7 @@ func TestLogsSelectsOneService(t *testing.T) {
 				t.Fatalf("Run(%q) error = %v", args, err)
 			}
 			following := args[len(args)-1] == "-f"
-			want := []string{"--user", "-u", "q15-agent.container"}
+			want := []string{"--user", "-u", "q15-agent.service"}
 			if following {
 				want = append(want, "--follow")
 			}
@@ -467,7 +468,7 @@ func TestStackFlagNamesAnotherStack(t *testing.T) {
 		t.Fatalf("calls = %v, want a reload and a start", fake.calls)
 	}
 	start := fake.calls[1].args
-	if !strings.Contains(strings.Join(start, " "), "demo-two-agent.container") {
+	if !strings.Contains(strings.Join(start, " "), "demo-two-agent.service") {
 		t.Fatalf("args = %v, want the second stack's units", start)
 	}
 	for _, arg := range start {

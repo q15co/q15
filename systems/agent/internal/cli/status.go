@@ -54,7 +54,7 @@ func runStatus(ctx context.Context, env command.Env, args []string) error {
 	if err != nil {
 		return err
 	}
-	units := profile.UnitNames()
+	units := profile.ServiceNames()
 
 	unitStates := make(map[string]string, len(units))
 	for _, unit := range units {
@@ -128,11 +128,11 @@ func runStatus(ctx context.Context, env command.Env, args []string) error {
 	return nil
 }
 
-// containerUnitName is the container a unit owns. A container unit's file name
-// without its suffix is the ContainerName the renderer gave it, and the network
-// unit owns no container, which is what the dash in its row means.
 func containerUnitName(unit string) string {
-	name, ok := strings.CutSuffix(unit, ".container")
+	if strings.HasSuffix(unit, "-network.service") {
+		return ""
+	}
+	name, ok := strings.CutSuffix(unit, ".service")
 	if !ok {
 		return ""
 	}

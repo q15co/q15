@@ -29,7 +29,7 @@ func runUp(ctx context.Context, env command.Env, args []string) error {
 	if err != nil {
 		return err
 	}
-	units := profile.UnitNames()
+	units := profile.ServiceNames()
 
 	runner := processRunner{env: env}
 	fmt.Fprintf(env.Stderr, "reloading the user's systemd\n")
