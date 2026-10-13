@@ -81,6 +81,11 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: write
+    env:
+      # The signature verifier the installer pins, so that a release is signed
+      # by something install.sh is willing to run. Keep in step with install.sh:
+      # scripts/check-install-key.sh fails the build if the two pins drift.
+      MINISIGN_TARBALL_SHA256: "9a599b48ba6eb7b1e80f12f36b94ceca7c00b7a5173c95c3efc88d9822957e73"
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -92,7 +97,39 @@ jobs:
         with:
           go-version-file: go.work
 
-      - name: Release q15 from the GoReleaser config
+      - name: Install the pinned signature verifier
+        run: |
+          set -euo pipefail
+          verifier_tarball="${RUNNER_TEMP}/minisign-linux.tar.gz"
+          curl -fsSL --output "${verifier_tarball}" \
+            "https://github.com/jedisct1/minisign/releases/download/0.12/minisign-0.12-linux.tar.gz"
+          echo "${MINISIGN_TARBALL_SHA256}  ${verifier_tarball}" | sha256sum --check
+          tar -xzf "${verifier_tarball}" -C "${RUNNER_TEMP}" minisign-linux/x86_64/minisign
+          install -m 0755 "${RUNNER_TEMP}/minisign-linux/x86_64/minisign" "${RUNNER_TEMP}/minisign"
+          echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
+
+      - name: Check the signing key against the published public key
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MINISIGN_SECRET_KEY}" ]; then
+            echo "the MINISIGN_SECRET_KEY repository secret is not set, so a release would be unsigned" >&2
+            exit 1
+          fi
+          umask 077
+          printf '%s\n' "${MINISIGN_SECRET_KEY}" > "${RUNNER_TEMP}/minisign.key"
+          minisign -R -s "${RUNNER_TEMP}/minisign.key" -p "${RUNNER_TEMP}/derived.pub" < /dev/null
+          # Only the key line is compared: the comment above it is free text, and
+          # the published file carries one that says what the key is for.
+          tail -n 1 "${RUNNER_TEMP}/derived.pub" > "${RUNNER_TEMP}/derived.key"
+          tail -n 1 deploy/install/q15.pub > "${RUNNER_TEMP}/published.key"
+          if ! cmp -s "${RUNNER_TEMP}/derived.key" "${RUNNER_TEMP}/published.key"; then
+            echo "the signing key does not derive deploy/install/q15.pub, so install.sh would reject this release" >&2
+            exit 1
+          fi
+
+      - name: Release and sign q15 from the GoReleaser config
         uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser
@@ -100,3 +137,4 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MINISIGN_KEY_PATH: ${{ runner.temp }}/minisign.key
