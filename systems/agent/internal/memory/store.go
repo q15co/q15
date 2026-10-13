@@ -411,6 +411,68 @@ func (s *Store) LoadWorkingMemory(ctx context.Context) (agent.WorkingMemory, err
 	}, nil
 }
 
+// LoadOpenLoops loads the trimmed prospective open-loops file. A missing file
+// yields empty content.
+func (s *Store) LoadOpenLoops(ctx context.Context) (string, error) {
+	_ = ctx
+
+	release := s.repository.Acquire()
+	defer release()
+
+	path := filepath.Join(s.root(), workingDirPath, openLoopsFileName)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("read open loops file %q: %w", path, err)
+	}
+	return strings.TrimSpace(string(raw)), nil
+}
+
+// LoadSemanticFileSizes returns the on-disk byte size of each semantic root
+// and each semantic/topics/*.md file, keyed by repository-relative slash
+// path. Missing files are omitted.
+func (s *Store) LoadSemanticFileSizes(ctx context.Context) (map[string]int64, error) {
+	_ = ctx
+
+	release := s.repository.Acquire()
+	defer release()
+
+	candidates := make([]string, 0, len(semanticSeedPaths))
+	for _, file := range semanticSeedPaths {
+		candidates = append(candidates, file.relativePath)
+	}
+	topicsDir := filepath.Join(s.root(), filepath.FromSlash(semanticTopicsRelativePath))
+	topics, err := filepath.Glob(filepath.Join(topicsDir, "*.md"))
+	if err != nil {
+		return nil, fmt.Errorf("list semantic topic files in %q: %w", topicsDir, err)
+	}
+	for _, topic := range topics {
+		candidates = append(
+			candidates,
+			semanticTopicsRelativePath+"/"+filepath.Base(topic),
+		)
+	}
+
+	out := make(map[string]int64, len(candidates))
+	for _, relative := range candidates {
+		path := filepath.Join(s.root(), filepath.FromSlash(relative))
+		info, err := os.Stat(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("stat semantic file %q: %w", path, err)
+		}
+		if info.IsDir() {
+			continue
+		}
+		out[relative] = info.Size()
+	}
+	return out, nil
+}
+
 // AppendTurn persists one completed conversation turn and commits it to git.
 func (s *Store) AppendTurn(ctx context.Context, messages []conversation.Message) error {
 	if len(messages) == 0 {

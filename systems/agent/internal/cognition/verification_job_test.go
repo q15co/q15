@@ -87,6 +87,18 @@ func (l *verificationJobLoader) LoadSemanticExtractionCheckpoint(
 	return SemanticExtractionCheckpoint{}, nil
 }
 
+func (l *verificationJobLoader) LoadSemanticFileSizes(context.Context) (map[string]int64, error) {
+	return nil, nil
+}
+
+func (l *verificationJobLoader) LoadOpenLoops(context.Context) (string, error) {
+	return "", nil
+}
+
+func (l *verificationJobLoader) LoadWorkingLedger(context.Context) (string, error) {
+	return "", nil
+}
+
 func (l *verificationJobLoader) LoadCognitionArtifact(
 	_ context.Context,
 	relativePath string,

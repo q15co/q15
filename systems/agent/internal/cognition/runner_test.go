@@ -144,6 +144,18 @@ func (s *spyLoader) LoadCognitionArtifact(
 	return Artifact{}, nil
 }
 
+func (s *spyLoader) LoadSemanticFileSizes(context.Context) (map[string]int64, error) {
+	return nil, nil
+}
+
+func (s *spyLoader) LoadOpenLoops(context.Context) (string, error) {
+	return "", nil
+}
+
+func (s *spyLoader) LoadWorkingLedger(context.Context) (string, error) {
+	return "", nil
+}
+
 func (s *spyLoader) StoreCognitionArtifact(
 	context.Context,
 	Artifact,

@@ -114,6 +114,19 @@ func (s *runtimeStore) LoadWorkingMemory(ctx context.Context) (agent.WorkingMemo
 	return s.memory.LoadWorkingMemory(ctx)
 }
 
+func (s *runtimeStore) LoadSemanticFileSizes(ctx context.Context) (map[string]int64, error) {
+	return s.memory.LoadSemanticFileSizes(ctx)
+}
+
+func (s *runtimeStore) LoadOpenLoops(ctx context.Context) (string, error) {
+	return s.memory.LoadOpenLoops(ctx)
+}
+
+func (s *runtimeStore) LoadWorkingLedger(ctx context.Context) (string, error) {
+	_ = ctx
+	return s.memory.ReadWorkingLedger()
+}
+
 func (s *runtimeStore) LoadSkillCatalog(ctx context.Context) (agent.SkillCatalog, error) {
 	_ = ctx
 	if s.skills == nil {
