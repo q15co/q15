@@ -85,6 +85,40 @@ func (s *Store) StoreCognitionArtifact(
 	return nil
 }
 
+// DeleteCognitionArtifact removes one job-owned cognition artifact under the
+// runtime memory root. A path that does not exist counts as already deleted,
+// so callers can clear artifacts such as stall alerts idempotently.
+func (s *Store) DeleteCognitionArtifact(ctx context.Context, relativePath string) error {
+	release := s.repository.Acquire()
+	defer release()
+
+	normalized, path, err := s.cognitionArtifactPath(relativePath)
+	if err != nil {
+		return err
+	}
+
+	if _, statErr := os.Lstat(path); statErr != nil {
+		if os.IsNotExist(statErr) {
+			return nil
+		}
+		return fmt.Errorf("stat cognition artifact %q: %w", path, statErr)
+	}
+	if err := os.Remove(path); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("delete cognition artifact %q: %w", path, err)
+	}
+	if err := s.repository.Commit(
+		ctx,
+		fmt.Sprintf("memory: delete cognition artifact %s", normalized),
+		filepath.ToSlash(filepath.Join(cognitionDirPath, normalized)),
+	); err != nil {
+		return fmt.Errorf("delete cognition artifact %q: %w", normalized, err)
+	}
+	return nil
+}
+
 // LoadHead returns the current persisted transcript head.
 func (s *Store) LoadHead(ctx context.Context) (int64, time.Time, error) {
 	_ = ctx

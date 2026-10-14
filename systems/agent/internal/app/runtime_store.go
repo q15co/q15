@@ -164,6 +164,10 @@ func (s *runtimeStore) StoreCognitionArtifact(
 	return s.memory.StoreCognitionArtifact(ctx, artifact)
 }
 
+func (s *runtimeStore) DeleteCognitionArtifact(ctx context.Context, relativePath string) error {
+	return s.memory.DeleteCognitionArtifact(ctx, relativePath)
+}
+
 func (s *runtimeStore) LoadHead(ctx context.Context) (int64, time.Time, error) {
 	return s.memory.LoadHead(ctx)
 }

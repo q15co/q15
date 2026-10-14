@@ -99,6 +99,10 @@ func (l *verificationJobLoader) LoadWorkingLedger(context.Context) (string, erro
 	return "", nil
 }
 
+func (l *verificationJobLoader) LoadJobState(context.Context, string) (JobState, error) {
+	return JobState{}, nil
+}
+
 func (l *verificationJobLoader) LoadCognitionArtifact(
 	_ context.Context,
 	relativePath string,

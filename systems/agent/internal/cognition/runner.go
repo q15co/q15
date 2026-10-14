@@ -41,6 +41,11 @@ type ContextLoader interface {
 	LoadHead(ctx context.Context) (int64, time.Time, error)
 	LoadConsolidationCheckpoint(ctx context.Context) (ConsolidationCheckpoint, error)
 	LoadSemanticExtractionCheckpoint(ctx context.Context) (SemanticExtractionCheckpoint, error)
+	// LoadJobState returns the persisted trigger state for one cognition job
+	// type, or the zero state when nothing was persisted for it yet. Jobs that
+	// adapt their input cost to repeated failures read their own state through
+	// it.
+	LoadJobState(ctx context.Context, jobType string) (JobState, error)
 	LoadCognitionArtifact(ctx context.Context, relativePath string) (Artifact, error)
 	StoreCognitionArtifact(ctx context.Context, artifact Artifact) error
 }

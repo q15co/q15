@@ -2604,6 +2604,76 @@ func TestStoreCognitionArtifactRejectsPathEscape(t *testing.T) {
 	}); err == nil {
 		t.Fatal("StoreCognitionArtifact() error = nil, want path validation failure")
 	}
+	if err := store.DeleteCognitionArtifact(context.Background(), "../escape.md"); err == nil {
+		t.Fatal("DeleteCognitionArtifact() error = nil, want path validation failure")
+	}
+}
+
+// stallAlertRelativePath pins the on-disk layout of the controller-written
+// stall alert artifacts under the runtime memory root.
+const stallAlertRelativePath = "alerts/semantic_memory.extract.md"
+
+func artifactDiskPath(t *testing.T, store *Store, relativePath string) string {
+	t.Helper()
+	_, path, err := store.cognitionArtifactPath(relativePath)
+	if err != nil {
+		t.Fatalf("cognitionArtifactPath(%q) error = %v", relativePath, err)
+	}
+	return path
+}
+
+func TestStoreDeleteCognitionArtifact(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "memory")
+	committer := &fakeCommitter{}
+	store := newTestStore(root, committer)
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	// Deleting a path that was never written succeeds without a commit, so
+	// callers can clear stall alerts idempotently.
+	commitCalls := committer.commitCalls
+	if err := store.DeleteCognitionArtifact(
+		context.Background(),
+		stallAlertRelativePath,
+	); err != nil {
+		t.Fatalf("DeleteCognitionArtifact() missing path error = %v", err)
+	}
+	if committer.commitCalls != commitCalls {
+		t.Fatalf(
+			"commit calls after missing-path delete = %d, want unchanged %d",
+			committer.commitCalls,
+			commitCalls,
+		)
+	}
+
+	alert := cognition.Artifact{
+		RelativePath: stallAlertRelativePath,
+		Content:      "# Cognition stall alert\n\n- 6 consecutive failures.\n",
+	}
+	if err := store.StoreCognitionArtifact(context.Background(), alert); err != nil {
+		t.Fatalf("StoreCognitionArtifact() error = %v", err)
+	}
+	if _, err := os.Stat(artifactDiskPath(t, store, alert.RelativePath)); err != nil {
+		t.Fatalf("Stat(artifact file) error = %v", err)
+	}
+
+	if err := store.DeleteCognitionArtifact(context.Background(), alert.RelativePath); err != nil {
+		t.Fatalf("DeleteCognitionArtifact() error = %v", err)
+	}
+	if committer.lastMessage != "memory: delete cognition artifact "+alert.RelativePath {
+		t.Fatalf("commit message = %q, want delete commit", committer.lastMessage)
+	}
+	if _, err := os.Stat(artifactDiskPath(t, store, alert.RelativePath)); !os.IsNotExist(err) {
+		t.Fatalf("Stat(artifact file) after delete error = %v, want not exist", err)
+	}
+	got, err := store.LoadCognitionArtifact(context.Background(), alert.RelativePath)
+	if err != nil {
+		t.Fatalf("LoadCognitionArtifact() error = %v", err)
+	}
+	if got != (cognition.Artifact{}) {
+		t.Fatalf("artifact after delete = %#v, want zero value", got)
+	}
 }
 
 func TestParseMarkdownFrontmatter(t *testing.T) {

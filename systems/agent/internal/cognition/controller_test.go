@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
+	"github.com/q15co/q15/systems/agent/internal/conversation"
 )
 
 type fakeControllerStore struct {
@@ -19,12 +22,15 @@ type fakeControllerStore struct {
 	records                      []RunRecord
 	checkpoint                   ConsolidationCheckpoint
 	semanticExtractionCheckpoint SemanticExtractionCheckpoint
+	artifacts                    map[string]string
+	deleted                      []string
 }
 
 func newFakeControllerStore() *fakeControllerStore {
 	return &fakeControllerStore{
-		headAt: time.Date(2026, time.April, 6, 12, 0, 0, 0, time.UTC),
-		states: make(map[string]JobState),
+		headAt:    time.Date(2026, time.April, 6, 12, 0, 0, 0, time.UTC),
+		states:    make(map[string]JobState),
+		artifacts: make(map[string]string),
 	}
 }
 
@@ -115,6 +121,20 @@ func (s *fakeControllerStore) AppendRunRecord(_ context.Context, record RunRecor
 	return nil
 }
 
+// DeleteCognitionArtifact implements the controller-side artifact delete
+// primitive against the fake's artifact mirror, mirroring how a real store
+// deletes the file the loader-side writes manage.
+func (s *fakeControllerStore) DeleteCognitionArtifact(
+	_ context.Context,
+	relativePath string,
+) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.artifacts, relativePath)
+	s.deleted = append(s.deleted, relativePath)
+	return nil
+}
+
 func (s *fakeControllerStore) setHead(seq int64, at time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -146,6 +166,38 @@ func (s *fakeControllerStore) semanticCheckpoint() SemanticExtractionCheckpoint 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.semanticExtractionCheckpoint
+}
+
+func (s *fakeControllerStore) putArtifact(relativePath, content string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.artifacts == nil {
+		s.artifacts = make(map[string]string)
+	}
+	s.artifacts[relativePath] = content
+}
+
+func (s *fakeControllerStore) artifact(relativePath string) (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	content, ok := s.artifacts[relativePath]
+	return content, ok
+}
+
+func (s *fakeControllerStore) artifactPaths() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	paths := make([]string, 0, len(s.artifacts))
+	for path := range s.artifacts {
+		paths = append(paths, path)
+	}
+	return paths
+}
+
+func (s *fakeControllerStore) deletedPaths() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.deleted...)
 }
 
 func waitFor(t *testing.T, timeout time.Duration, fn func() bool) {
@@ -1127,5 +1179,230 @@ func TestControllerRunWithNoJobsExitsCleanly(t *testing.T) {
 
 	if err := controller.Run(ctx); err != nil {
 		t.Fatalf("Run() error = %v", err)
+	}
+}
+
+// stallProbeLoader mirrors the runtime wiring for the stall-escalation
+// controller test: the job's Build reads its persisted state from the same
+// store the controller drives, the controller's artifact writes land in the
+// store's artifact mirror, and a fixed consolidation checkpoint keeps the real
+// working-memory Build on the windowed replay path so the run's window size is
+// observable.
+type stallProbeLoader struct {
+	*spyLoader
+	store      *fakeControllerStore
+	checkpoint ConsolidationCheckpoint
+
+	mu          sync.Mutex
+	windowTurns []int
+}
+
+func (l *stallProbeLoader) LoadJobState(
+	ctx context.Context,
+	jobType string,
+) (JobState, error) {
+	return l.store.LoadJobState(ctx, jobType)
+}
+
+func (l *stallProbeLoader) LoadConsolidationCheckpoint(
+	context.Context,
+) (ConsolidationCheckpoint, error) {
+	return l.checkpoint, nil
+}
+
+func (l *stallProbeLoader) LoadMessagesSinceSeqWindow(
+	_ context.Context,
+	_ int64,
+	maxTurns int,
+) (TurnWindow, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.windowTurns = append(l.windowTurns, maxTurns)
+	return TurnWindow{}, nil
+}
+
+func (l *stallProbeLoader) LoadCognitionArtifact(
+	_ context.Context,
+	relativePath string,
+) (Artifact, error) {
+	content, ok := l.store.artifact(relativePath)
+	if !ok {
+		return Artifact{}, nil
+	}
+	return Artifact{RelativePath: relativePath, Content: content}, nil
+}
+
+func (l *stallProbeLoader) StoreCognitionArtifact(_ context.Context, artifact Artifact) error {
+	l.store.putArtifact(artifact.RelativePath, artifact.Content)
+	return nil
+}
+
+func (l *stallProbeLoader) requestedWindowTurns() []int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]int(nil), l.windowTurns...)
+}
+
+// stallScriptJob runs the real working-memory Build so the degradation
+// decision is exercised, and scripts the run outcome through ApplyResult.
+type stallScriptJob struct {
+	fail *bool
+}
+
+func (j stallScriptJob) Type() string {
+	return workingMemoryConsolidationJobType
+}
+
+func (j stallScriptJob) Build(ctx context.Context, loader ContextLoader) (Spec, error) {
+	return workingMemoryConsolidationJob{}.Build(ctx, loader)
+}
+
+func (j stallScriptJob) ApplyResult(
+	context.Context,
+	ContextLoader,
+	JobOutput,
+) (ParsedResult, error) {
+	if j.fail != nil && *j.fail {
+		return ParsedResult{}, errors.New("scripted consolidation failure")
+	}
+	return ParsedResult{Summary: "consolidated working memory"}, nil
+}
+
+// TestControllerStallEscalationHalvesWindowAndAlerts covers the stall
+// escalation of a checkpoint-advancing job end to end: three consecutive
+// failures halve the next run's input window, six leave an alert artifact
+// naming the job and the count, two failures change nothing, and the next
+// success deletes the artifact and resets the failure count.
+func TestControllerStallEscalationHalvesWindowAndAlerts(t *testing.T) {
+	store := newFakeControllerStore()
+	loader := &stallProbeLoader{
+		spyLoader:  &spyLoader{},
+		store:      store,
+		checkpoint: ConsolidationCheckpoint{LastConsolidatedSeq: 40},
+	}
+	model := &fakeModelClient{}
+	model.complete = func(
+		context.Context,
+		string,
+		[]conversation.Message,
+		[]agent.ToolDefinition,
+	) (agent.ModelClientResult, error) {
+		return assistantResult("status: ok"), nil
+	}
+
+	failRuns := true
+	controller, err := NewController(
+		NewRunner(model, nil, []string{"cognition"}, loader),
+		store,
+		loader,
+		JobRegistration{
+			NewJob: func() JobDefinition {
+				return stallScriptJob{fail: &failRuns}
+			},
+			Policy: TriggerPolicy{
+				State: []StateRule{{
+					ID: "dirty",
+					Evaluate: func(context.Context, Snapshot, JobState) (bool, string, error) {
+						return true, "scripted dirty tail", nil
+					},
+				}},
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewController() error = %v", err)
+	}
+	controller.started = time.Now().UTC()
+
+	alertPath := StallAlertPath(workingMemoryConsolidationJobType)
+	base := time.Date(2026, time.October, 13, 9, 0, 0, 0, time.UTC)
+	ctx := context.Background()
+
+	for run := 1; run <= 6; run++ {
+		store.setHead(int64(run), base)
+		pending, ok, err := controller.nextPendingRun(ctx, false, false, true)
+		if err != nil {
+			t.Fatalf("run %d: nextPendingRun() error = %v", run, err)
+		}
+		if !ok {
+			t.Fatalf("run %d: nextPendingRun() ok = false, want a pending run", run)
+		}
+		if err := controller.runPending(ctx, pending); err != nil {
+			t.Fatalf("run %d: runPending() error = %v", run, err)
+		}
+
+		if run == 2 {
+			// Two consecutive failures change nothing: the window stays at
+			// its default and no alert artifact exists.
+			if got := loader.requestedWindowTurns(); !reflect.DeepEqual(
+				got,
+				[]int{workingMemoryWindowTurns, workingMemoryWindowTurns},
+			) {
+				t.Fatalf("window turns after two failures = %v, want no degradation", got)
+			}
+			if got := store.artifactPaths(); len(got) != 0 {
+				t.Fatalf("artifacts after two failures = %v, want none", got)
+			}
+		}
+	}
+
+	wantTurns := []int{
+		workingMemoryWindowTurns,
+		workingMemoryWindowTurns,
+		workingMemoryWindowTurns,
+		workingMemoryWindowTurns / 2,
+		workingMemoryWindowTurns / 2,
+		workingMemoryWindowTurns / 2,
+	}
+	if got := loader.requestedWindowTurns(); !reflect.DeepEqual(got, wantTurns) {
+		t.Fatalf("window turns per run = %v, want %v (halved from run 4)", got, wantTurns)
+	}
+
+	content, ok := store.artifact(alertPath)
+	if !ok {
+		t.Fatalf("stall alert artifact %q missing after six failures", alertPath)
+	}
+	for _, want := range []string{
+		workingMemoryConsolidationJobType,
+		"consecutive_failures: 6",
+		"last_failure_at:",
+		"last_failure: apply cognition result for job",
+		"scripted consolidation failure",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("stall alert content missing %q:\n%s", want, content)
+		}
+	}
+
+	// The next success deletes the alert and resets the failure count.
+	failRuns = false
+	store.setHead(7, base)
+	pending, ok, err := controller.nextPendingRun(ctx, false, false, true)
+	if err != nil {
+		t.Fatalf("recovery: nextPendingRun() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("recovery: nextPendingRun() ok = false, want a pending run")
+	}
+	if err := controller.runPending(ctx, pending); err != nil {
+		t.Fatalf("recovery: runPending() error = %v", err)
+	}
+
+	if got := store.state(workingMemoryConsolidationJobType).ConsecutiveFailures; got != 0 {
+		t.Fatalf("ConsecutiveFailures after success = %d, want 0", got)
+	}
+	if got := store.artifactPaths(); len(got) != 0 {
+		t.Fatalf("artifacts after success = %v, want the alert deleted", got)
+	}
+	deleted := store.deletedPaths()
+	found := false
+	for _, path := range deleted {
+		if path == alertPath {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("delete calls = %v, want %q among them", deleted, alertPath)
 	}
 }
