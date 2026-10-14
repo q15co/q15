@@ -90,8 +90,9 @@ type Agent struct {
 	// conversion pass's working_memory_overbudget rule; absent selects the
 	// documented default.
 	MemoryWorkingBudgetBytes int `yaml:"memory_working_budget_bytes"`
-	// MemoryOpenLoopsBudgetBytes is the open-loops byte budget the conversion
-	// pass will enforce; absent selects the documented default.
+	// MemoryOpenLoopsBudgetBytes is the open-loops byte budget the
+	// working-memory consolidation job's open_loops_overbudget rule enforces;
+	// absent selects the documented default.
 	MemoryOpenLoopsBudgetBytes int      `yaml:"memory_open_loops_budget_bytes"`
 	Tools                      Tools    `yaml:"tools"`
 	Telegram                   Telegram `yaml:"telegram"`
@@ -210,8 +211,8 @@ type AgentRuntime struct {
 	// MemoryWorkingBudgetBytes is the working-memory byte budget the semantic
 	// conversion registration's overbudget state rule enforces.
 	MemoryWorkingBudgetBytes int
-	// MemoryOpenLoopsBudgetBytes is the open-loops byte budget, resolved and
-	// carried for the conversion pass, which does not enforce it yet.
+	// MemoryOpenLoopsBudgetBytes is the open-loops byte budget the
+	// working-memory consolidation job's open_loops_overbudget rule enforces.
 	MemoryOpenLoopsBudgetBytes int
 	Execution                  ExecutionRuntime
 	Tools                      ToolsRuntime

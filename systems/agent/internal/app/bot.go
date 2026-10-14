@@ -527,7 +527,9 @@ func (s bridgeSettings) newChatBridge(
 
 // cognitionJobs registers the built-in background cognition jobs. The runtime
 // supplies the memory byte budgets: the semantic conversion registration takes
-// the working-memory one its overbudget state rule enforces.
+// the working-memory one its overbudget state rule enforces, and the
+// working-memory consolidation registration takes the open-loops one its
+// open_loops_overbudget state rule enforces.
 func cognitionJobs(rt config.AgentRuntime) []cognition.JobRegistration {
 	return []cognition.JobRegistration{
 		cognition.NewVerificationReviewRegistration(),
