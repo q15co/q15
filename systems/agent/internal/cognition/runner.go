@@ -35,6 +35,17 @@ type ContextLoader interface {
 	LoadOpenLoops(ctx context.Context) (string, error)
 	// LoadWorkingLedger returns the trimmed content of working/LEDGER.md.
 	LoadWorkingLedger(ctx context.Context) (string, error)
+	// ReadFileBytes returns the raw on-disk bytes of one repository-relative
+	// memory file and whether it existed. A missing file yields
+	// (nil, false, nil). Unlike the trimmed loaders, it preserves every byte
+	// so a pre-run snapshot can be restored verbatim.
+	ReadFileBytes(ctx context.Context, relativePath string) ([]byte, bool, error)
+	// WriteFileBytes replaces the whole content of one repository-relative
+	// memory file and commits it, preserving the bytes exactly as given.
+	WriteFileBytes(ctx context.Context, relativePath string, data []byte) error
+	// DeleteFile removes one repository-relative memory file and commits the
+	// removal. A missing file counts as already deleted.
+	DeleteFile(ctx context.Context, relativePath string) error
 	LoadSkillCatalog(ctx context.Context) (agent.SkillCatalog, error)
 	LoadRecentMessages(ctx context.Context, turns int) ([]conversation.Message, error)
 	LoadLatestMessages(ctx context.Context, turns int) ([]conversation.Message, error)

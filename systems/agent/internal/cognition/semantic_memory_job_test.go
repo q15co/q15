@@ -30,6 +30,15 @@ type semanticMemoryJobLoader struct {
 	openLoops               string
 	ledger                  string
 	jobState                JobState
+	storeCheckpointCalls    int
+	// files is the raw on-disk state the snapshot/rollback primitives read and
+	// write, keyed by repository-relative slash path. When nil, ReadFileBytes
+	// falls back to the structured fields so Build-based tests keep working.
+	files   map[string][]byte
+	deleted []string
+	// failWritePath, when set, makes WriteFileBytes fail for that relative
+	// path so a restore failure can be exercised.
+	failWritePath string
 }
 
 func (l *semanticMemoryJobLoader) LoadCoreMemory(context.Context) (agent.CoreMemory, error) {
@@ -61,6 +70,59 @@ func (l *semanticMemoryJobLoader) LoadOpenLoops(context.Context) (string, error)
 
 func (l *semanticMemoryJobLoader) LoadWorkingLedger(context.Context) (string, error) {
 	return l.ledger, nil
+}
+
+func (l *semanticMemoryJobLoader) ReadFileBytes(
+	_ context.Context,
+	relativePath string,
+) ([]byte, bool, error) {
+	if l.files != nil {
+		data, ok := l.files[relativePath]
+		return data, ok, nil
+	}
+	switch relativePath {
+	case workingMemoryRelativePath:
+		return []byte(l.working.Content), true, nil
+	case "working/OPEN_LOOPS.md":
+		return []byte(l.openLoops), true, nil
+	case "working/LEDGER.md":
+		return []byte(l.ledger), true, nil
+	}
+	for _, f := range l.semantic.Files {
+		if f.RelativePath == relativePath {
+			return []byte(f.Content), true, nil
+		}
+	}
+	return nil, false, nil
+}
+
+func (l *semanticMemoryJobLoader) WriteFileBytes(
+	_ context.Context,
+	relativePath string,
+	data []byte,
+) error {
+	if l.failWritePath != "" && relativePath == l.failWritePath {
+		return fmt.Errorf("write failed for %s", relativePath)
+	}
+	if l.files == nil {
+		l.files = make(map[string][]byte)
+	}
+	l.files[relativePath] = append([]byte(nil), data...)
+	return nil
+}
+
+func (l *semanticMemoryJobLoader) DeleteFile(_ context.Context, relativePath string) error {
+	delete(l.files, relativePath)
+	l.deleted = append(l.deleted, relativePath)
+	return nil
+}
+
+func (l *semanticMemoryJobLoader) StoreSemanticExtractionCheckpoint(
+	context.Context,
+	SemanticExtractionCheckpoint,
+) (SemanticExtractionCheckpoint, error) {
+	l.storeCheckpointCalls++
+	return SemanticExtractionCheckpoint{}, nil
 }
 
 func (l *semanticMemoryJobLoader) LoadSkillCatalog(context.Context) (agent.SkillCatalog, error) {

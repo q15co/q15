@@ -35,22 +35,36 @@ var (
 	workingLedgerRuntimePath = memoryRuntimePrefix + "working/LEDGER.md"
 )
 
-// semanticConversionPolicy scopes the conversion pass to the semantic roots,
-// direct children of semantic/topics, and the three working-level files it
-// converts from and records into.
-func semanticConversionPolicy() filetools.PathAccessPolicy {
-	paths := append(
+// semanticConversionWritePaths returns the fixed runtime paths the conversion
+// pass may write: the three semantic roots and the three working-level files
+// it converts from and records into. Topic files under semantic/topics/ are
+// covered by the write dir and are enumerated separately when snapshotted.
+func semanticConversionWritePaths() []string {
+	return append(
 		semanticRuntimePaths(),
 		workingMemoryRuntimePath,
 		openLoopsRuntimePath,
 		workingLedgerRuntimePath,
 	)
+}
+
+// semanticConversionPolicy scopes the conversion pass to the semantic roots,
+// direct children of semantic/topics, and the three working-level files it
+// converts from and records into.
+func semanticConversionPolicy() filetools.PathAccessPolicy {
+	paths := semanticConversionWritePaths()
 	return filetools.PathAccessPolicy{
 		ReadPaths:  paths,
 		WritePaths: append([]string(nil), paths...),
 		ReadDirs:   []string{semanticTopicsRuntimeDir},
 		WriteDirs:  []string{semanticTopicsRuntimeDir},
 	}
+}
+
+// relativeMemoryPath strips the runtime prefix from a runtime path to recover
+// the repository-relative slash path the loader accessors use.
+func relativeMemoryPath(runtimePath string) string {
+	return strings.TrimPrefix(runtimePath, memoryRuntimePrefix)
 }
 
 // evaluateWorkingMemoryOverbudget fires a conversion run when working memory
@@ -283,4 +297,99 @@ func countNonEmptyLines(text string) int {
 		}
 	}
 	return count
+}
+
+// snapshotConversionFiles captures the pre-run on-disk state of every path the
+// conversion pass may write, so a failed run can be rolled back byte-for-byte.
+// It covers the fixed write paths and every existing topic file under the
+// topics write dir. Topic files created by the run have no snapshot here;
+// rollback deletes them by re-listing the dir afterwards.
+func snapshotConversionFiles(
+	ctx context.Context,
+	loader ContextLoader,
+) (map[string]FileSnapshot, error) {
+	snapshots := make(map[string]FileSnapshot, len(semanticConversionWritePaths()))
+	for _, runtimePath := range semanticConversionWritePaths() {
+		raw, existed, err := loader.ReadFileBytes(ctx, relativeMemoryPath(runtimePath))
+		if err != nil {
+			return nil, fmt.Errorf("snapshot %s: %w", runtimePath, err)
+		}
+		snapshots[runtimePath] = FileSnapshot{Existed: existed, Content: raw}
+	}
+
+	sizes, err := loader.LoadSemanticFileSizes(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list semantic files to snapshot: %w", err)
+	}
+	for relative := range sizes {
+		if path.Dir(relative) != relativeMemoryPath(semanticTopicsRuntimeDir) {
+			continue
+		}
+		runtimePath := memoryRuntimePrefix + relative
+		raw, existed, err := loader.ReadFileBytes(ctx, relative)
+		if err != nil {
+			return nil, fmt.Errorf("snapshot %s: %w", runtimePath, err)
+		}
+		snapshots[runtimePath] = FileSnapshot{Existed: existed, Content: raw}
+	}
+	return snapshots, nil
+}
+
+// restoreConversionFiles rolls a failed conversion run back to the snapshotted
+// pre-run state: it writes every snapshotted file's bytes back verbatim and
+// deletes any path that had no snapshot but exists now (a file the run
+// created). The first failure is returned with the offending path named.
+func restoreConversionFiles(
+	ctx context.Context,
+	loader ContextLoader,
+	snapshots map[string]FileSnapshot,
+) error {
+	if len(snapshots) == 0 {
+		return nil
+	}
+	for runtimePath, snap := range snapshots {
+		relative := relativeMemoryPath(runtimePath)
+		if snap.Existed {
+			if err := loader.WriteFileBytes(ctx, relative, snap.Content); err != nil {
+				return fmt.Errorf("restore %s: %w", runtimePath, err)
+			}
+			continue
+		}
+		if err := loader.DeleteFile(ctx, relative); err != nil {
+			return fmt.Errorf("restore %s: %w", runtimePath, err)
+		}
+	}
+
+	sizes, err := loader.LoadSemanticFileSizes(ctx)
+	if err != nil {
+		return fmt.Errorf("list semantic files to restore: %w", err)
+	}
+	for relative := range sizes {
+		if path.Dir(relative) != relativeMemoryPath(semanticTopicsRuntimeDir) {
+			continue
+		}
+		runtimePath := memoryRuntimePrefix + relative
+		if snap, ok := snapshots[runtimePath]; ok && snap.Existed {
+			continue
+		}
+		if err := loader.DeleteFile(ctx, relative); err != nil {
+			return fmt.Errorf("restore %s: %w", runtimePath, err)
+		}
+	}
+	return nil
+}
+
+// rollbackFailedRun restores the snapshotted pre-run state after a validation
+// failure and returns an error carrying both the original failure and any
+// rollback failure, so neither is lost.
+func rollbackFailedRun(
+	ctx context.Context,
+	loader ContextLoader,
+	snapshots map[string]FileSnapshot,
+	validationErr error,
+) error {
+	if restoreErr := restoreConversionFiles(ctx, loader, snapshots); restoreErr != nil {
+		return fmt.Errorf("%w (rollback also failed: %v)", validationErr, restoreErr)
+	}
+	return validationErr
 }

@@ -116,6 +116,18 @@ func (l *workingMemoryJobLoader) LoadWorkingLedger(context.Context) (string, err
 	return "", nil
 }
 
+func (l *workingMemoryJobLoader) ReadFileBytes(context.Context, string) ([]byte, bool, error) {
+	return nil, false, nil
+}
+
+func (l *workingMemoryJobLoader) WriteFileBytes(context.Context, string, []byte) error {
+	return nil
+}
+
+func (l *workingMemoryJobLoader) DeleteFile(context.Context, string) error {
+	return nil
+}
+
 func (l *workingMemoryJobLoader) LoadCognitionArtifact(
 	_ context.Context,
 	relativePath string,
