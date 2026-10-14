@@ -34,8 +34,11 @@ var semanticMemoryAllowedTools = []string{
 }
 
 // NewSemanticMemoryExtractionRegistration returns the built-in semantic-memory
-// extraction job registration.
-func NewSemanticMemoryExtractionRegistration() JobRegistration {
+// extraction job registration. workingMemoryBudgetBytes is the working-memory
+// byte budget its overbudget state rule enforces; a non-positive value selects
+// the built-in default, so a zero-value construction behaves as a registration
+// built from the documented defaults.
+func NewSemanticMemoryExtractionRegistration(workingMemoryBudgetBytes int) JobRegistration {
 	return JobRegistration{
 		NewJob: func() JobDefinition {
 			return semanticMemoryExtractionJob{}
@@ -51,8 +54,18 @@ func NewSemanticMemoryExtractionRegistration() JobRegistration {
 					Evaluate: evaluateSemanticMemoryState,
 				},
 				{
-					ID:       "working_memory_overbudget",
-					Evaluate: evaluateWorkingMemoryOverbudget,
+					ID: "working_memory_overbudget",
+					Evaluate: func(
+						ctx context.Context,
+						snapshot Snapshot,
+						_ JobState,
+					) (bool, string, error) {
+						return evaluateWorkingMemoryOverbudget(
+							ctx,
+							snapshot,
+							workingMemoryBudgetBytes,
+						)
+					},
 				},
 			},
 		},

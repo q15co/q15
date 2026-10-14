@@ -113,6 +113,11 @@ providers:
 agent:
   name: Q15
   memory_recent_turns: 6
+  # Byte budgets for the memory files the cognition conversion pass reads.
+  # Absent keys use these defaults. The pass never truncates a file: it reads
+  # it whole and the over-budget working memory fires a conversion run.
+  memory_working_budget_bytes: 8192
+  memory_open_loops_budget_bytes: 4096
   tools:
     web_search:
       brave_api_key_env: BRAVE_API_KEY

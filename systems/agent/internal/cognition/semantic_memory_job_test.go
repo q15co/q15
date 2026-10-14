@@ -154,7 +154,7 @@ func (l *semanticMemoryJobLoader) StoreCognitionArtifact(
 func TestSemanticMemoryExtractionRegistration(t *testing.T) {
 	t.Parallel()
 
-	registration := NewSemanticMemoryExtractionRegistration()
+	registration := NewSemanticMemoryExtractionRegistration(0)
 	job := registration.NewJob()
 	if job == nil {
 		t.Fatal("NewJob() = nil")
@@ -233,7 +233,7 @@ func TestSemanticMemoryExtractionBuildLoadsSemanticWorkingVerificationAndTranscr
 		},
 	}
 
-	spec, err := NewSemanticMemoryExtractionRegistration().NewJob().Build(
+	spec, err := NewSemanticMemoryExtractionRegistration(0).NewJob().Build(
 		context.Background(),
 		loader,
 	)
@@ -373,7 +373,7 @@ func TestSemanticMemoryExtractionBuildUsesSemanticCheckpointReplay(t *testing.T)
 		},
 	}
 
-	spec, err := NewSemanticMemoryExtractionRegistration().NewJob().Build(
+	spec, err := NewSemanticMemoryExtractionRegistration(0).NewJob().Build(
 		context.Background(),
 		loader,
 	)
@@ -438,7 +438,7 @@ func TestSemanticMemoryExtractionBuildWindowsCheckpointReplay(t *testing.T) {
 		},
 	}
 
-	spec, err := NewSemanticMemoryExtractionRegistration().NewJob().Build(
+	spec, err := NewSemanticMemoryExtractionRegistration(0).NewJob().Build(
 		context.Background(),
 		loader,
 	)
@@ -473,7 +473,7 @@ func TestSemanticMemoryExtractionBuildWindowsCheckpointReplay(t *testing.T) {
 func TestSemanticMemoryExtractionApplyResultCarriesWindowCheckpoint(t *testing.T) {
 	t.Parallel()
 
-	result, err := NewSemanticMemoryExtractionRegistration().NewJob().ApplyResult(
+	result, err := NewSemanticMemoryExtractionRegistration(0).NewJob().ApplyResult(
 		context.Background(),
 		&semanticMemoryJobLoader{},
 		JobOutput{
@@ -546,7 +546,7 @@ func TestSemanticMemoryExtractionBuildRejectsIncompleteCanonicalSemanticMemory(t
 		},
 	}
 
-	_, err := NewSemanticMemoryExtractionRegistration().NewJob().Build(
+	_, err := NewSemanticMemoryExtractionRegistration(0).NewJob().Build(
 		context.Background(),
 		loader,
 	)
@@ -559,7 +559,7 @@ func TestSemanticMemoryExtractionBuildRejectsIncompleteCanonicalSemanticMemory(t
 func TestSemanticMemoryExtractionApplyResultRejectsMissingTargetCoverage(t *testing.T) {
 	t.Parallel()
 
-	_, err := NewSemanticMemoryExtractionRegistration().NewJob().ApplyResult(
+	_, err := NewSemanticMemoryExtractionRegistration(0).NewJob().ApplyResult(
 		context.Background(),
 		&semanticMemoryJobLoader{},
 		JobOutput{
@@ -589,7 +589,7 @@ func TestSemanticMemoryExtractionApplyResultRejectsMissingTargetCoverage(t *test
 func TestSemanticMemoryExtractionApplyResultIgnoresFailedAndMisleadingToolResults(t *testing.T) {
 	t.Parallel()
 
-	_, err := NewSemanticMemoryExtractionRegistration().NewJob().ApplyResult(
+	_, err := NewSemanticMemoryExtractionRegistration(0).NewJob().ApplyResult(
 		context.Background(),
 		&semanticMemoryJobLoader{},
 		JobOutput{
@@ -635,7 +635,7 @@ func TestSemanticMemoryExtractionApplyResultIgnoresFailedAndMisleadingToolResult
 func TestSemanticMemoryExtractionApplyResultTracksChangedMetadata(t *testing.T) {
 	t.Parallel()
 
-	result, err := NewSemanticMemoryExtractionRegistration().NewJob().ApplyResult(
+	result, err := NewSemanticMemoryExtractionRegistration(0).NewJob().ApplyResult(
 		context.Background(),
 		&semanticMemoryJobLoader{},
 		JobOutput{
@@ -717,7 +717,7 @@ func TestSemanticMemoryExtractionApplyResultTracksChangedMetadata(t *testing.T) 
 func TestSemanticMemoryExtractionApplyResultUsesFalseChangedForReadOnlyInspection(t *testing.T) {
 	t.Parallel()
 
-	result, err := NewSemanticMemoryExtractionRegistration().NewJob().ApplyResult(
+	result, err := NewSemanticMemoryExtractionRegistration(0).NewJob().ApplyResult(
 		context.Background(),
 		&semanticMemoryJobLoader{},
 		JobOutput{
