@@ -10,10 +10,13 @@ import (
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
+	"github.com/q15co/q15/systems/agent/internal/memory/claims"
 )
 
 type verificationJobLoader struct {
 	core            agent.CoreMemory
+	semantic        agent.SemanticMemory
+	topics          map[string]string
 	working         agent.WorkingMemory
 	recent          []conversation.Message
 	headSeq         int64
@@ -29,8 +32,16 @@ func (l *verificationJobLoader) LoadCoreMemory(context.Context) (agent.CoreMemor
 	return l.core, nil
 }
 
-func (l *verificationJobLoader) LoadSemanticMemory(context.Context) (agent.SemanticMemory, error) {
-	return agent.SemanticMemory{}, nil
+func (l *verificationJobLoader) LoadSemanticMemory(
+	context.Context,
+) (agent.SemanticMemory, error) {
+	return l.semantic, nil
+}
+
+func (l *verificationJobLoader) LoadSemanticTopics(
+	context.Context,
+) (map[string]string, error) {
+	return l.topics, nil
 }
 
 func (l *verificationJobLoader) LoadWorkingMemory(context.Context) (agent.WorkingMemory, error) {
@@ -312,6 +323,210 @@ func TestVerificationReviewBuildLoadsStateAndConfiguresReadOnlyTools(t *testing.
 		if !contains(prompt, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, prompt)
 		}
+	}
+}
+
+func TestVerificationReviewBuildRendersConflictedClaimsSection(t *testing.T) {
+	t.Parallel()
+
+	loader := &verificationJobLoader{
+		core: agent.CoreMemory{
+			Files: []agent.CoreMemoryFile{{
+				RelativePath: "core/AGENT.md",
+				Content:      "You are q15.",
+			}},
+		},
+		semantic: agent.SemanticMemory{
+			Files: []agent.SemanticMemoryFile{{
+				RelativePath: "semantic/facts.md",
+				Content: "# Facts\n\n## Confirmed Facts\n\n" +
+					"- [c-2026-0417] The agent deploys on Fridays.\n" +
+					"  {status: active, kind: fact, confidence: confirmed, " +
+					"src: t51, rev: 2026-04-10}\n" +
+					"- [c-2026-0401] The deploy target is staging, not production.\n" +
+					"  {status: conflicted, kind: fact, confidence: likely, " +
+					"src: t61, rev: 2026-04-12}\n",
+			}},
+		},
+		topics: map[string]string{
+			"semantic/topics/deploy-targets.md": "# Deploy Targets\n\n" +
+				"tracked in the deploy-targets topic file\n\n" +
+				"- [c-2026-0432] The deploy target is production, contradicting " +
+				"c-2026-0401.\n" +
+				"  {status: conflicted, kind: inference, confidence: likely, " +
+				"src: t64, rev: 2026-04-13}\n",
+		},
+		working: agent.WorkingMemory{
+			RelativePath: workingMemoryRelativePath,
+			Content:      "# Working Memory\n\n## Active Tasks\n\n- Verify current state.\n",
+		},
+	}
+
+	spec, err := NewVerificationReviewRegistration().NewJob().Build(
+		context.Background(),
+		loader,
+	)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	section, ok := findPromptSection(spec.PromptSections, "conflicted_claims")
+	if !ok {
+		t.Fatalf("prompt sections have no conflicted_claims section: %#v", spec.PromptSections)
+	}
+	if !contains(
+		section.Body,
+		"- [c-2026-0401] The deploy target is staging, not production. (file: semantic/facts.md)",
+	) {
+		t.Fatalf("conflicted_claims body missing the root claim:\n%s", section.Body)
+	}
+	// The review's correction: a claim in a topic file must be listed, with its
+	// topic path, even though LoadSemanticMemory never returns topic files.
+	if !contains(
+		section.Body,
+		"- [c-2026-0432] The deploy target is production, contradicting c-2026-0401. (file: semantic/topics/deploy-targets.md)",
+	) {
+		t.Fatalf("conflicted_claims body missing the topic-file claim:\n%s", section.Body)
+	}
+	if !contains(section.Body, "Cross-referenced pair c-2026-0401 and c-2026-0432:") {
+		t.Fatalf(
+			"conflicted_claims body does not pair the cross-referenced claims:\n%s",
+			section.Body,
+		)
+	}
+	// Only conflicted claims are included: an active claim in the same root
+	// file must not leak into the section.
+	if contains(section.Body, "c-2026-0417") {
+		t.Fatalf("conflicted_claims body includes a non-conflicted claim:\n%s", section.Body)
+	}
+
+	prompt, err := renderPrompt(verificationReviewJobType, spec)
+	if err != nil {
+		t.Fatalf("renderPrompt() error = %v", err)
+	}
+	for _, want := range []string{
+		"<conflicted_claims>",
+		"- [c-2026-0401] The deploy target is staging, not production. (file: semantic/facts.md)",
+		"- [c-2026-0432] The deploy target is production, contradicting c-2026-0401. (file: semantic/topics/deploy-targets.md)",
+		"Cross-referenced pair c-2026-0401 and c-2026-0432:",
+		"the review artifact must propose one resolution: name the winning claim ID, give the reasoning for it, or state that the evidence is insufficient to decide",
+		"Proposed resolutions are input for the conversion pass, which applies them to semantic memory",
+	} {
+		if !contains(prompt, want) {
+			t.Fatalf("prompt missing %q:\n%s", want, prompt)
+		}
+	}
+	if contains(prompt, "- [c-2026-0417] The agent deploys on Fridays.") {
+		t.Fatal("prompt includes a non-conflicted semantic claim")
+	}
+}
+
+func TestVerificationReviewBuildOmitsConflictedClaimsSectionWhenNone(t *testing.T) {
+	t.Parallel()
+
+	loader := &verificationJobLoader{
+		core: agent.CoreMemory{
+			Files: []agent.CoreMemoryFile{{
+				RelativePath: "core/AGENT.md",
+				Content:      "You are q15.",
+			}},
+		},
+		semantic: agent.SemanticMemory{
+			Files: []agent.SemanticMemoryFile{{
+				RelativePath: "semantic/facts.md",
+				Content: "# Facts\n\n## Confirmed Facts\n\n" +
+					"- [c-2026-0417] The agent deploys on Fridays.\n" +
+					"  {status: active, kind: fact, confidence: confirmed, " +
+					"src: t51, rev: 2026-04-10}\n",
+			}},
+		},
+		topics: map[string]string{
+			"semantic/topics/deploy-targets.md": "# Deploy Targets\n\n" +
+				"- [c-2026-0418] The staging deploy runs nightly.\n" +
+				"  {status: active, kind: fact, confidence: confirmed, " +
+				"src: t53, rev: 2026-04-11}\n",
+		},
+		working: agent.WorkingMemory{
+			RelativePath: workingMemoryRelativePath,
+			Content:      "# Working Memory\n\n## Active Tasks\n\n- Verify current state.\n",
+		},
+	}
+
+	spec, err := NewVerificationReviewRegistration().NewJob().Build(
+		context.Background(),
+		loader,
+	)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if _, ok := findPromptSection(spec.PromptSections, "conflicted_claims"); ok {
+		t.Fatalf("prompt sections include conflicted_claims with no conflicted claims: %#v",
+			spec.PromptSections)
+	}
+
+	prompt, err := renderPrompt(verificationReviewJobType, spec)
+	if err != nil {
+		t.Fatalf("renderPrompt() error = %v", err)
+	}
+	if contains(prompt, "conflicted_claims") {
+		t.Fatal("prompt mentions conflicted_claims with no conflicted claims")
+	}
+	if contains(prompt, "must propose one resolution") {
+		t.Fatal("prompt carries the resolution contract with no conflicted claims")
+	}
+}
+
+func TestCollectConflictedClaimsSkipsUnparseableLines(t *testing.T) {
+	t.Parallel()
+
+	semantic := agent.SemanticMemory{Files: []agent.SemanticMemoryFile{{
+		RelativePath: "semantic/facts.md",
+		Content: "# Facts\n\nSome prose that is not a claim.\n" +
+			"- a legacy bullet without a claim id {status: conflicted}\n\n" +
+			"- [c-2026-0401] The deploy target is staging.\n" +
+			"  {status: conflicted, kind: fact, confidence: likely, " +
+			"src: t61, rev: 2026-04-12}\n\n" +
+			"an unparseable line that is not a claim at all\n\n" +
+			"- [c-2026-0433] The deploy target is production.\n" +
+			"  {status: conflicted, kind: fact, confidence: likely, " +
+			"src: t64, rev: 2026-04-13}\n",
+	}}}
+
+	entries, err := collectConflictedClaims(semantic, nil)
+	if err != nil {
+		t.Fatalf("collectConflictedClaims() error = %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("conflicted entries = %d (%v), want 2", len(entries), entries)
+	}
+	if got, want := entries[0].claim.ID, "c-2026-0401"; got != want {
+		t.Fatalf("entries[0] id = %q, want %q", got, want)
+	}
+	if got, want := entries[1].claim.ID, "c-2026-0433"; got != want {
+		t.Fatalf("entries[1] id = %q, want %q", got, want)
+	}
+	for _, entry := range entries {
+		if got, want := entry.relativePath, "semantic/facts.md"; got != want {
+			t.Fatalf("entry %s path = %q, want %q", entry.claim.ID, got, want)
+		}
+		if got, want := entry.claim.EffectiveStatus(), claims.StatusConflicted; got != want {
+			t.Fatalf("entry %s status = %q, want %q", entry.claim.ID, got, want)
+		}
+	}
+
+	// Rendered, the section survives the same fixture: the unparseable lines
+	// never abort it.
+	section := conflictedClaimsSection(entries)
+	for _, want := range []string{
+		"- [c-2026-0401] The deploy target is staging.",
+		"- [c-2026-0433] The deploy target is production.",
+	} {
+		if !contains(section.Body, want) {
+			t.Fatalf("conflicted_claims body missing %q:\n%s", want, section.Body)
+		}
+	}
+	if contains(section.Body, "legacy bullet") {
+		t.Fatal("conflicted_claims body swallowed an unparsed line as a claim")
 	}
 }
 

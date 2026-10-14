@@ -24,6 +24,12 @@ type ContextLoader interface {
 	// root and topic file, keyed by memory-relative path (for example
 	// "semantic/topics/q15.md").
 	LoadSemanticFileSizes(ctx context.Context) (map[string]int64, error)
+	// LoadSemanticTopics returns the trimmed content of every
+	// semantic/topics/*.md file, keyed by memory-relative slash path. It is
+	// separate from LoadSemanticMemory on purpose: the conversion pass treats
+	// the three roots as its working set, so topic files must be read
+	// explicitly by the jobs that want them.
+	LoadSemanticTopics(ctx context.Context) (map[string]string, error)
 	LoadWorkingMemory(ctx context.Context) (agent.WorkingMemory, error)
 	// LoadOpenLoops returns the trimmed content of working/OPEN_LOOPS.md.
 	LoadOpenLoops(ctx context.Context) (string, error)
