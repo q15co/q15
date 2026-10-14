@@ -172,6 +172,25 @@ func (s *runtimeStore) DeleteCognitionArtifact(ctx context.Context, relativePath
 	return s.memory.DeleteCognitionArtifact(ctx, relativePath)
 }
 
+func (s *runtimeStore) LoadSemanticChunk(
+	ctx context.Context,
+	relativePath string,
+	offset int64,
+	length int64,
+) (cognition.SemanticChunk, error) {
+	return s.memory.LoadSemanticChunk(ctx, relativePath, offset, length)
+}
+
+func (s *runtimeStore) RemoveSemanticLines(
+	ctx context.Context,
+	relativePath string,
+	start int64,
+	end int64,
+	hashes []string,
+) (int64, error) {
+	return s.memory.RemoveSemanticLines(ctx, relativePath, start, end, hashes)
+}
+
 func (s *runtimeStore) LoadHead(ctx context.Context) (int64, time.Time, error) {
 	return s.memory.LoadHead(ctx)
 }

@@ -535,6 +535,11 @@ func cognitionJobs(rt config.AgentRuntime) []cognition.JobRegistration {
 		cognition.NewVerificationReviewRegistration(),
 		cognition.NewSemanticMemoryExtractionRegistration(rt.MemoryWorkingBudgetBytes),
 		cognition.NewWorkingMemoryConsolidationRegistration(rt.MemoryOpenLoopsBudgetBytes),
+		// Registered unconditionally: jobs are a static slice handed to
+		// NewController once at startup, so conditional registration is
+		// impossible. The migration's trigger gates on its cursor existing,
+		// so without that cursor the job never runs.
+		cognition.NewSemanticMigrationRegistration(),
 	}
 }
 

@@ -163,6 +163,32 @@ func (l *verificationJobLoader) StoreCognitionArtifact(
 	return nil
 }
 
+func (l *verificationJobLoader) DeleteCognitionArtifact(
+	context.Context,
+	string,
+) error {
+	return nil
+}
+
+func (l *verificationJobLoader) LoadSemanticChunk(
+	context.Context,
+	string,
+	int64,
+	int64,
+) (SemanticChunk, error) {
+	return SemanticChunk{}, nil
+}
+
+func (l *verificationJobLoader) RemoveSemanticLines(
+	context.Context,
+	string,
+	int64,
+	int64,
+	[]string,
+) (int64, error) {
+	return 0, nil
+}
+
 func TestVerificationReviewRegistration(t *testing.T) {
 	t.Parallel()
 

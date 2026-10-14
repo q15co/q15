@@ -167,6 +167,29 @@ func (s *spyLoader) StoreCognitionArtifact(
 	return nil
 }
 
+func (s *spyLoader) DeleteCognitionArtifact(context.Context, string) error {
+	return nil
+}
+
+func (s *spyLoader) LoadSemanticChunk(
+	context.Context,
+	string,
+	int64,
+	int64,
+) (SemanticChunk, error) {
+	return SemanticChunk{}, nil
+}
+
+func (s *spyLoader) RemoveSemanticLines(
+	context.Context,
+	string,
+	int64,
+	int64,
+	[]string,
+) (int64, error) {
+	return 0, nil
+}
+
 func (s *spyLoader) LoadJobState(context.Context, string) (JobState, error) {
 	return JobState{}, nil
 }

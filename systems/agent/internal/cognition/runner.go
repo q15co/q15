@@ -54,6 +54,33 @@ type ContextLoader interface {
 	LoadJobState(ctx context.Context, jobType string) (JobState, error)
 	LoadCognitionArtifact(ctx context.Context, relativePath string) (Artifact, error)
 	StoreCognitionArtifact(ctx context.Context, artifact Artifact) error
+	// DeleteCognitionArtifact removes one job-owned cognition artifact from
+	// the runtime memory root. A missing artifact counts as already deleted.
+	DeleteCognitionArtifact(ctx context.Context, relativePath string) error
+	// LoadSemanticChunk reads at most length bytes of one semantic source
+	// file starting at offset, cut back to the last line boundary the window
+	// contains, so a job can walk an oversized file in bounded whole-line
+	// steps without ever carrying the whole file.
+	LoadSemanticChunk(
+		ctx context.Context,
+		relativePath string,
+		offset int64,
+		length int64,
+	) (SemanticChunk, error)
+	// RemoveSemanticLines deletes the whole lines of one semantic source file
+	// that start in the byte range [start, end) and whose line hash
+	// (SemanticLineHash) is listed, keeping every other byte of the file
+	// byte-for-byte. It returns the file's size after the rewrite and fails
+	// when any listed hash matches no line in range, so a source file that
+	// moved under the caller is reported instead of drained wrongly. The
+	// migration uses it to remove exactly the source lines its run ledgered.
+	RemoveSemanticLines(
+		ctx context.Context,
+		relativePath string,
+		start int64,
+		end int64,
+		hashes []string,
+	) (int64, error)
 }
 
 // Artifact is one job-owned persisted artifact stored under

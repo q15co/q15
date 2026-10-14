@@ -168,6 +168,25 @@ func (s *spyRuntimeStore) DeleteCognitionArtifact(context.Context, string) error
 	return nil
 }
 
+func (s *spyRuntimeStore) LoadSemanticChunk(
+	context.Context,
+	string,
+	int64,
+	int64,
+) (cognition.SemanticChunk, error) {
+	return cognition.SemanticChunk{}, nil
+}
+
+func (s *spyRuntimeStore) RemoveSemanticLines(
+	context.Context,
+	string,
+	int64,
+	int64,
+	[]string,
+) (int64, error) {
+	return 0, nil
+}
+
 type appFakeCognitionJob struct{}
 
 func (appFakeCognitionJob) Type() string {

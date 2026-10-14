@@ -134,6 +134,32 @@ func (l *workingMemoryJobLoader) StoreCognitionArtifact(
 	return nil
 }
 
+func (l *workingMemoryJobLoader) DeleteCognitionArtifact(
+	context.Context,
+	string,
+) error {
+	return nil
+}
+
+func (l *workingMemoryJobLoader) LoadSemanticChunk(
+	context.Context,
+	string,
+	int64,
+	int64,
+) (SemanticChunk, error) {
+	return SemanticChunk{}, nil
+}
+
+func (l *workingMemoryJobLoader) RemoveSemanticLines(
+	context.Context,
+	string,
+	int64,
+	int64,
+	[]string,
+) (int64, error) {
+	return 0, nil
+}
+
 func (l *workingMemoryJobLoader) LoadJobState(context.Context, string) (JobState, error) {
 	return l.jobState, nil
 }
