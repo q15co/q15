@@ -45,17 +45,27 @@ func (c Config) ResolveAgentRuntime() (*AgentRuntime, error) {
 	if memoryRecentTurns == 0 {
 		memoryRecentTurns = defaultMemoryRecentTurns
 	}
+	memoryWorkingBudgetBytes := agentCfg.MemoryWorkingBudgetBytes
+	if memoryWorkingBudgetBytes == 0 {
+		memoryWorkingBudgetBytes = defaultMemoryWorkingBudgetBytes
+	}
+	memoryOpenLoopsBudgetBytes := agentCfg.MemoryOpenLoopsBudgetBytes
+	if memoryOpenLoopsBudgetBytes == 0 {
+		memoryOpenLoopsBudgetBytes = defaultMemoryOpenLoopsBudgetBytes
+	}
 	scheduleRuntime := resolveScheduleRuntime(agentCfg.Tools.Schedule)
 
 	return &AgentRuntime{
-		Name:              strings.TrimSpace(agentCfg.Name),
-		WorkspaceLocalDir: runtimeWorkspaceLocalDir,
-		MemoryLocalDir:    "/memory",
-		MediaLocalDir:     runtimeMediaLocalDir,
-		SkillsLocalDir:    runtimeSkillsLocalDir,
-		StateLocalDir:     runtimeStateLocalDir,
-		MemoryRecentTurns: memoryRecentTurns,
-		Execution:         ExecutionRuntime{ServiceAddress: runtimeExecutionServiceAddr},
+		Name:                       strings.TrimSpace(agentCfg.Name),
+		WorkspaceLocalDir:          runtimeWorkspaceLocalDir,
+		MemoryLocalDir:             "/memory",
+		MediaLocalDir:              runtimeMediaLocalDir,
+		SkillsLocalDir:             runtimeSkillsLocalDir,
+		StateLocalDir:              runtimeStateLocalDir,
+		MemoryRecentTurns:          memoryRecentTurns,
+		MemoryWorkingBudgetBytes:   memoryWorkingBudgetBytes,
+		MemoryOpenLoopsBudgetBytes: memoryOpenLoopsBudgetBytes,
+		Execution:                  ExecutionRuntime{ServiceAddress: runtimeExecutionServiceAddr},
 		Tools: ToolsRuntime{
 			WebSearch: WebSearchToolRuntime{
 				BraveAPIKey: braveAPIKey,

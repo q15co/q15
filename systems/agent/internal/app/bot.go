@@ -66,7 +66,7 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 	// Telegram-less runtime is refused there rather than run headless.
 	token := strings.TrimSpace(rt.TelegramToken)
 
-	jobs := cognitionJobs()
+	jobs := cognitionJobs(rt)
 	selectionStore, err := selectionstore.Open(selectionstore.DefaultPath(rt.WorkspaceLocalDir))
 	if err != nil {
 		return fmt.Errorf("open model selection store: %w", err)
@@ -525,11 +525,13 @@ func (s bridgeSettings) newChatBridge(
 	return &chatBridge{server: server, endpoint: endpoint}, nil
 }
 
-// cognitionJobs registers the built-in background cognition jobs.
-func cognitionJobs() []cognition.JobRegistration {
+// cognitionJobs registers the built-in background cognition jobs. The runtime
+// supplies the memory byte budgets: the semantic conversion registration takes
+// the working-memory one its overbudget state rule enforces.
+func cognitionJobs(rt config.AgentRuntime) []cognition.JobRegistration {
 	return []cognition.JobRegistration{
 		cognition.NewVerificationReviewRegistration(),
-		cognition.NewSemanticMemoryExtractionRegistration(),
+		cognition.NewSemanticMemoryExtractionRegistration(rt.MemoryWorkingBudgetBytes),
 		cognition.NewWorkingMemoryConsolidationRegistration(),
 	}
 }

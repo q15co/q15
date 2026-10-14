@@ -90,6 +90,18 @@ func (c Config) validate() error {
 	if err := c.Agent.Tools.Schedule.validate(); err != nil {
 		return fmt.Errorf("agent.tools.schedule: %w", err)
 	}
+	if err := validateMemoryBudget(
+		"memory_working_budget_bytes",
+		c.Agent.MemoryWorkingBudgetBytes,
+	); err != nil {
+		return err
+	}
+	if err := validateMemoryBudget(
+		"memory_open_loops_budget_bytes",
+		c.Agent.MemoryOpenLoopsBudgetBytes,
+	); err != nil {
+		return err
+	}
 	if err := validateBridgeListenTarget(c.Agent.Bridge.ListenTarget); err != nil {
 		return fmt.Errorf("agent.bridge.listen_target: %w", err)
 	}
@@ -163,6 +175,17 @@ func validateTelegram(tg Telegram) error {
 		if _, err := normalizeAllowedUserIDs(tg.AllowedUserIDs); err != nil {
 			return fmt.Errorf("agent.telegram.allowed_user_ids: %w", err)
 		}
+	}
+	return nil
+}
+
+// validateMemoryBudget rejects a negative memory byte budget. Zero stays
+// legal: it is how an absent key arrives, and ResolveAgentRuntime applies the
+// documented default for it, so only an explicitly configured budget has to
+// name a usable size.
+func validateMemoryBudget(key string, value int) error {
+	if value < 0 {
+		return fmt.Errorf("agent.%s must not be negative", key)
 	}
 	return nil
 }

@@ -16,9 +16,10 @@ const (
 	// for semantic files the conversion pass writes (DESIGN §2.3, §6.3).
 	semanticRootCapBytes  = 16 * 1024
 	semanticTopicCapBytes = 32 * 1024
-	// workingMemoryBudgetBytes is the working-memory budget whose overrun
-	// triggers a conversion run (DESIGN §6.3).
-	workingMemoryBudgetBytes = 8 * 1024
+	// defaultWorkingMemoryBudgetBytes is the working-memory budget whose
+	// overrun triggers a conversion run (DESIGN §6.3); a registration built
+	// with a configured budget replaces it.
+	defaultWorkingMemoryBudgetBytes = 8 * 1024
 )
 
 // Runtime paths derived from the semantic root constant so every path the
@@ -55,27 +56,41 @@ func semanticConversionPolicy() filetools.PathAccessPolicy {
 // exceeds its budget. Like every state rule it is only evaluated once head has
 // advanced past the last run's input (shouldEvaluateStateRules), so it fires on
 // the next turn after the file goes over budget, never on file size alone.
+// The rule only reads: it never truncates or rewrites the file.
 func evaluateWorkingMemoryOverbudget(
 	ctx context.Context,
 	snapshot Snapshot,
-	_ JobState,
+	budget int,
 ) (bool, string, error) {
 	if snapshot.Loader == nil {
 		return false, "", nil
 	}
+	effectiveBudget := effectiveWorkingMemoryBudget(budget)
 	working, err := snapshot.Loader.LoadWorkingMemory(ctx)
 	if err != nil {
 		return false, "", fmt.Errorf("load working memory: %w", err)
 	}
 	size := len(working.Content)
-	if size <= workingMemoryBudgetBytes {
+	if size <= effectiveBudget {
 		return false, "", nil
 	}
 	return true, fmt.Sprintf(
 		"working_memory_bytes=%d budget=%d",
 		size,
-		workingMemoryBudgetBytes,
+		effectiveBudget,
 	), nil
+}
+
+// effectiveWorkingMemoryBudget resolves the working-memory budget a rule
+// enforces. A non-positive value selects defaultWorkingMemoryBudgetBytes:
+// zero is the shape of a registration built without a budget, and a negative
+// one is a configuration error caught at load, so neither can silently turn
+// the budget into one the rule always or never trips.
+func effectiveWorkingMemoryBudget(budget int) int {
+	if budget <= 0 {
+		return defaultWorkingMemoryBudgetBytes
+	}
+	return budget
 }
 
 // checkSemanticCaps fails when a semantic file this run wrote is over its cap

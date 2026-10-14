@@ -69,7 +69,7 @@ func applyConversion(
 	writes ...string,
 ) (ParsedResult, error) {
 	t.Helper()
-	return NewSemanticMemoryExtractionRegistration().NewJob().ApplyResult(
+	return NewSemanticMemoryExtractionRegistration(0).NewJob().ApplyResult(
 		context.Background(),
 		loader,
 		JobOutput{
@@ -267,25 +267,38 @@ func TestSemanticConversionOverbudgetStateRule(t *testing.T) {
 	t.Parallel()
 
 	under := &semanticMemoryJobLoader{
-		working: agent.WorkingMemory{Content: strings.Repeat("x", workingMemoryBudgetBytes)},
+		working: agent.WorkingMemory{
+			Content: strings.Repeat("x", defaultWorkingMemoryBudgetBytes),
+		},
 	}
-	if run, _, err := evaluateWorkingMemoryOverbudget(context.Background(), Snapshot{Loader: under}, JobState{}); err != nil ||
-		run {
+	if run, _, err := evaluateWorkingMemoryOverbudget(
+		context.Background(),
+		Snapshot{Loader: under},
+		defaultWorkingMemoryBudgetBytes,
+	); err != nil || run {
 		t.Fatalf("at budget: run=%v err=%v, want false nil", run, err)
 	}
 	over := &semanticMemoryJobLoader{
-		working: agent.WorkingMemory{Content: strings.Repeat("x", workingMemoryBudgetBytes+1)},
+		working: agent.WorkingMemory{
+			Content: strings.Repeat("x", defaultWorkingMemoryBudgetBytes+1),
+		},
 	}
 	run, reason, err := evaluateWorkingMemoryOverbudget(
 		context.Background(),
 		Snapshot{Loader: over},
-		JobState{},
+		defaultWorkingMemoryBudgetBytes,
 	)
-	if err != nil || !run || !strings.Contains(reason, "budget=8192") {
+	if err != nil || !run || !strings.Contains(
+		reason,
+		fmt.Sprintf("budget=%d", defaultWorkingMemoryBudgetBytes),
+	) {
 		t.Fatalf("over budget: run=%v reason=%q err=%v", run, reason, err)
 	}
-	if run, _, err := evaluateWorkingMemoryOverbudget(context.Background(), Snapshot{}, JobState{}); err != nil ||
-		run {
+	if run, _, err := evaluateWorkingMemoryOverbudget(
+		context.Background(),
+		Snapshot{},
+		defaultWorkingMemoryBudgetBytes,
+	); err != nil || run {
 		t.Fatalf("nil loader: run=%v err=%v, want false nil", run, err)
 	}
 }
@@ -294,7 +307,7 @@ func TestSemanticConversionBuildStashesBaseline(t *testing.T) {
 	t.Parallel()
 
 	loader := goldenSemanticLoader()
-	spec, err := NewSemanticMemoryExtractionRegistration().NewJob().
+	spec, err := NewSemanticMemoryExtractionRegistration(0).NewJob().
 		Build(context.Background(), loader)
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
@@ -348,7 +361,7 @@ func goldenSemanticLoader() *semanticMemoryJobLoader {
 func TestSemanticConversionPromptGolden(t *testing.T) {
 	t.Parallel()
 
-	spec, err := NewSemanticMemoryExtractionRegistration().NewJob().Build(
+	spec, err := NewSemanticMemoryExtractionRegistration(0).NewJob().Build(
 		context.Background(),
 		goldenSemanticLoader(),
 	)
@@ -378,5 +391,84 @@ func TestSemanticConversionPromptGolden(t *testing.T) {
 			golden,
 			prompt,
 		)
+	}
+}
+
+// semanticConversionOverbudgetRule returns the working_memory_overbudget state
+// rule from a registration, failing the test when the registration lost it.
+func semanticConversionOverbudgetRule(t *testing.T, registration JobRegistration) StateRule {
+	t.Helper()
+	for _, rule := range registration.Policy.State {
+		if rule.ID == "working_memory_overbudget" {
+			return rule
+		}
+	}
+	t.Fatal("registration has no working_memory_overbudget state rule")
+	return StateRule{}
+}
+
+func TestSemanticConversionOverbudgetRuleUsesConfiguredBudget(t *testing.T) {
+	t.Parallel()
+
+	evaluate := semanticConversionOverbudgetRule(
+		t,
+		NewSemanticMemoryExtractionRegistration(128),
+	).Evaluate
+
+	atBudget := &semanticMemoryJobLoader{
+		working: agent.WorkingMemory{Content: strings.Repeat("x", 128)},
+	}
+	if run, _, err := evaluate(context.Background(), Snapshot{Loader: atBudget}, JobState{}); err != nil ||
+		run {
+		t.Fatalf("at configured budget: run=%v err=%v, want false nil", run, err)
+	}
+
+	oneOver := &semanticMemoryJobLoader{
+		working: agent.WorkingMemory{Content: strings.Repeat("x", 129)},
+	}
+	run, reason, err := evaluate(context.Background(), Snapshot{Loader: oneOver}, JobState{})
+	if err != nil || !run {
+		t.Fatalf("one byte over configured budget: run=%v err=%v, want true nil", run, err)
+	}
+	if !strings.Contains(reason, "budget=128") {
+		t.Fatalf("reason %q does not name the configured budget", reason)
+	}
+	if strings.Contains(reason, fmt.Sprintf("budget=%d", defaultWorkingMemoryBudgetBytes)) {
+		t.Fatalf("reason %q names the built-in default, not the configured budget", reason)
+	}
+}
+
+func TestSemanticConversionOverbudgetRuleDefaultsBudgetWhenUnconfigured(t *testing.T) {
+	t.Parallel()
+
+	// A zero-value construction must keep today's threshold. Content one byte
+	// over the built-in default fires and names 8192; anything at or under it
+	// does not fire even though the configured value was zero.
+	evaluate := semanticConversionOverbudgetRule(
+		t,
+		NewSemanticMemoryExtractionRegistration(0),
+	).Evaluate
+
+	atDefault := &semanticMemoryJobLoader{
+		working: agent.WorkingMemory{
+			Content: strings.Repeat("x", defaultWorkingMemoryBudgetBytes),
+		},
+	}
+	if run, _, err := evaluate(context.Background(), Snapshot{Loader: atDefault}, JobState{}); err != nil ||
+		run {
+		t.Fatalf("at built-in default: run=%v err=%v, want false nil", run, err)
+	}
+
+	oneOver := &semanticMemoryJobLoader{
+		working: agent.WorkingMemory{
+			Content: strings.Repeat("x", defaultWorkingMemoryBudgetBytes+1),
+		},
+	}
+	run, reason, err := evaluate(context.Background(), Snapshot{Loader: oneOver}, JobState{})
+	if err != nil || !run {
+		t.Fatalf("one over built-in default: run=%v err=%v, want true nil", run, err)
+	}
+	if !strings.Contains(reason, fmt.Sprintf("budget=%d", defaultWorkingMemoryBudgetBytes)) {
+		t.Fatalf("reason %q does not name the built-in default", reason)
 	}
 }
