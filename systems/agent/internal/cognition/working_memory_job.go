@@ -7,6 +7,7 @@ import (
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
+	"github.com/q15co/q15/systems/agent/internal/memory/memcheck"
 	filetools "github.com/q15co/q15/systems/agent/internal/tools/files"
 )
 
@@ -414,7 +415,7 @@ func evaluateOpenLoopsOverbudget(
 		return false, "", fmt.Errorf("load open loops: %w", err)
 	}
 	size := len(openLoops)
-	if size <= effectiveBudget {
+	if !memcheck.OverLimit(int64(size), int64(effectiveBudget)) {
 		return false, "", nil
 	}
 	return true, fmt.Sprintf(

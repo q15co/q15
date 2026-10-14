@@ -8,6 +8,7 @@ import (
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
+	"github.com/q15co/q15/systems/agent/internal/memory/memcheck"
 	filetools "github.com/q15co/q15/systems/agent/internal/tools/files"
 )
 
@@ -71,7 +72,7 @@ func evaluateWorkingMemoryOverbudget(
 		return false, "", fmt.Errorf("load working memory: %w", err)
 	}
 	size := len(working.Content)
-	if size <= effectiveBudget {
+	if !memcheck.OverLimit(int64(size), int64(effectiveBudget)) {
 		return false, "", nil
 	}
 	return true, fmt.Sprintf(
@@ -116,7 +117,7 @@ func checkSemanticCaps(
 			continue
 		}
 		size, ok := sizes[strings.TrimPrefix(runtimePath, memoryRuntimePrefix)]
-		if ok && size > int64(limit) {
+		if ok && memcheck.OverLimit(size, int64(limit)) {
 			over = append(over, fmt.Sprintf("%s=%d>%d", runtimePath, size, limit))
 		}
 	}
