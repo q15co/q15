@@ -65,3 +65,57 @@ func TestStoreConversionReadsSeeSizesOpenLoopsAndLedger(t *testing.T) {
 		t.Fatalf("LoadOpenLoops(missing) = %q, %v; want empty, nil", loops, err)
 	}
 }
+
+func TestStoreLoadSemanticTopicsReturnsTopicFilesByRelativePath(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "memory")
+	store := newTestStore(root, &fakeCommitter{})
+	ctx := context.Background()
+	if err := store.Init(ctx); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	// No topics directory yet: the reader must report empty content instead of
+	// an error, matching the other optional reads.
+	topics, err := store.LoadSemanticTopics(ctx)
+	if err != nil {
+		t.Fatalf("LoadSemanticTopics(no topics dir) error = %v", err)
+	}
+	if len(topics) != 0 {
+		t.Fatalf("LoadSemanticTopics(no topics dir) = %v, want empty", topics)
+	}
+
+	topicsDir := filepath.Join(root, "semantic", "topics")
+	if err := os.MkdirAll(topicsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(topics) error = %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(topicsDir, "q15.md"),
+		[]byte("\n- [c-2026-0001] The q15 repo carries the memory design.\n\n"),
+		0o644,
+	); err != nil {
+		t.Fatalf("WriteFile(topic q15) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(topicsDir, "notes.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("WriteFile(non-markdown) error = %v", err)
+	}
+	nested := filepath.Join(topicsDir, "nested")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatalf("MkdirAll(nested) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(nested, "x.md"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("WriteFile(nested) error = %v", err)
+	}
+
+	topics, err = store.LoadSemanticTopics(ctx)
+	if err != nil {
+		t.Fatalf("LoadSemanticTopics() error = %v", err)
+	}
+	if got, want := len(topics), 1; got != want {
+		t.Fatalf("len(LoadSemanticTopics()) = %d, want %d (%v)", got, want, topics)
+	}
+	got, want := topics["semantic/topics/q15.md"],
+		"- [c-2026-0001] The q15 repo carries the memory design."
+	if got != want {
+		t.Fatalf("topics[semantic/topics/q15.md] = %q, want %q", got, want)
+	}
+}

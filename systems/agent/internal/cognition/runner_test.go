@@ -84,6 +84,10 @@ func (s *spyLoader) LoadSemanticMemory(context.Context) (agent.SemanticMemory, e
 	return agent.SemanticMemory{}, nil
 }
 
+func (s *spyLoader) LoadSemanticTopics(context.Context) (map[string]string, error) {
+	return nil, nil
+}
+
 func (s *spyLoader) LoadWorkingMemory(context.Context) (agent.WorkingMemory, error) {
 	return agent.WorkingMemory{}, nil
 }

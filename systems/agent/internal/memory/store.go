@@ -381,6 +381,37 @@ func (s *Store) LoadSemanticMemory(ctx context.Context) (agent.SemanticMemory, e
 	}, nil
 }
 
+// LoadSemanticTopics loads every semantic/topics/*.md file, keyed by
+// repository-relative slash path ("semantic/topics/<slug>.md") with its
+// trimmed content. Topic files routed there by the conversion pass are
+// invisible to LoadSemanticMemory, which returns only the three fixed roots,
+// so jobs that need them read them separately through this accessor rather
+// than having the roots' working set widened behind them.
+// A missing or empty topics directory yields an empty map.
+func (s *Store) LoadSemanticTopics(ctx context.Context) (map[string]string, error) {
+	_ = ctx
+
+	release := s.repository.Acquire()
+	defer release()
+
+	topicsDir := filepath.Join(s.root(), filepath.FromSlash(semanticTopicsRelativePath))
+	files, err := filepath.Glob(filepath.Join(topicsDir, "*.md"))
+	if err != nil {
+		return nil, fmt.Errorf("list semantic topic files in %q: %w", topicsDir, err)
+	}
+
+	out := make(map[string]string, len(files))
+	for _, file := range files {
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			return nil, fmt.Errorf("read semantic topic file %q: %w", file, err)
+		}
+		out[semanticTopicsRelativePath+"/"+filepath.Base(file)] =
+			strings.TrimSpace(string(raw))
+	}
+	return out, nil
+}
+
 // LoadWorkingMemory loads the canonical prompt-visible working-memory artifact.
 func (s *Store) LoadWorkingMemory(ctx context.Context) (agent.WorkingMemory, error) {
 	_ = ctx

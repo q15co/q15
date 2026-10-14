@@ -39,6 +39,10 @@ func (l *workingMemoryJobLoader) LoadSemanticMemory(context.Context) (agent.Sema
 	return agent.SemanticMemory{}, nil
 }
 
+func (l *workingMemoryJobLoader) LoadSemanticTopics(context.Context) (map[string]string, error) {
+	return nil, nil
+}
+
 func (l *workingMemoryJobLoader) LoadWorkingMemory(context.Context) (agent.WorkingMemory, error) {
 	return l.working, nil
 }

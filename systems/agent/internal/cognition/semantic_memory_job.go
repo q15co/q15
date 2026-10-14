@@ -270,6 +270,8 @@ func (semanticMemoryExtractionJob) Build(
 					"- Repeated protocol, questionnaire, or profile-building answers count as repeated evidence when they consistently describe stable personal facts or preferences.",
 					"- Prefer verified or explicitly grounded claims over speculative inferences.",
 					"- If verification flags a semantic entry as stale, unsupported, or contradicted, remove it, rewrite it, or downgrade it with explicit uncertainty.",
+					"- If the latest verification review artifact proposes a resolution for a pair of conflicted claims, apply it in this run: mark the winning claim active, remove or supersede the losing claim per the supersession rule, and record the resolution in the ledger.",
+					"- If the verification review states that the evidence for a conflicted pair is insufficient, leave both claims conflicted and cross-referenced.",
 					"- If current semantic files contain drifted headings such as Personal Facts or Technical Facts, fold those entries back into the canonical headings and remove the drift.",
 					"- Never promote single-turn temporary tasks, transient session context, speculative tool-output guesses, or generic process chatter.",
 					"- Maintain strict category separation: do not duplicate the same claim across facts.md and preferences.md.",

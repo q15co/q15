@@ -93,6 +93,10 @@ func (s *spyRuntimeStore) LoadSemanticFileSizes(context.Context) (map[string]int
 	return nil, nil
 }
 
+func (s *spyRuntimeStore) LoadSemanticTopics(context.Context) (map[string]string, error) {
+	return nil, nil
+}
+
 func (s *spyRuntimeStore) LoadOpenLoops(context.Context) (string, error) {
 	return "", nil
 }

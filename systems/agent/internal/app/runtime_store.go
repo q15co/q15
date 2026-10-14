@@ -118,6 +118,10 @@ func (s *runtimeStore) LoadSemanticFileSizes(ctx context.Context) (map[string]in
 	return s.memory.LoadSemanticFileSizes(ctx)
 }
 
+func (s *runtimeStore) LoadSemanticTopics(ctx context.Context) (map[string]string, error) {
+	return s.memory.LoadSemanticTopics(ctx)
+}
+
 func (s *runtimeStore) LoadOpenLoops(ctx context.Context) (string, error) {
 	return s.memory.LoadOpenLoops(ctx)
 }

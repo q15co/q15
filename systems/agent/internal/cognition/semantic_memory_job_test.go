@@ -51,6 +51,10 @@ func (l *semanticMemoryJobLoader) LoadSemanticFileSizes(context.Context) (map[st
 	return l.semanticSizes, nil
 }
 
+func (l *semanticMemoryJobLoader) LoadSemanticTopics(context.Context) (map[string]string, error) {
+	return nil, nil
+}
+
 func (l *semanticMemoryJobLoader) LoadOpenLoops(context.Context) (string, error) {
 	return l.openLoops, nil
 }
