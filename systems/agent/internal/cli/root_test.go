@@ -42,6 +42,47 @@ func TestRunHelp(t *testing.T) {
 	}
 }
 
+// TestRunVersionFlag answers the spelling a person types first. `--version` is
+// not a verb: it is handled before the lookup, and it prints the same three
+// lines, in the same order, that `version` prints.
+func TestRunVersionFlag(t *testing.T) {
+	want := fmt.Sprintf(
+		"release: v1.2.3\nconfig_schema: %d\nstate_layout: %d\n",
+		config.SchemaVersion,
+		StateLayoutVersion,
+	)
+
+	for _, arg := range []string{"-V", "--version"} {
+		t.Run(arg, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+
+			env := command.Env{Stdout: &stdout, Stderr: &stderr, Release: "v1.2.3"}
+			if err := Run(context.Background(), env, []string{arg}); err != nil {
+				t.Fatalf("Run(%q) error = %v", arg, err)
+			}
+			if got := stdout.String(); got != want {
+				t.Fatalf("stdout = %q, want %q", got, want)
+			}
+			if stderr.Len() != 0 {
+				t.Fatalf("stderr = %q, want empty", stderr.String())
+			}
+		})
+	}
+
+	// The flag is not a licence to pass anything: a trailing argument is still the
+	// verb's to refuse, and it fails where the mistake is.
+	var stdout, stderr bytes.Buffer
+
+	env := command.Env{Stdout: &stdout, Stderr: &stderr, Release: "v1.2.3"}
+	err := Run(context.Background(), env, []string{"--version", "extra"})
+	if err == nil {
+		t.Fatal("Run() error = nil, want the trailing argument refused")
+	}
+	if got := command.ExitCode(err); got != 2 {
+		t.Fatalf("ExitCode(error) = %d, want 2", got)
+	}
+}
+
 // TestRunUnknownCommandIsAUsageError pins the two things a script depends on:
 // the command list goes to stderr with the message, and the error is classified
 // as a shape mistake so the process exits 2 rather than 1.
