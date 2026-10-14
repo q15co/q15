@@ -20,6 +20,12 @@ const (
 	workingMemoryMinDirtyTurns        int64 = 6
 )
 
+// WorkingMemoryConsolidationJobType is the job type under which the built-in
+// working-memory consolidation job persists its trigger state. The controller
+// writes that state and read-only status reporting reads it back by this name,
+// so it has exactly one spelling.
+const WorkingMemoryConsolidationJobType = workingMemoryConsolidationJobType
+
 var workingMemoryAllowedTools = []string{
 	"read_file",
 	"write_file",

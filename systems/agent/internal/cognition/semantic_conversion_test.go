@@ -472,3 +472,31 @@ func TestSemanticConversionOverbudgetRuleDefaultsBudgetWhenUnconfigured(t *testi
 		t.Fatalf("reason %q does not name the built-in default", reason)
 	}
 }
+
+// TestSemanticCapBytesMatchesTheConversionRule pins the exported cap lookup
+// against the same rule the conversion pass enforces after a run, so a report
+// built on it cannot drift from what a run is judged by.
+func TestSemanticCapBytesMatchesTheConversionRule(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		relativePath string
+		want         int
+	}{
+		{semanticFactsRelativePath, semanticRootCapBytes},
+		{semanticPreferencesRelativePath, semanticRootCapBytes},
+		{semanticProjectsRelativePath, semanticRootCapBytes},
+		{"semantic/topics/q15.md", semanticTopicCapBytes},
+		{"cognition/state/semantic_extraction_checkpoint.json", 0},
+		{"semantic/topics", 0},
+	} {
+		if got := SemanticCapBytes(tc.relativePath); got != tc.want {
+			t.Fatalf(
+				"SemanticCapBytes(%q) = %d, want %d",
+				tc.relativePath,
+				got,
+				tc.want,
+			)
+		}
+	}
+}
