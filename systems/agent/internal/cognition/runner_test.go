@@ -2,6 +2,7 @@ package cognition
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -241,6 +242,16 @@ type fakeJob struct {
 	jobType string
 	build   func(context.Context, ContextLoader) (Spec, error)
 	apply   func(context.Context, ContextLoader, JobOutput) (ParsedResult, error)
+	// rollback, when set, makes the fake a Rollbacker so the runner's
+	// failure-path rollback is observable.
+	rollback func(context.Context, ContextLoader, Spec) error
+}
+
+func (f fakeJob) Rollback(ctx context.Context, loader ContextLoader, spec Spec) error {
+	if f.rollback != nil {
+		return f.rollback(ctx, loader, spec)
+	}
+	return nil
 }
 
 func (f fakeJob) Type() string {
@@ -516,5 +527,137 @@ func TestRunnerForwardsAllowedToolsAndLoaderToApplyResult(t *testing.T) {
 	}
 	if model.callTools[0][0].Name != "web_fetch" {
 		t.Fatalf("tool name = %q, want web_fetch", model.callTools[0][0].Name)
+	}
+}
+
+func TestRunnerRollsBackTheJobWhenTheRunFails(t *testing.T) {
+	t.Parallel()
+
+	registry, err := agent.NewToolRegistry()
+	if err != nil {
+		t.Fatalf("NewToolRegistry() error = %v", err)
+	}
+	model := &fakeModelClient{errors: []error{fmt.Errorf("model exploded")}}
+	spec := Spec{
+		Objective:          "Inspect state.",
+		CompletionContract: "Return `status: ok` when complete.",
+		FileSnapshots: map[string]FileSnapshot{
+			"/memory/working/WORKING_MEMORY.md": {
+				Existed: true,
+				Content: []byte("before"),
+			},
+		},
+	}
+	rolledBack := 0
+	job := fakeJob{
+		jobType: "semantic_memory.extract",
+		build: func(context.Context, ContextLoader) (Spec, error) {
+			return spec, nil
+		},
+		rollback: func(_ context.Context, _ ContextLoader, got Spec) error {
+			rolledBack++
+			if len(got.FileSnapshots) != 1 {
+				t.Errorf("rollback saw %d snapshots, want 1", len(got.FileSnapshots))
+			}
+			return nil
+		},
+	}
+
+	runner := NewRunnerWithResolver(
+		model,
+		nil,
+		registry,
+		ConstantModelRefResolver([]string{"m1"}),
+		&spyLoader{},
+	)
+	if _, err := runner.Run(context.Background(), job, nil); err == nil {
+		t.Fatal("Run() error = nil, want the model failure")
+	}
+	if rolledBack != 1 {
+		t.Fatalf("rollback calls = %d, want 1", rolledBack)
+	}
+}
+
+func TestRunnerLeavesAJobWithoutSnapshotsAloneWhenTheRunFails(t *testing.T) {
+	t.Parallel()
+
+	registry, err := agent.NewToolRegistry()
+	if err != nil {
+		t.Fatalf("NewToolRegistry() error = %v", err)
+	}
+	model := &fakeModelClient{errors: []error{fmt.Errorf("model exploded")}}
+	rolledBack := 0
+	job := fakeJob{
+		jobType: "semantic_memory.extract",
+		build: func(context.Context, ContextLoader) (Spec, error) {
+			return Spec{
+				Objective:          "Inspect state.",
+				CompletionContract: "Return `status: ok` when complete.",
+			}, nil
+		},
+		rollback: func(context.Context, ContextLoader, Spec) error {
+			rolledBack++
+			return nil
+		},
+	}
+
+	runner := NewRunnerWithResolver(
+		model,
+		nil,
+		registry,
+		ConstantModelRefResolver([]string{"m1"}),
+		&spyLoader{},
+	)
+	if _, err := runner.Run(context.Background(), job, nil); err == nil {
+		t.Fatal("Run() error = nil, want the model failure")
+	}
+	if rolledBack != 0 {
+		t.Fatalf("rollback calls = %d, want 0 for a spec without snapshots", rolledBack)
+	}
+}
+
+func TestRunnerReportsARollbackFailureAlongsideTheRunFailure(t *testing.T) {
+	t.Parallel()
+
+	registry, err := agent.NewToolRegistry()
+	if err != nil {
+		t.Fatalf("NewToolRegistry() error = %v", err)
+	}
+	model := &fakeModelClient{errors: []error{fmt.Errorf("model exploded")}}
+	job := fakeJob{
+		jobType: "semantic_memory.extract",
+		build: func(context.Context, ContextLoader) (Spec, error) {
+			return Spec{
+				Objective:          "Inspect state.",
+				CompletionContract: "Return `status: ok` when complete.",
+				FileSnapshots: map[string]FileSnapshot{
+					"/memory/working/WORKING_MEMORY.md": {
+						Existed: true,
+						Content: []byte("before"),
+					},
+				},
+			}, nil
+		},
+		rollback: func(context.Context, ContextLoader, Spec) error {
+			return fmt.Errorf("restore failed")
+		},
+	}
+
+	runner := NewRunnerWithResolver(
+		model,
+		nil,
+		registry,
+		ConstantModelRefResolver([]string{"m1"}),
+		&spyLoader{},
+	)
+	_, err = runner.Run(context.Background(), job, nil)
+	if err == nil {
+		t.Fatal("Run() error = nil, want the model failure")
+	}
+	if !strings.Contains(err.Error(), "model exploded") {
+		t.Fatalf("Run() error = %v, want the model failure in it", err)
+	}
+	if !strings.Contains(err.Error(), "restore failed") {
+		t.Fatalf("Run() error = %v, want the rollback failure in it", err)
 	}
 }

@@ -785,17 +785,14 @@ func (semanticMigrationJob) ApplyResult(
 	var fold semanticMigrationArchiveFold
 	var rescan semanticMigrationRescan
 	if allMigrationFilesFinished(cursor) {
-		// Finishing the migration persists the drained state first, so the
-		// cursor records on disk what the source files already show, then
-		// folds the archive into steady state and deletes it, then jumps the
-		// extraction checkpoint to the transcript head, then requests a
-		// rescan of the semantic collection so Qdrant reflects the new chunk
-		// shapes, and only then does the cursor go away so the trigger never
-		// fires again. One ledger line names the fold and one names the jump,
-		// in that order.
-		if err := SaveSemanticMigrationCursor(ctx, loader, cursor); err != nil {
-			return ParsedResult{}, err
-		}
+		// The completion runs BEFORE the all-finished cursor is persisted, so a
+		// failure here - or a process that dies here - leaves a cursor whose
+		// last source is still open. The trigger re-fires, the drained source
+		// yields an empty chunk, and the completion is retried; persisting the
+		// finished cursor first would instead strand the migration
+		// finished-but-uncleared, with the fold, the jump and the rescan never
+		// done and no run left to do them. Folder, jump and rescan are each
+		// idempotent, so the retry writes no second ledger line.
 		fold, err = completeArchiveFold(ctx, loader, residueLines)
 		if err != nil {
 			return ParsedResult{}, err
@@ -805,6 +802,9 @@ func (semanticMigrationJob) ApplyResult(
 			return ParsedResult{}, err
 		}
 		rescan = requestSemanticMigrationRescan(ctx, loader)
+		if err := SaveSemanticMigrationCursor(ctx, loader, cursor); err != nil {
+			return ParsedResult{}, err
+		}
 		if err := ClearSemanticMigrationCursor(ctx, loader); err != nil {
 			return ParsedResult{}, err
 		}
@@ -901,6 +901,11 @@ func completeArchiveFold(
 	if fold.unresolved != "" {
 		return fold, nil
 	}
+	if fold.filesFolded == 0 {
+		// Nothing was left to fold: the archive was already gone, which is what
+		// a retried completion sees. Writing the line again would double-count.
+		return fold, nil
+	}
 	if err := appendSemanticMigrationFoldLedgerLine(ctx, loader, fold); err != nil {
 		return semanticMigrationArchiveFold{}, err
 	}
@@ -952,6 +957,7 @@ func completeSemanticMigration(
 	loader ContextLoader,
 ) (semanticMigrationCheckpointJump, error) {
 	jump := semanticMigrationCheckpointJump{}
+	writeJumpLine := true
 	seq, _, err := loader.LoadHead(ctx)
 	if err != nil {
 		jump.unresolved = fmt.Sprintf(
@@ -960,23 +966,46 @@ func completeSemanticMigration(
 		)
 	} else {
 		jump.seq = seq
-		if _, err := loader.StoreSemanticExtractionCheckpoint(
-			ctx,
-			SemanticExtractionCheckpoint{LastExtractedSeq: seq},
-		); err != nil {
+		current, err := loader.LoadSemanticExtractionCheckpoint(ctx)
+		switch {
+		case err != nil:
 			jump.unresolved = fmt.Sprintf(
-				"semantic extraction checkpoint left where it was: transcript head seq %d could not be recorded (%s)",
-				seq,
+				"semantic extraction checkpoint left where it was: the existing checkpoint could not be read (%s)",
 				err,
 			)
-		} else {
+		case current.LastExtractedSeq == seq:
+			// Already at head, which is what a retried completion sees. The
+			// jump already happened, so the run reports it as recorded and
+			// writes no second ledger line for it.
 			jump.recorded = true
+			writeJumpLine = false
+		default:
+			if _, err := loader.StoreSemanticExtractionCheckpoint(
+				ctx,
+				SemanticExtractionCheckpoint{LastExtractedSeq: seq},
+			); err != nil {
+				jump.unresolved = fmt.Sprintf(
+					"semantic extraction checkpoint left where it was: transcript head seq %d could not be recorded (%s)",
+					seq,
+					err,
+				)
+			} else {
+				jump.recorded = true
+			}
 		}
 	}
 	// The jump is ledgered whatever the checkpoint did: the migration ended
-	// either way, and the line names what the steady-state pass inherits.
-	if err := appendSemanticMigrationJumpLedgerLine(ctx, loader, jump); err != nil {
-		return semanticMigrationCheckpointJump{}, err
+	// either way, and the line names what the steady-state pass inherits. A
+	// checkpoint that was already at head writes no line, so a retried
+	// completion leaves the ledger where the first one left it.
+	if writeJumpLine {
+		if err := appendSemanticMigrationJumpLedgerLine(ctx, loader, jump); err != nil {
+			jump.unresolved = fmt.Sprintf(
+				"jump ledger line could not be written (%s)",
+				err,
+			)
+			return jump, fmt.Errorf("append migration jump ledger line: %w", err)
+		}
 	}
 	return jump, nil
 }

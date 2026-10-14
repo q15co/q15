@@ -66,7 +66,8 @@ func (s *Store) rotateWorkingLedger(now time.Time) error {
 	// Read before truncating: writeSeedLedger replaces the current file, so the
 	// raw bytes must be captured first. Renaming would be cheaper, but the
 	// archive path is quarter-based and a second rotation in the same quarter
-	// must not clobber the first archive.
+	// must not clobber the first archive: the two are appended, oldest first, so
+	// an archive stays in the order its entries were written.
 	raw, err := os.ReadFile(current)
 	if err != nil {
 		return fmt.Errorf("read ledger file %q: %w", current, err)
@@ -75,7 +76,9 @@ func (s *Store) rotateWorkingLedger(now time.Time) error {
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("read ledger archive %q: %w", target, err)
 	}
-	combined := append(raw, existing...)
+	combined := make([]byte, 0, len(existing)+len(raw))
+	combined = append(combined, existing...)
+	combined = append(combined, raw...)
 	if err := atomicfile.WriteBytes(target, combined); err != nil {
 		return fmt.Errorf("write ledger archive %q: %w", target, err)
 	}

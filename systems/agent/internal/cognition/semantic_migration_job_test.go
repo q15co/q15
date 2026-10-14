@@ -109,7 +109,7 @@ func (l *migrationJobLoader) LoadConsolidationCheckpoint(
 func (l *migrationJobLoader) LoadSemanticExtractionCheckpoint(
 	context.Context,
 ) (SemanticExtractionCheckpoint, error) {
-	return SemanticExtractionCheckpoint{}, nil
+	return l.semanticCheckpoint, nil
 }
 
 func (l *migrationJobLoader) LoadJobState(
@@ -1571,5 +1571,56 @@ func TestSemanticMigrationArchiveFoldAcceptance(t *testing.T) {
 			report.Rate,
 			memcheck.DuplicateRateLimit,
 		)
+	}
+}
+
+func TestSemanticMigrationCompletionRetryWritesNoSecondLedgerLines(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	loader := &migrationJobLoader{
+		files:              map[string]string{},
+		archiveFiles:       map[string]string{"working/archive/pre-demotion.md": "# Old\n"},
+		ledger:             "# Conversion Ledger\n",
+		headSeq:            64,
+		semanticCheckpoint: SemanticExtractionCheckpoint{LastExtractedSeq: 40},
+	}
+
+	if _, err := completeArchiveFold(ctx, loader, 3); err != nil {
+		t.Fatalf("completeArchiveFold() error = %v", err)
+	}
+	if _, err := completeSemanticMigration(ctx, loader); err != nil {
+		t.Fatalf("completeSemanticMigration() error = %v", err)
+	}
+	if got := strings.Count(loader.ledger, "archive folded"); got != 1 {
+		t.Fatalf("fold ledger lines = %d, want 1:\n%s", got, loader.ledger)
+	}
+	if got := strings.Count(loader.ledger, "migration finished"); got != 1 {
+		t.Fatalf("jump ledger lines = %d, want 1:\n%s", got, loader.ledger)
+	}
+
+	// A retried completion - the process died after the fold, or the jump ran
+	// twice - must leave the ledger exactly as the first one left it.
+	if _, err := completeArchiveFold(ctx, loader, 3); err != nil {
+		t.Fatalf("completeArchiveFold(retry) error = %v", err)
+	}
+	if _, err := completeSemanticMigration(ctx, loader); err != nil {
+		t.Fatalf("completeSemanticMigration(retry) error = %v", err)
+	}
+	if got := strings.Count(loader.ledger, "archive folded"); got != 1 {
+		t.Fatalf("fold ledger lines after retry = %d, want 1:\n%s", got, loader.ledger)
+	}
+	if got := strings.Count(loader.ledger, "migration finished"); got != 1 {
+		t.Fatalf("jump ledger lines after retry = %d, want 1:\n%s", got, loader.ledger)
+	}
+	if loader.semanticCheckpoint.LastExtractedSeq != loader.headSeq {
+		t.Fatalf(
+			"checkpoint = %d, want the head %d",
+			loader.semanticCheckpoint.LastExtractedSeq,
+			loader.headSeq,
+		)
+	}
+	if len(loader.archiveFiles) != 0 {
+		t.Fatalf("archive still present after the fold: %#v", loader.archiveFiles)
 	}
 }
