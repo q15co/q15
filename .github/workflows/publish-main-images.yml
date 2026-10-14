@@ -151,24 +151,19 @@ jobs:
           EXEC="$(jq -r '.exec' <<< "${IMPACT_JSON}")"
           PROXY="$(jq -r '.proxy' <<< "${IMPACT_JSON}")"
           WEB="$(jq -r '.web' <<< "${IMPACT_JSON}")"
-          RELEASE=false
 
-          while IFS= read -r file; do
-            [[ -n "${file}" ]] || continue
-
-            # Re-publish the synchronized release tags when their assembly
-            # logic changes, even when no runtime image needs rebuilding.
-            if [[ ${file} == ".github/workflows/publish-main-images.yml" ||
-              ${file} == "scripts/image-build-impact.sh" ||
-              ${file} == "scripts/image-build-impact-test.sh" ]]; then
-              RELEASE=true
-            fi
-          done <<< "${CHANGED_FILES}"
+          # Every verified push to main mints a release tag, even when no component
+          # image needs rebuilding. A release resolves the four images of its own
+          # commit through the immutable tag that commit published, so a commit that
+          # published nothing cannot be released at all - and a push that changes
+          # only the release path or a document would otherwise be exactly that. An
+          # unchanged component is retagged rather than rebuilt, so this costs four
+          # tag creations and no build.
+          RELEASE=true
 
           ANY=false
           if [[ "${AGENT}" == true || "${EXEC}" == true || "${PROXY}" == true || "${WEB}" == true ]]; then
             ANY=true
-            RELEASE=true
           fi
 
           echo "agent=${AGENT}"
