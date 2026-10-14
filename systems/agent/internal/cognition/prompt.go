@@ -31,6 +31,21 @@ type Spec struct {
 	Baseline            map[string]string
 	conflictGroups      [][]conflictedClaimEntry
 	conflictResolutions []conflictResolution
+	// FileSnapshots carries the pre-run on-disk bytes of every path the run
+	// may write, keyed by runtime path, so ApplyResult can roll a failed run
+	// back to a byte-identical store. A snapshot with Existed false records a
+	// path that did not exist before the run and must be deleted on rollback
+	// if the run created it.
+	FileSnapshots map[string]FileSnapshot
+}
+
+// FileSnapshot is the pre-run on-disk state of one writable path.
+type FileSnapshot struct {
+	// Existed reports whether the file existed before the run. When false,
+	// rolling back deletes the file if the run created it.
+	Existed bool
+	// Content is the raw pre-run bytes. Empty when Existed is false.
+	Content []byte
 }
 
 func renderPrompt(jobType string, spec Spec) (string, error) {

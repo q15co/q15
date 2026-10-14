@@ -209,6 +209,11 @@ func (j semanticMemoryExtractionJob) Build(
 	}
 	transcriptArtifact := renderTranscriptArtifact(recentMessages)
 
+	snapshots, err := snapshotConversionFiles(ctx, loader)
+	if err != nil {
+		return Spec{}, fmt.Errorf("snapshot conversion targets: %w", err)
+	}
+
 	return Spec{
 		Objective: renderPromptLines(
 			"This is a background maintenance job, not a user-facing reply.",
@@ -331,6 +336,7 @@ func (j semanticMemoryExtractionJob) Build(
 					"- Supersession (the new claim is the acknowledged replacement): write the new claim as active, delete the old claim, and append a superseded ledger record targeting the old claim ID with the replacement ID in its reason. Every removed durable claim needs a superseded, retracted, or resolved ledger record targeting its old ID and explaining the reason.",
 					"- Claim format: `- [c-YYYY-NNNN] <self-contained statement>` followed by an indented `{status: active|conflicted, kind: fact|inference|preference, confidence: confirmed|likely|uncertain, src: t<seq>[, t<seq>], rev: YYYY-MM-DD}` line. Claim IDs are globally unique and never reused, including IDs recorded in archived ledgers. Preserve existing source markers when revising an existing claim.",
 					"- Store durable claims only in the canonical semantic roots or direct `semantic/topics/<slug>.md` files. Other topic extensions are not indexed by semantic retrieval and fail claim validation.",
+					"- Retraction: delete an explicitly withdrawn claim and append a retracted ledger record targeting its old ID with the reason. The transcript retains the evidence.",
 					"- Open-loop format: `- [l-YYYY-NNNN] <intention>` followed by an indented `{trigger: date:YYYY-MM-DD | event:\"<description>\" | next-session, owner: agent|user, src: t<seq>}` line.",
 					"- Ledger format: one line per exit, `YYYY-MM-DDTHH:MMZ run=semantic_memory.extract src=t<a>..t<b> <outcome> \"<working-memory item>\" → <claim-or-loop-id> (<file>)`. For a drop, omit the target and give the reason in parentheses.",
 					"- Ledger descriptions must preserve the complete removed working-memory block, including continuation text, code fences, and HTML comments, with whitespace collapsed to one line and only its leading list marker omitted. Standalone prose and noncanonical headings also require an exit record; only canonical working-memory headings and the exact `- None` scaffold are exempt.",
@@ -380,6 +386,7 @@ func (j semanticMemoryExtractionJob) Build(
 		ToolCallPolicy:      semanticConversionPolicy(),
 		conflictGroups:      conflictGroups,
 		conflictResolutions: resolutions,
+		FileSnapshots:       snapshots,
 	}, nil
 }
 
@@ -417,20 +424,30 @@ func (j semanticMemoryExtractionJob) ApplyResult(
 		return ParsedResult{}, fmt.Errorf("context loader is required")
 	}
 	if err := checkSemanticCaps(ctx, loader, output.Messages); err != nil {
-		return ParsedResult{}, err
+		return ParsedResult{}, rollbackFailedRun(
+			ctx,
+			loader,
+			output.Spec.FileSnapshots,
+			err,
+		)
 	}
 	if err := checkSemanticClaims(ctx, loader, output.Spec.Baseline, successfulWritePaths(output.Messages)); err != nil {
-		return ParsedResult{}, err
+		return ParsedResult{}, rollbackFailedRun(ctx, loader, output.Spec.FileSnapshots, err)
 	}
 	if err := checkWorkingFileBudgets(ctx, loader, j.budgets); err != nil {
-		return ParsedResult{}, err
+		return ParsedResult{}, rollbackFailedRun(ctx, loader, output.Spec.FileSnapshots, err)
 	}
 	removed, appended, err := checkLedgerCompleteness(ctx, loader, output.Spec.Baseline)
 	if err != nil {
-		return ParsedResult{}, err
+		return ParsedResult{}, rollbackFailedRun(
+			ctx,
+			loader,
+			output.Spec.FileSnapshots,
+			err,
+		)
 	}
 	if err := checkConflictResolutions(ctx, loader, output.Spec); err != nil {
-		return ParsedResult{}, err
+		return ParsedResult{}, rollbackFailedRun(ctx, loader, output.Spec.FileSnapshots, err)
 	}
 
 	metadata := map[string]string{

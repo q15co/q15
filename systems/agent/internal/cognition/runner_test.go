@@ -160,6 +160,18 @@ func (s *spyLoader) LoadWorkingLedger(context.Context) (string, error) {
 	return "", nil
 }
 
+func (s *spyLoader) ReadFileBytes(context.Context, string) ([]byte, bool, error) {
+	return nil, false, nil
+}
+
+func (s *spyLoader) WriteFileBytes(context.Context, string, []byte) error {
+	return nil
+}
+
+func (s *spyLoader) DeleteFile(context.Context, string) error {
+	return nil
+}
+
 func (s *spyLoader) StoreCognitionArtifact(
 	context.Context,
 	Artifact,
@@ -456,10 +468,6 @@ func TestRunnerForwardsAllowedToolsAndLoaderToApplyResult(t *testing.T) {
 	if model.callTools[0][0].Name != "web_fetch" {
 		t.Fatalf("tool name = %q, want web_fetch", model.callTools[0][0].Name)
 	}
-}
-
-func (s *spyLoader) ReadFileBytes(context.Context, string) ([]byte, bool, error) {
-	return nil, false, nil
 }
 
 func (s *spyLoader) LoadConversionLedgerHistory(context.Context) (string, error) {

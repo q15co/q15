@@ -142,6 +142,14 @@ func (s *runtimeStore) LoadConversionLedgerHistory(ctx context.Context) (string,
 	return s.memory.LoadConversionLedgerHistory(ctx)
 }
 
+func (s *runtimeStore) WriteFileBytes(ctx context.Context, relativePath string, data []byte) error {
+	return s.memory.WriteFileBytes(ctx, relativePath, data)
+}
+
+func (s *runtimeStore) DeleteFile(ctx context.Context, relativePath string) error {
+	return s.memory.DeleteFile(ctx, relativePath)
+}
+
 func (s *runtimeStore) LoadSkillCatalog(ctx context.Context) (agent.SkillCatalog, error) {
 	_ = ctx
 	if s.skills == nil {

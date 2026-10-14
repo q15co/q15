@@ -105,6 +105,18 @@ func (s *spyRuntimeStore) LoadWorkingLedger(context.Context) (string, error) {
 	return "", nil
 }
 
+func (s *spyRuntimeStore) ReadFileBytes(context.Context, string) ([]byte, bool, error) {
+	return nil, false, nil
+}
+
+func (s *spyRuntimeStore) WriteFileBytes(context.Context, string, []byte) error {
+	return nil
+}
+
+func (s *spyRuntimeStore) DeleteFile(context.Context, string) error {
+	return nil
+}
+
 func (s *spyRuntimeStore) StoreCognitionArtifact(
 	context.Context,
 	cognition.Artifact,
@@ -336,10 +348,6 @@ func (f *fakeMemoryCommitter) CommitPaths(context.Context, string, string, []str
 
 func (f *fakeMemoryCommitter) ResetPaths(context.Context, string, []string) error {
 	return nil
-}
-
-func (s *spyRuntimeStore) ReadFileBytes(context.Context, string) ([]byte, bool, error) {
-	return nil, false, nil
 }
 
 func (s *spyRuntimeStore) LoadConversionLedgerHistory(context.Context) (string, error) {
