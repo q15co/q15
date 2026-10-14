@@ -137,6 +137,25 @@ func (s *runtimeStore) AppendWorkingLedger(ctx context.Context, line string) err
 	return s.memory.AppendWorkingLedger(ctx, line)
 }
 
+func (s *runtimeStore) ReadFileBytes(
+	ctx context.Context,
+	relativePath string,
+) ([]byte, bool, error) {
+	return s.memory.ReadFileBytes(ctx, relativePath)
+}
+
+func (s *runtimeStore) WriteFileBytes(
+	ctx context.Context,
+	relativePath string,
+	data []byte,
+) error {
+	return s.memory.WriteFileBytes(ctx, relativePath, data)
+}
+
+func (s *runtimeStore) DeleteFile(ctx context.Context, relativePath string) error {
+	return s.memory.DeleteFile(ctx, relativePath)
+}
+
 func (s *runtimeStore) LoadSkillCatalog(ctx context.Context) (agent.SkillCatalog, error) {
 	_ = ctx
 	if s.skills == nil {

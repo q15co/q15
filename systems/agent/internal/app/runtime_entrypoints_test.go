@@ -109,6 +109,18 @@ func (s *spyRuntimeStore) AppendWorkingLedger(context.Context, string) error {
 	return nil
 }
 
+func (s *spyRuntimeStore) ReadFileBytes(context.Context, string) ([]byte, bool, error) {
+	return nil, false, nil
+}
+
+func (s *spyRuntimeStore) WriteFileBytes(context.Context, string, []byte) error {
+	return nil
+}
+
+func (s *spyRuntimeStore) DeleteFile(context.Context, string) error {
+	return nil
+}
+
 func (s *spyRuntimeStore) StoreCognitionArtifact(
 	context.Context,
 	cognition.Artifact,

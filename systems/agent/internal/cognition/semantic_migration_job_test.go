@@ -165,6 +165,34 @@ func (l *migrationJobLoader) AppendWorkingLedger(_ context.Context, line string)
 	return nil
 }
 
+func (l *migrationJobLoader) ReadFileBytes(
+	_ context.Context,
+	relativePath string,
+) ([]byte, bool, error) {
+	if data, ok := l.files[relativePath]; ok {
+		return []byte(data), true, nil
+	}
+	if data, ok := l.topics[relativePath]; ok {
+		return []byte(data), true, nil
+	}
+	return nil, false, nil
+}
+
+func (l *migrationJobLoader) WriteFileBytes(
+	_ context.Context,
+	relativePath string,
+	data []byte,
+) error {
+	l.files[relativePath] = string(data)
+	return nil
+}
+
+func (l *migrationJobLoader) DeleteFile(_ context.Context, relativePath string) error {
+	delete(l.files, relativePath)
+	delete(l.topics, relativePath)
+	return nil
+}
+
 // StoreSemanticExtractionCheckpoint records the checkpoint the job set, or
 // fails with the configured error so the unresolved branch is testable.
 func (l *migrationJobLoader) StoreSemanticExtractionCheckpoint(

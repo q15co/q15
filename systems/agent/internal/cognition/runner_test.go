@@ -164,6 +164,18 @@ func (s *spyLoader) AppendWorkingLedger(context.Context, string) error {
 	return nil
 }
 
+func (s *spyLoader) ReadFileBytes(context.Context, string) ([]byte, bool, error) {
+	return nil, false, nil
+}
+
+func (s *spyLoader) WriteFileBytes(context.Context, string, []byte) error {
+	return nil
+}
+
+func (s *spyLoader) DeleteFile(context.Context, string) error {
+	return nil
+}
+
 func (s *spyLoader) StoreCognitionArtifact(
 	context.Context,
 	Artifact,
