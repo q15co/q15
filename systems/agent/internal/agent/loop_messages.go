@@ -58,6 +58,15 @@ func injectWorkingMemory(working WorkingMemory) (conversation.Message, bool) {
 	)), true
 }
 
+func injectOpenLoops(text string) (conversation.Message, bool) {
+	content := strings.TrimSpace(text)
+	if content == "" {
+		return conversation.Message{}, false
+	}
+
+	return systemMessage(RenderPromptElement("open_loops", nil, content)), true
+}
+
 func injectSkillCatalog(catalog SkillCatalog) (conversation.Message, bool) {
 	if len(catalog.Entries) == 0 && len(catalog.Warnings) == 0 {
 		return conversation.Message{}, false

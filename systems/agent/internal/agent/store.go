@@ -49,6 +49,12 @@ type WorkingMemoryStore interface {
 	LoadWorkingMemory(ctx context.Context) (WorkingMemory, error)
 }
 
+// OpenLoopsStore can provide the prompt-visible prospective open-loops text for
+// each reply.
+type OpenLoopsStore interface {
+	LoadOpenLoops(ctx context.Context) (string, error)
+}
+
 // SemanticMemory holds canonical durable extracted memory files that are
 // available to cognition jobs but are not auto-injected into reply prompts.
 type SemanticMemory struct {
