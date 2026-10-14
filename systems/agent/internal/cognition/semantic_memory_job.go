@@ -122,6 +122,15 @@ func (j semanticMemoryExtractionJob) Build(
 	if err != nil {
 		return Spec{}, fmt.Errorf("load semantic extraction checkpoint: %w", err)
 	}
+	windowTurns, err := degradedWindowTurns(
+		ctx,
+		loader,
+		semanticMemoryExtractionJobType,
+		semanticMemoryWindowTurns,
+	)
+	if err != nil {
+		return Spec{}, fmt.Errorf("load semantic extraction job state: %w", err)
+	}
 	var recentMessages []conversation.Message
 	var transcriptStatus string
 	windowEndSeq := int64(0)
@@ -129,7 +138,7 @@ func (j semanticMemoryExtractionJob) Build(
 		window, loadErr := loader.LoadMessagesSinceSeqWindow(
 			ctx,
 			semanticCheckpoint.LastExtractedSeq,
-			semanticMemoryWindowTurns,
+			windowTurns,
 		)
 		if loadErr != nil {
 			return Spec{}, fmt.Errorf(

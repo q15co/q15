@@ -30,6 +30,7 @@ type semanticMemoryJobLoader struct {
 	semanticSizes           map[string]int64
 	openLoops               string
 	ledger                  string
+	jobState                JobState
 	rawFiles                map[string]string
 	ledgerHistory           string
 }
@@ -149,6 +150,10 @@ func (l *semanticMemoryJobLoader) StoreCognitionArtifact(
 	Artifact,
 ) error {
 	return nil
+}
+
+func (l *semanticMemoryJobLoader) LoadJobState(context.Context, string) (JobState, error) {
+	return l.jobState, nil
 }
 
 func TestSemanticMemoryExtractionRegistration(t *testing.T) {
@@ -467,6 +472,70 @@ func TestSemanticMemoryExtractionBuildWindowsCheckpointReplay(t *testing.T) {
 		if !contains(prompt, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, prompt)
 		}
+	}
+}
+
+func TestSemanticMemoryExtractionHalvesWindowAfterRepeatedFailures(t *testing.T) {
+	t.Parallel()
+
+	semantic := agent.SemanticMemory{
+		Files: []agent.SemanticMemoryFile{
+			{
+				RelativePath: semanticFactsRelativePath,
+				Content: "# Semantic Facts\n\n## Confirmed Facts\n\n- None\n\n" +
+					"## Grounded Inferences\n\n- None\n",
+			},
+			{
+				RelativePath: semanticPreferencesRelativePath,
+				Content: "# Semantic Preferences\n\n## User Preferences\n\n- None\n\n" +
+					"## Collaboration Preferences\n\n- None\n",
+			},
+			{
+				RelativePath: semanticProjectsRelativePath,
+				Content: "# Semantic Projects\n\n## Active Projects\n\n- None\n\n" +
+					"## Durable Project Knowledge\n\n- None\n",
+			},
+		},
+	}
+	working := agent.WorkingMemory{
+		RelativePath: workingMemoryRelativePath,
+		Content:      "# Working Memory\n\n## Active Tasks\n\n- None\n",
+	}
+
+	build := func(jobState JobState) (*semanticMemoryJobLoader, error) {
+		loader := &semanticMemoryJobLoader{
+			semantic:   semantic,
+			working:    working,
+			checkpoint: SemanticExtractionCheckpoint{LastExtractedSeq: 40},
+			jobState:   jobState,
+		}
+		_, err := NewSemanticMemoryExtractionRegistration(0).NewJob().Build(
+			context.Background(),
+			loader,
+		)
+		return loader, err
+	}
+
+	// Three consecutive failures halve the conversion pass's window for the
+	// next run.
+	loader, err := build(JobState{ConsecutiveFailures: stallDegradedFailures})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if got, want := loader.loadWindowTurns, semanticMemoryWindowTurns/2; got != want {
+		t.Fatalf("degraded window maxTurns = %d, want %d", got, want)
+	}
+	if got, want := loader.loadMessagesSinceSeqSeq, int64(40); got != want {
+		t.Fatalf("degraded window afterSeq = %d, want %d", got, want)
+	}
+
+	// Below the degradation threshold the window stays whole.
+	loader, err = build(JobState{ConsecutiveFailures: stallDegradedFailures - 1})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if got, want := loader.loadWindowTurns, semanticMemoryWindowTurns; got != want {
+		t.Fatalf("undegraded window maxTurns = %d, want %d", got, want)
 	}
 }
 

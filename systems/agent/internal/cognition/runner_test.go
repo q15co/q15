@@ -163,6 +163,10 @@ func (s *spyLoader) StoreCognitionArtifact(
 	return nil
 }
 
+func (s *spyLoader) LoadJobState(context.Context, string) (JobState, error) {
+	return JobState{}, nil
+}
+
 func (s *spyLoader) AppendTurn(context.Context, []conversation.Message) error {
 	s.appendCalls++
 	return nil

@@ -27,6 +27,7 @@ type workingMemoryJobLoader struct {
 	windowRemaining         int
 	loadCheckpointCalls     int
 	loadArtifacts           []string
+	jobState                JobState
 }
 
 func (l *workingMemoryJobLoader) LoadCoreMemory(context.Context) (agent.CoreMemory, error) {
@@ -126,6 +127,10 @@ func (l *workingMemoryJobLoader) StoreCognitionArtifact(
 	Artifact,
 ) error {
 	return nil
+}
+
+func (l *workingMemoryJobLoader) LoadJobState(context.Context, string) (JobState, error) {
+	return l.jobState, nil
 }
 
 func toolCallResult(id, name, arguments string) agent.ModelClientResult {
@@ -370,6 +375,48 @@ func TestWorkingMemoryConsolidationBuildUsesConsolidationCheckpointWindow(t *tes
 	}
 	if contains(prompt, "capped at 16 turns") {
 		t.Fatalf("prompt unexpectedly described checkpoint replay as capped:\n%s", prompt)
+	}
+}
+
+func TestWorkingMemoryConsolidationHalvesWindowAfterRepeatedFailures(t *testing.T) {
+	t.Parallel()
+
+	build := func(jobState JobState) (*workingMemoryJobLoader, error) {
+		loader := &workingMemoryJobLoader{
+			working: agent.WorkingMemory{
+				RelativePath: workingMemoryRelativePath,
+				Content: "# Working Memory\n\n## Active Tasks\n\n" +
+					"- Continue the windowed consolidation.\n",
+			},
+			checkpoint: ConsolidationCheckpoint{LastConsolidatedSeq: 40},
+			jobState:   jobState,
+		}
+		_, err := NewWorkingMemoryConsolidationRegistration().NewJob().Build(
+			context.Background(),
+			loader,
+		)
+		return loader, err
+	}
+
+	// Three consecutive failures halve the window for the next run.
+	loader, err := build(JobState{ConsecutiveFailures: stallDegradedFailures})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if got, want := loader.loadWindowTurns, workingMemoryWindowTurns/2; got != want {
+		t.Fatalf("degraded LoadMessagesSinceSeqWindow maxTurns = %d, want %d", got, want)
+	}
+	if got, want := loader.loadMessagesSinceSeqSeq, int64(40); got != want {
+		t.Fatalf("degraded window afterSeq = %d, want %d", got, want)
+	}
+
+	// Below the degradation threshold the window stays whole.
+	loader, err = build(JobState{ConsecutiveFailures: stallDegradedFailures - 1})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if got, want := loader.loadWindowTurns, workingMemoryWindowTurns; got != want {
+		t.Fatalf("undegraded LoadMessagesSinceSeqWindow maxTurns = %d, want %d", got, want)
 	}
 }
 
