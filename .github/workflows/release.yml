@@ -1,6 +1,8 @@
-# One workflow publishes the single release binary: the q15 CLI, which carries
-# the management verbs, the configuration truth and the auth verbs. The tag is
-# the version, and there is only one artefact to keep in step with it.
+# One workflow publishes a release: the single binary, the q15 CLI, which carries
+# the management verbs, the configuration truth and the auth verbs, and the four
+# runtime images of the same commit, aliased under the release tag. The tag is the
+# version, and it names both halves, because the units a released CLI renders pin
+# the images at it.
 name: Release
 
 on:
@@ -74,9 +76,128 @@ jobs:
           version: "~> v2"
           args: check
 
+  # A rendered unit pins the four runtime images at the release tag, and a unit that
+  # named a tag the registry does not have would start nothing. The images are
+  # published by the push-to-main workflow under their own immutable DateVer tags,
+  # so this job finds what this commit published, aliases it under the release tag,
+  # and verifies all four. A release whose images cannot be resolved fails here
+  # rather than shipping a binary that renders four references nobody can pull.
+  pin-images:
+    name: Pin the release's images
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    env:
+      AGENT_IMAGE: ghcr.io/q15co/q15-agent
+      EXEC_IMAGE: ghcr.io/q15co/q15-exec
+      PROXY_IMAGE: ghcr.io/q15co/q15-proxy
+      WEB_IMAGE: ghcr.io/q15co/q15-web
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Alias the release tag onto the images this commit published
+        id: pin
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          release_version="${RELEASE_TAG#v}"
+          [[ "${release_version}" =~ ^[a-z0-9][a-z0-9._-]{0,127}$ ]] || {
+            echo "${RELEASE_TAG} does not leave a usable image tag behind" >&2
+            exit 1
+          }
+
+          published_release=""
+          {
+            echo "| Component | Published as | Source digest | Aliased to |"
+            echo "| --- | --- | --- | --- |"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+          for specification in \
+            "agent|${AGENT_IMAGE}" \
+            "exec|${EXEC_IMAGE}" \
+            "proxy|${PROXY_IMAGE}" \
+            "web|${WEB_IMAGE}"; do
+            IFS='|' read -r component image <<< "${specification}"
+
+            published="$(./scripts/find-published-index.sh "${image}" "${GITHUB_SHA}")"
+            read -r published_tag published_digest <<< "${published}"
+            echo "q15-${component}: ${published_tag} ${published_digest}"
+
+            # One release is one published image release. Four lookups that each
+            # happened to match must not assemble a set that was never published
+            # together, and a partially published release is exactly how that
+            # would happen.
+            if [[ -z "${published_release}" ]]; then
+              published_release="${published_tag}"
+            elif [[ "${published_release}" != "${published_tag}" ]]; then
+              echo "q15-${component} was published as ${published_tag}, not ${published_release}, so this commit's images are not one release" >&2
+              exit 1
+            fi
+
+            # The operation the publish workflow already performs for its own
+            # immutable release tag: a new index over an already-published digest,
+            # carrying the annotations a reader resolves a release from.
+            docker buildx imagetools create \
+              --tag "${image}:${release_version}" \
+              --annotation "index:org.opencontainers.image.source=https://github.com/q15co/q15" \
+              --annotation "index:io.q15.release.version=${release_version}" \
+              --annotation "index:io.q15.release.revision=${GITHUB_SHA}" \
+              --annotation "index:io.q15.release.component=${component}" \
+              --annotation "index:io.q15.release.source-digest=${published_digest}" \
+              "${image}@${published_digest}"
+
+            echo "| q15-${component} | \`${published_tag}\` | \`${published_digest}\` | \`${release_version}\` |" \
+              >> "${GITHUB_STEP_SUMMARY}"
+          done
+
+          echo "release-version=${release_version}" >> "${GITHUB_OUTPUT}"
+
+      - name: Verify the four release tags name this commit
+        env:
+          RELEASE_VERSION: ${{ steps.pin.outputs.release-version }}
+        run: |
+          set -euo pipefail
+          for image in "${AGENT_IMAGE}" "${EXEC_IMAGE}" "${PROXY_IMAGE}" "${WEB_IMAGE}"; do
+            docker buildx imagetools inspect --raw "${image}:${RELEASE_VERSION}" \
+              > /tmp/release-index.json
+            # The same shape the publish workflow insists on before it moves
+            # `stable`: an OCI index for this version and this commit, with both
+            # platforms present, so a release is never aliased to a partial or
+            # single-architecture set.
+            jq -e \
+              --arg version "${RELEASE_VERSION}" \
+              --arg revision "${GITHUB_SHA}" '
+                .schemaVersion == 2 and
+                .mediaType == "application/vnd.oci.image.index.v1+json" and
+                .annotations["io.q15.release.version"] == $version and
+                .annotations["io.q15.release.revision"] == $revision and
+                ([.manifests[] |
+                  select(.platform.os == "linux") |
+                  .platform.architecture
+                ] | unique | sort) == ["amd64", "arm64"]
+              ' /tmp/release-index.json >/dev/null
+            docker buildx imagetools inspect "${image}:${RELEASE_VERSION}"
+          done
+
   release-binary:
     name: Release q15
-    needs: verify
+    needs: [verify, pin-images]
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
