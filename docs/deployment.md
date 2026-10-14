@@ -10,17 +10,18 @@ Runtime services are published as OCI images to GHCR on verified pushes to `main
 - `ghcr.io/q15co/q15-agent`
 - `ghcr.io/q15co/q15-exec`
 - `ghcr.io/q15co/q15-proxy`
+- `ghcr.io/q15co/q15-web`
 
 Published runtime tags:
 
 - `main` tracks the latest successful component build.
-- `stable` tracks the latest verified three-image release.
+- `stable` tracks the latest verified four-image release.
 - `YYYY.MM.DD.<run-number>` identifies one immutable release, for example `2026.09.05.164`.
 
-The release job publishes the same DateVer on `q15-agent`, `q15-exec`, and `q15-proxy`, verifies all
-three multi-platform indexes, and then moves each package's `stable` tag to that release. Unchanged
-services reuse their existing image index and are retagged without rebuilding. Deployments pull
-`stable` only after the publish workflow succeeds.
+The release job publishes the same DateVer on `q15-agent`, `q15-exec`, `q15-proxy`, and `q15-web`,
+verifies all four multi-platform indexes, and then moves each package's `stable` tag to that
+release. Unchanged services reuse their existing image index and are retagged without rebuilding.
+Deployments pull `stable` only after the publish workflow succeeds.
 
 The build dependency graph is:
 
@@ -31,18 +32,28 @@ The build dependency graph is:
 - Docker build-context policy changes rebuild all three services.
 
 This separates component build identity from stack compatibility: `main` is a moving integration
-tag, while a synchronized DateVer identifies one compatible three-image deployment.
+tag, while a synchronized DateVer identifies one compatible four-image deployment.
 
 GHCR runtime images are intended to be publicly pullable without registry auth for ordinary
-self-hosted consumption. Maintain the GitHub package visibility for `q15-agent`, `q15-exec`, and
-`q15-proxy` as public outside this repo.
+self-hosted consumption. Maintain the GitHub package visibility for `q15-agent`, `q15-exec`,
+`q15-proxy`, and `q15-web` as public outside this repo.
 
 The `q15` management binary is published as GitHub Release archives on pushed tags that match `v*`,
-after the tagged commit passes verification and is confirmed reachable from `main`. The assets are:
+after the tagged commit passes verification and is confirmed reachable from `main`. The tag is the
+version the binary reports, for example `v2026.10.14-d84f422`. The assets are:
 
 - `q15_<version>_linux_amd64.tar.gz`
 - `q15_<version>_linux_arm64.tar.gz`
 - `checksums.txt`
+
+That same tag names the runtime images. A released CLI renders Quadlet units whose `Image=` lines
+pin all four images at the release tag, because a restarted service must not silently change version
+under the operator. The release job therefore aliases the immutable images the tagged commit
+published under the release tag, and verifies all four before the binary is published; a release
+whose images cannot be resolved fails instead of shipping a binary that renders references nobody
+can pull. Cut a `v*` tag from a `main` commit whose publish run succeeded, so the images it names
+exist. Both halves of a release are then named the same way: `q15 version` reports the tag, and the
+rendered units pull the images at it.
 
 ## q15
 
