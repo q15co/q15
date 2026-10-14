@@ -158,6 +158,26 @@ func newEmbeddingService(
 	return embed.NewService(settings, state, vectors, embedder), nil
 }
 
+// buildSemanticRescan returns the func the runtime store hands to the
+// semantic migration's completion pass, or nil when embeddings are disabled.
+// The rescan runs through the same background sync-job machinery the embed
+// sync tool uses, as a full re-index of the semantic collection, and it is
+// started asynchronously: the migration never waits on it, and a start that
+// fails (for example a sync already in flight) surfaces as the func's error.
+func buildSemanticRescan(service *embed.Service) func(ctx context.Context) error {
+	if service == nil {
+		return nil
+	}
+	jobs := embed.NewSyncJobManager(service)
+	return func(ctx context.Context) error {
+		_, err := jobs.Start(ctx, embed.SyncOptions{
+			Collection: embed.CollectionSemantic,
+			Full:       true,
+		})
+		return err
+	}
+}
+
 // subagentSkillResolver adapts the skills.Manager to the subagent package's
 // SkillResolver interface. It lives in app, where both packages are visible,
 // to avoid an import cycle between internal/skills and internal/tools/subagent.

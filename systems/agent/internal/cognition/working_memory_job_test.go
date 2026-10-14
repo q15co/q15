@@ -196,6 +196,10 @@ func (l *workingMemoryJobLoader) DeleteWorkingArchive(context.Context) (int, err
 	return 0, nil
 }
 
+func (l *workingMemoryJobLoader) RequestSemanticRescan(context.Context) error {
+	return nil
+}
+
 func (l *workingMemoryJobLoader) LoadJobState(context.Context, string) (JobState, error) {
 	return l.jobState, nil
 }

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -15,6 +16,12 @@ import (
 type runtimeStore struct {
 	memory *memory.Store
 	skills *q15skills.Manager
+
+	// requestSemanticRescan starts a full re-index of the semantic memory
+	// collection. It is injected by the composition root, where the embedding
+	// service lives; the migration's cognition job reaches it through the
+	// ContextLoader interface and must not fail the run when it is absent.
+	requestSemanticRescan func(ctx context.Context) error
 
 	mu              sync.Mutex
 	appendObservers []func()
@@ -225,6 +232,17 @@ func (s *runtimeStore) LoadSemanticSourceContent(
 
 func (s *runtimeStore) DeleteWorkingArchive(ctx context.Context) (int, error) {
 	return s.memory.DeleteWorkingArchive(ctx)
+}
+
+// RequestSemanticRescan starts a full re-index of the semantic memory
+// collection through the injected rescan func. A store without one wired
+// reports that the embedding service is not configured; the migration treats
+// that as a finished-but-unresolved outcome rather than a failure.
+func (s *runtimeStore) RequestSemanticRescan(ctx context.Context) error {
+	if s.requestSemanticRescan == nil {
+		return fmt.Errorf("embedding service is not configured")
+	}
+	return s.requestSemanticRescan(ctx)
 }
 
 func (s *runtimeStore) LoadHead(ctx context.Context) (int64, time.Time, error) {

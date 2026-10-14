@@ -783,13 +783,16 @@ func (semanticMigrationJob) ApplyResult(
 	cursor.Files[target] = entry
 	var jump semanticMigrationCheckpointJump
 	var fold semanticMigrationArchiveFold
+	var rescan semanticMigrationRescan
 	if allMigrationFilesFinished(cursor) {
 		// Finishing the migration persists the drained state first, so the
 		// cursor records on disk what the source files already show, then
 		// folds the archive into steady state and deletes it, then jumps the
-		// extraction checkpoint to the transcript head, and only then does the
-		// cursor go away so the trigger never fires again. One ledger line
-		// names the fold and one names the jump, in that order.
+		// extraction checkpoint to the transcript head, then requests a
+		// rescan of the semantic collection so Qdrant reflects the new chunk
+		// shapes, and only then does the cursor go away so the trigger never
+		// fires again. One ledger line names the fold and one names the jump,
+		// in that order.
 		if err := SaveSemanticMigrationCursor(ctx, loader, cursor); err != nil {
 			return ParsedResult{}, err
 		}
@@ -801,6 +804,7 @@ func (semanticMigrationJob) ApplyResult(
 		if err != nil {
 			return ParsedResult{}, err
 		}
+		rescan = requestSemanticMigrationRescan(ctx, loader)
 		if err := ClearSemanticMigrationCursor(ctx, loader); err != nil {
 			return ParsedResult{}, err
 		}
@@ -809,20 +813,21 @@ func (semanticMigrationJob) ApplyResult(
 	}
 
 	metadata := map[string]string{
-		"source_file":              target,
-		"chunk_offset":             strconv.FormatInt(chunk.Offset, 10),
-		"chunk_bytes":              strconv.FormatInt(int64(len(chunk.Content)), 10),
-		"source_bytes_drained":     strconv.FormatInt(removedBytes, 10),
-		"source_offset_after":      strconv.FormatInt(newOffset, 10),
-		"source_size_after":        strconv.FormatInt(newSize, 10),
-		"source_lines_drained":     strconv.Itoa(len(drained)),
-		"ledger_lines_appended":    strconv.Itoa(len(refs)),
-		"source_finished":          strconv.FormatBool(finished),
-		"cursor_cleared":           strconv.FormatBool(allMigrationFilesFinished(cursor)),
-		"archive_files_folded":     strconv.Itoa(fold.filesFolded),
-		"archive_residue_lines":    strconv.Itoa(fold.residueLines),
-		"checkpoint_jump_seq":      strconv.FormatInt(jump.seq, 10),
-		"checkpoint_jump_recorded": strconv.FormatBool(jump.recorded),
+		"source_file":               target,
+		"chunk_offset":              strconv.FormatInt(chunk.Offset, 10),
+		"chunk_bytes":               strconv.FormatInt(int64(len(chunk.Content)), 10),
+		"source_bytes_drained":      strconv.FormatInt(removedBytes, 10),
+		"source_offset_after":       strconv.FormatInt(newOffset, 10),
+		"source_size_after":         strconv.FormatInt(newSize, 10),
+		"source_lines_drained":      strconv.Itoa(len(drained)),
+		"ledger_lines_appended":     strconv.Itoa(len(refs)),
+		"source_finished":           strconv.FormatBool(finished),
+		"cursor_cleared":            strconv.FormatBool(allMigrationFilesFinished(cursor)),
+		"archive_files_folded":      strconv.Itoa(fold.filesFolded),
+		"archive_residue_lines":     strconv.Itoa(fold.residueLines),
+		"checkpoint_jump_seq":       strconv.FormatInt(jump.seq, 10),
+		"checkpoint_jump_recorded":  strconv.FormatBool(jump.recorded),
+		"semantic_rescan_requested": strconv.FormatBool(rescan.requested),
 	}
 	summary := summarizeMigrationNotes(output.FinalText)
 	if fold.unresolved != "" {
@@ -830,6 +835,9 @@ func (semanticMigrationJob) ApplyResult(
 	}
 	if jump.unresolved != "" {
 		summary = fmt.Sprintf("%s; unresolved: %s", summary, jump.unresolved)
+	}
+	if rescan.unresolved != "" {
+		summary = fmt.Sprintf("%s; unresolved: %s", summary, rescan.unresolved)
 	}
 	return ParsedResult{
 		Summary:  summary,
@@ -855,6 +863,14 @@ type semanticMigrationArchiveFold struct {
 	filesFolded  int
 	residueLines int
 	unresolved   string
+}
+
+// semanticMigrationRescan records what the migration's completion pass did
+// about the embed rescan of the semantic collection, so the run summary
+// reports an honest outcome: the rescan was started, or why it was not.
+type semanticMigrationRescan struct {
+	requested  bool
+	unresolved string
 }
 
 // completeArchiveFold deletes the staged archive residue and the whole
@@ -990,6 +1006,26 @@ func appendSemanticMigrationJumpLedgerLine(
 		)
 	}
 	return loader.AppendWorkingLedger(ctx, line)
+}
+
+// requestSemanticMigrationRescan asks the runtime to start a full re-index of
+// the semantic collection so Qdrant reflects the chunk shapes the migration
+// produced. The rescan is asynchronous and the migration does not wait on it;
+// a loader that cannot start it (for example no embedding service configured,
+// or a sync already in flight) does not fail the run — the migration is
+// finished either way and no content depends on the index, so the summary
+// reports the request as unresolved.
+func requestSemanticMigrationRescan(
+	ctx context.Context,
+	loader ContextLoader,
+) semanticMigrationRescan {
+	rescan := semanticMigrationRescan{}
+	if err := loader.RequestSemanticRescan(ctx); err != nil {
+		rescan.unresolved = fmt.Sprintf("semantic rescan not started (%s)", err)
+	} else {
+		rescan.requested = true
+	}
+	return rescan
 }
 
 // migrationLedgerTimestamp renders the ledger line prefix the conversion

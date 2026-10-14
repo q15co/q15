@@ -115,6 +115,12 @@ type ContextLoader interface {
 	// folded away. A missing directory counts as zero files, so finishing a
 	// migration with no archive is a no-op.
 	DeleteWorkingArchive(ctx context.Context) (int, error)
+	// RequestSemanticRescan asks the runtime to re-index the semantic memory
+	// collection so the vector store reflects the chunk shapes the migration
+	// just produced. The migration cannot reach the embedding service itself,
+	// so the request is handed to the runtime, which starts the rescan
+	// asynchronously and does not fail the migration when it cannot.
+	RequestSemanticRescan(ctx context.Context) error
 }
 
 // Artifact is one job-owned persisted artifact stored under

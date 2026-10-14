@@ -478,6 +478,10 @@ func (ruleContextLoader) LoadWorkingLedger(context.Context) (string, error) {
 	return "", nil
 }
 
+func (ruleContextLoader) RequestSemanticRescan(context.Context) error {
+	return nil
+}
+
 var _ cognition.ContextLoader = ruleContextLoader{}
 
 // overbudgetRuleEvaluator returns the working_memory_overbudget state rule of

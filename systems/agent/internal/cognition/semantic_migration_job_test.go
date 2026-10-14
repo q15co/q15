@@ -32,14 +32,17 @@ var migrationChunkBodyPattern = regexp.MustCompile(
 // contract. Only the accessors the migration touches return meaningful
 // data; the rest return zero values.
 type migrationJobLoader struct {
-	files              map[string]string
-	topics             map[string]string
-	archiveFiles       map[string]string
-	ledger             string
-	artifacts          map[string]string
-	headSeq            int64
-	semanticCheckpoint SemanticExtractionCheckpoint
-	checkpointErr      error
+	files                 map[string]string
+	topics                map[string]string
+	archiveFiles          map[string]string
+	ledger                string
+	artifacts             map[string]string
+	headSeq               int64
+	semanticCheckpoint    SemanticExtractionCheckpoint
+	checkpointErr         error
+	rescanRequests        int
+	rescanErr             error
+	rescanAtCheckpointSeq int64
 }
 
 func (l *migrationJobLoader) LoadCoreMemory(
@@ -181,6 +184,18 @@ func (l *migrationJobLoader) DeleteWorkingArchive(context.Context) (int, error) 
 	delete(l.files, SemanticMigrationResidueSourcePath)
 	l.archiveFiles = nil
 	return folded, nil
+}
+
+// RequestSemanticRescan records the request the migration's completion pass
+// makes after the checkpoint jump, or fails with the configured error so the
+// unresolved branch is testable.
+func (l *migrationJobLoader) RequestSemanticRescan(context.Context) error {
+	l.rescanRequests++
+	l.rescanAtCheckpointSeq = l.semanticCheckpoint.LastExtractedSeq
+	if l.rescanErr != nil {
+		return l.rescanErr
+	}
+	return nil
 }
 
 // AppendWorkingLedger appends the runtime way: the line joins the end of the
@@ -1232,6 +1247,94 @@ func TestSemanticMigrationCompletionSurvivesAnUnrecordableHead(t *testing.T) {
 		t.Fatalf(
 			"run summary = %q, want the unresolved item reported",
 			summary,
+		)
+	}
+	if _, ok := loader.artifacts[SemanticMigrationCursorArtifactPath]; ok {
+		t.Fatalf("completed migration left the cursor behind")
+	}
+}
+
+// TestSemanticMigrationCompletionRequestsRescan finishes a migration and
+// asserts the completion pass asks the runtime for exactly one semantic
+// rescan, and only after the checkpoint jump has landed on the transcript
+// head.
+func TestSemanticMigrationCompletionRequestsRescan(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	job := NewSemanticMigrationRegistration().NewJob()
+	loader := &migrationJobLoader{
+		files:   migrationFixture(250),
+		topics:  map[string]string{},
+		headSeq: 77,
+	}
+	migrationCursorFor(
+		t,
+		loader,
+		semanticFactsRelativePath,
+		semanticPreferencesRelativePath,
+	)
+
+	finalResult := migrateToCompletion(ctx, t, job, loader)
+
+	if loader.rescanRequests != 1 {
+		t.Fatalf("rescan requests = %d, want exactly one", loader.rescanRequests)
+	}
+	if loader.rescanAtCheckpointSeq != 77 {
+		t.Fatalf(
+			"rescan was requested at checkpoint seq %d, want it after the jump to 77",
+			loader.rescanAtCheckpointSeq,
+		)
+	}
+	if got, want := finalResult.Metadata["semantic_rescan_requested"], "true"; got != want {
+		t.Fatalf("semantic_rescan_requested = %q, want %q", got, want)
+	}
+	if _, ok := loader.artifacts[SemanticMigrationCursorArtifactPath]; ok {
+		t.Fatalf("completed migration left the cursor behind")
+	}
+}
+
+// TestSemanticMigrationCompletionSurvivesAFailedRescan finishes a migration
+// whose loader cannot start the semantic rescan. The run does not fail: the
+// migration is finished either way and no content depends on the index, so
+// the summary reports the request as unresolved and the checkpoint jump still
+// lands on the head.
+func TestSemanticMigrationCompletionSurvivesAFailedRescan(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	job := NewSemanticMigrationRegistration().NewJob()
+	loader := &migrationJobLoader{
+		files:   migrationFixture(250),
+		topics:  map[string]string{},
+		headSeq: 77,
+		rescanErr: fmt.Errorf(
+			"embedding service is not configured",
+		),
+	}
+	migrationCursorFor(
+		t,
+		loader,
+		semanticFactsRelativePath,
+		semanticPreferencesRelativePath,
+	)
+
+	finalResult := migrateToCompletion(ctx, t, job, loader)
+
+	if loader.rescanRequests != 1 {
+		t.Fatalf("rescan requests = %d, want exactly one", loader.rescanRequests)
+	}
+	if !strings.Contains(finalResult.Summary, "unresolved") {
+		t.Fatalf(
+			"run summary = %q, want the unresolved rescan reported",
+			finalResult.Summary,
+		)
+	}
+	if got, want := finalResult.Metadata["semantic_rescan_requested"], "false"; got != want {
+		t.Fatalf("semantic_rescan_requested = %q, want %q", got, want)
+	}
+	if loader.semanticCheckpoint.LastExtractedSeq != 77 {
+		t.Fatalf(
+			"semantic checkpoint seq = %d, want the jump to 77 even when the rescan fails",
+			loader.semanticCheckpoint.LastExtractedSeq,
 		)
 	}
 	if _, ok := loader.artifacts[SemanticMigrationCursorArtifactPath]; ok {

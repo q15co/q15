@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -79,6 +80,10 @@ func (s *spyRuntimeStore) LoadSemanticSourceContent(
 
 func (s *spyRuntimeStore) DeleteWorkingArchive(context.Context) (int, error) {
 	return 0, nil
+}
+
+func (s *spyRuntimeStore) RequestSemanticRescan(context.Context) error {
+	return nil
 }
 
 func (s *spyRuntimeStore) LoadSemanticMemory(context.Context) (agent.SemanticMemory, error) {
@@ -367,6 +372,39 @@ func TestRuntimeEntryPointsInteractiveReplayUsesCheckpointAwareHistory(t *testin
 	}
 	if got := conversation.TextValue(gotInput[len(gotInput)-1]); got != "new-question" {
 		t.Fatalf("model input[3] = %q, want current user input", got)
+	}
+}
+
+// TestRuntimeStoreRequestSemanticRescanWithoutWiring reports that a store with
+// no rescan func wired cannot start a semantic rescan: the migration hands the
+// request to the runtime, and an unwired store is the "embedding service is
+// not configured" outcome rather than a crash.
+func TestRuntimeStoreRequestSemanticRescanWithoutWiring(t *testing.T) {
+	store := &runtimeStore{}
+	err := store.RequestSemanticRescan(context.Background())
+	if err == nil {
+		t.Fatal("RequestSemanticRescan() = nil, want an error when no rescan func is wired")
+	}
+	if !strings.Contains(err.Error(), "embedding service is not configured") {
+		t.Fatalf("RequestSemanticRescan() error = %q, want the not-configured error", err)
+	}
+}
+
+// TestRuntimeStoreRequestSemanticRescanWired invokes the injected func when
+// one is wired, so the runtime's rescan request reaches the embedding service.
+func TestRuntimeStoreRequestSemanticRescanWired(t *testing.T) {
+	called := false
+	store := &runtimeStore{
+		requestSemanticRescan: func(context.Context) error {
+			called = true
+			return nil
+		},
+	}
+	if err := store.RequestSemanticRescan(context.Background()); err != nil {
+		t.Fatalf("RequestSemanticRescan() error = %v", err)
+	}
+	if !called {
+		t.Fatal("wired rescan func was not invoked")
 	}
 }
 

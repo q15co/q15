@@ -224,6 +224,10 @@ func (s *spyLoader) DeleteWorkingArchive(context.Context) (int, error) {
 	return 0, nil
 }
 
+func (s *spyLoader) RequestSemanticRescan(context.Context) error {
+	return nil
+}
+
 func (s *spyLoader) LoadJobState(context.Context, string) (JobState, error) {
 	return JobState{}, nil
 }

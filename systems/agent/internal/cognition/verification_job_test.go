@@ -225,6 +225,10 @@ func (l *verificationJobLoader) DeleteWorkingArchive(context.Context) (int, erro
 	return 0, nil
 }
 
+func (l *verificationJobLoader) RequestSemanticRescan(context.Context) error {
+	return nil
+}
+
 func TestVerificationReviewRegistration(t *testing.T) {
 	t.Parallel()
 

@@ -176,8 +176,9 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 		return fmt.Errorf("initialize schedule store for agent %q: %w", rt.Name, err)
 	}
 	store := &runtimeStore{
-		memory: memoryStore,
-		skills: skillManager,
+		memory:                memoryStore,
+		skills:                skillManager,
+		requestSemanticRescan: buildSemanticRescan(embeddingService),
 	}
 	scheduledExecutor, err := newScheduledJobExecutor(
 		modelAdapter,
