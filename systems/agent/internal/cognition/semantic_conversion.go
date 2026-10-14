@@ -159,6 +159,15 @@ func semanticCapFor(runtimePath string) int {
 	return 0
 }
 
+// SemanticCapBytes returns the post-run byte cap for a repository-relative
+// semantic file path ("semantic/facts.md", "semantic/topics/an-agent.md"), and
+// 0 when the path is not one the conversion pass caps. Read-only status
+// reporting calls it so a report and this pass cannot disagree about the cap a
+// file is judged against.
+func SemanticCapBytes(relativePath string) int {
+	return semanticCapFor(memoryRuntimePrefix + strings.TrimPrefix(relativePath, "/"))
+}
+
 // successfulWritePaths returns the cleaned paths of file-tool writes whose
 // tool result was not an error, in first-seen order.
 func successfulWritePaths(messages []conversation.Message) []string {

@@ -25,6 +25,12 @@ const (
 	semanticMemoryMinDirtyTurns     = 12
 )
 
+// SemanticMemoryExtractionJobType is the job type under which the built-in
+// semantic-memory extraction job persists its trigger state. The controller
+// writes that state and read-only status reporting reads it back by this name,
+// so it has exactly one spelling.
+const SemanticMemoryExtractionJobType = semanticMemoryExtractionJobType
+
 var semanticMemoryAllowedTools = []string{
 	"read_file",
 	"write_file",

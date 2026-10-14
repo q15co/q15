@@ -19,6 +19,12 @@ const (
 	verificationReviewMinDirtyTurns   int64 = 8
 )
 
+// VerificationReviewJobType is the job type under which the built-in
+// verification-review job persists its trigger state. The controller writes
+// that state and read-only status reporting reads it back by this name, so it
+// has exactly one spelling.
+const VerificationReviewJobType = verificationReviewJobType
+
 var verificationReviewAllowedTools = []string{
 	"read_file",
 	"web_fetch",
