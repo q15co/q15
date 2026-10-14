@@ -113,9 +113,10 @@ providers:
 agent:
   name: Q15
   memory_recent_turns: 6
-  # Byte budgets for the memory files the cognition conversion pass reads.
-  # Absent keys use these defaults. The pass never truncates a file: it reads
-  # it whole and the over-budget working memory fires a conversion run.
+  # Byte budgets for the memory files the cognition jobs read. Absent keys use
+  # these defaults. No budget truncates: an over-budget file is read whole;
+  # over-budget working memory fires a conversion run, and over-budget open
+  # loops fire a working-memory consolidation run.
   memory_working_budget_bytes: 8192
   memory_open_loops_budget_bytes: 4096
   tools:
