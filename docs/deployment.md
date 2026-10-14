@@ -21,7 +21,8 @@ Published runtime tags:
 The release job publishes the same DateVer on `q15-agent`, `q15-exec`, `q15-proxy`, and `q15-web`,
 verifies all four multi-platform indexes, and then moves each package's `stable` tag to that
 release. Unchanged services reuse their existing image index and are retagged without rebuilding.
-Deployments pull `stable` only after the publish workflow succeeds.
+Deployments pull `stable` only after the publish workflow succeeds. Every verified push to `main`
+mints a DateVer, including one that rebuilds nothing, so any commit on `main` can be released.
 
 The build dependency graph is:
 
