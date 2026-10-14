@@ -412,6 +412,9 @@ func (j semanticMemoryExtractionJob) ApplyResult(
 	)
 	missing := make([]string, 0, len(targets))
 	changed := false
+	if loader == nil {
+		return ParsedResult{}, fmt.Errorf("context loader is required")
+	}
 	for _, path := range semanticRuntimePaths() {
 		status := targets[path]
 		if !status.inspected {
@@ -423,14 +426,21 @@ func (j semanticMemoryExtractionJob) ApplyResult(
 		}
 	}
 	if len(missing) > 0 {
-		return ParsedResult{}, fmt.Errorf(
-			"semantic-memory run must inspect all canonical targets with file tools (missing=%s final_text=%q)",
-			strings.Join(missing, ", "),
-			compactSemanticMemoryText(output.FinalText),
+		// Coverage is checked first, so it is also the first place a run can
+		// fail after its tool calls have already written to the store. It rolls
+		// back exactly like the two checks below it: a run that ran out of turns
+		// mid-way is the most common failure this job has, and its half-finished
+		// edits would otherwise become the next run's baseline.
+		return ParsedResult{}, rollbackFailedRun(
+			ctx,
+			loader,
+			output.Spec.FileSnapshots,
+			fmt.Errorf(
+				"semantic-memory run must inspect all canonical targets with file tools (missing=%s final_text=%q)",
+				strings.Join(missing, ", "),
+				compactSemanticMemoryText(output.FinalText),
+			),
 		)
-	}
-	if loader == nil {
-		return ParsedResult{}, fmt.Errorf("context loader is required")
 	}
 	if err := checkSemanticCaps(ctx, loader, output.Messages); err != nil {
 		return ParsedResult{}, rollbackFailedRun(
@@ -478,6 +488,18 @@ func (j semanticMemoryExtractionJob) ApplyResult(
 		Metadata:      metadata,
 		CheckpointSeq: output.Spec.CheckpointSeq,
 	}, nil
+}
+
+// Rollback returns the run's writable paths to the state Build snapshotted.
+// The runner calls it when a run fails before ApplyResult - an engine error, a
+// cancelled context, a turn budget that runs out - so a failure leaves no
+// partial writes behind and the next run's baseline is the store as it was.
+func (semanticMemoryExtractionJob) Rollback(
+	ctx context.Context,
+	loader ContextLoader,
+	spec Spec,
+) error {
+	return restoreConversionFiles(ctx, loader, spec.FileSnapshots)
 }
 
 func evaluateSemanticMemoryState(

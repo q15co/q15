@@ -99,6 +99,14 @@ type JobDefinition interface {
 	ApplyResult(ctx context.Context, loader ContextLoader, output JobOutput) (ParsedResult, error)
 }
 
+// Rollbacker is implemented by a job whose Spec carries the pre-run state of
+// every path its run can write. The runner asks it to restore that state when
+// the run fails, because partial writes from a failed run would otherwise
+// survive on disk and become the next run's baseline.
+type Rollbacker interface {
+	Rollback(ctx context.Context, loader ContextLoader, spec Spec) error
+}
+
 // JobOutput is the validated raw engine output for one cognition run.
 type JobOutput struct {
 	Type      string
@@ -337,6 +345,7 @@ func (r *Runner) Run(
 		Observer:           observer,
 	})
 	if err != nil {
+		rollbackErr := r.rollbackFailedRun(ctx, job, spec)
 		notifyRunEvent(ctx, observer, agent.RunEvent{
 			Type:      agent.RunEventRunFailed,
 			Turn:      runResult.Turn,
@@ -344,6 +353,9 @@ func (r *Runner) Run(
 			FinalText: runResult.FinalText,
 			Err:       err,
 		})
+		if rollbackErr != nil {
+			return Result{}, fmt.Errorf("%w (rollback also failed: %v)", err, rollbackErr)
+		}
 		return Result{}, err
 	}
 
@@ -384,6 +396,25 @@ func (r *Runner) Run(
 		FinalText: result.FinalText,
 	})
 	return result, nil
+}
+
+// rollbackFailedRun restores the pre-run state of a failed run when the job
+// and the spec make that possible: the spec must carry snapshots, there must be
+// a loader to write them back through, and the job must implement Rollbacker.
+// A job that carries no snapshots is left exactly as it is.
+func (r *Runner) rollbackFailedRun(
+	ctx context.Context,
+	job JobDefinition,
+	spec Spec,
+) error {
+	if len(spec.FileSnapshots) == 0 || r.loader == nil {
+		return nil
+	}
+	rollbacker, ok := job.(Rollbacker)
+	if !ok {
+		return nil
+	}
+	return rollbacker.Rollback(ctx, r.loader, spec)
 }
 
 func cloneMetadata(in map[string]string) map[string]string {
