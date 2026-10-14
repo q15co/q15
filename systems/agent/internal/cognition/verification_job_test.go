@@ -26,6 +26,7 @@ type verificationJobLoader struct {
 	artifactRoot    string
 	loadRecentTurns int
 	storeCalls      []Artifact
+	storeCheckpoint SemanticExtractionCheckpoint
 }
 
 func (l *verificationJobLoader) LoadCoreMemory(context.Context) (agent.CoreMemory, error) {
@@ -98,6 +99,14 @@ func (l *verificationJobLoader) LoadSemanticExtractionCheckpoint(
 	return SemanticExtractionCheckpoint{}, nil
 }
 
+func (l *verificationJobLoader) StoreSemanticExtractionCheckpoint(
+	_ context.Context,
+	checkpoint SemanticExtractionCheckpoint,
+) (SemanticExtractionCheckpoint, error) {
+	l.storeCheckpoint = checkpoint
+	return checkpoint, nil
+}
+
 func (l *verificationJobLoader) LoadSemanticFileSizes(context.Context) (map[string]int64, error) {
 	return nil, nil
 }
@@ -108,6 +117,10 @@ func (l *verificationJobLoader) LoadOpenLoops(context.Context) (string, error) {
 
 func (l *verificationJobLoader) LoadWorkingLedger(context.Context) (string, error) {
 	return "", nil
+}
+
+func (l *verificationJobLoader) AppendWorkingLedger(context.Context, string) error {
+	return nil
 }
 
 func (l *verificationJobLoader) LoadJobState(context.Context, string) (JobState, error) {

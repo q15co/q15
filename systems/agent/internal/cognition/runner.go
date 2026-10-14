@@ -35,6 +35,11 @@ type ContextLoader interface {
 	LoadOpenLoops(ctx context.Context) (string, error)
 	// LoadWorkingLedger returns the trimmed content of working/LEDGER.md.
 	LoadWorkingLedger(ctx context.Context) (string, error)
+	// AppendWorkingLedger appends one whole pre-formatted ledger line to
+	// working/LEDGER.md and commits it. Runtime bookkeeping appends in
+	// place; the file tools a model turn uses rewrite whole files instead,
+	// so runtime writers must not reach the ledger through those.
+	AppendWorkingLedger(ctx context.Context, line string) error
 	LoadSkillCatalog(ctx context.Context) (agent.SkillCatalog, error)
 	LoadRecentMessages(ctx context.Context, turns int) ([]conversation.Message, error)
 	LoadLatestMessages(ctx context.Context, turns int) ([]conversation.Message, error)
@@ -47,6 +52,13 @@ type ContextLoader interface {
 	LoadHead(ctx context.Context) (int64, time.Time, error)
 	LoadConsolidationCheckpoint(ctx context.Context) (ConsolidationCheckpoint, error)
 	LoadSemanticExtractionCheckpoint(ctx context.Context) (SemanticExtractionCheckpoint, error)
+	// StoreSemanticExtractionCheckpoint persists the last successful
+	// semantic extraction boundary. The semantic migration's completion pass
+	// jumps the steady-state pass past the backlog it drained with it.
+	StoreSemanticExtractionCheckpoint(
+		ctx context.Context,
+		checkpoint SemanticExtractionCheckpoint,
+	) (SemanticExtractionCheckpoint, error)
 	// LoadJobState returns the persisted trigger state for one cognition job
 	// type, or the zero state when nothing was persisted for it yet. Jobs that
 	// adapt their input cost to repeated failures read their own state through

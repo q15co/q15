@@ -160,6 +160,10 @@ func (s *spyLoader) LoadWorkingLedger(context.Context) (string, error) {
 	return "", nil
 }
 
+func (s *spyLoader) AppendWorkingLedger(context.Context, string) error {
+	return nil
+}
+
 func (s *spyLoader) StoreCognitionArtifact(
 	context.Context,
 	Artifact,
@@ -178,6 +182,13 @@ func (s *spyLoader) LoadSemanticChunk(
 	int64,
 ) (SemanticChunk, error) {
 	return SemanticChunk{}, nil
+}
+
+func (s *spyLoader) StoreSemanticExtractionCheckpoint(
+	context.Context,
+	SemanticExtractionCheckpoint,
+) (SemanticExtractionCheckpoint, error) {
+	return SemanticExtractionCheckpoint{}, nil
 }
 
 func (s *spyLoader) RemoveSemanticLines(

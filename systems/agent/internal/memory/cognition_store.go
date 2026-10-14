@@ -119,6 +119,47 @@ func (s *Store) DeleteCognitionArtifact(ctx context.Context, relativePath string
 	return nil
 }
 
+// AppendWorkingLedger appends one whole pre-formatted ledger line to
+// working/LEDGER.md and commits the file.
+//
+// Runtime bookkeeping appends in place: an O_APPEND write never touches the
+// bytes above it, which is what keeps the ledger append-only for readers
+// that treat earlier lines as history. The file tools a model turn uses
+// rewrite whole files instead, so a runtime writer reaches the ledger this
+// way.
+func (s *Store) AppendWorkingLedger(ctx context.Context, line string) error {
+	release := s.repository.Acquire()
+	defer release()
+
+	if err := s.ensureWorkingLedger(); err != nil {
+		return err
+	}
+	line = strings.TrimRight(line, "\n")
+	if strings.TrimSpace(line) == "" {
+		return fmt.Errorf("working ledger line is required")
+	}
+	path := filepath.Join(s.root(), filepath.FromSlash(workingLedgerRelativePath))
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return fmt.Errorf("open working ledger %q: %w", path, err)
+	}
+	if _, err := file.WriteString(line + "\n"); err != nil {
+		file.Close()
+		return fmt.Errorf("write working ledger %q: %w", path, err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close working ledger %q: %w", path, err)
+	}
+	if err := s.repository.Commit(
+		ctx,
+		"memory: append working ledger",
+		workingLedgerRelativePath,
+	); err != nil {
+		return fmt.Errorf("commit working ledger: %w", err)
+	}
+	return nil
+}
+
 // LoadHead returns the current persisted transcript head.
 func (s *Store) LoadHead(ctx context.Context) (int64, time.Time, error) {
 	_ = ctx

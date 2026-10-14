@@ -30,6 +30,7 @@ type semanticMemoryJobLoader struct {
 	openLoops               string
 	ledger                  string
 	jobState                JobState
+	storeCheckpointCalls    int
 }
 
 func (l *semanticMemoryJobLoader) LoadCoreMemory(context.Context) (agent.CoreMemory, error) {
@@ -61,6 +62,18 @@ func (l *semanticMemoryJobLoader) LoadOpenLoops(context.Context) (string, error)
 
 func (l *semanticMemoryJobLoader) LoadWorkingLedger(context.Context) (string, error) {
 	return l.ledger, nil
+}
+
+func (l *semanticMemoryJobLoader) AppendWorkingLedger(context.Context, string) error {
+	return nil
+}
+
+func (l *semanticMemoryJobLoader) StoreSemanticExtractionCheckpoint(
+	context.Context,
+	SemanticExtractionCheckpoint,
+) (SemanticExtractionCheckpoint, error) {
+	l.storeCheckpointCalls++
+	return SemanticExtractionCheckpoint{}, nil
 }
 
 func (l *semanticMemoryJobLoader) LoadSkillCatalog(context.Context) (agent.SkillCatalog, error) {

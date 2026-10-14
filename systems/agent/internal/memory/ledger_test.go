@@ -255,3 +255,66 @@ func TestStoreInitRotatesOversizedLedger(t *testing.T) {
 		t.Fatalf("Init left rotated entries in the fresh ledger:\n%s", string(fresh))
 	}
 }
+
+// TestStoreAppendWorkingLedgerAppendsInPlace pins the runtime's one ledger
+// write path: an append leaves every byte it appended behind, never rewrote
+// anything above it, and both lines survive a second append.
+func TestStoreAppendWorkingLedgerAppendsInPlace(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "memory")
+	store := newTestStore(root, &fakeCommitter{})
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	before, err := store.ReadWorkingLedger()
+	if err != nil {
+		t.Fatalf("ReadWorkingLedger() error = %v", err)
+	}
+	first := "2026-10-14T05:00Z run=semantic_memory.migrate migrated"
+	if err := store.AppendWorkingLedger(context.Background(), first); err != nil {
+		t.Fatalf("AppendWorkingLedger() error = %v", err)
+	}
+
+	after, err := store.ReadWorkingLedger()
+	if err != nil {
+		t.Fatalf("ReadWorkingLedger() error = %v", err)
+	}
+	if !strings.HasPrefix(after, before) {
+		t.Fatalf(
+			"ledger after append = %q, want the previous content untouched (%q)",
+			after,
+			before,
+		)
+	}
+	if !strings.HasSuffix(after, first) {
+		t.Fatalf("ledger after append = %q, want the line appended", after)
+	}
+
+	second := "2026-10-14T05:01Z run=semantic_memory.migrate migrated"
+	if err := store.AppendWorkingLedger(context.Background(), second); err != nil {
+		t.Fatalf("second AppendWorkingLedger() error = %v", err)
+	}
+	final, err := store.ReadWorkingLedger()
+	if err != nil {
+		t.Fatalf("ReadWorkingLedger() error = %v", err)
+	}
+	want := before + "\n" + first + "\n" + second
+	if final != want {
+		t.Fatalf("ledger after two appends = %q, want %q", final, want)
+	}
+}
+
+// TestStoreAppendWorkingLedgerRejectsEmptyLines pins the guard the append
+// path keeps: no runtime writer leaves an empty line in the ledger.
+func TestStoreAppendWorkingLedgerRejectsEmptyLines(t *testing.T) {
+	store := newTestStore(filepath.Join(t.TempDir(), "memory"), &fakeCommitter{})
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	for _, line := range []string{"", "\n", "   \n"} {
+		if err := store.AppendWorkingLedger(context.Background(), line); err == nil {
+			t.Fatalf("AppendWorkingLedger(%q) error = nil, want a refusal", line)
+		}
+	}
+}

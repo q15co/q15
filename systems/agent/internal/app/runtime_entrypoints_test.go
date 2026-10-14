@@ -105,6 +105,10 @@ func (s *spyRuntimeStore) LoadWorkingLedger(context.Context) (string, error) {
 	return "", nil
 }
 
+func (s *spyRuntimeStore) AppendWorkingLedger(context.Context, string) error {
+	return nil
+}
+
 func (s *spyRuntimeStore) StoreCognitionArtifact(
 	context.Context,
 	cognition.Artifact,

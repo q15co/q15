@@ -30,10 +30,13 @@ var migrationChunkBodyPattern = regexp.MustCompile(
 // contract. Only the accessors the migration touches return meaningful
 // data; the rest return zero values.
 type migrationJobLoader struct {
-	files     map[string]string
-	topics    map[string]string
-	ledger    string
-	artifacts map[string]string
+	files              map[string]string
+	topics             map[string]string
+	ledger             string
+	artifacts          map[string]string
+	headSeq            int64
+	semanticCheckpoint SemanticExtractionCheckpoint
+	checkpointErr      error
 }
 
 func (l *migrationJobLoader) LoadCoreMemory(
@@ -88,7 +91,7 @@ func (l *migrationJobLoader) LoadMessagesSinceSeqWindow(
 }
 
 func (l *migrationJobLoader) LoadHead(context.Context) (int64, time.Time, error) {
-	return 0, time.Time{}, nil
+	return l.headSeq, time.Time{}, nil
 }
 
 func (l *migrationJobLoader) LoadConsolidationCheckpoint(
@@ -148,6 +151,31 @@ func (l *migrationJobLoader) LoadSemanticTopics(
 
 func (l *migrationJobLoader) LoadWorkingLedger(context.Context) (string, error) {
 	return strings.TrimSpace(l.ledger), nil
+}
+
+// AppendWorkingLedger appends the runtime way: the line joins the end of the
+// ledger, and the bytes above it stay byte-for-byte.
+func (l *migrationJobLoader) AppendWorkingLedger(_ context.Context, line string) error {
+	line = strings.TrimRight(line, "\n")
+	if l.ledger == "" {
+		l.ledger = line + "\n"
+		return nil
+	}
+	l.ledger = strings.TrimRight(l.ledger, "\n") + "\n" + line + "\n"
+	return nil
+}
+
+// StoreSemanticExtractionCheckpoint records the checkpoint the job set, or
+// fails with the configured error so the unresolved branch is testable.
+func (l *migrationJobLoader) StoreSemanticExtractionCheckpoint(
+	_ context.Context,
+	checkpoint SemanticExtractionCheckpoint,
+) (SemanticExtractionCheckpoint, error) {
+	if l.checkpointErr != nil {
+		return SemanticExtractionCheckpoint{}, l.checkpointErr
+	}
+	l.semanticCheckpoint = checkpoint
+	return checkpoint, nil
 }
 
 func (l *migrationJobLoader) LoadCognitionArtifact(
@@ -712,12 +740,12 @@ func TestSemanticMigrationResumesToTheSameEndState(t *testing.T) {
 		!strings.Contains(facts, "## Grounded Inferences") {
 		t.Fatalf("drained file lost its section structure: %q", facts)
 	}
-	if got, want := strings.Count(
-		direct.ledger,
-		"run=semantic_memory.migrate",
-	), 250; got != want {
+	// The run ledgered one line per drained bullet. The migration's own
+	// finish adds one more line for the checkpoint jump, which the count
+	// below deliberately ignores: it counts the per-bullet source citations.
+	if got, want := strings.Count(direct.ledger, "(source="), 250; got != want {
 		t.Fatalf(
-			"ledger lines = %d, want one per drained bullet (%d)",
+			"ledger citations = %d, want one per drained bullet (%d)",
 			got,
 			want,
 		)
@@ -969,5 +997,151 @@ func TestSemanticMigrationCapsNewDestinations(t *testing.T) {
 			"ApplyResult(over-cap topic) error = %v, want the cap failure",
 			err,
 		)
+	}
+}
+
+// TestSemanticMigrationCompletionJumpsTheCheckpointToHead drives a fixture to
+// its last chunk, which drains every tracked file. The run must end honestly:
+// the semantic extraction checkpoint lands on the transcript head (the backlog
+// reached it through this cursor, not through that checkpoint), one ledger
+// line names the jump, and the cursor is gone so the trigger never fires
+// again.
+func TestSemanticMigrationCompletionJumpsTheCheckpointToHead(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	job := NewSemanticMigrationRegistration().NewJob()
+	loader := &migrationJobLoader{
+		files:   migrationFixture(250),
+		topics:  map[string]string{},
+		headSeq: 77,
+	}
+	migrationCursorFor(
+		t,
+		loader,
+		semanticFactsRelativePath,
+		semanticPreferencesRelativePath,
+	)
+
+	var finalResult ParsedResult
+	for runs := 0; runs < 8; runs++ {
+		cursor, err := LoadSemanticMigrationCursor(ctx, loader)
+		if err != nil {
+			t.Fatalf("LoadSemanticMigrationCursor() error = %v", err)
+		}
+		if !SemanticMigrationCursorHasOpenFile(cursor) {
+			break
+		}
+		spec, err := job.Build(ctx, loader)
+		if err != nil {
+			t.Fatalf("Build() error = %v", err)
+		}
+		result, err := job.ApplyResult(
+			ctx,
+			loader,
+			migrationFakeModelOutput(t, loader, spec),
+		)
+		if err != nil {
+			t.Fatalf("ApplyResult() error = %v", err)
+		}
+		finalResult = result
+	}
+	if loader.semanticCheckpoint.LastExtractedSeq != 77 {
+		t.Fatalf(
+			"semantic checkpoint seq = %d, want the transcript head 77",
+			loader.semanticCheckpoint.LastExtractedSeq,
+		)
+	}
+	if !strings.Contains(
+		loader.ledger,
+		"migration finished: semantic extraction checkpoint set to seq 77",
+	) {
+		t.Fatalf(
+			"ledger = %q, want the jump recorded for seq 77",
+			loader.ledger,
+		)
+	}
+	if !strings.Contains(
+		loader.ledger,
+		"the legacy backlog was drained by this migration and not by that checkpoint",
+	) {
+		t.Fatalf("ledger = %q, want the jump line to say why", loader.ledger)
+	}
+	if got, want := strings.Count(loader.ledger, "migration finished"), 1; got != want {
+		t.Fatalf("jump ledger lines = %d, want exactly one", got)
+	}
+	if _, ok := loader.artifacts[SemanticMigrationCursorArtifactPath]; ok {
+		t.Fatalf("completed migration left the cursor behind")
+	}
+	if got, want := finalResult.Metadata["checkpoint_jump_seq"], "77"; got != want {
+		t.Fatalf("checkpoint_jump_seq = %q, want %q", got, want)
+	}
+	if got, want := finalResult.Metadata["checkpoint_jump_recorded"], "true"; got != want {
+		t.Fatalf("checkpoint_jump_recorded = %q, want %q", got, want)
+	}
+}
+
+// TestSemanticMigrationCompletionSurvivesAnUnrecordableHead finishes a
+// migration whose head the checkpoint setter rejects. The run does not fail:
+// the checkpoint stays where it was, the ledger line names that fact, and the
+// run's summary reports it as unresolved.
+func TestSemanticMigrationCompletionSurvivesAnUnrecordableHead(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	job := NewSemanticMigrationRegistration().NewJob()
+	loader := &migrationJobLoader{
+		files:   migrationFixture(250),
+		topics:  map[string]string{},
+		headSeq: 77,
+		checkpointErr: fmt.Errorf(
+			"transcript head seq 77 not found in turn history",
+		),
+	}
+	migrationCursorFor(
+		t,
+		loader,
+		semanticFactsRelativePath,
+		semanticPreferencesRelativePath,
+	)
+
+	var summary string
+	for runs := 0; runs < 8; runs++ {
+		cursor, err := LoadSemanticMigrationCursor(ctx, loader)
+		if err != nil {
+			t.Fatalf("LoadSemanticMigrationCursor() error = %v", err)
+		}
+		if !SemanticMigrationCursorHasOpenFile(cursor) {
+			break
+		}
+		spec, err := job.Build(ctx, loader)
+		if err != nil {
+			t.Fatalf("Build() error = %v", err)
+		}
+		output := migrationFakeModelOutput(t, loader, spec)
+		result, err := job.ApplyResult(ctx, loader, output)
+		if err != nil {
+			t.Fatalf("ApplyResult() error = %v, want the run to finish", err)
+		}
+		summary = result.Summary
+	}
+	if loader.semanticCheckpoint.LastExtractedSeq != 0 {
+		t.Fatalf(
+			"semantic checkpoint seq = %d, want the checkpoint left where it was",
+			loader.semanticCheckpoint.LastExtractedSeq,
+		)
+	}
+	if !strings.Contains(
+		loader.ledger,
+		"migration finished: semantic extraction checkpoint left unrecorded",
+	) {
+		t.Fatalf("ledger = %q, want the unrecorded jump named", loader.ledger)
+	}
+	if !strings.Contains(summary, "unresolved") {
+		t.Fatalf(
+			"run summary = %q, want the unresolved item reported",
+			summary,
+		)
+	}
+	if _, ok := loader.artifacts[SemanticMigrationCursorArtifactPath]; ok {
+		t.Fatalf("completed migration left the cursor behind")
 	}
 }

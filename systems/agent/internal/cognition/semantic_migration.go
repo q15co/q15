@@ -150,6 +150,15 @@ func SemanticMigrationFileCursorFor(
 	return file, ok
 }
 
+// SemanticMigrationSourcePaths returns the memory-relative slash paths of the
+// three canonical semantic source files the migration walks, in the
+// canonical drain order. The operator's start command creates the cursor over
+// exactly this set; the three-source restriction itself lives in
+// semanticMigrationSources.
+func SemanticMigrationSourcePaths() []string {
+	return append([]string(nil), semanticMigrationSources...)
+}
+
 // SemanticChunk is one bounded slice of a semantic source file, read for the
 // migration pass so that no run ever carries a whole oversized file.
 type SemanticChunk struct {

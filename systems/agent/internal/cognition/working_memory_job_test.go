@@ -29,6 +29,7 @@ type workingMemoryJobLoader struct {
 	loadCheckpointCalls     int
 	loadArtifacts           []string
 	jobState                JobState
+	storeCheckpoint         SemanticExtractionCheckpoint
 }
 
 func (l *workingMemoryJobLoader) LoadCoreMemory(context.Context) (agent.CoreMemory, error) {
@@ -104,6 +105,14 @@ func (l *workingMemoryJobLoader) LoadSemanticExtractionCheckpoint(
 	return SemanticExtractionCheckpoint{}, nil
 }
 
+func (l *workingMemoryJobLoader) StoreSemanticExtractionCheckpoint(
+	_ context.Context,
+	checkpoint SemanticExtractionCheckpoint,
+) (SemanticExtractionCheckpoint, error) {
+	l.storeCheckpoint = checkpoint
+	return checkpoint, nil
+}
+
 func (l *workingMemoryJobLoader) LoadSemanticFileSizes(context.Context) (map[string]int64, error) {
 	return nil, nil
 }
@@ -114,6 +123,10 @@ func (l *workingMemoryJobLoader) LoadOpenLoops(context.Context) (string, error) 
 
 func (l *workingMemoryJobLoader) LoadWorkingLedger(context.Context) (string, error) {
 	return "", nil
+}
+
+func (l *workingMemoryJobLoader) AppendWorkingLedger(context.Context, string) error {
+	return nil
 }
 
 func (l *workingMemoryJobLoader) LoadCognitionArtifact(

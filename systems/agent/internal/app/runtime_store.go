@@ -131,6 +131,12 @@ func (s *runtimeStore) LoadWorkingLedger(ctx context.Context) (string, error) {
 	return s.memory.ReadWorkingLedger()
 }
 
+// AppendWorkingLedger appends one whole pre-formatted ledger line through the
+// store's append path: an O_APPEND write plus a memory commit.
+func (s *runtimeStore) AppendWorkingLedger(ctx context.Context, line string) error {
+	return s.memory.AppendWorkingLedger(ctx, line)
+}
+
 func (s *runtimeStore) LoadSkillCatalog(ctx context.Context) (agent.SkillCatalog, error) {
 	_ = ctx
 	if s.skills == nil {

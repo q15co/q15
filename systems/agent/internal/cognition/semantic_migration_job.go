@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/memory/claims"
@@ -757,9 +758,21 @@ func (semanticMigrationJob) ApplyResult(
 		Finished: finished,
 	}
 	cursor.Files[target] = entry
+	var jump semanticMigrationCheckpointJump
 	if allMigrationFilesFinished(cursor) {
-		// Finishing the migration is deleting the cursor: no restart is
-		// involved, and a deleted cursor never triggers again.
+		// Finishing the migration persists the drained state first, so the
+		// cursor records on disk what the source files already show, then
+		// folds the drain into steady state before the cursor disappears:
+		// the extraction checkpoint jumps to the transcript head, one ledger
+		// line names that jump, and only then does the cursor go away so the
+		// trigger never fires again.
+		if err := SaveSemanticMigrationCursor(ctx, loader, cursor); err != nil {
+			return ParsedResult{}, err
+		}
+		jump, err = completeSemanticMigration(ctx, loader)
+		if err != nil {
+			return ParsedResult{}, err
+		}
 		if err := ClearSemanticMigrationCursor(ctx, loader); err != nil {
 			return ParsedResult{}, err
 		}
@@ -768,21 +781,114 @@ func (semanticMigrationJob) ApplyResult(
 	}
 
 	metadata := map[string]string{
-		"source_file":           target,
-		"chunk_offset":          strconv.FormatInt(chunk.Offset, 10),
-		"chunk_bytes":           strconv.FormatInt(int64(len(chunk.Content)), 10),
-		"source_bytes_drained":  strconv.FormatInt(removedBytes, 10),
-		"source_offset_after":   strconv.FormatInt(newOffset, 10),
-		"source_size_after":     strconv.FormatInt(newSize, 10),
-		"source_lines_drained":  strconv.Itoa(len(drained)),
-		"ledger_lines_appended": strconv.Itoa(len(refs)),
-		"source_finished":       strconv.FormatBool(finished),
-		"cursor_cleared":        strconv.FormatBool(allMigrationFilesFinished(cursor)),
+		"source_file":              target,
+		"chunk_offset":             strconv.FormatInt(chunk.Offset, 10),
+		"chunk_bytes":              strconv.FormatInt(int64(len(chunk.Content)), 10),
+		"source_bytes_drained":     strconv.FormatInt(removedBytes, 10),
+		"source_offset_after":      strconv.FormatInt(newOffset, 10),
+		"source_size_after":        strconv.FormatInt(newSize, 10),
+		"source_lines_drained":     strconv.Itoa(len(drained)),
+		"ledger_lines_appended":    strconv.Itoa(len(refs)),
+		"source_finished":          strconv.FormatBool(finished),
+		"cursor_cleared":           strconv.FormatBool(allMigrationFilesFinished(cursor)),
+		"checkpoint_jump_seq":      strconv.FormatInt(jump.seq, 10),
+		"checkpoint_jump_recorded": strconv.FormatBool(jump.recorded),
+	}
+	summary := summarizeMigrationNotes(output.FinalText)
+	if jump.unresolved != "" {
+		summary = fmt.Sprintf("%s; unresolved: %s", summary, jump.unresolved)
 	}
 	return ParsedResult{
-		Summary:  summarizeMigrationNotes(output.FinalText),
+		Summary:  summary,
 		Metadata: metadata,
 	}, nil
+}
+
+// semanticMigrationCheckpointJump records what the migration's completion
+// pass did about the steady-state checkpoint, so the run summary reports an
+// honest outcome: recorded at a sequence, or why the existing checkpoint was
+// left where it was.
+type semanticMigrationCheckpointJump struct {
+	seq        int64
+	recorded   bool
+	unresolved string
+}
+
+// completeSemanticMigration folds the drained backlog into steady state. The
+// extraction checkpoint lands on the transcript head: the backlog reached the
+// head through this cursor and not through that checkpoint, and leaving the
+// checkpoint behind would make the next steady-state pass replay and
+// re-convert ground the migration has just covered.
+//
+// A head this pass cannot record — a head read that fails, or a sequence the
+// store's setter has no turn file for — does not fail the run: the existing
+// checkpoint stays where it is, and the run's summary reports that as
+// unresolved.
+func completeSemanticMigration(
+	ctx context.Context,
+	loader ContextLoader,
+) (semanticMigrationCheckpointJump, error) {
+	jump := semanticMigrationCheckpointJump{}
+	seq, _, err := loader.LoadHead(ctx)
+	if err != nil {
+		jump.unresolved = fmt.Sprintf(
+			"semantic extraction checkpoint left where it was: transcript head could not be read (%s)",
+			err,
+		)
+	} else {
+		jump.seq = seq
+		if _, err := loader.StoreSemanticExtractionCheckpoint(
+			ctx,
+			SemanticExtractionCheckpoint{LastExtractedSeq: seq},
+		); err != nil {
+			jump.unresolved = fmt.Sprintf(
+				"semantic extraction checkpoint left where it was: transcript head seq %d could not be recorded (%s)",
+				seq,
+				err,
+			)
+		} else {
+			jump.recorded = true
+		}
+	}
+	// The jump is ledgered whatever the checkpoint did: the migration ended
+	// either way, and the line names what the steady-state pass inherits.
+	if err := appendSemanticMigrationJumpLedgerLine(ctx, loader, jump); err != nil {
+		return semanticMigrationCheckpointJump{}, err
+	}
+	return jump, nil
+}
+
+// appendSemanticMigrationJumpLedgerLine writes the one ledger line the
+// migration's finish leaves behind: the migration ending, the sequence it
+// recorded, and why the jump happened.
+func appendSemanticMigrationJumpLedgerLine(
+	ctx context.Context,
+	loader ContextLoader,
+	jump semanticMigrationCheckpointJump,
+) error {
+	var line string
+	if jump.recorded {
+		line = fmt.Sprintf(
+			"%s run=%s migration finished: semantic extraction checkpoint set to seq %d because the legacy backlog was drained by this migration and not by that checkpoint",
+			migrationLedgerTimestamp(),
+			SemanticMigrationJobType,
+			jump.seq,
+		)
+	} else {
+		line = fmt.Sprintf(
+			"%s run=%s migration finished: semantic extraction checkpoint left unrecorded (%s)",
+			migrationLedgerTimestamp(),
+			SemanticMigrationJobType,
+			jump.unresolved,
+		)
+	}
+	return loader.AppendWorkingLedger(ctx, line)
+}
+
+// migrationLedgerTimestamp renders the ledger line prefix the conversion
+// ledger discipline uses: UTC to the second.
+func migrationLedgerTimestamp() string {
+	return time.Now().UTC().Format("2006-01-02T15:04:05Z")
 }
 
 // migrationTargetOffset returns the tracked offset one source file carries
