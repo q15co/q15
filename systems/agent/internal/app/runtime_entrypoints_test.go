@@ -70,6 +70,17 @@ func (s *spyRuntimeStore) LoadCoreMemory(context.Context) (agent.CoreMemory, err
 	return agent.CoreMemory{}, nil
 }
 
+func (s *spyRuntimeStore) LoadSemanticSourceContent(
+	context.Context,
+	string,
+) (string, error) {
+	return "", nil
+}
+
+func (s *spyRuntimeStore) DeleteWorkingArchive(context.Context) (int, error) {
+	return 0, nil
+}
+
 func (s *spyRuntimeStore) LoadSemanticMemory(context.Context) (agent.SemanticMemory, error) {
 	return agent.SemanticMemory{}, nil
 }

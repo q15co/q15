@@ -214,6 +214,17 @@ func (l *verificationJobLoader) RemoveSemanticLines(
 	return 0, nil
 }
 
+func (l *verificationJobLoader) LoadSemanticSourceContent(
+	context.Context,
+	string,
+) (string, error) {
+	return "", nil
+}
+
+func (l *verificationJobLoader) DeleteWorkingArchive(context.Context) (int, error) {
+	return 0, nil
+}
+
 func TestVerificationReviewRegistration(t *testing.T) {
 	t.Parallel()
 

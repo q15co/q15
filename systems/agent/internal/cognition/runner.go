@@ -104,6 +104,17 @@ type ContextLoader interface {
 		end int64,
 		hashes []string,
 	) (int64, error)
+	// LoadSemanticSourceContent returns the trimmed content of one migration
+	// source file: a semantic root or the staged archive residue. The
+	// migration reads exactly the source it is about to drain, for its
+	// per-source hash check, rather than the whole semantic memory set (which
+	// the residue is not part of). A missing file yields empty content.
+	LoadSemanticSourceContent(ctx context.Context, relativePath string) (string, error)
+	// DeleteWorkingArchive removes working/archive-residue.md and the whole
+	// working/archive/ directory, returning how many archive .md files were
+	// folded away. A missing directory counts as zero files, so finishing a
+	// migration with no archive is a no-op.
+	DeleteWorkingArchive(ctx context.Context) (int, error)
 }
 
 // Artifact is one job-owned persisted artifact stored under

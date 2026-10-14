@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -157,6 +158,38 @@ func SemanticMigrationFileCursorFor(
 // semanticMigrationSources.
 func SemanticMigrationSourcePaths() []string {
 	return append([]string(nil), semanticMigrationSources...)
+}
+
+// SemanticMigrationResidueSourcePath is the repository-relative slash path of
+// the staged archive fold residue, the migration's fourth source. It is walked
+// last, after the three canonical roots, and deleted on completion.
+const SemanticMigrationResidueSourcePath = "working/archive-residue.md"
+
+// SemanticMigrationCursorExtraSourcePaths returns the cursor-tracked paths
+// that are not one of the canonical semantic roots, in sorted order. The
+// migration walks these after the canonical sources, so the staged archive
+// residue is always opened last.
+func SemanticMigrationCursorExtraSourcePaths(cursor SemanticMigrationCursor) []string {
+	var extras []string
+	for relativePath := range cursor.Files {
+		if isCanonicalMigrationSource(relativePath) {
+			continue
+		}
+		extras = append(extras, relativePath)
+	}
+	sort.Strings(extras)
+	return extras
+}
+
+// isCanonicalMigrationSource reports whether relativePath is one of the three
+// canonical semantic roots.
+func isCanonicalMigrationSource(relativePath string) bool {
+	for _, source := range semanticMigrationSources {
+		if source == relativePath {
+			return true
+		}
+	}
+	return false
 }
 
 // SemanticChunk is one bounded slice of a semantic source file, read for the

@@ -265,6 +265,28 @@ func runMemoryMigrateStart(
 	for _, path := range cognition.SemanticMigrationSourcePaths() {
 		cursor.Files[path] = cognition.SemanticMigrationFileCursor{}
 	}
+	// A working/archive/ directory holding at least one .md copy is folded
+	// into this migration: the residue of lines not already in working memory
+	// is staged as the cursor's last source. After a completed fold the
+	// archive is gone, so a second --start stages nothing new.
+	working, err := store.LoadWorkingMemory(ctx)
+	if err != nil {
+		return fmt.Errorf("memory migrate: %w", err)
+	}
+	summary, staged, err := store.StageArchiveResidue(ctx, working.Content)
+	if err != nil {
+		return fmt.Errorf("memory migrate: %w", err)
+	}
+	if staged {
+		cursor.Files[cognition.SemanticMigrationResidueSourcePath] =
+			cognition.SemanticMigrationFileCursor{}
+		fmt.Fprintf(
+			env.Stdout,
+			"semantic migration: staged archive fold residue (%d files folded, %d residue lines)\n",
+			summary.FilesFolded,
+			summary.ResidueLines,
+		)
+	}
 	if err := cognition.SaveSemanticMigrationCursor(ctx, store, cursor); err != nil {
 		return fmt.Errorf("memory migrate: %w", err)
 	}

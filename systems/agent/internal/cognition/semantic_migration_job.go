@@ -47,6 +47,11 @@ var semanticMigrationSources = []string{
 	semanticProjectsRelativePath,
 }
 
+// semanticMigrationResidueRuntimePath is the runtime (tool-visible) path of
+// the staged archive fold residue. The residue is a migration source, so a run
+// must not be able to write into its own source; it is never a policy path.
+var semanticMigrationResidueRuntimePath = memoryRuntimePrefix + SemanticMigrationResidueSourcePath
+
 // migrationLedgerLinePattern matches one appended migration ledger line.
 // FormatLedgerEntry renders a target as ` → id (path)` and any note as a
 // trailing parenthesized group, so the migration note
@@ -141,6 +146,19 @@ type migrationLedgerRef struct {
 	Description string
 }
 
+// loadMigrationSourceContent returns the trimmed content of one migration
+// source file — a semantic root or the staged archive residue — read through
+// the loader's per-source reader rather than the whole semantic memory set,
+// which the residue is not part of. A missing file yields empty content, so
+// the residue is read exactly when staged and a drained source reads as empty.
+func loadMigrationSourceContent(
+	ctx context.Context,
+	loader ContextLoader,
+	relativePath string,
+) (string, error) {
+	return loader.LoadSemanticSourceContent(ctx, relativePath)
+}
+
 // loadMigrationChunk reads the next whole-line window at offset, escalating
 // the window once for a degenerate source whose next line alone exceeds a
 // regular chunk. A still-unbounded line is an error, never an endless loop.
@@ -181,9 +199,9 @@ func loadMigrationChunk(
 	return chunk, nil
 }
 
-// nextMigrationTarget returns the first cursor-tracked semantic source, in
-// canonical order, that is not finished. The empty result with a nil error
-// means the cursor tracks no open file.
+// nextMigrationTarget returns the first cursor-tracked source, in canonical
+// order followed by any extra source in sorted order, that is not finished.
+// The empty result with a nil error means the cursor tracks no open file.
 func nextMigrationTarget(
 	cursor SemanticMigrationCursor,
 ) (string, SemanticMigrationFileCursor, error) {
@@ -194,22 +212,22 @@ func nextMigrationTarget(
 		}
 		return relativePath, entry, nil
 	}
+	for _, relativePath := range SemanticMigrationCursorExtraSourcePaths(cursor) {
+		entry := cursor.Files[relativePath]
+		if entry.Finished {
+			continue
+		}
+		return relativePath, entry, nil
+	}
 	return "", SemanticMigrationFileCursor{}, nil
 }
 
-// validateMigrationCursor rejects cursor entries outside the canonical
-// source set, so a mistyped operator cursor fails loudly instead of being
-// ignored or drained.
+// validateMigrationCursor rejects cursor entries that are neither a canonical
+// source nor the staged archive residue, so a mistyped operator cursor fails
+// loudly instead of being ignored or drained.
 func validateMigrationCursor(cursor SemanticMigrationCursor) error {
 	for relativePath := range cursor.Files {
-		known := false
-		for _, source := range semanticMigrationSources {
-			if source == relativePath {
-				known = true
-				break
-			}
-		}
-		if !known {
+		if !isMigrationSourcePath(relativePath) {
 			return fmt.Errorf(
 				"semantic migration cursor tracks unknown source path %q",
 				relativePath,
@@ -217,6 +235,15 @@ func validateMigrationCursor(cursor SemanticMigrationCursor) error {
 		}
 	}
 	return nil
+}
+
+// isMigrationSourcePath reports whether relativePath is a migration source:
+// one of the three canonical roots or the staged archive residue.
+func isMigrationSourcePath(relativePath string) bool {
+	if isCanonicalMigrationSource(relativePath) {
+		return true
+	}
+	return relativePath == SemanticMigrationResidueSourcePath
 }
 
 // migrationSectionBefore scans the source file from its start to offset and
@@ -362,7 +389,7 @@ func isMigrationSourceRuntimePath(runtimePath string) bool {
 			return true
 		}
 	}
-	return false
+	return runtimePath == semanticMigrationResidueRuntimePath
 }
 
 // allMigrationFilesFinished reports whether every tracked source is done;
@@ -414,17 +441,9 @@ func (semanticMigrationJob) Build(
 
 	// The hash check runs against whole-file content, but only hash values
 	// are kept: no semantic root content ever reaches the prompt.
-	files, err := loader.LoadSemanticMemory(ctx)
+	currentContent, err := loadMigrationSourceContent(ctx, loader, target)
 	if err != nil {
-		return Spec{}, fmt.Errorf("load semantic memory: %w", err)
-	}
-	contentByPath := semanticMemoryContentMap(files)
-	currentContent, ok := contentByPath[target]
-	if !ok {
-		return Spec{}, fmt.Errorf(
-			"semantic migration source %q is missing from semantic memory",
-			target,
-		)
+		return Spec{}, err
 	}
 	currentHash := SemanticContentHash(currentContent)
 	if fileCursor.Hash != "" && fileCursor.Hash != currentHash {
@@ -673,6 +692,18 @@ func (semanticMigrationJob) ApplyResult(
 		)
 	}
 
+	// The fold reports how many residue lines the migration walked, but the
+	// drain below removes the residue's bullets before the fold runs, so the
+	// count is captured here, from the still-undrained source.
+	var residueLines int
+	if target == SemanticMigrationResidueSourcePath {
+		residueContent, err := loadMigrationSourceContent(ctx, loader, target)
+		if err != nil {
+			return ParsedResult{}, err
+		}
+		residueLines = migrationResidueLineCount(residueContent)
+	}
+
 	// Nothing leaves the source file until it is ledgered: the drain runs
 	// strictly after the ledger lines above were parsed and validated.
 	var removedBytes int64
@@ -740,17 +771,9 @@ func (semanticMigrationJob) ApplyResult(
 		)
 	}
 
-	files, err := loader.LoadSemanticMemory(ctx)
+	currentContent, err := loadMigrationSourceContent(ctx, loader, target)
 	if err != nil {
-		return ParsedResult{}, fmt.Errorf("load semantic memory: %w", err)
-	}
-	contentByPath := semanticMemoryContentMap(files)
-	currentContent, ok := contentByPath[target]
-	if !ok {
-		return ParsedResult{}, fmt.Errorf(
-			"semantic migration source %q is missing from semantic memory",
-			target,
-		)
+		return ParsedResult{}, err
 	}
 	entry := SemanticMigrationFileCursor{
 		Offset:   newOffset,
@@ -759,14 +782,19 @@ func (semanticMigrationJob) ApplyResult(
 	}
 	cursor.Files[target] = entry
 	var jump semanticMigrationCheckpointJump
+	var fold semanticMigrationArchiveFold
 	if allMigrationFilesFinished(cursor) {
 		// Finishing the migration persists the drained state first, so the
 		// cursor records on disk what the source files already show, then
-		// folds the drain into steady state before the cursor disappears:
-		// the extraction checkpoint jumps to the transcript head, one ledger
-		// line names that jump, and only then does the cursor go away so the
-		// trigger never fires again.
+		// folds the archive into steady state and deletes it, then jumps the
+		// extraction checkpoint to the transcript head, and only then does the
+		// cursor go away so the trigger never fires again. One ledger line
+		// names the fold and one names the jump, in that order.
 		if err := SaveSemanticMigrationCursor(ctx, loader, cursor); err != nil {
+			return ParsedResult{}, err
+		}
+		fold, err = completeArchiveFold(ctx, loader, residueLines)
+		if err != nil {
 			return ParsedResult{}, err
 		}
 		jump, err = completeSemanticMigration(ctx, loader)
@@ -791,10 +819,15 @@ func (semanticMigrationJob) ApplyResult(
 		"ledger_lines_appended":    strconv.Itoa(len(refs)),
 		"source_finished":          strconv.FormatBool(finished),
 		"cursor_cleared":           strconv.FormatBool(allMigrationFilesFinished(cursor)),
+		"archive_files_folded":     strconv.Itoa(fold.filesFolded),
+		"archive_residue_lines":    strconv.Itoa(fold.residueLines),
 		"checkpoint_jump_seq":      strconv.FormatInt(jump.seq, 10),
 		"checkpoint_jump_recorded": strconv.FormatBool(jump.recorded),
 	}
 	summary := summarizeMigrationNotes(output.FinalText)
+	if fold.unresolved != "" {
+		summary = fmt.Sprintf("%s; unresolved: %s", summary, fold.unresolved)
+	}
 	if jump.unresolved != "" {
 		summary = fmt.Sprintf("%s; unresolved: %s", summary, jump.unresolved)
 	}
@@ -812,6 +845,80 @@ type semanticMigrationCheckpointJump struct {
 	seq        int64
 	recorded   bool
 	unresolved string
+}
+
+// semanticMigrationArchiveFold records what the migration's completion pass
+// did about the staged archive residue and the working archive directory, so
+// the run summary reports an honest outcome: the files folded away and
+// residue lines walked, or why the archive was left in place.
+type semanticMigrationArchiveFold struct {
+	filesFolded  int
+	residueLines int
+	unresolved   string
+}
+
+// completeArchiveFold deletes the staged archive residue and the whole
+// working/archive/ directory once the migration has walked the residue, and
+// leaves one ledger line naming the fold: how many archive files were folded
+// away and how many residue lines were walked. The residue line count is
+// passed in because the migration drains the residue's bullets before the
+// fold, so the residue file is empty by the time this runs.
+//
+// A deletion this pass cannot perform — the store's deletion returning an
+// error — does not fail the run: the archive stays in place, and the run's
+// summary reports that as unresolved.
+func completeArchiveFold(
+	ctx context.Context,
+	loader ContextLoader,
+	residueLines int,
+) (semanticMigrationArchiveFold, error) {
+	fold := semanticMigrationArchiveFold{residueLines: residueLines}
+	filesFolded, err := loader.DeleteWorkingArchive(ctx)
+	if err != nil {
+		fold.unresolved = fmt.Sprintf(
+			"archive fold left in place: working archive could not be deleted (%s)",
+			err,
+		)
+	} else {
+		fold.filesFolded = filesFolded
+	}
+	if fold.unresolved != "" {
+		return fold, nil
+	}
+	if err := appendSemanticMigrationFoldLedgerLine(ctx, loader, fold); err != nil {
+		return semanticMigrationArchiveFold{}, err
+	}
+	return fold, nil
+}
+
+// appendSemanticMigrationFoldLedgerLine writes the one ledger line the fold
+// leaves behind: the archive copies folded away and the residue lines walked.
+func appendSemanticMigrationFoldLedgerLine(
+	ctx context.Context,
+	loader ContextLoader,
+	fold semanticMigrationArchiveFold,
+) error {
+	line := fmt.Sprintf(
+		"%s run=%s archive folded: %d files, %d residue lines walked, working/archive deleted",
+		migrationLedgerTimestamp(),
+		SemanticMigrationJobType,
+		fold.filesFolded,
+		fold.residueLines,
+	)
+	return loader.AppendWorkingLedger(ctx, line)
+}
+
+// migrationResidueLineCount counts the non-blank lines of the staged archive
+// residue, the same count StageArchiveResidue reported when it staged the
+// residue.
+func migrationResidueLineCount(content string) int {
+	n := 0
+	for _, line := range strings.Split(content, "\n") {
+		if strings.TrimSpace(line) != "" {
+			n++
+		}
+	}
+	return n
 }
 
 // completeSemanticMigration folds the drained backlog into steady state. The

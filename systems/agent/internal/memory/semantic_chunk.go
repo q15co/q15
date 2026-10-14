@@ -11,16 +11,18 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/cognition"
 )
 
-// semanticSourceRelativePath normalizes and validates one semantic source
+// semanticSourceRelativePath normalizes and validates one migration source
 // path. The chunk and drain accessors are deliberately restricted to the
-// three canonical roots: they exist so the migration can walk the oversized
-// legacy files, and no other file may pass through them.
+// three canonical roots plus the staged archive residue: they exist so the
+// migration can walk the oversized legacy files, and no other file may pass
+// through them.
 func semanticSourceRelativePath(relativePath string) (string, error) {
 	normalized := filepath.ToSlash(strings.TrimSpace(relativePath))
 	switch normalized {
 	case semanticFactsRelativePath,
 		semanticPreferencesRelativePath,
-		semanticProjectsRelativePath:
+		semanticProjectsRelativePath,
+		archiveResidueRelativePath:
 		return normalized, nil
 	}
 	return "", fmt.Errorf("path %q is not a semantic source file", relativePath)

@@ -461,19 +461,20 @@ func (s *Store) LoadOpenLoops(ctx context.Context) (string, error) {
 	return strings.TrimSpace(string(raw)), nil
 }
 
-// LoadSemanticFileSizes returns the on-disk byte size of each semantic root
-// and each semantic/topics/*.md file, keyed by repository-relative slash
-// path. Missing files are omitted.
+// LoadSemanticFileSizes returns the on-disk byte size of each semantic root,
+// each semantic/topics/*.md file, and the staged archive residue, keyed by
+// repository-relative slash path. Missing files are omitted.
 func (s *Store) LoadSemanticFileSizes(ctx context.Context) (map[string]int64, error) {
 	_ = ctx
 
 	release := s.repository.Acquire()
 	defer release()
 
-	candidates := make([]string, 0, len(semanticSeedPaths))
+	candidates := make([]string, 0, len(semanticSeedPaths)+1)
 	for _, file := range semanticSeedPaths {
 		candidates = append(candidates, file.relativePath)
 	}
+	candidates = append(candidates, archiveResidueRelativePath)
 	topicsDir := filepath.Join(s.root(), filepath.FromSlash(semanticTopicsRelativePath))
 	topics, err := filepath.Glob(filepath.Join(topicsDir, "*.md"))
 	if err != nil {
@@ -502,6 +503,35 @@ func (s *Store) LoadSemanticFileSizes(ctx context.Context) (map[string]int64, er
 		out[relative] = info.Size()
 	}
 	return out, nil
+}
+
+// LoadSemanticSourceContent returns the trimmed content of one migration
+// source file: a semantic root or the staged archive residue. The migration
+// reads exactly the source it is about to drain, for its per-source hash
+// check, rather than the whole semantic memory set (which the residue is not
+// part of). A missing file yields empty content.
+func (s *Store) LoadSemanticSourceContent(
+	ctx context.Context,
+	relativePath string,
+) (string, error) {
+	_ = ctx
+
+	release := s.repository.Acquire()
+	defer release()
+
+	relative, err := semanticSourceRelativePath(relativePath)
+	if err != nil {
+		return "", err
+	}
+	path := filepath.Join(s.root(), filepath.FromSlash(relative))
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("read migration source %q: %w", path, err)
+	}
+	return strings.TrimSpace(string(raw)), nil
 }
 
 // AppendTurn persists one completed conversation turn and commits it to git.

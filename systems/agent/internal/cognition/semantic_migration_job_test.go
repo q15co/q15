@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
+	"github.com/q15co/q15/systems/agent/internal/memory/memcheck"
 )
 
 // migrationTopicRelativePath is the single topic file the scripted model
@@ -32,6 +34,7 @@ var migrationChunkBodyPattern = regexp.MustCompile(
 type migrationJobLoader struct {
 	files              map[string]string
 	topics             map[string]string
+	archiveFiles       map[string]string
 	ledger             string
 	artifacts          map[string]string
 	headSeq            int64
@@ -151,6 +154,33 @@ func (l *migrationJobLoader) LoadSemanticTopics(
 
 func (l *migrationJobLoader) LoadWorkingLedger(context.Context) (string, error) {
 	return strings.TrimSpace(l.ledger), nil
+}
+
+// LoadSemanticSourceContent returns the trimmed content of one migration
+// source file (a semantic root or the staged archive residue), mirroring the
+// store's per-source reader. A missing file yields empty content.
+func (l *migrationJobLoader) LoadSemanticSourceContent(
+	_ context.Context,
+	relativePath string,
+) (string, error) {
+	if !isMigrationSourcePath(relativePath) {
+		return "", fmt.Errorf("path %q is not a semantic source file", relativePath)
+	}
+	return strings.TrimSpace(l.files[relativePath]), nil
+}
+
+// DeleteWorkingArchive removes the staged archive residue and the archive
+// copies, returning how many archive .md files were folded away.
+func (l *migrationJobLoader) DeleteWorkingArchive(context.Context) (int, error) {
+	folded := 0
+	for path := range l.archiveFiles {
+		if strings.HasSuffix(strings.ToLower(path), ".md") {
+			folded++
+		}
+	}
+	delete(l.files, SemanticMigrationResidueSourcePath)
+	l.archiveFiles = nil
+	return folded, nil
 }
 
 // AppendWorkingLedger appends the runtime way: the line joins the end of the
@@ -339,26 +369,25 @@ func (l *migrationJobLoader) RemoveSemanticLines(
 }
 
 func isMigrationSourceRelative(relativePath string) bool {
-	for _, source := range semanticMigrationSources {
-		if source == relativePath {
-			return true
-		}
-	}
-	return false
+	return isMigrationSourcePath(relativePath)
 }
 
 func cloneMigrationLoader(l *migrationJobLoader) *migrationJobLoader {
 	copied := &migrationJobLoader{
-		files:     make(map[string]string, len(l.files)),
-		topics:    make(map[string]string, len(l.topics)),
-		ledger:    l.ledger,
-		artifacts: make(map[string]string, len(l.artifacts)),
+		files:        make(map[string]string, len(l.files)),
+		topics:       make(map[string]string, len(l.topics)),
+		archiveFiles: make(map[string]string, len(l.archiveFiles)),
+		ledger:       l.ledger,
+		artifacts:    make(map[string]string, len(l.artifacts)),
 	}
 	for key, value := range l.files {
 		copied.files[key] = value
 	}
 	for key, value := range l.topics {
 		copied.topics[key] = value
+	}
+	for key, value := range l.archiveFiles {
+		copied.archiveFiles[key] = value
 	}
 	for key, value := range l.artifacts {
 		copied.artifacts[key] = value
@@ -466,16 +495,24 @@ func migrationFakeModelOutput(
 ) JobOutput {
 	t.Helper()
 	bullets := migrationChunkBullets(t, spec)
+	target := migrationChunkTarget(t, spec)
 	appended := make([]string, 0, len(bullets))
+	claims := make([]string, 0, len(bullets))
 	for i, bullet := range bullets {
+		id := fmt.Sprintf("c-2026-%04d", i+1)
 		appended = append(appended, fmt.Sprintf(
 			"2026-10-12T09:00Z run=semantic_memory.migrate migrated \"legacy bullet\""+
-				" → c-2026-%04d (%s) (source=%s:%d sha=%s)",
-			i+1,
+				" → %s (%s) (source=%s:%d sha=%s)",
+			id,
 			migrationTopicRelativePath,
-			semanticFactsRelativePath,
+			target,
 			bullet.ByteOffset,
 			bullet.Hash,
+		))
+		claims = append(claims, fmt.Sprintf(
+			"- [%s] %s",
+			id,
+			migrationBulletStatement(bullet.Raw),
 		))
 	}
 	if len(appended) > 0 {
@@ -485,12 +522,40 @@ func migrationFakeModelOutput(
 		}
 		loader.ledger = trimmed + strings.Join(appended, "\n")
 	}
+	if len(claims) > 0 {
+		if loader.topics == nil {
+			loader.topics = make(map[string]string)
+		}
+		topic := strings.TrimSpace(loader.topics[migrationTopicRelativePath])
+		if topic != "" {
+			topic += "\n"
+		}
+		loader.topics[migrationTopicRelativePath] = topic + strings.Join(claims, "\n")
+	}
 	return JobOutput{
 		Type:      SemanticMigrationJobType,
 		Spec:      spec,
 		FinalText: "Drained the annotated chunk.",
 		Messages:  migrationModelWriteMessages(),
 	}
+}
+
+// migrationBulletStatement strips a legacy bullet line to its claim text: the
+// "- " or "* " marker and surrounding whitespace are removed, leaving the
+// statement the scripted model turns into a claim.
+func migrationBulletStatement(raw string) string {
+	text := strings.TrimSpace(raw)
+	text = strings.TrimPrefix(text, "- ")
+	text = strings.TrimPrefix(text, "* ")
+	return strings.TrimSpace(text)
+}
+
+// migrationChunkTarget returns the source path the built spec is draining,
+// the one path its ledger lines must cite.
+func migrationChunkTarget(t *testing.T, spec Spec) string {
+	t.Helper()
+	chunk := migrationPromptSection(t, spec, "migration_chunk")
+	return chunk.Attributes["path"]
 }
 
 // migrationModelWriteMessages fabricates the successful tool calls the
@@ -1171,5 +1236,237 @@ func TestSemanticMigrationCompletionSurvivesAnUnrecordableHead(t *testing.T) {
 	}
 	if _, ok := loader.artifacts[SemanticMigrationCursorArtifactPath]; ok {
 		t.Fatalf("completed migration left the cursor behind")
+	}
+}
+
+// seedMigrationArchiveFold stages one archive copy and the residue the fold
+// walks: the archive holds one .md file, and the residue is its lines that
+// are not already in current working memory.
+func seedMigrationArchiveFold(t *testing.T, loader *migrationJobLoader, residue string) {
+	t.Helper()
+	if loader.archiveFiles == nil {
+		loader.archiveFiles = make(map[string]string)
+	}
+	loader.archiveFiles["working/archive/pre-demotion.md"] = "# Old Working Memory\n"
+	loader.files[SemanticMigrationResidueSourcePath] = residue
+}
+
+// migrateToCompletion drives Build, the scripted model, and ApplyResult until
+// the cursor reports no open file, returning the final parse result.
+func migrateToCompletion(
+	ctx context.Context,
+	t *testing.T,
+	job JobDefinition,
+	loader *migrationJobLoader,
+) ParsedResult {
+	t.Helper()
+	var finalResult ParsedResult
+	for runs := 0; runs < 16; runs++ {
+		cursor, err := LoadSemanticMigrationCursor(ctx, loader)
+		if err != nil {
+			t.Fatalf("LoadSemanticMigrationCursor() error = %v", err)
+		}
+		if !SemanticMigrationCursorHasOpenFile(cursor) {
+			return finalResult
+		}
+		spec, err := job.Build(ctx, loader)
+		if err != nil {
+			t.Fatalf("Build() error = %v", err)
+		}
+		result, err := job.ApplyResult(
+			ctx,
+			loader,
+			migrationFakeModelOutput(t, loader, spec),
+		)
+		if err != nil {
+			t.Fatalf("ApplyResult() error = %v", err)
+		}
+		finalResult = result
+	}
+	t.Fatalf("migration did not finish within the run budget")
+	return ParsedResult{}
+}
+
+// TestSemanticMigrationWalksResidueLast pins the walk order: the three
+// canonical roots are drained before the staged archive residue, which is the
+// cursor's extra source and always opened last.
+func TestSemanticMigrationWalksResidueLast(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	loader := &migrationJobLoader{files: migrationFixture(1)}
+	migrationCursorFor(
+		t,
+		loader,
+		semanticFactsRelativePath,
+		semanticPreferencesRelativePath,
+		semanticProjectsRelativePath,
+		SemanticMigrationResidueSourcePath,
+	)
+
+	cursor, err := LoadSemanticMigrationCursor(ctx, loader)
+	if err != nil {
+		t.Fatalf("LoadSemanticMigrationCursor() error = %v", err)
+	}
+	var order []string
+	for {
+		target, _, err := nextMigrationTarget(cursor)
+		if err != nil {
+			t.Fatalf("nextMigrationTarget() error = %v", err)
+		}
+		if target == "" {
+			break
+		}
+		order = append(order, target)
+		entry := cursor.Files[target]
+		entry.Finished = true
+		cursor.Files[target] = entry
+	}
+	want := []string{
+		semanticFactsRelativePath,
+		semanticPreferencesRelativePath,
+		semanticProjectsRelativePath,
+		SemanticMigrationResidueSourcePath,
+	}
+	if strings.Join(order, ",") != strings.Join(want, ",") {
+		t.Fatalf("walk order = %v, want %v", order, want)
+	}
+}
+
+// TestSemanticMigrationCompletionFoldsArchive drives a migration whose cursor
+// tracks the three roots plus a staged archive residue. Finishing it folds the
+// archive: the residue file and the archive directory are gone, one ledger
+// line names the fold, and the extraction checkpoint still jumps to head.
+func TestSemanticMigrationCompletionFoldsArchive(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	job := NewSemanticMigrationRegistration().NewJob()
+	loader := &migrationJobLoader{
+		files:   migrationFixture(2),
+		topics:  map[string]string{},
+		headSeq: 77,
+	}
+	seedMigrationArchiveFold(
+		t,
+		loader,
+		"- the river ferry departs before sunrise on cold mornings\n"+
+			"- the old bridge closes for repairs every autumn\n",
+	)
+	migrationCursorFor(
+		t,
+		loader,
+		semanticFactsRelativePath,
+		semanticPreferencesRelativePath,
+		semanticProjectsRelativePath,
+		SemanticMigrationResidueSourcePath,
+	)
+
+	finalResult := migrateToCompletion(ctx, t, job, loader)
+
+	if _, ok := loader.files[SemanticMigrationResidueSourcePath]; ok {
+		t.Fatalf("residue file still present after the fold")
+	}
+	if len(loader.archiveFiles) != 0 {
+		t.Fatalf("archive copies still present after the fold: %v", loader.archiveFiles)
+	}
+	if got := strings.Count(loader.ledger, "archive folded"); got != 1 {
+		t.Fatalf("fold ledger lines = %d, want exactly one", got)
+	}
+	if !strings.Contains(loader.ledger, "1 files, 2 residue lines walked") {
+		t.Fatalf("ledger = %q, want the fold to name 1 file and 2 residue lines", loader.ledger)
+	}
+	if loader.semanticCheckpoint.LastExtractedSeq != 77 {
+		t.Fatalf(
+			"semantic checkpoint seq = %d, want the transcript head 77",
+			loader.semanticCheckpoint.LastExtractedSeq,
+		)
+	}
+	if _, ok := loader.artifacts[SemanticMigrationCursorArtifactPath]; ok {
+		t.Fatalf("completed migration left the cursor behind")
+	}
+	if got, want := finalResult.Metadata["archive_files_folded"], "1"; got != want {
+		t.Fatalf("archive_files_folded = %q, want %q", got, want)
+	}
+	if got, want := finalResult.Metadata["archive_residue_lines"], "2"; got != want {
+		t.Fatalf("archive_residue_lines = %q, want %q", got, want)
+	}
+}
+
+// dumpMigrationCorpus writes the fake's post-migration corpus to a temp
+// memory root: the drained semantic roots and the topic claims the scripted
+// model produced, in the layout memcheck.CheckDuplicates walks.
+func dumpMigrationCorpus(t *testing.T, loader *migrationJobLoader) string {
+	t.Helper()
+	root := t.TempDir()
+	write := func(relativePath, content string) {
+		t.Helper()
+		path := filepath.Join(root, filepath.FromSlash(relativePath))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s) error = %v", filepath.Dir(path), err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("WriteFile(%s) error = %v", path, err)
+		}
+	}
+	for _, relativePath := range semanticMigrationSources {
+		write(relativePath, loader.files[relativePath])
+	}
+	for relativePath, content := range loader.topics {
+		write(relativePath, content)
+	}
+	return root
+}
+
+// TestSemanticMigrationArchiveFoldAcceptance covers the ticket's two
+// acceptance assertions: the post-migration corpus stays under the duplicate
+// rate limit, and working/archive/ is absent after the fold.
+func TestSemanticMigrationArchiveFoldAcceptance(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	job := NewSemanticMigrationRegistration().NewJob()
+	loader := &migrationJobLoader{
+		files:   migrationFixture(2),
+		topics:  map[string]string{},
+		headSeq: 77,
+	}
+	seedMigrationArchiveFold(
+		t,
+		loader,
+		"- the river ferry departs before sunrise on cold mornings\n"+
+			"- the old bridge closes for repairs every autumn\n",
+	)
+	migrationCursorFor(
+		t,
+		loader,
+		semanticFactsRelativePath,
+		semanticPreferencesRelativePath,
+		semanticProjectsRelativePath,
+		SemanticMigrationResidueSourcePath,
+	)
+
+	migrateToCompletion(ctx, t, job, loader)
+
+	// Item (e): the archive directory is gone.
+	if len(loader.archiveFiles) != 0 {
+		t.Fatalf("working/archive still present after the fold: %v", loader.archiveFiles)
+	}
+	if _, ok := loader.files[SemanticMigrationResidueSourcePath]; ok {
+		t.Fatalf("archive residue still present after the fold")
+	}
+
+	// Item (c): the post-migration corpus stays under the duplicate rate
+	// limit the design §7.3 sets.
+	report, err := memcheck.CheckDuplicates(
+		dumpMigrationCorpus(t, loader),
+		memcheck.DefaultDuplicateOptions(),
+	)
+	if err != nil {
+		t.Fatalf("CheckDuplicates(post-migration corpus) error = %v", err)
+	}
+	if report.Rate >= memcheck.DuplicateRateLimit {
+		t.Fatalf(
+			"post-migration duplicate rate %v is not under the %v limit",
+			report.Rate,
+			memcheck.DuplicateRateLimit,
+		)
 	}
 }

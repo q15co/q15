@@ -442,6 +442,67 @@ func TestMemoryMigrateStartIsIdempotent(t *testing.T) {
 	}
 }
 
+// TestMemoryMigrateStartStagesArchiveResidue covers the archive fold's CLI
+// hook: a --start whose working/archive/ holds a .md copy stages the residue
+// of lines not already in working memory as the cursor's fourth source and
+// prints one line naming what was folded.
+func TestMemoryMigrateStartStagesArchiveResidue(t *testing.T) {
+	root := newMigrateRoot(t, map[string]int64{
+		"semantic/facts.md":       40,
+		"semantic/preferences.md": 30,
+		"semantic/projects.md":    20,
+	})
+	// Working memory already holds two of the archive's three lines, so the
+	// staged residue carries exactly the one line not present.
+	if err := os.MkdirAll(filepath.Join(root, "working"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(working) error = %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(root, "working", "WORKING_MEMORY.md"),
+		[]byte("already there\nkeep me\n"),
+		0o644,
+	); err != nil {
+		t.Fatalf("WriteFile(WORKING_MEMORY.md) error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "working", "archive"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(working/archive) error = %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(root, "working", "archive", "pre-demotion.md"),
+		[]byte("already there\nfresh line from the archive\nkeep me\n"),
+		0o644,
+	); err != nil {
+		t.Fatalf("WriteFile(archive copy) error = %v", err)
+	}
+
+	env, stdout, _ := newEnv(&fakeExec{})
+	if err := Run(
+		context.Background(),
+		env,
+		[]string{"memory", "migrate", "--memory-root", root, "--start"},
+	); err != nil {
+		t.Fatalf("Run(migrate --start) error = %v", err)
+	}
+	staged := "semantic migration: staged archive fold residue (1 files folded, 1 residue lines)\n"
+	if !strings.Contains(stdout.String(), staged) {
+		t.Fatalf("stdout = %q, want the staged line %q", stdout.String(), staged)
+	}
+	files := readMigrateCursor(t, root)
+	if len(files) != 4 {
+		t.Fatalf("cursor tracks %d files: %v, want 4", len(files), files)
+	}
+	if _, ok := files["working/archive-residue.md"]; !ok {
+		t.Fatalf("cursor files = %v, want the archive residue source", files)
+	}
+	if residue, err := os.ReadFile(
+		filepath.Join(root, "working", "archive-residue.md"),
+	); err != nil {
+		t.Fatalf("ReadFile(archive-residue.md) error = %v", err)
+	} else if string(residue) != "fresh line from the archive\n" {
+		t.Fatalf("archive residue = %q, want only the not-already-present line", string(residue))
+	}
+}
+
 // TestMemoryMigrateStartOnFinishedMigration pins the finished rule: a plain
 // start against a cursor whose files all say finished reports that and does
 // not redo the work; only --force restarts every file from offset zero.

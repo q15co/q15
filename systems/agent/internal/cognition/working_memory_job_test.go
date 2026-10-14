@@ -185,6 +185,17 @@ func (l *workingMemoryJobLoader) RemoveSemanticLines(
 	return 0, nil
 }
 
+func (l *workingMemoryJobLoader) LoadSemanticSourceContent(
+	context.Context,
+	string,
+) (string, error) {
+	return "", nil
+}
+
+func (l *workingMemoryJobLoader) DeleteWorkingArchive(context.Context) (int, error) {
+	return 0, nil
+}
+
 func (l *workingMemoryJobLoader) LoadJobState(context.Context, string) (JobState, error) {
 	return l.jobState, nil
 }

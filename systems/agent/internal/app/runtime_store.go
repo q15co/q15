@@ -216,6 +216,17 @@ func (s *runtimeStore) RemoveSemanticLines(
 	return s.memory.RemoveSemanticLines(ctx, relativePath, start, end, hashes)
 }
 
+func (s *runtimeStore) LoadSemanticSourceContent(
+	ctx context.Context,
+	relativePath string,
+) (string, error) {
+	return s.memory.LoadSemanticSourceContent(ctx, relativePath)
+}
+
+func (s *runtimeStore) DeleteWorkingArchive(ctx context.Context) (int, error) {
+	return s.memory.DeleteWorkingArchive(ctx)
+}
+
 func (s *runtimeStore) LoadHead(ctx context.Context) (int64, time.Time, error) {
 	return s.memory.LoadHead(ctx)
 }

@@ -213,6 +213,17 @@ func (s *spyLoader) RemoveSemanticLines(
 	return 0, nil
 }
 
+func (s *spyLoader) LoadSemanticSourceContent(
+	context.Context,
+	string,
+) (string, error) {
+	return "", nil
+}
+
+func (s *spyLoader) DeleteWorkingArchive(context.Context) (int, error) {
+	return 0, nil
+}
+
 func (s *spyLoader) LoadJobState(context.Context, string) (JobState, error) {
 	return JobState{}, nil
 }
