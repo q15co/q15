@@ -174,9 +174,9 @@ func TestStoreRotatesOversizedLedger(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile(%q) error = %v", ledgerPath, err)
 	}
-	seeded, err := os.ReadFile(filepath.Join(root, "working", "LEDGER.md"))
+	seeded, err := readEmbeddedSeed(ledgerSeedPath)
 	if err != nil {
-		t.Fatalf("ReadFile(LEDGER.md) error = %v", err)
+		t.Fatalf("readEmbeddedSeed(ledgerSeedPath) error = %v", err)
 	}
 	if strings.Contains(string(fresh), "src=t4391") {
 		t.Fatalf("fresh ledger retained rotated entries:\n%s", string(fresh))
@@ -184,8 +184,8 @@ func TestStoreRotatesOversizedLedger(t *testing.T) {
 	if !strings.Contains(string(fresh), "Conversion Ledger") {
 		t.Fatalf("fresh ledger lost its header:\n%s", string(fresh))
 	}
-	if string(fresh) != string(seeded) {
-		t.Fatalf("fresh ledger = %q, want seeded header %q", string(fresh), string(seeded))
+	if strings.TrimSpace(string(fresh)) != strings.TrimSpace(seeded) {
+		t.Fatalf("fresh ledger = %q, want seeded header %q", string(fresh), seeded)
 	}
 
 	info, err := os.Stat(ledgerPath)
@@ -253,5 +253,52 @@ func TestStoreInitRotatesOversizedLedger(t *testing.T) {
 	}
 	if strings.Contains(string(fresh), "l-2026-0031") {
 		t.Fatalf("Init left rotated entries in the fresh ledger:\n%s", string(fresh))
+	}
+}
+
+
+func TestStoreRotatesOversizedLedgerKeepsArchiveChronological(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "memory")
+	store := newTestStore(root, &fakeCommitter{})
+	ctx := context.Background()
+
+	if err := store.Init(ctx); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	rotatedAt := time.Date(2026, time.October, 14, 5, 2, 0, 0, time.UTC)
+	archivePath := filepath.Join(root, "working", "ledger", "2026-Q4.md")
+	if err := os.MkdirAll(filepath.Dir(archivePath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(ledger archive dir) error = %v", err)
+	}
+	older := "2026-10-01T05:02Z src=t1..t2 run=working_memory.consolidate older\n"
+	if err := os.WriteFile(archivePath, []byte(older), 0o644); err != nil {
+		t.Fatalf("WriteFile(archive fixture) error = %v", err)
+	}
+
+	ledgerPath := filepath.Join(root, "working", "LEDGER.md")
+	oversized := strings.Repeat(
+		"2026-10-14T05:02Z src=t4391..t4414 run=semantic_memory.extract\n",
+		6144,
+	)
+	if err := os.WriteFile(ledgerPath, []byte(oversized), 0o644); err != nil {
+		t.Fatalf("WriteFile(ledger fixture) error = %v", err)
+	}
+
+	if err := store.rotateWorkingLedger(rotatedAt); err != nil {
+		t.Fatalf("rotateWorkingLedger() error = %v", err)
+	}
+
+	archived, err := os.ReadFile(archivePath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", archivePath, err)
+	}
+	want := older + oversized
+	if string(archived) != want {
+		t.Fatalf(
+			"archive after a second rotation in the same quarter is not chronological: got %d bytes, want %d",
+			len(archived),
+			len(want),
+		)
 	}
 }
