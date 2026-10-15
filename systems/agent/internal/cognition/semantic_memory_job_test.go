@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -29,6 +30,8 @@ type semanticMemoryJobLoader struct {
 	semanticSizes           map[string]int64
 	openLoops               string
 	ledger                  string
+	rawFiles                map[string]string
+	ledgerHistory           string
 }
 
 func (l *semanticMemoryJobLoader) LoadCoreMemory(context.Context) (agent.CoreMemory, error) {
@@ -47,7 +50,20 @@ func (l *semanticMemoryJobLoader) LoadWorkingMemory(context.Context) (agent.Work
 }
 
 func (l *semanticMemoryJobLoader) LoadSemanticFileSizes(context.Context) (map[string]int64, error) {
-	return l.semanticSizes, nil
+	sizes := map[string]int64{
+		semanticFactsRelativePath:       0,
+		semanticPreferencesRelativePath: 0,
+		semanticProjectsRelativePath:    0,
+	}
+	for path, size := range l.semanticSizes {
+		sizes[path] = size
+	}
+	for path, raw := range l.rawFiles {
+		if strings.HasPrefix(path, "semantic/") {
+			sizes[path] = int64(len(raw))
+		}
+	}
+	return sizes, nil
 }
 
 func (l *semanticMemoryJobLoader) LoadOpenLoops(context.Context) (string, error) {
@@ -767,10 +783,34 @@ func TestSemanticMemoryExtractionApplyResultUsesFalseChangedForReadOnlyInspectio
 	}
 }
 
-func (l *semanticMemoryJobLoader) ReadFileBytes(context.Context, string) ([]byte, bool, error) {
+func (l *semanticMemoryJobLoader) ReadFileBytes(
+	_ context.Context,
+	relative string,
+) ([]byte, bool, error) {
+	if raw, ok := l.rawFiles[relative]; ok {
+		return []byte(raw), true, nil
+	}
+	switch relative {
+	case workingMemoryRelativePath:
+		return []byte(l.working.Content), true, nil
+	case "working/LEDGER.md":
+		return []byte(l.ledger), true, nil
+	case "working/OPEN_LOOPS.md":
+		return []byte(l.openLoops), true, nil
+	}
+	for _, file := range l.semantic.Files {
+		if file.RelativePath == relative {
+			return []byte(file.Content), true, nil
+		}
+	}
+	for _, root := range semanticRuntimePaths() {
+		if relative == strings.TrimPrefix(root, memoryRuntimePrefix) {
+			return nil, true, nil
+		}
+	}
 	return nil, false, nil
 }
 
 func (l *semanticMemoryJobLoader) LoadConversionLedgerHistory(context.Context) (string, error) {
-	return "", nil
+	return l.ledgerHistory, nil
 }

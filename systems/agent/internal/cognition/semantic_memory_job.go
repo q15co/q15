@@ -81,7 +81,7 @@ func (semanticMemoryExtractionJob) Build(
 	if err != nil {
 		return Spec{}, fmt.Errorf("load working memory: %w", err)
 	}
-	ledger, err := loader.LoadWorkingLedger(ctx)
+	_, err = loader.LoadWorkingLedger(ctx)
 	if err != nil {
 		return Spec{}, fmt.Errorf("load working ledger: %w", err)
 	}
@@ -155,6 +155,14 @@ func (semanticMemoryExtractionJob) Build(
 		verificationAttrs["present"] = "true"
 	}
 
+	baseline, err := conversionBaselineFiles(ctx, loader)
+	if err != nil {
+		return Spec{}, err
+	}
+	claimIDs, err := conversionClaimIDSummary(ctx, loader, baseline)
+	if err != nil {
+		return Spec{}, err
+	}
 	transcriptArtifact := renderTranscriptArtifact(recentMessages)
 
 	return Spec{
@@ -189,10 +197,10 @@ func (semanticMemoryExtractionJob) Build(
 			"If a target file needs changes, update only that file with write_file, edit_file, or apply_patch while preserving the existing section structure.",
 			"If a target file does not need changes, call read_file on it and leave it unchanged.",
 			fmt.Sprintf(
-				"Every working-memory bullet you remove or rewrite is an exit and needs its own ledger line appended to %s in this run. A run that removes more working-memory bullets than it appends ledger lines fails validation.",
+				"Every working-memory item you remove or rewrite, including its continuation lines, is an exit and needs exactly one valid ledger line appended to %s in this run. Copy the entire original item text into the quoted description, collapsing whitespace and omitting only the initial bullet marker. Converted and moved exits require an existing valid target; drops require a reason. Unrelated or duplicate exit records fail validation.",
 				workingLedgerRuntimePath,
 			),
-			"Only append to the ledger: add new lines at the end with edit_file or apply_patch and never edit, reorder, or delete existing ledger lines. A run that does not preserve the existing ledger as a prefix fails validation.",
+			"Only append complete newline-terminated records to the ledger: preserve every existing byte, including leading whitespace and final line boundaries. Never edit, reorder, or delete existing ledger lines.",
 			fmt.Sprintf(
 				"Keep every semantic root file at or under %d bytes and every topic file at or under %d bytes. A run that leaves a file it wrote over its cap fails validation.",
 				semanticRootCapBytes,
@@ -206,6 +214,7 @@ func (semanticMemoryExtractionJob) Build(
 			"After the tool work completes, reply with one or two short sentences summarizing what changed or that semantic memory was already current.",
 		),
 		PromptSections: []agent.PromptSection{
+			{Name: "claim_id_allocation", Body: claimIDs},
 			{
 				Name:       "semantic_facts_target",
 				Attributes: map[string]string{"path": semanticFactsRuntimePath},
@@ -271,8 +280,8 @@ func (semanticMemoryExtractionJob) Build(
 					"- No match: add a new claim to the correct section, respecting the cap.",
 					"- Consistent match: merge into the existing claim, append the new src seq, and bump rev. Never add a second bullet for the same claim.",
 					"- Contradicting match: mark the old claim status: conflicted, add the new claim also as conflicted, and cross-reference both IDs. Never flatten the conflict.",
-					"- Supersession (the new claim is the acknowledged replacement): write the new claim as active, delete the old claim, and record superseded c-old -> c-new in the ledger.",
-					"- Claim format: `- [c-YYYY-NNNN] <self-contained statement>` followed by an indented `{status: active|conflicted, kind: fact|inference|preference, confidence: confirmed|likely|uncertain, src: t<seq>[, t<seq>], rev: YYYY-MM-DD}` line. Claim IDs are never reused.",
+					"- Supersession (the new claim is the acknowledged replacement): write the new claim as active, delete the old claim, and append a superseded ledger record targeting the old claim ID with the replacement ID in its reason. Every removed durable claim needs a superseded, retracted, or resolved ledger record targeting its old ID and explaining the reason.",
+					"- Claim format: `- [c-YYYY-NNNN] <self-contained statement>` followed by an indented `{status: active|conflicted, kind: fact|inference|preference, confidence: confirmed|likely|uncertain, src: t<seq>[, t<seq>], rev: YYYY-MM-DD}` line. Claim IDs are globally unique and never reused, including IDs recorded in archived ledgers. Preserve existing source markers when revising an existing claim.",
 					"- Open-loop format: `- [l-YYYY-NNNN] <intention>` followed by an indented `{trigger: date:YYYY-MM-DD | event:\"<description>\" | next-session, owner: agent|user, src: t<seq>}` line.",
 					"- Ledger format: one line per exit, `YYYY-MM-DDTHH:MMZ run=semantic_memory.extract src=t<a>..t<b> <outcome> \"<working-memory item>\" → <claim-or-loop-id> (<file>)`. For a drop, omit the target and give the reason in parentheses.",
 					"- Caps: when a file is near its cap, revise before adding: merge, supersede, or split project detail into a topic file and leave a one-line index entry in projects.md (`- [<slug>] <summary> → topics/<slug>.md`).",
@@ -313,11 +322,8 @@ func (semanticMemoryExtractionJob) Build(
 		RequireToolCalling: true,
 		AllowedTools:       append([]string(nil), semanticMemoryAllowedTools...),
 		CheckpointSeq:      windowEndSeq,
-		Baseline: map[string]string{
-			workingMemoryRuntimePath: strings.TrimSpace(working.Content),
-			workingLedgerRuntimePath: strings.TrimSpace(ledger),
-		},
-		ToolCallPolicy: semanticConversionPolicy(),
+		Baseline:           baseline,
+		ToolCallPolicy:     semanticConversionPolicy(),
 	}, nil
 }
 
@@ -355,6 +361,9 @@ func (semanticMemoryExtractionJob) ApplyResult(
 		return ParsedResult{}, fmt.Errorf("context loader is required")
 	}
 	if err := checkSemanticCaps(ctx, loader, output.Messages); err != nil {
+		return ParsedResult{}, err
+	}
+	if err := checkSemanticClaims(ctx, loader, output.Spec.Baseline, successfulWritePaths(output.Messages)); err != nil {
 		return ParsedResult{}, err
 	}
 	removed, appended, err := checkLedgerCompleteness(ctx, loader, output.Spec.Baseline)

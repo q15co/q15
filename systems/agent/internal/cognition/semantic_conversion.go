@@ -6,6 +6,8 @@ import (
 	"path"
 	"strings"
 
+	"github.com/q15co/q15/systems/agent/internal/memory/claims"
+
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
 	filetools "github.com/q15co/q15/systems/agent/internal/tools/files"
@@ -80,7 +82,7 @@ func evaluateWorkingMemoryOverbudget(
 
 // checkSemanticCaps fails when a semantic file this run wrote is over its cap
 // afterwards. Files the run did not write are not judged, so a file that was
-// already oversized does not fail every run until it is migrated.
+// already oversized does not fail a run that leaves it untouched.
 func checkSemanticCaps(
 	ctx context.Context,
 	loader ContextLoader,
@@ -101,7 +103,23 @@ func checkSemanticCaps(
 			continue
 		}
 		size, ok := sizes[strings.TrimPrefix(runtimePath, memoryRuntimePrefix)]
-		if ok && size > int64(limit) {
+		if !ok {
+			_, existed, readErr := loader.ReadFileBytes(
+				ctx,
+				strings.TrimPrefix(runtimePath, memoryRuntimePrefix),
+			)
+			if readErr != nil {
+				return fmt.Errorf("inspect written semantic file %s: %w", runtimePath, readErr)
+			}
+			if !existed {
+				continue
+			}
+			return fmt.Errorf(
+				"written semantic file %s is missing from the file inventory",
+				runtimePath,
+			)
+		}
+		if size > int64(limit) {
 			over = append(over, fmt.Sprintf("%s=%d>%d", runtimePath, size, limit))
 		}
 	}
@@ -167,10 +185,8 @@ func successfulWritePaths(messages []conversation.Message) []string {
 	return out
 }
 
-// checkLedgerCompleteness diffs working memory against the Build baseline and
-// requires one appended ledger line per removed working-memory bullet. It also
-// requires the pre-run ledger to survive as a prefix, because file tools
-// rewrite the whole file instead of appending with O_APPEND.
+// checkLedgerCompleteness validates structured exit evidence against complete
+// working-memory items. Descriptions must preserve the entire item's text.
 func checkLedgerCompleteness(
 	ctx context.Context,
 	loader ContextLoader,
@@ -180,40 +196,106 @@ func checkLedgerCompleteness(
 	if !ok {
 		return 0, 0, fmt.Errorf("spec baseline is missing pre-run working memory")
 	}
-	beforeLedger := baseline[workingLedgerRuntimePath]
-
-	working, err := loader.LoadWorkingMemory(ctx)
+	working, _, err := loader.ReadFileBytes(ctx, workingMemoryRelativePath)
 	if err != nil {
 		return 0, 0, fmt.Errorf("load post-run working memory: %w", err)
 	}
-	afterLedger, err := loader.LoadWorkingLedger(ctx)
+	entries, err := appendedWorkingLedgerEntries(ctx, loader, baseline, "semantic-memory run")
 	if err != nil {
-		return 0, 0, fmt.Errorf("load post-run working ledger: %w", err)
+		return 0, 0, err
 	}
-	afterLedger = strings.TrimSpace(afterLedger)
-	if !strings.HasPrefix(afterLedger, beforeLedger) {
-		return 0, 0, fmt.Errorf(
-			"semantic-memory run rewrote existing ledger lines in %s; the ledger is append-only",
-			workingLedgerRuntimePath,
-		)
+	removed := removedWorkingItems(before, string(working))
+	unmatched := make(map[string]int, len(removed))
+	for _, item := range removed {
+		unmatched[workingItemDescription(item)]++
 	}
-	appended := countNonEmptyLines(afterLedger[len(beforeLedger):])
-	removed := removedWorkingItems(before, strings.TrimSpace(working.Content))
-	if len(removed) > appended {
-		return 0, 0, fmt.Errorf(
-			"semantic-memory run removed %d working-memory items but appended %d ledger lines to %s (first unrecorded: %q)",
-			len(removed),
-			appended,
-			workingLedgerRuntimePath,
-			compactSemanticMemoryText(removed[0]),
-		)
+	exits := 0
+	for _, entry := range entries {
+		switch entry.Outcome {
+		case claims.OutcomeConverted, claims.OutcomeMoved, claims.OutcomeDropped:
+			description := normalizeExitDescription(entry.Description)
+			if unmatched[description] == 0 {
+				return 0, 0, fmt.Errorf(
+					"ledger exit does not match an unrecorded removed working-memory item: %q",
+					entry.Description,
+				)
+			}
+			unmatched[description]--
+			exits++
+		}
 	}
-	return len(removed), appended, nil
+	if exits != len(removed) {
+		for _, item := range removed {
+			if unmatched[workingItemDescription(item)] > 0 {
+				return 0, 0, fmt.Errorf(
+					"semantic-memory run removed %d working-memory items but recorded %d matching exits in %s (first unrecorded: %q)",
+					len(removed),
+					exits,
+					workingLedgerRuntimePath,
+					compactSemanticMemoryText(item),
+				)
+			}
+		}
+	}
+	if err := validateExitTargets(ctx, loader, entries); err != nil {
+		return 0, 0, err
+	}
+	return len(removed), len(entries), nil
 }
 
-// removedWorkingItems returns the bullet lines of before that are missing from
-// after, counted as a multiset. A rewritten bullet counts as removed.
-// Empty-section placeholders such as "- None" are not items.
+// appendedWorkingLedgerEntries compares the raw bytes before parsing only the
+// appended suffix; trimming would conceal edits to historical evidence.
+func appendedWorkingLedgerEntries(
+	ctx context.Context,
+	loader ContextLoader,
+	baseline map[string]string,
+	runLabel string,
+) ([]claims.LedgerEntry, error) {
+	before, ok := baseline[workingLedgerRuntimePath]
+	if !ok {
+		return nil, fmt.Errorf("spec baseline is missing pre-run working ledger")
+	}
+	after, _, err := loader.ReadFileBytes(ctx, "working/LEDGER.md")
+	if err != nil {
+		return nil, fmt.Errorf("load post-run working ledger: %w", err)
+	}
+	if !strings.HasPrefix(string(after), before) {
+		return nil, fmt.Errorf(
+			"%s rewrote existing ledger bytes in %s; the ledger is append-only",
+			runLabel,
+			workingLedgerRuntimePath,
+		)
+	}
+	suffix := string(after[len(before):])
+	if suffix == "" {
+		return nil, nil
+	}
+	if before != "" && !strings.HasSuffix(before, "\n") {
+		if !strings.HasPrefix(suffix, "\n") {
+			return nil, fmt.Errorf("%s appended inside an existing ledger line", runLabel)
+		}
+		suffix = strings.TrimPrefix(suffix, "\n")
+		if suffix == "" {
+			return nil, nil
+		}
+	}
+	if !strings.HasSuffix(suffix, "\n") {
+		return nil, fmt.Errorf("%s appended an unterminated ledger line", runLabel)
+	}
+	var entries []claims.LedgerEntry
+	for _, line := range strings.Split(strings.TrimSuffix(suffix, "\n"), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		entry, err := claims.ParseLedgerEntry(line)
+		if err != nil {
+			return nil, fmt.Errorf("invalid appended ledger entry: %w", err)
+		}
+		entries = append(entries, entry)
+	}
+	return entries, nil
+}
+
 func removedWorkingItems(before, after string) []string {
 	remaining := make(map[string]int)
 	for _, item := range workingItems(after) {
@@ -230,32 +312,71 @@ func removedWorkingItems(before, after string) []string {
 	return removed
 }
 
+// workingItems includes indented continuation lines and nested bullets in their
+// parent item so deleting a detail cannot evade exit accounting.
 func workingItems(content string) []string {
 	var items []string
-	for _, line := range strings.Split(content, "\n") {
-		line = strings.TrimSpace(line)
-		text, ok := strings.CutPrefix(line, "- ")
-		if !ok {
-			text, ok = strings.CutPrefix(line, "* ")
+	var current []string
+	flush := func() {
+		if len(current) == 0 {
+			return
 		}
-		if !ok {
-			continue
+		item := strings.TrimRight(strings.Join(current, "\n"), "\n")
+		description := workingItemDescription(item)
+		if description != "" && !strings.EqualFold(strings.Trim(description, "()."), "none") {
+			items = append(items, item)
 		}
-		text = strings.TrimSpace(text)
-		if text == "" || strings.EqualFold(strings.Trim(text, "()."), "none") {
-			continue
-		}
-		items = append(items, line)
+		current = nil
 	}
+	inComment := false
+	fence := ""
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if inComment {
+			if strings.Contains(line, "-->") {
+				inComment = false
+			}
+			continue
+		}
+		if strings.HasPrefix(trimmed, "<!--") {
+			flush()
+			inComment = !strings.Contains(trimmed, "-->")
+			continue
+		}
+		if fence != "" {
+			if strings.HasPrefix(line, fence) {
+				fence = ""
+			}
+			continue
+		}
+		if strings.HasPrefix(line, "```") || strings.HasPrefix(line, "~~~") {
+			flush()
+			fence = line[:3]
+			continue
+		}
+		if line == strings.TrimLeft(line, " \t") &&
+			(strings.HasPrefix(line, "- ") || strings.HasPrefix(line, "* ") || strings.HasPrefix(line, "+ ")) {
+			flush()
+			current = []string{line}
+			continue
+		}
+		if len(current) > 0 &&
+			(strings.TrimSpace(line) == "" || line != strings.TrimLeft(line, " \t") ||
+				(strings.TrimSpace(current[len(current)-1]) != "" && !strings.HasPrefix(line, "#"))) {
+			current = append(current, line)
+			continue
+		}
+		flush()
+	}
+	flush()
 	return items
 }
 
-func countNonEmptyLines(text string) int {
-	count := 0
-	for _, line := range strings.Split(text, "\n") {
-		if strings.TrimSpace(line) != "" {
-			count++
-		}
+func workingItemDescription(item string) string {
+	if len(item) >= 2 {
+		item = item[2:]
 	}
-	return count
+	return normalizeExitDescription(item)
 }
+
+func normalizeExitDescription(text string) string { return strings.Join(strings.Fields(text), " ") }

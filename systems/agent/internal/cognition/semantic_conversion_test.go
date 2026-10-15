@@ -53,7 +53,7 @@ func conversionRunMessages(writes ...string) []conversation.Message {
 
 const conversionWorkingBefore = "# Working Memory\n\n## Active Tasks\n\n- Ship T8.\n- Deploy target switched after staging issue.\n\n## Open Threads\n\n- None\n"
 
-const conversionLedgerBefore = "# Conversion Ledger\n\n2026-10-12T05:00Z run=semantic_memory.extract dropped \"old chatter\""
+const conversionLedgerBefore = "# Conversion Ledger\n\n2026-10-12T05:00Z run=semantic_memory.extract src=t1 dropped \"old chatter\" (irrelevant)"
 
 func conversionBaseline() map[string]string {
 	return map[string]string{
@@ -90,7 +90,8 @@ func TestSemanticConversionApplyResultHappyPath(t *testing.T) {
 			RelativePath: workingMemoryRelativePath,
 			Content:      "# Working Memory\n\n## Active Tasks\n\n- Ship T8.\n\n## Open Threads\n\n- None\n",
 		},
-		ledger: conversionLedgerBefore + "\n2026-10-14T05:00Z run=semantic_memory.extract converted \"Deploy target switched\" → c-2026-0001 (semantic/topics/q15.md)\n",
+		rawFiles: map[string]string{"semantic/topics/q15.md": validConversionClaim},
+		ledger:   conversionLedgerBefore + "\n2026-10-14T05:00Z run=semantic_memory.extract src=t12 converted \"Deploy target switched after staging issue.\" → c-2026-0001 (semantic/topics/q15.md)\n",
 		semanticSizes: map[string]int64{
 			semanticFactsRelativePath: semanticRootCapBytes,
 			"semantic/topics/q15.md":  semanticTopicCapBytes,
@@ -117,7 +118,7 @@ func TestSemanticConversionApplyResultFailsOnRemovedItemsWithoutLedger(t *testin
 		ledger string
 	}{
 		{name: "no append", ledger: conversionLedgerBefore},
-		{name: "one append for two exits", ledger: conversionLedgerBefore + "\n2026-10-14T05:00Z run=semantic_memory.extract dropped \"Ship T8.\""},
+		{name: "one append for two exits", ledger: conversionLedgerBefore + "\n2026-10-14T05:00Z run=semantic_memory.extract src=t12 dropped \"Ship T8.\" (done)"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -126,7 +127,7 @@ func TestSemanticConversionApplyResultFailsOnRemovedItemsWithoutLedger(t *testin
 				working: agent.WorkingMemory{
 					Content: "# Working Memory\n\n## Active Tasks\n\n- None\n",
 				},
-				ledger: tc.ledger,
+				ledger: tc.ledger + "\n",
 			}
 			_, err := applyConversion(t, loader, conversionBaseline(), workingMemoryRuntimePath)
 			if err == nil || !strings.Contains(err.Error(), "removed 2 working-memory items") {
@@ -299,12 +300,10 @@ func TestSemanticConversionBuildStashesBaseline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
-	if got := spec.Baseline[workingMemoryRuntimePath]; got != strings.TrimSpace(
-		loader.working.Content,
-	) {
+	if got := spec.Baseline[workingMemoryRuntimePath]; got != loader.working.Content {
 		t.Fatalf("Baseline[working] = %q", got)
 	}
-	if got := spec.Baseline[workingLedgerRuntimePath]; got != strings.TrimSpace(loader.ledger) {
+	if got := spec.Baseline[workingLedgerRuntimePath]; got != loader.ledger {
 		t.Fatalf("Baseline[ledger] = %q", got)
 	}
 }

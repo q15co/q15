@@ -44,8 +44,8 @@ Always inspect all three semantic-memory target files with file tools during thi
 Call read_file, write_file, edit_file, or apply_patch on each of /memory/semantic/facts.md, /memory/semantic/preferences.md, and /memory/semantic/projects.md before your final response. A response without target-file tool coverage for all three semantic files is invalid.
 If a target file needs changes, update only that file with write_file, edit_file, or apply_patch while preserving the existing section structure.
 If a target file does not need changes, call read_file on it and leave it unchanged.
-Every working-memory bullet you remove or rewrite is an exit and needs its own ledger line appended to /memory/working/LEDGER.md in this run. A run that removes more working-memory bullets than it appends ledger lines fails validation.
-Only append to the ledger: add new lines at the end with edit_file or apply_patch and never edit, reorder, or delete existing ledger lines. A run that does not preserve the existing ledger as a prefix fails validation.
+Every working-memory item you remove or rewrite, including its continuation lines, is an exit and needs exactly one valid ledger line appended to /memory/working/LEDGER.md in this run. Copy the entire original item text into the quoted description, collapsing whitespace and omitting only the initial bullet marker. Converted and moved exits require an existing valid target; drops require a reason. Unrelated or duplicate exit records fail validation.
+Only append complete newline-terminated records to the ledger: preserve every existing byte, including leading whitespace and final line boundaries. Never edit, reorder, or delete existing ledger lines.
 Keep every semantic root file at or under 16384 bytes and every topic file at or under 32768 bytes. A run that leaves a file it wrote over its cap fails validation.
 Keep the semantic-memory update bounded, structured, and auditable.
 Do not copy transcript detail or verification-review prose verbatim into semantic memory.
@@ -78,6 +78,10 @@ After the tool work completes, reply with one or two short sentences summarizing
 - Prefer an available lookup tool when the missing context is retrievable.
 - If you must proceed with partial context, label the uncertainty explicitly and keep the action reversible.
 </missing_context_gating>
+
+<claim_id_allocation>
+No prior claim IDs are recorded. Start at c-YYYY-0001 for the current year.
+</claim_id_allocation>
 
 <semantic_facts_target path="/memory/semantic/facts.md">
 # Semantic Facts
@@ -168,8 +172,8 @@ After the tool work completes, reply with one or two short sentences summarizing
 - No match: add a new claim to the correct section, respecting the cap.
 - Consistent match: merge into the existing claim, append the new src seq, and bump rev. Never add a second bullet for the same claim.
 - Contradicting match: mark the old claim status: conflicted, add the new claim also as conflicted, and cross-reference both IDs. Never flatten the conflict.
-- Supersession (the new claim is the acknowledged replacement): write the new claim as active, delete the old claim, and record superseded c-old -> c-new in the ledger.
-- Claim format: `- [c-YYYY-NNNN] <self-contained statement>` followed by an indented `{status: active|conflicted, kind: fact|inference|preference, confidence: confirmed|likely|uncertain, src: t<seq>[, t<seq>], rev: YYYY-MM-DD}` line. Claim IDs are never reused.
+- Supersession (the new claim is the acknowledged replacement): write the new claim as active, delete the old claim, and append a superseded ledger record targeting the old claim ID with the replacement ID in its reason. Every removed durable claim needs a superseded, retracted, or resolved ledger record targeting its old ID and explaining the reason.
+- Claim format: `- [c-YYYY-NNNN] <self-contained statement>` followed by an indented `{status: active|conflicted, kind: fact|inference|preference, confidence: confirmed|likely|uncertain, src: t<seq>[, t<seq>], rev: YYYY-MM-DD}` line. Claim IDs are globally unique and never reused, including IDs recorded in archived ledgers. Preserve existing source markers when revising an existing claim.
 - Open-loop format: `- [l-YYYY-NNNN] <intention>` followed by an indented `{trigger: date:YYYY-MM-DD | event:"<description>" | next-session, owner: agent|user, src: t<seq>}` line.
 - Ledger format: one line per exit, `YYYY-MM-DDTHH:MMZ run=semantic_memory.extract src=t<a>..t<b> <outcome> "<working-memory item>" → <claim-or-loop-id> (<file>)`. For a drop, omit the target and give the reason in parentheses.
 - Caps: when a file is near its cap, revise before adding: merge, supersede, or split project detail into a topic file and leave a one-line index entry in projects.md (`- [<slug>] <summary> → topics/<slug>.md`).
