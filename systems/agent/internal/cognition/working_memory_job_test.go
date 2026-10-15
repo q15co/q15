@@ -13,6 +13,7 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
 	"github.com/q15co/q15/systems/agent/internal/fileops"
+	"github.com/q15co/q15/systems/agent/internal/memory/claims"
 	"github.com/q15co/q15/systems/agent/internal/tools"
 )
 
@@ -117,6 +118,25 @@ func (l *workingMemoryJobLoader) LoadOpenLoops(context.Context) (string, error) 
 
 func (l *workingMemoryJobLoader) LoadWorkingLedger(context.Context) (string, error) {
 	return l.ledger, nil
+}
+
+func (l *workingMemoryJobLoader) ReadFileBytes(
+	_ context.Context,
+	relativePath string,
+) ([]byte, bool, error) {
+	if l.files != nil {
+		content, ok := l.files[relativePath]
+		return append([]byte(nil), content...), ok, nil
+	}
+	switch relativePath {
+	case workingMemoryRelativePath:
+		return []byte(l.working.Content), true, nil
+	case "working/OPEN_LOOPS.md":
+		return []byte(l.openLoops), true, nil
+	case "working/LEDGER.md":
+		return []byte(l.ledger), true, nil
+	}
+	return nil, false, nil
 }
 
 func (l *workingMemoryJobLoader) WriteFileBytes(
@@ -1207,7 +1227,7 @@ func TestWorkingMemoryConsolidationApplyResultFailsWhenRemovedItemHasNoLedgerLin
 	if err == nil {
 		t.Fatal("ApplyResult() error = nil, want unrecorded-exit failure")
 	}
-	if !contains(err.Error(), "appended 0 ledger lines") {
+	if !contains(err.Error(), "without a matching ledger exit") {
 		t.Fatalf("ApplyResult() error = %v, want the missing ledger line named", err)
 	}
 	if !contains(err.Error(), "Ship the audit fix") {
@@ -1340,8 +1360,8 @@ func TestWorkingMemoryConsolidationApplyResultAcceptsRecordedExits(t *testing.T)
 		"- [l-2026-0041] Follow up on the rollout once the report lands.\n" +
 		"  {trigger: date:2026-10-19, owner: agent, src: t4441}\n"
 	ledgerAfter := ledgerBefore +
-		"2026-10-12T04:00Z run=working_memory.consolidate dropped \"- Finish the audit follow-up.\" (done)\n" +
-		"2026-10-12T04:00Z run=working_memory.consolidate closed l-2026-0042 (answered)\n"
+		"2026-10-12T04:00Z run=working_memory.consolidate src=t4441..t4518 dropped \"Finish the audit follow-up.\" (done)\n" +
+		"2026-10-12T04:00Z run=working_memory.consolidate src=t4441..t4518 closed \"[l-2026-0042] Ask the user how long the audit window stays open. {trigger: next-session, owner: user, src: t4518}\" (answered)\n"
 	loader.working.Content = workingAfter
 	loader.openLoops = openLoopsAfter
 	loader.ledger = ledgerAfter
@@ -1553,25 +1573,6 @@ func findPromptSection(
 	return agent.PromptSection{}, false
 }
 
-func (l *workingMemoryJobLoader) ReadFileBytes(
-	_ context.Context,
-	path string,
-) ([]byte, bool, error) {
-	if l.files != nil {
-		content, ok := l.files[path]
-		return append([]byte(nil), content...), ok, nil
-	}
-	switch path {
-	case workingMemoryRelativePath:
-		return []byte(l.working.Content), true, nil
-	case "working/OPEN_LOOPS.md":
-		return []byte(l.openLoops), true, nil
-	case "working/LEDGER.md":
-		return nil, true, nil
-	}
-	return nil, false, nil
-}
-
 func (l *workingMemoryJobLoader) LoadConversionLedgerHistory(context.Context) (string, error) {
 	return "", nil
 }
@@ -1597,3 +1598,157 @@ func (*workingMemoryJobLoader) BeginMemoryRecovery(
 func (*workingMemoryJobLoader) CompleteMemoryRecovery(context.Context, string) error { return nil }
 
 func (*workingMemoryJobLoader) RecoverMemory(context.Context, string) error { return nil }
+
+func workingExitRecord(
+	outcome claims.LedgerOutcome,
+	description, targetID, targetPath, note string,
+) string {
+	return claims.FormatLedgerEntry(claims.LedgerEntry{
+		Timestamp: time.Date(2026, time.October, 15, 4, 0, 0, 0, time.UTC),
+		Run:       workingMemoryConsolidationJobType, SourceSeq: "t42..t45",
+		Outcome: outcome, Description: description, TargetID: targetID,
+		TargetPath: targetPath, Note: note,
+	})
+}
+
+func TestWorkingMemoryConsolidationRejectsUntraceableExitsAndRestoresFixedFiles(t *testing.T) {
+	t.Parallel()
+	workingBefore := "# Working Memory\n\n- Finish the release.\n  Include its changelog.\n"
+	loopBefore := "- [l-2026-0001] Verify the release.\n  {trigger: next-session, owner: agent, src: t42}\n"
+	validDrop := workingExitRecord(
+		claims.OutcomeDropped,
+		"Finish the release. Include its changelog.",
+		"",
+		"",
+		"completed",
+	)
+	validClose := workingExitRecord(
+		claims.OutcomeClosed,
+		"[l-2026-0001] Verify the release. {trigger: next-session, owner: agent, src: t42}",
+		"",
+		"",
+		"verified at t45",
+	)
+	for _, test := range []struct {
+		name   string
+		ledger string
+	}{
+		{name: "arbitrary sentences", ledger: "finished release\nclosed loop\n"},
+		{name: "duplicate item", ledger: validDrop + validDrop + validClose},
+		{name: "unrelated description", ledger: workingExitRecord(claims.OutcomeDropped, "Different release.", "", "", "done") + validClose},
+		{name: "missing continuation", ledger: workingExitRecord(claims.OutcomeDropped, "Finish the release.", "", "", "done") + validClose},
+		{name: "loop ID alone", ledger: validDrop + workingExitRecord(claims.OutcomeClosed, "l-2026-0001", "", "", "done")},
+		{name: "missing loop metadata", ledger: validDrop + workingExitRecord(claims.OutcomeClosed, "[l-2026-0001] Verify the release.", "", "", "done")},
+		{name: "drop lacks reason", ledger: workingExitRecord(claims.OutcomeDropped, "Finish the release. Include its changelog.", "", "", "") + validClose},
+		{name: "close lacks reason", ledger: validDrop + workingExitRecord(claims.OutcomeClosed, "[l-2026-0001] Verify the release. {trigger: next-session, owner: agent, src: t42}", "", "", "")},
+		{name: "wrong run", ledger: strings.ReplaceAll(validDrop+validClose, workingMemoryConsolidationJobType, semanticMemoryExtractionJobType)},
+		{name: "wrong source syntax", ledger: strings.ReplaceAll(validDrop+validClose, "src=t42..t45", "src=t45..t42")},
+		{name: "unsupported outcome", ledger: workingExitRecord(claims.OutcomeRetracted, "Finish the release. Include its changelog.", "c-2026-0001", "", "invalid") + validClose},
+		{name: "missing moved target", ledger: workingExitRecord(claims.OutcomeMoved, "Finish the release. Include its changelog.", "l-2026-0002", "working/OPEN_LOOPS.md", "") + validClose},
+		{name: "missing converted target", ledger: workingExitRecord(claims.OutcomeConverted, "Finish the release. Include its changelog.", "c-2026-0002", "semantic/facts.md", "") + validClose},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			loader := &workingMemoryJobLoader{files: map[string][]byte{
+				workingMemoryRelativePath:     []byte(workingBefore),
+				"working/OPEN_LOOPS.md":       []byte(loopBefore),
+				"working/LEDGER.md":           []byte("# Ledger\n\n"),
+				"semantic/topics/existing.md": []byte("existing semantic topic\n"),
+			}}
+			spec := buildWorkingMemorySpec(t, loader)
+			loader.files[workingMemoryRelativePath] = []byte("# Working Memory\n")
+			loader.files["working/OPEN_LOOPS.md"] = []byte("# Open Loops\n")
+			loader.files["working/LEDGER.md"] = []byte("# Ledger\n\n" + test.ledger)
+			_, err := (workingMemoryConsolidationJob{}).ApplyResult(
+				context.Background(),
+				loader,
+				JobOutput{
+					Spec:     spec,
+					Messages: workingMemoryTargetToolCall("write_file", workingMemoryRuntimePath),
+				},
+			)
+			if err == nil {
+				t.Fatal("ApplyResult accepted an untraceable exit")
+			}
+			assertFileBytesRestored(t, loader, workingMemoryRuntimePath, []byte(workingBefore))
+			assertFileBytesRestored(t, loader, openLoopsRuntimePath, []byte(loopBefore))
+			assertFileBytesRestored(t, loader, workingLedgerRuntimePath, []byte("# Ledger\n\n"))
+			if got := string(loader.files["semantic/topics/existing.md"]); got != "existing semantic topic\n" {
+				t.Fatalf("unrelated topic = %q", got)
+			}
+		})
+	}
+}
+
+func TestWorkingMemoryConsolidationPreservesRawLedgerBaseline(t *testing.T) {
+	t.Parallel()
+	before := "# Ledger\n\n"
+	loader := &workingMemoryJobLoader{files: map[string][]byte{
+		workingMemoryRelativePath: []byte("# Working Memory\n"),
+		"working/OPEN_LOOPS.md":   []byte("# Open Loops\n"),
+		"working/LEDGER.md":       []byte(before),
+	}}
+	spec := buildWorkingMemorySpec(t, loader)
+	if spec.Baseline[workingLedgerRuntimePath] != before {
+		t.Fatal("Build trimmed raw ledger evidence")
+	}
+	loader.files["working/LEDGER.md"] = []byte(strings.TrimSpace(before) + "\n")
+	_, err := (workingMemoryConsolidationJob{}).ApplyResult(
+		context.Background(),
+		loader,
+		JobOutput{
+			Spec:     spec,
+			Messages: workingMemoryTargetToolCall("read_file", workingMemoryRuntimePath),
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "append-only") {
+		t.Fatalf("ApplyResult() = %v, want raw append-only failure", err)
+	}
+	assertFileBytesRestored(t, loader, workingLedgerRuntimePath, []byte(before))
+}
+
+func TestWorkingMemoryConsolidationAcceptsVerifiedExitTargets(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name    string
+		outcome claims.LedgerOutcome
+		id      string
+		path    string
+		content string
+	}{
+		{name: "converted", outcome: claims.OutcomeConverted, id: "c-2026-0001", path: "semantic/facts.md", content: "- [c-2026-0001] Release notes are required.\n  {status: active, kind: fact, confidence: confirmed, src: t42, rev: 2026-10-15}\n"},
+		{name: "moved", outcome: claims.OutcomeMoved, id: "l-2026-0001", path: "working/OPEN_LOOPS.md", content: "- [l-2026-0001] Prepare the release.\n  {trigger: next-session, owner: agent, src: t42}\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			loader := &workingMemoryJobLoader{files: map[string][]byte{
+				workingMemoryRelativePath: []byte("# Working Memory\n\n- Prepare the release.\n"),
+				"working/OPEN_LOOPS.md":   []byte("# Open Loops\n"),
+				"working/LEDGER.md":       []byte("# Ledger\n"),
+			}}
+			spec := buildWorkingMemorySpec(t, loader)
+			loader.files[workingMemoryRelativePath] = []byte("# Working Memory\n")
+			loader.files[test.path] = []byte(test.content)
+			ledger := "# Ledger\n" + workingExitRecord(
+				test.outcome,
+				"Prepare the release.",
+				test.id,
+				test.path,
+				"",
+			)
+			loader.files["working/LEDGER.md"] = []byte(ledger)
+			_, err := (workingMemoryConsolidationJob{}).ApplyResult(
+				context.Background(),
+				loader,
+				JobOutput{
+					Spec:     spec,
+					Messages: workingMemoryTargetToolCall("write_file", workingMemoryRuntimePath),
+				},
+			)
+			if err != nil {
+				t.Fatalf("ApplyResult rejected valid %s exit: %v", test.name, err)
+			}
+			assertFileBytesRestored(t, loader, workingLedgerRuntimePath, []byte(ledger))
+		})
+	}
+}

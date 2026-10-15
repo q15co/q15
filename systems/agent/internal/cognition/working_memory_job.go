@@ -8,6 +8,7 @@ import (
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
+	"github.com/q15co/q15/systems/agent/internal/memory/claims"
 	"github.com/q15co/q15/systems/agent/internal/memory/memcheck"
 	filetools "github.com/q15co/q15/systems/agent/internal/tools/files"
 )
@@ -122,10 +123,6 @@ func (j workingMemoryConsolidationJob) Build(
 	openLoops, err := loader.LoadOpenLoops(ctx)
 	if err != nil {
 		return Spec{}, fmt.Errorf("load open loops: %w", err)
-	}
-	ledger, err := loader.LoadWorkingLedger(ctx)
-	if err != nil {
-		return Spec{}, fmt.Errorf("load working ledger: %w", err)
 	}
 	verificationArtifact, err := loader.LoadCognitionArtifact(
 		ctx,
@@ -245,6 +242,11 @@ func (j workingMemoryConsolidationJob) Build(
 				openLoopsRuntimePath,
 				workingLedgerRuntimePath,
 			),
+			fmt.Sprintf(
+				"Every removed working-memory item requires exactly one converted, moved, or dropped ledger record in %s. Every closed or promoted loop requires exactly one closed record whose description preserves the full old loop, including its ID and metadata, and whose reason explains the outcome.",
+				workingLedgerRuntimePath,
+			),
+			"Ledger format: YYYY-MM-DDTHH:MMZ run=working_memory.consolidate src=t<a>..t<b> <outcome> \"<full removed item without its bullet marker>\" → <claim-or-loop-id> (<file>). For dropped and closed records, omit the target and include an outcome reason in parentheses. Preserve all existing ledger bytes and append complete newline-terminated records.",
 			"A closed loop that produced durable knowledge also merits a claim in the semantic store; this job does not write semantic memory, so leave the claim to the conversion pass.",
 			"Apply supported verification corrections in the working-memory artifact; preserve explicit uncertainty when verification downgraded confidence.",
 			"Do not copy the verification review artifact verbatim into working memory.",
@@ -343,9 +345,9 @@ func (j workingMemoryConsolidationJob) Build(
 		CheckpointSeq:      windowEndSeq,
 		RunAt:              now,
 		Baseline: map[string]string{
-			workingMemoryRuntimePath: strings.TrimSpace(working.Content),
-			workingLedgerRuntimePath: strings.TrimSpace(ledger),
-			openLoopsRuntimePath:     strings.TrimSpace(openLoops),
+			workingMemoryRuntimePath: string(snapshots[workingMemoryRuntimePath].Content),
+			workingLedgerRuntimePath: string(snapshots[workingLedgerRuntimePath].Content),
+			openLoopsRuntimePath:     string(snapshots[openLoopsRuntimePath].Content),
 		},
 		FileSnapshots:    snapshots,
 		MemoryRecoveryID: recoveryID,
@@ -434,51 +436,98 @@ func (workingMemoryConsolidationJob) Rollback(
 	return restoreSnapshotFiles(ctx, loader, spec.FileSnapshots)
 }
 
-// checkWorkingMemoryLedgerCompleteness enforces "every exit writes exactly
-// one ledger line" for the working-memory job on top of the shared
-// append-only ledger check: every working-memory bullet the run removed and
-// every open-loop line the run closed needs one appended ledger line, and the
-// run fails when it recorded fewer exits than it made. Open-loop lines are
-// bullets in OpenLoopsLineFormat; headings and blank lines are not loops, so
-// the same multiset line-diff as workingItems applies to both files.
+// checkWorkingMemoryLedgerCompleteness matches every removed item and complete
+// loop against exactly one typed record, then checks its destination or reason.
 func checkWorkingMemoryLedgerCompleteness(
 	ctx context.Context,
 	loader ContextLoader,
 	baseline map[string]string,
 ) error {
-	before, ok := baseline[workingMemoryRuntimePath]
-	if !ok {
-		return fmt.Errorf("spec baseline is missing pre-run working memory")
+	for _, runtimePath := range []string{workingMemoryRuntimePath, openLoopsRuntimePath, workingLedgerRuntimePath} {
+		if _, ok := baseline[runtimePath]; !ok {
+			return fmt.Errorf("spec baseline is missing pre-run %s", runtimePath)
+		}
 	}
-	beforeLoops, ok := baseline[openLoopsRuntimePath]
-	if !ok {
-		return fmt.Errorf("spec baseline is missing pre-run open loops")
-	}
-
-	working, err := loader.LoadWorkingMemory(ctx)
+	working, _, err := loader.ReadFileBytes(ctx, workingMemoryRelativePath)
 	if err != nil {
 		return fmt.Errorf("load post-run working memory: %w", err)
 	}
-	afterLoops, err := loader.LoadOpenLoops(ctx)
+	afterLoops, _, err := loader.ReadFileBytes(ctx, relativeMemoryPath(openLoopsRuntimePath))
 	if err != nil {
 		return fmt.Errorf("load post-run open loops: %w", err)
 	}
-	appended, err := appendedWorkingLedgerLines(ctx, loader, baseline, "working-memory run")
+	beforeLoopItems, err := parseOpenLoops(baseline[openLoopsRuntimePath])
+	if err != nil {
+		return fmt.Errorf("invalid pre-run open loops: %w", err)
+	}
+	afterLoopItems, err := parseOpenLoops(string(afterLoops))
+	if err != nil {
+		return fmt.Errorf("invalid post-run open loops: %w", err)
+	}
+	entries, err := appendedWorkingLedgerEntries(ctx, loader, baseline, "working-memory run")
 	if err != nil {
 		return err
 	}
-	exits := removedWorkingItems(before, strings.TrimSpace(working.Content))
-	exits = append(exits, removedWorkingItems(beforeLoops, strings.TrimSpace(afterLoops))...)
-	if len(exits) > appended {
-		return fmt.Errorf(
-			"working-memory run removed %d working-memory items and open-loop lines but appended %d ledger lines to %s (first unrecorded: %q)",
-			len(exits),
-			appended,
-			workingLedgerRuntimePath,
-			compactWorkingMemoryText(exits[0]),
-		)
+	workingExits := unmatchedWorkingExits(baseline[workingMemoryRuntimePath], string(working))
+	loopExits := make(map[string]int)
+	for _, loop := range beforeLoopItems {
+		loopExits[workingItemDescription(loop.Item)]++
 	}
-	return nil
+	for _, loop := range afterLoopItems {
+		description := workingItemDescription(loop.Item)
+		if loopExits[description] > 0 {
+			loopExits[description]--
+		}
+	}
+	for _, entry := range entries {
+		if entry.Run != workingMemoryConsolidationJobType {
+			return fmt.Errorf("working-memory ledger entry has wrong run %q", entry.Run)
+		}
+		var unmatched map[string]int
+		switch entry.Outcome {
+		case claims.OutcomeConverted, claims.OutcomeMoved, claims.OutcomeDropped:
+			unmatched = workingExits
+		case claims.OutcomeClosed:
+			if entry.TargetID != "" || entry.TargetPath != "" ||
+				strings.TrimSpace(entry.Note) == "" {
+				return fmt.Errorf("closed loop ledger exit requires a reason and no target")
+			}
+			unmatched = loopExits
+		default:
+			return fmt.Errorf(
+				"working-memory ledger entry has unsupported outcome %q",
+				entry.Outcome,
+			)
+		}
+		description := normalizeExitDescription(entry.Description)
+		if unmatched[description] == 0 {
+			return fmt.Errorf(
+				"ledger exit does not match an unrecorded removed working-memory item or complete open loop: %q",
+				entry.Description,
+			)
+		}
+		unmatched[description]--
+	}
+	for _, unmatched := range []map[string]int{workingExits, loopExits} {
+		for description, count := range unmatched {
+			if count > 0 {
+				return fmt.Errorf(
+					"working-memory run removed item without a matching ledger exit in %s: %q",
+					workingLedgerRuntimePath,
+					description,
+				)
+			}
+		}
+	}
+	return validateExitTargets(ctx, loader, entries)
+}
+
+func unmatchedWorkingExits(before, after string) map[string]int {
+	unmatched := make(map[string]int)
+	for _, item := range removedWorkingItems(before, after) {
+		unmatched[workingItemDescription(item)]++
+	}
+	return unmatched
 }
 
 // snapshotWorkingMemoryFiles captures the pre-run on-disk bytes of the three
