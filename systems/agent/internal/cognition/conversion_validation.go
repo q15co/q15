@@ -160,7 +160,8 @@ func validateClaimItem(item string) error {
 }
 
 func validateLoopItem(item string) error {
-	if loopHeadPattern.FindStringSubmatch(item) == nil {
+	match := loopHeadPattern.FindStringSubmatch(item)
+	if match == nil || strings.TrimSpace(strings.SplitN(match[2], "{", 2)[0]) == "" {
 		return fmt.Errorf("loop requires a stable ID and intention")
 	}
 	fields, err := itemMetadata(item, "trigger", "owner", "src")
@@ -231,7 +232,8 @@ func itemMetadata(item string, required ...string) (map[string]string, error) {
 	}
 	for i, match := range matches {
 		key := raw[match[2]:match[3]]
-		if !allowed[key] || fields[key] != "" {
+		_, duplicate := fields[key]
+		if !allowed[key] || duplicate {
 			return nil, fmt.Errorf("unknown or duplicate metadata field %q", key)
 		}
 		end := len(raw)

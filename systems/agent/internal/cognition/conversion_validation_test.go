@@ -108,6 +108,8 @@ func TestConversionRejectsInvalidExitEvidence(t *testing.T) {
 		{name: "invalid rev", records: exitRecord(claims.OutcomeConverted, "A.", "c-2026-0001", semanticFactsRelativePath, ""), claim: strings.ReplaceAll(validConversionClaim, "rev: 2026-10-14", "rev: 2026-02-31")},
 		{name: "missing loop", records: exitRecord(claims.OutcomeMoved, "A.", "l-2026-0001", "working/OPEN_LOOPS.md", "")},
 		{name: "invalid loop trigger", records: exitRecord(claims.OutcomeMoved, "A.", "l-2026-0001", "working/OPEN_LOOPS.md", ""), loop: strings.ReplaceAll(validConversionLoop, "next-session", "someday")},
+		{name: "empty loop intention", records: exitRecord(claims.OutcomeMoved, "A.", "l-2026-0001", "working/OPEN_LOOPS.md", ""), loop: strings.ReplaceAll(validConversionLoop, "Ship the release.", " ")},
+		{name: "empty duplicated metadata", records: exitRecord(claims.OutcomeConverted, "A.", "c-2026-0001", semanticFactsRelativePath, ""), claim: strings.ReplaceAll(validConversionClaim, "kind: fact", "kind: , kind: fact")},
 		{name: "invalid loop owner", records: exitRecord(claims.OutcomeMoved, "A.", "l-2026-0001", "working/OPEN_LOOPS.md", ""), loop: strings.ReplaceAll(validConversionLoop, "owner: agent", "owner: anyone")},
 		{name: "missing drop reason", records: exitRecord(claims.OutcomeDropped, "A.", "", "", "")},
 	} {
