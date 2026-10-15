@@ -1761,7 +1761,7 @@ func TestWorkingMemoryConsolidationAccountsForNonBulletExitBlocks(t *testing.T) 
 		{name: "comment", block: "<!-- Prepare the release. -->\n", description: "<!-- Prepare the release. -->"},
 		{name: "numbered list", block: "1. Prepare the release.\n", description: "1. Prepare the release."},
 		{name: "custom heading", block: "## Release notes\nPrepare the release.\n", description: "## Release notes Prepare the release."},
-		{name: "None-like content", block: "- None\n", description: "None"},
+		{name: "None-like content", block: "- (None).\n", description: "(None)."},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
