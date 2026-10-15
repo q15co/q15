@@ -972,7 +972,7 @@ func TestWorkingMemoryConsolidationBuildInjectsOpenLoopsTargetAndRules(t *testin
 	for _, want := range []string{
 		OpenLoopsLineFormat,
 		"Open loops are prospective memory",
-		"Date-trigger check: any loop whose date trigger has passed",
+		"Date-trigger check: use maintenance_time as the current UTC time.",
 	} {
 		if !contains(rules.Body, want) {
 			t.Fatalf("open loops rules missing %q:\n%s", want, rules.Body)
@@ -1049,7 +1049,7 @@ func TestWorkingMemoryConsolidationParseResultAcceptsEitherTarget(t *testing.T) 
 	for _, testCase := range cases {
 		result, err := NewWorkingMemoryConsolidationRegistration(0, 0).NewJob().ApplyResult(
 			context.Background(),
-			nil,
+			&workingMemoryJobLoader{},
 			JobOutput{
 				Type:      workingMemoryConsolidationJobType,
 				FinalText: "Closed the due loop and recorded the outcome in the ledger.",
