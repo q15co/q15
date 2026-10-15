@@ -633,7 +633,7 @@ func (semanticMigrationJob) ApplyResult(
 			hadBullets = true
 		}
 	}
-	drained := make(map[string]struct{})
+	var drainedLines []SemanticDrainLine
 	seenBytes := make(map[int64]struct{})
 	for _, ref := range refs {
 		if ref.SourcePath != target {
@@ -682,7 +682,10 @@ func (semanticMigrationJob) ApplyResult(
 				ref.SourceByte,
 			)
 		}
-		drained[line.Hash] = struct{}{}
+		drainedLines = append(drainedLines, SemanticDrainLine{
+			ByteOffset: ref.SourceByte,
+			Hash:       ref.Hash,
+		})
 	}
 	if len(refs) == 0 && hadBullets {
 		return ParsedResult{}, fmt.Errorf(
@@ -705,22 +708,16 @@ func (semanticMigrationJob) ApplyResult(
 	}
 
 	// Nothing leaves the source file until it is ledgered: the drain runs
-	// strictly after the ledger lines above were parsed and validated.
+	// strictly after the ledger lines above were parsed and validated. It
+	// removes exactly those ledgered offsets, so a byte-identical line the run
+	// did not ledger keeps its bytes even inside the same chunk.
 	var removedBytes int64
 	newSize := chunk.Size
-	if len(drained) > 0 {
-		hashes := make([]string, 0, len(drained))
-		for hash := range drained {
-			hashes = append(hashes, hash)
-		}
-		sort.Strings(hashes)
-		newSize, err = loader.RemoveSemanticLines(
-			ctx,
-			target,
-			chunk.Offset,
-			consumedEnd,
-			hashes,
-		)
+	if len(drainedLines) > 0 {
+		sort.Slice(drainedLines, func(i, j int) bool {
+			return drainedLines[i].ByteOffset < drainedLines[j].ByteOffset
+		})
+		newSize, err = loader.RemoveSemanticLines(ctx, target, drainedLines)
 		if err != nil {
 			return ParsedResult{}, fmt.Errorf(
 				"drain ledgered source lines of %q: %w",
@@ -819,7 +816,7 @@ func (semanticMigrationJob) ApplyResult(
 		"source_bytes_drained":      strconv.FormatInt(removedBytes, 10),
 		"source_offset_after":       strconv.FormatInt(newOffset, 10),
 		"source_size_after":         strconv.FormatInt(newSize, 10),
-		"source_lines_drained":      strconv.Itoa(len(drained)),
+		"source_lines_drained":      strconv.Itoa(len(drainedLines)),
 		"ledger_lines_appended":     strconv.Itoa(len(refs)),
 		"source_finished":           strconv.FormatBool(finished),
 		"cursor_cleared":            strconv.FormatBool(allMigrationFilesFinished(cursor)),

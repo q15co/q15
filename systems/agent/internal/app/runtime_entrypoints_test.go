@@ -212,9 +212,7 @@ func (s *spyRuntimeStore) LoadSemanticChunk(
 func (s *spyRuntimeStore) RemoveSemanticLines(
 	context.Context,
 	string,
-	int64,
-	int64,
-	[]string,
+	[]cognition.SemanticDrainLine,
 ) (int64, error) {
 	return 0, nil
 }

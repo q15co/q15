@@ -90,19 +90,20 @@ type ContextLoader interface {
 		offset int64,
 		length int64,
 	) (SemanticChunk, error)
-	// RemoveSemanticLines deletes the whole lines of one semantic source file
-	// that start in the byte range [start, end) and whose line hash
-	// (SemanticLineHash) is listed, keeping every other byte of the file
+	// RemoveSemanticLines deletes exactly the whole lines of one semantic
+	// source file that the caller cites by byte offset and line hash
+	// (SemanticDrainLine), keeping every other byte of the file
 	// byte-for-byte. It returns the file's size after the rewrite and fails
-	// when any listed hash matches no line in range, so a source file that
-	// moved under the caller is reported instead of drained wrongly. The
-	// migration uses it to remove exactly the source lines its run ledgered.
+	// when a cited offset begins no line, or begins a line that does not hash
+	// to the cited hash, so a source file that moved under the caller is
+	// reported instead of drained wrongly. Citing offsets rather than a set of
+	// hashes is what keeps a byte-identical line at another offset in the file:
+	// only the lines a ledger line names may leave. The migration uses it to
+	// remove exactly the source lines its run ledgered.
 	RemoveSemanticLines(
 		ctx context.Context,
 		relativePath string,
-		start int64,
-		end int64,
-		hashes []string,
+		lines []SemanticDrainLine,
 	) (int64, error)
 	// LoadSemanticSourceContent returns the trimmed content of one migration
 	// source file: a semantic root or the staged archive residue. The

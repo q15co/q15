@@ -332,52 +332,56 @@ func (l *migrationJobLoader) LoadSemanticChunk(
 func (l *migrationJobLoader) RemoveSemanticLines(
 	_ context.Context,
 	relativePath string,
-	start int64,
-	end int64,
-	hashes []string,
+	lines []SemanticDrainLine,
 ) (int64, error) {
-	if end < start {
-		return 0, fmt.Errorf("drain range end before start")
-	}
-	if len(hashes) == 0 {
-		return 0, fmt.Errorf("drain requires line hashes")
+	if len(lines) == 0 {
+		return 0, fmt.Errorf("drain requires at least one cited line")
 	}
 	if !isMigrationSourceRelative(relativePath) {
 		return 0, fmt.Errorf("path %q is not a semantic source file", relativePath)
 	}
 	data := l.files[relativePath]
-	wanted := make(map[string]struct{}, len(hashes))
-	for _, hash := range hashes {
-		wanted[hash] = struct{}{}
-	}
-	unmatched := make(map[string]struct{}, len(wanted))
-	for hash := range wanted {
-		unmatched[hash] = struct{}{}
+	wanted := make(map[int64]string, len(lines))
+	for _, line := range lines {
+		if _, dup := wanted[line.ByteOffset]; dup {
+			return 0, fmt.Errorf("drain cites offset %d twice", line.ByteOffset)
+		}
+		wanted[line.ByteOffset] = line.Hash
 	}
 	var remaining strings.Builder
+	drained := make(map[int64]struct{}, len(wanted))
 	position := int64(0)
 	for position < int64(len(data)) {
 		next := strings.IndexByte(data[position:], '\n')
-		lineEnd := position
+		lineEnd := int64(len(data))
 		if next >= 0 {
-			lineEnd += int64(next) + 1
-		} else {
-			lineEnd = int64(len(data))
+			lineEnd = position + int64(next) + 1
 		}
 		line := data[position:lineEnd]
-		if position >= start && position < end {
-			hash := SemanticLineHash(line)
-			if _, ok := wanted[hash]; ok {
-				delete(unmatched, hash)
-				position = lineEnd
-				continue
+		if cited, ok := wanted[position]; ok {
+			if hash := SemanticLineHash(line); hash != cited {
+				return 0, fmt.Errorf(
+					"drain of %q cites offset %d with hash %s, but the line there hashes to %s",
+					relativePath,
+					position,
+					cited,
+					hash,
+				)
 			}
+			drained[position] = struct{}{}
+		} else {
+			remaining.WriteString(line)
 		}
-		remaining.WriteString(line)
 		position = lineEnd
 	}
-	if len(unmatched) > 0 {
-		return 0, fmt.Errorf("drain found no line matching a listed hash")
+	for _, line := range lines {
+		if _, ok := drained[line.ByteOffset]; !ok {
+			return 0, fmt.Errorf(
+				"drain of %q cites offset %d, which begins no line",
+				relativePath,
+				line.ByteOffset,
+			)
+		}
 	}
 	l.files[relativePath] = remaining.String()
 	return int64(remaining.Len()), nil

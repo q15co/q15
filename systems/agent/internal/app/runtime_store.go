@@ -216,11 +216,9 @@ func (s *runtimeStore) LoadSemanticChunk(
 func (s *runtimeStore) RemoveSemanticLines(
 	ctx context.Context,
 	relativePath string,
-	start int64,
-	end int64,
-	hashes []string,
+	lines []cognition.SemanticDrainLine,
 ) (int64, error) {
-	return s.memory.RemoveSemanticLines(ctx, relativePath, start, end, hashes)
+	return s.memory.RemoveSemanticLines(ctx, relativePath, lines)
 }
 
 func (s *runtimeStore) LoadSemanticSourceContent(

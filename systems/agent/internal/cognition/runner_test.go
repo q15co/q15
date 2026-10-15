@@ -207,9 +207,7 @@ func (s *spyLoader) StoreSemanticExtractionCheckpoint(
 func (s *spyLoader) RemoveSemanticLines(
 	context.Context,
 	string,
-	int64,
-	int64,
-	[]string,
+	[]SemanticDrainLine,
 ) (int64, error) {
 	return 0, nil
 }

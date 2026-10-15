@@ -178,9 +178,7 @@ func (l *workingMemoryJobLoader) LoadSemanticChunk(
 func (l *workingMemoryJobLoader) RemoveSemanticLines(
 	context.Context,
 	string,
-	int64,
-	int64,
-	[]string,
+	[]SemanticDrainLine,
 ) (int64, error) {
 	return 0, nil
 }

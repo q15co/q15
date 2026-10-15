@@ -215,3 +215,15 @@ type SemanticChunk struct {
 func SemanticLineHash(line string) string {
 	return SemanticContentHash(strings.TrimSuffix(line, "\n"))
 }
+
+// SemanticDrainLine names one whole line of a semantic source file that a
+// caller may remove: the byte offset at which the line starts in the file's
+// current coordinates, and SemanticLineHash of the line's bytes. The pair is
+// exactly what a migration ledger line cites, so a drain removes the lines a
+// run ledgered and never a byte-identical line at another offset.
+type SemanticDrainLine struct {
+	// ByteOffset is the offset at which the line starts.
+	ByteOffset int64
+	// Hash is SemanticLineHash of the line, its trailing newline excluded.
+	Hash string
+}

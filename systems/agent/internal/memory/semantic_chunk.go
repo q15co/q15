@@ -108,35 +108,53 @@ func (s *Store) LoadSemanticChunk(
 	}, nil
 }
 
-// RemoveSemanticLines deletes the whole lines of one semantic source file
-// that start in the byte range [start, end) and whose line hash
-// (cognition.SemanticLineHash) is listed, keeping every other byte of the
-// file byte-for-byte. It returns the file's size after the rewrite and
-// fails when any listed hash matches no line in range, so a source file that
-// moved under the caller is reported instead of drained wrongly. Empty
-// hashes lists and ranges without a match are caller errors.
+// RemoveSemanticLines deletes exactly the whole lines of one semantic source
+// file that the caller cites by byte offset and line hash, keeping every other
+// byte of the file byte-for-byte. It returns the file's size after the rewrite
+// and fails when a cited offset begins no line, or begins a line that does not
+// hash to the cited hash, so a source file that moved under the caller is
+// reported instead of drained wrongly. Citing lines by offset rather than
+// citing a set of hashes is what keeps a byte-identical line at another offset
+// in the file: only the lines a ledger line names may leave. An empty citation
+// list, a negative offset, a repeated offset and an empty hash are caller
+// errors.
 func (s *Store) RemoveSemanticLines(
 	ctx context.Context,
 	relativePath string,
-	start int64,
-	end int64,
-	hashes []string,
+	lines []cognition.SemanticDrainLine,
 ) (int64, error) {
 	_ = ctx
 
-	if end < start {
-		return 0, fmt.Errorf(
-			"semantic drain range end %d is before start %d",
-			end,
-			start,
-		)
-	}
-	if len(hashes) == 0 {
-		return 0, fmt.Errorf("semantic drain requires at least one line hash")
+	if len(lines) == 0 {
+		return 0, fmt.Errorf("semantic drain requires at least one cited line")
 	}
 	relative, err := semanticSourceRelativePath(relativePath)
 	if err != nil {
 		return 0, err
+	}
+
+	wanted := make(map[int64]string, len(lines))
+	for _, line := range lines {
+		hash := strings.TrimSpace(line.Hash)
+		if hash == "" {
+			return 0, fmt.Errorf(
+				"semantic drain received an empty line hash for offset %d",
+				line.ByteOffset,
+			)
+		}
+		if line.ByteOffset < 0 {
+			return 0, fmt.Errorf(
+				"semantic drain received a negative line offset %d",
+				line.ByteOffset,
+			)
+		}
+		if _, dup := wanted[line.ByteOffset]; dup {
+			return 0, fmt.Errorf(
+				"semantic drain cites line offset %d twice",
+				line.ByteOffset,
+			)
+		}
+		wanted[line.ByteOffset] = hash
 	}
 
 	release := s.repository.Acquire()
@@ -148,54 +166,43 @@ func (s *Store) RemoveSemanticLines(
 		return 0, fmt.Errorf("read semantic source %q: %w", path, err)
 	}
 
-	wanted := make(map[string]struct{}, len(hashes))
-	for _, hash := range hashes {
-		trimmed := strings.TrimSpace(hash)
-		if trimmed == "" {
-			return 0, fmt.Errorf("semantic drain received an empty line hash")
-		}
-		wanted[trimmed] = struct{}{}
-	}
-
 	var remaining []byte
-	unmatched := make(map[string]struct{}, len(wanted))
-	for hash := range wanted {
-		unmatched[hash] = struct{}{}
-	}
+	drained := make(map[int64]struct{}, len(wanted))
 	position := int64(0)
 	for position < int64(len(data)) {
 		cut := bytes.IndexByte(data[position:], '\n')
-		lineEnd := position
+		lineEnd := int64(len(data))
 		if cut >= 0 {
-			lineEnd += int64(cut) + 1
-		} else {
-			lineEnd = int64(len(data))
+			lineEnd = position + int64(cut) + 1
 		}
 		line := data[position:lineEnd]
-		match := false
-		if position >= start && position < end {
-			hash := cognition.SemanticLineHash(string(line))
-			if _, ok := wanted[hash]; ok {
-				match = true
-				delete(unmatched, hash)
+		if cited, ok := wanted[position]; ok {
+			if hash := cognition.SemanticLineHash(string(line)); hash != cited {
+				return 0, fmt.Errorf(
+					"semantic drain of %q cites offset %d with hash %s, but the "+
+						"line there hashes to %s",
+					relative,
+					position,
+					cited,
+					hash,
+				)
 			}
-		}
-		if !match {
+			drained[position] = struct{}{}
+		} else {
 			remaining = append(remaining, line...)
 		}
 		position = lineEnd
 	}
-	if len(unmatched) > 0 {
-		return 0, fmt.Errorf(
-			"semantic drain of %q found no line in range [%d, %d) matching hash %s",
-			relative,
-			start,
-			end,
-			anyUnmatchedHash(unmatched),
-		)
-	}
-	if len(remaining) == len(data) {
-		return int64(len(data)), nil
+	for _, line := range lines {
+		if _, ok := drained[line.ByteOffset]; !ok {
+			return 0, fmt.Errorf(
+				"semantic drain of %q cites offset %d, which begins no line in "+
+					"the %d bytes of the file",
+				relative,
+				line.ByteOffset,
+				len(data),
+			)
+		}
 	}
 	if err := writeBytesFileAtomic(path, remaining); err != nil {
 		return 0, fmt.Errorf("rewrite semantic source %q: %w", path, err)
@@ -212,11 +219,4 @@ func (s *Store) RemoveSemanticLines(
 		)
 	}
 	return int64(len(remaining)), nil
-}
-
-func anyUnmatchedHash(unmatched map[string]struct{}) string {
-	for hash := range unmatched {
-		return hash
-	}
-	return ""
 }

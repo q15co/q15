@@ -189,71 +189,111 @@ func TestStoreLoadSemanticChunkRestrictedToSources(t *testing.T) {
 	}
 }
 
-func TestStoreRemoveSemanticLinesDrainsWholeLinesByHash(t *testing.T) {
+func TestStoreRemoveSemanticLinesDrainsExactlyTheCitedLines(t *testing.T) {
 	t.Parallel()
 	store, root := newSemanticChunkStore(t)
 	ctx := context.Background()
 	bullet := "- a legacy bullet about deploy targets\n"
 	other := "- a different legacy bullet\n"
-	// The same bullet text appears twice: outside and inside the range.
-	content := "# Semantic Facts\n\n" + bullet + "## Grounded Inferences\n\n- None\n\n" + bullet + other
+	// The same line appears twice: only the offset the caller cites may leave
+	// the file, so the second copy keeps its bytes. A drain that took a set of
+	// hashes instead would have removed both.
+	content := "# Semantic Facts\n\n## Grounded Inferences\n\n" + bullet + other + bullet
 	writeSemanticSource(t, root, semanticFactsRelativePath, content)
-	rangeStart := int64(strings.Index(content, "## Grounded Inferences"))
-	hashes := []string{cognition.SemanticLineHash(bullet)}
+	citedOffset := int64(strings.Index(content, bullet))
+	if citedOffset == int64(strings.LastIndex(content, bullet)) {
+		t.Fatalf("fixture placed the bullet once, want it twice")
+	}
+	cited := cognition.SemanticDrainLine{
+		ByteOffset: citedOffset,
+		Hash:       cognition.SemanticLineHash(bullet),
+	}
 
 	newSize, err := store.RemoveSemanticLines(
 		ctx,
 		semanticFactsRelativePath,
-		rangeStart,
-		int64(len(content)),
-		hashes,
+		[]cognition.SemanticDrainLine{cited},
 	)
 	if err != nil {
 		t.Fatalf("RemoveSemanticLines() error = %v", err)
+	}
+	want := content[:citedOffset] + content[citedOffset+int64(len(bullet)):]
+	if !strings.Contains(want, bullet) {
+		t.Fatalf("fixture lost the uncited duplicate: %q", want)
 	}
 	data, err := os.ReadFile(filepath.Join(root, "semantic", "facts.md"))
 	if err != nil {
 		t.Fatalf("ReadFile(facts) error = %v", err)
 	}
-	want := content[:rangeStart] + strings.Replace(
-		content[rangeStart:],
-		bullet,
-		"",
-		1,
-	)
 	if string(data) != want {
 		t.Fatalf("drained file = %q, want %q", string(data), want)
 	}
-	if got, want := newSize, int64(len(want)); got != want {
-		t.Fatalf("new size = %d, want %d", got, want)
+	if got, wantSize := newSize, int64(len(want)); got != wantSize {
+		t.Fatalf("new size = %d, want %d", got, wantSize)
 	}
 
-	// A hash with no matching line in range fails loudly and changes nothing.
-	if _, err := store.RemoveSemanticLines(
-		ctx,
-		semanticFactsRelativePath,
-		0,
-		int64(len(want)),
-		[]string{cognition.SemanticLineHash("absent line\n")},
-	); err == nil {
-		t.Fatalf("RemoveSemanticLines(absent hash) = nil error, want failure")
+	// A citation that does not name a line of the file as it stands fails
+	// loudly and leaves every byte in place.
+	rejected := []struct {
+		name  string
+		path  string
+		lines []cognition.SemanticDrainLine
+	}{
+		{"no cited lines", semanticFactsRelativePath, nil},
+		{
+			"offset begins no line",
+			semanticFactsRelativePath,
+			[]cognition.SemanticDrainLine{{
+				ByteOffset: citedOffset + 1,
+				Hash:       cognition.SemanticLineHash(bullet),
+			}},
+		},
+		{
+			"offset past the end",
+			semanticFactsRelativePath,
+			[]cognition.SemanticDrainLine{{
+				ByteOffset: int64(len(want)) + 1,
+				Hash:       cognition.SemanticLineHash(bullet),
+			}},
+		},
+		{
+			"hash does not match the line",
+			semanticFactsRelativePath,
+			[]cognition.SemanticDrainLine{{
+				ByteOffset: citedOffset,
+				Hash:       cognition.SemanticLineHash("absent line\n"),
+			}},
+		},
+		{
+			"empty hash",
+			semanticFactsRelativePath,
+			[]cognition.SemanticDrainLine{{ByteOffset: citedOffset, Hash: "  "}},
+		},
+		{
+			"negative offset",
+			semanticFactsRelativePath,
+			[]cognition.SemanticDrainLine{{
+				ByteOffset: -1,
+				Hash:       cognition.SemanticLineHash(bullet),
+			}},
+		},
+		{
+			"repeated offset",
+			semanticFactsRelativePath,
+			[]cognition.SemanticDrainLine{cited, cited},
+		},
+		{"non-source path", "semantic/topics/x.md", []cognition.SemanticDrainLine{cited}},
 	}
-	data, err = os.ReadFile(filepath.Join(root, "semantic", "facts.md"))
-	if err != nil {
-		t.Fatalf("ReadFile(facts) error = %v", err)
-	}
-	if string(data) != want {
-		t.Fatalf("file changed after failed drain: %q", string(data))
-	}
-
-	// No hashes and inverted ranges are caller errors.
-	if _, err := store.RemoveSemanticLines(ctx, semanticFactsRelativePath, 0, 8, nil); err == nil {
-		t.Fatalf("RemoveSemanticLines(no hashes) = nil error, want failure")
-	}
-	if _, err := store.RemoveSemanticLines(ctx, semanticFactsRelativePath, 8, 0, hashes); err == nil {
-		t.Fatalf("RemoveSemanticLines(inverted range) = nil error, want failure")
-	}
-	if _, err := store.RemoveSemanticLines(ctx, "semantic/topics/x.md", 0, 8, hashes); err == nil {
-		t.Fatalf("RemoveSemanticLines(non-source) = nil error, want rejection")
+	for _, tc := range rejected {
+		if _, err := store.RemoveSemanticLines(ctx, tc.path, tc.lines); err == nil {
+			t.Fatalf("RemoveSemanticLines(%s) = nil error, want failure", tc.name)
+		}
+		data, err := os.ReadFile(filepath.Join(root, "semantic", "facts.md"))
+		if err != nil {
+			t.Fatalf("ReadFile(facts) error = %v", err)
+		}
+		if string(data) != want {
+			t.Fatalf("file changed after a rejected drain (%s): %q", tc.name, string(data))
+		}
 	}
 }
