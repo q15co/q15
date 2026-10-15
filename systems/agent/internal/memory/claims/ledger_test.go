@@ -3,9 +3,11 @@ package claims
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // TestAppendLedgerIsConcurrencySafeUnderParallelWriters is the T1 ledger
@@ -133,8 +135,11 @@ func TestAppendLedgerCreatesFileAndParents(t *testing.T) {
 	}
 
 	err = AppendLedger(path, []LedgerEntry{
-		{Outcome: OutcomeMoved, Description: "follow up on thing", TargetID: "l-2026-0031"},
+		{Run: "semantic_memory.extract", SourceSeq: "t1", Outcome: OutcomeMoved,
+			Description: "follow up on thing", TargetID: "l-2026-0031", TargetPath: "working/OPEN_LOOPS.md"},
 		{
+			Run:         "semantic_memory.extract",
+			SourceSeq:   "t1",
 			Outcome:     OutcomeDropped,
 			Description: "transient staging noise",
 			Note:        "(no durable content)",
@@ -160,7 +165,8 @@ func TestAppendLedgerCreatesFileAndParents(t *testing.T) {
 	}
 
 	// Appending again must not rewrite what is already there.
-	if err := AppendLedger(path, []LedgerEntry{{Outcome: OutcomeClosed, TargetID: "l-2026-0031"}}); err != nil {
+	if err := AppendLedger(path, []LedgerEntry{{Run: "working_memory.refresh", SourceSeq: "t2",
+		Outcome: OutcomeClosed, Description: "follow up on thing", TargetID: "l-2026-0031", Note: "completed in t2"}}); err != nil {
 		t.Fatalf("second AppendLedger() error = %v", err)
 	}
 	raw, err = os.ReadFile(path)
@@ -196,5 +202,130 @@ func TestFormatLedgerEntryKeepsOneLinePerExit(t *testing.T) {
 	}
 	if !strings.Contains(got, "note with break") {
 		t.Fatalf("FormatLedgerEntry() = %q, want a collapsed note", got)
+	}
+}
+
+func TestParseLedgerEntryReadsIndependentExamples(t *testing.T) {
+	timestamp := time.Date(2026, time.October, 11, 9, 30, 0, 0, time.UTC)
+	tests := []struct {
+		name string
+		line string
+		want LedgerEntry
+	}{
+		{
+			name: "converted with escaped quotes and backslash",
+			line: `2026-10-11T09:30Z run=semantic_memory.extract src=t1..t9 converted "Use \"q15\" in C:\\work" → c-2026-0001 (semantic/topics/q15.md) (direct observation)`,
+			want: LedgerEntry{
+				Timestamp:   timestamp,
+				Run:         "semantic_memory.extract",
+				SourceSeq:   "t1..t9",
+				Outcome:     OutcomeConverted,
+				Description: `Use "q15" in C:\work`,
+				TargetID:    "c-2026-0001",
+				TargetPath:  "semantic/topics/q15.md",
+				Note:        "direct observation",
+			},
+		},
+		{
+			name: "moved accepts source first",
+			line: `2026-10-11T09:30Z src=t9 run=working_memory.refresh moved "Review the result" → l-2026-0001 (working/OPEN_LOOPS.md)`,
+			want: LedgerEntry{Timestamp: timestamp, Run: "working_memory.refresh", SourceSeq: "t9",
+				Outcome: OutcomeMoved, Description: "Review the result", TargetID: "l-2026-0001",
+				TargetPath: "working/OPEN_LOOPS.md"},
+		},
+		{
+			name: "dropped with nested parentheses in reason",
+			line: `2026-10-11T09:30Z run=semantic_memory.extract src=t9 dropped "Transient status" (already complete (t8))`,
+			want: LedgerEntry{Timestamp: timestamp, Run: "semantic_memory.extract", SourceSeq: "t9",
+				Outcome: OutcomeDropped, Description: "Transient status", Note: "already complete (t8)"},
+		},
+		{
+			name: "closed reason is not a target path",
+			line: `2026-10-11T09:30Z run=working_memory.refresh src=t9 closed "Review the result" → l-2026-0001 (completed in t9)`,
+			want: LedgerEntry{Timestamp: timestamp, Run: "working_memory.refresh", SourceSeq: "t9",
+				Outcome: OutcomeClosed, Description: "Review the result", TargetID: "l-2026-0001", Note: "completed in t9"},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := ParseLedgerEntry(test.line)
+			if err != nil {
+				t.Fatalf("ParseLedgerEntry() error = %v", err)
+			}
+			if !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("ParseLedgerEntry() = %#v, want %#v", got, test.want)
+			}
+			if got := strings.TrimSuffix(FormatLedgerEntry(test.want), "\n"); test.name != "moved accepts source first" &&
+				got != test.line {
+				t.Fatalf("FormatLedgerEntry() = %q, want %q", got, test.line)
+			}
+		})
+	}
+}
+
+func TestParseLedgerEntryRejectsMalformedRecords(t *testing.T) {
+	const prefix = "2026-10-11T09:30Z run=semantic_memory.extract src=t1 "
+	for _, line := range []string{
+		"arbitrary text pretending to record an exit",
+		`2026-02-30T09:30Z run=semantic_memory.extract src=t1 dropped "item" (noise)`,
+		`2026-10-11T09:30Z src=t1 dropped "item" (noise)`,
+		`2026-10-11T09:30Z run=semantic_memory.extract dropped "item" (noise)`,
+		`2026-10-11T09:30Z run=first run=second dropped "item" (noise)`,
+		`2026-10-11T09:30Z run=semantic_memory.extract src=untraceable dropped "item" (noise)`,
+		`2026-10-11T09:30Z run=semantic_memory.extract src=t9..t1 dropped "item" (noise)`,
+		prefix + `migrated "item"`,
+		prefix + `invented "item"`,
+		prefix + `dropped unquoted item`,
+		prefix + `dropped ""`,
+		prefix + `dropped "item`,
+		prefix + `dropped "item\nnext line"`,
+		prefix + `dropped "item" arbitrary suffix`,
+		prefix + `dropped "item" (unclosed reason`,
+		prefix + `dropped "item" (one) (two)`,
+		prefix + `converted "item" → (semantic/topics/file.md)`,
+		prefix + "dropped \"item\"\n" + prefix + `dropped "another"`,
+	} {
+		t.Run(line, func(t *testing.T) {
+			if got, err := ParseLedgerEntry(line); err == nil {
+				t.Fatalf("ParseLedgerEntry(%q) = %#v, want error", line, got)
+			}
+		})
+	}
+}
+
+func TestLedgerEntryCountCountsRecordsAndRejectsMalformedEvidence(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "LEDGER.md")
+	const record = `2026-10-11T09:30Z run=semantic_memory.extract src=t1 dropped "item" (transient noise)`
+	raw := "# Conversion ledger\n\nLegacy explanatory header prose.\n<!-- One line per exit. -->\n" + record + "\n"
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if count, err := LedgerEntryCount(path); err != nil || count != 1 {
+		t.Fatalf("LedgerEntryCount() = %d, %v; want 1, nil", count, err)
+	}
+	if err := os.WriteFile(path, []byte(raw+"2026-10-11 malformed record\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if count, err := LedgerEntryCount(path); err == nil {
+		t.Fatalf("LedgerEntryCount() = %d, nil; want malformed-record error", count)
+	}
+}
+
+func TestAppendLedgerRejectsMalformedEntryWithoutChangingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "LEDGER.md")
+	const before = "# Conversion ledger\n"
+	if err := os.WriteFile(path, []byte(before), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := AppendLedger(path, []LedgerEntry{{Outcome: OutcomeDropped, Description: "untraceable"}})
+	if err == nil {
+		t.Fatal("AppendLedger() accepted an entry without run or source")
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != before {
+		t.Fatalf("AppendLedger() changed existing bytes: %q", after)
 	}
 }

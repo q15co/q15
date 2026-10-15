@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -33,8 +35,6 @@ const (
 	OutcomeResolved LedgerOutcome = "resolved"
 	// OutcomeClosed marks an open loop that finished, with an outcome seq.
 	OutcomeClosed LedgerOutcome = "closed"
-	// OutcomeMigrated marks a legacy artifact converted during migration.
-	OutcomeMigrated LedgerOutcome = "migrated"
 )
 
 // LedgerEntry is one append-only line of the conversion ledger.
@@ -45,8 +45,8 @@ type LedgerEntry struct {
 	// Run names the cognition job or process that recorded the exit, for
 	// example "semantic_memory.extract".
 	Run string
-	// SourceSeq is the transcript range the exit covers ("t4391..t4414"), or
-	// empty when the originating seq is unrecoverable.
+	// SourceSeq is the transcript marker or range the exit covers ("t4391"
+	// or "t4391..t4414").
 	SourceSeq string
 	// Outcome is what became of the item.
 	Outcome LedgerOutcome
@@ -91,15 +91,13 @@ func FormatLedgerEntry(entry LedgerEntry) string {
 
 	description := normalizeLedgerField(entry.Description)
 	if description != "" {
-		builder.WriteString(" \"")
-		builder.WriteString(description)
-		builder.WriteString("\"")
+		builder.WriteString(" ")
+		builder.WriteString(strconv.Quote(description))
 	}
 	if target := strings.TrimSpace(entry.TargetID); target != "" {
 		if strings.Contains(target, " ") {
-			builder.WriteString(" → \"")
-			builder.WriteString(target)
-			builder.WriteString("\"")
+			builder.WriteString(" → ")
+			builder.WriteString(strconv.Quote(target))
 		} else {
 			builder.WriteString(" → ")
 			builder.WriteString(target)
@@ -111,9 +109,8 @@ func FormatLedgerEntry(entry LedgerEntry) string {
 		}
 	}
 	note := normalizeLedgerField(entry.Note)
-	if note != "" {
-		note = strings.Trim(note, "()")
-		note = strings.TrimSpace(note)
+	if strings.HasPrefix(note, "(") && strings.HasSuffix(note, ")") {
+		note = strings.TrimSpace(note[1 : len(note)-1])
 	}
 	if note != "" {
 		builder.WriteString(" (")
@@ -169,7 +166,11 @@ func AppendLedger(path string, entries []LedgerEntry) error {
 
 	var batch strings.Builder
 	for _, entry := range entries {
-		batch.WriteString(FormatLedgerEntry(entry))
+		line := FormatLedgerEntry(entry)
+		if _, err := ParseLedgerEntry(strings.TrimSuffix(line, "\n")); err != nil {
+			return fmt.Errorf("format ledger entry: %w", err)
+		}
+		batch.WriteString(line)
 	}
 	payload := []byte(batch.String())
 
@@ -201,8 +202,187 @@ func AppendLedger(path string, entries []LedgerEntry) error {
 	return nil
 }
 
-// LedgerEntryCount returns the number of ledger lines in the file at path.
-// A missing file counts as zero.
+// ParseLedgerEntry parses one complete single-line conversion record. Run and
+// src may appear in either order. Converted and moved records use their first
+// parenthesized suffix as a target path and an optional second suffix as a
+// reason; other outcomes use one suffix as a reason. Outcome-specific target
+// requirements are enforced when a conversion result is applied.
+func ParseLedgerEntry(line string) (LedgerEntry, error) {
+	var entry LedgerEntry
+	if strings.ContainsAny(line, "\r\n") {
+		return entry, fmt.Errorf("ledger record must occupy one line")
+	}
+	timestamp, rest, _ := strings.Cut(strings.TrimSpace(line), " ")
+	parsedTime, err := time.Parse(ledgerTimestampLayout, timestamp)
+	if err != nil {
+		return entry, fmt.Errorf("invalid ledger timestamp: %w", err)
+	}
+	entry.Timestamp = parsedTime
+	for range 2 {
+		field, after, ok := strings.Cut(strings.TrimSpace(rest), " ")
+		if !ok {
+			return entry, fmt.Errorf("ledger record requires run and src")
+		}
+		rest = after
+		key, value, ok := strings.Cut(field, "=")
+		if !ok || value == "" {
+			return entry, fmt.Errorf("invalid ledger field %q", field)
+		}
+		switch key {
+		case "run":
+			if entry.Run != "" || !ledgerRunPattern.MatchString(value) {
+				return entry, fmt.Errorf("invalid or duplicate ledger run %q", value)
+			}
+			entry.Run = value
+		case "src":
+			if entry.SourceSeq != "" || !validLedgerSource(value) {
+				return entry, fmt.Errorf("invalid or duplicate ledger src %q", value)
+			}
+			entry.SourceSeq = value
+		default:
+			return entry, fmt.Errorf("unknown ledger field %q", key)
+		}
+	}
+	if entry.Run == "" || entry.SourceSeq == "" {
+		return entry, fmt.Errorf("ledger record requires run and src")
+	}
+	outcome, rest, _ := strings.Cut(strings.TrimSpace(rest), " ")
+	entry.Outcome = LedgerOutcome(outcome)
+	switch entry.Outcome {
+	case OutcomeConverted, OutcomeMoved, OutcomeDropped, OutcomeSuperseded,
+		OutcomeRetracted, OutcomeResolved, OutcomeClosed:
+	default:
+		return entry, fmt.Errorf("invalid ledger outcome %q", outcome)
+	}
+	entry.Description, rest, err = consumeLedgerQuote(strings.TrimSpace(rest))
+	if err != nil || strings.TrimSpace(entry.Description) == "" {
+		return entry, fmt.Errorf("ledger record requires a quoted nonempty item")
+	}
+	if strings.ContainsAny(entry.Description, "\r\n") {
+		return entry, fmt.Errorf("ledger item must occupy one line")
+	}
+	return parseLedgerSuffix(entry, rest)
+}
+
+var (
+	ledgerRunPattern          = regexp.MustCompile(`^[a-zA-Z0-9_.:-]+$`)
+	ledgerRecordPrefixPattern = regexp.MustCompile(`^[0-9]{4}-`)
+)
+
+func validLedgerSource(source string) bool {
+	first, last, hasRange := strings.Cut(source, "..")
+	parseMarker := func(marker string) (uint64, error) {
+		if !strings.HasPrefix(marker, "t") || len(marker) == 1 {
+			return 0, fmt.Errorf("invalid transcript marker")
+		}
+		return strconv.ParseUint(marker[1:], 10, 64)
+	}
+	from, err := parseMarker(first)
+	if err != nil {
+		return false
+	}
+	if !hasRange {
+		return true
+	}
+	to, err := parseMarker(last)
+	return err == nil && to >= from
+}
+
+func consumeLedgerQuote(raw string) (string, string, error) {
+	if !strings.HasPrefix(raw, `"`) {
+		return "", "", fmt.Errorf("expected quoted value")
+	}
+	quoted, err := strconv.QuotedPrefix(raw)
+	if err != nil {
+		return "", "", err
+	}
+	value, err := strconv.Unquote(quoted)
+	return value, raw[len(quoted):], err
+}
+
+func parseLedgerSuffix(entry LedgerEntry, rest string) (LedgerEntry, error) {
+	rest = strings.TrimSpace(rest)
+	if after, ok := strings.CutPrefix(rest, "→ "); ok {
+		if strings.HasPrefix(after, `"`) {
+			var err error
+			entry.TargetID, rest, err = consumeLedgerQuote(after)
+			if err != nil {
+				return entry, fmt.Errorf("invalid ledger target: %w", err)
+			}
+		} else {
+			entry.TargetID, rest, _ = strings.Cut(after, " ")
+		}
+		if strings.TrimSpace(entry.TargetID) == "" ||
+			strings.ContainsAny(entry.TargetID, "\r\n()") {
+			return entry, fmt.Errorf("invalid ledger target")
+		}
+	}
+	var suffixes []string
+	for strings.TrimSpace(rest) != "" {
+		rest = strings.TrimSpace(rest)
+		if !strings.HasPrefix(rest, "(") {
+			return entry, fmt.Errorf("unexpected ledger suffix %q", rest)
+		}
+		end, depth := 0, 0
+		for i, char := range rest {
+			if char == '(' {
+				depth++
+			}
+			if char == ')' {
+				depth--
+				if depth == 0 {
+					end = i
+					break
+				}
+			}
+		}
+		if end == 0 || strings.TrimSpace(rest[1:end]) == "" {
+			return entry, fmt.Errorf("invalid ledger parenthesized suffix")
+		}
+		suffixes = append(suffixes, strings.TrimSpace(rest[1:end]))
+		rest = rest[end+1:]
+		if len(suffixes) > 2 {
+			return entry, fmt.Errorf("too many ledger suffixes")
+		}
+	}
+	if entry.TargetID != "" &&
+		(entry.Outcome == OutcomeConverted || entry.Outcome == OutcomeMoved) {
+		if len(suffixes) > 0 {
+			entry.TargetPath = suffixes[0]
+		}
+		if len(suffixes) == 2 {
+			entry.Note = suffixes[1]
+		}
+	} else if len(suffixes) == 1 {
+		entry.Note = suffixes[0]
+	} else if len(suffixes) > 1 {
+		return entry, fmt.Errorf("ledger outcome %q accepts one reason suffix", entry.Outcome)
+	}
+	return entry, nil
+}
+
+// ParseLedger parses records while ignoring blank lines, markdown headings,
+// and standalone HTML comments. Other content is rejected with its line number.
+func ParseLedger(data []byte) ([]LedgerEntry, error) {
+	var entries []LedgerEntry
+	for index, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") ||
+			(strings.HasPrefix(trimmed, "<!--") && strings.HasSuffix(trimmed, "-->")) {
+			continue
+		}
+		entry, err := ParseLedgerEntry(line)
+		if err != nil {
+			return nil, fmt.Errorf("ledger line %d: %w", index+1, err)
+		}
+		entries = append(entries, entry)
+	}
+	return entries, nil
+}
+
+// LedgerEntryCount returns the number of records in the file at path. Legacy
+// header prose is ignored; malformed date-prefixed records fail. A missing file
+// counts as zero.
 func LedgerEntryCount(path string) (int, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -212,9 +392,12 @@ func LedgerEntryCount(path string) (int, error) {
 		return 0, fmt.Errorf("read ledger %q: %w", path, err)
 	}
 	count := 0
-	for _, line := range strings.Split(string(raw), "\n") {
-		if strings.TrimSpace(line) == "" {
+	for index, line := range strings.Split(string(raw), "\n") {
+		if !ledgerRecordPrefixPattern.MatchString(strings.TrimSpace(line)) {
 			continue
+		}
+		if _, err := ParseLedgerEntry(line); err != nil {
+			return 0, fmt.Errorf("parse ledger %q line %d: %w", path, index+1, err)
 		}
 		count++
 	}
