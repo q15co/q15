@@ -28,7 +28,11 @@ func TestParseRenderParseIsIdentityForValidClaims(t *testing.T) {
 		if err != nil {
 			t.Fatalf("iteration %d: ParseClaims() error = %v", iteration, err)
 		}
-		if want := len(unparsedProseBlocks(markdown)); len(unparsed) != want {
+		wantBlocks := 3
+		if iteration > 0 {
+			wantBlocks = 2
+		}
+		if want := wantBlocks; len(unparsed) != want {
 			t.Fatalf(
 				"iteration %d: len(unparsed) = %d, want %d (the non-claim prose)",
 				iteration,
@@ -66,7 +70,7 @@ func TestParseRenderParseIsIdentityForValidClaims(t *testing.T) {
 		// A claims-only document still carries the blank lines between claims
 		// and the trailing newline, and the tolerant parser keeps them; what
 		// must not happen is a block appearing that the document does not have.
-		if want := len(unparsedProseBlocks(rendered.String())); len(reparsedUnparsed) != want {
+		if want := 2; len(reparsedUnparsed) != want {
 			t.Fatalf(
 				"iteration %d: reparse unparsed = %d, want %d\n%#v",
 				iteration,
@@ -88,48 +92,12 @@ func TestParseRenderParseIsIdentityForValidClaims(t *testing.T) {
 	}
 }
 
-// unparsedProseBlocks returns the unparsed blocks ParseClaims must produce for
-// a document, in order: every source line that is neither a claim head nor a
-// claim metadata continuation survives verbatim, and consecutive surviving
-// lines form one block. This mirrors ParseClaims' own grouping (the same claim
-// head pattern and the same continuation walk), so the assertion below checks
-// the count against the document's structure rather than against a magic
-// number.
-func unparsedProseBlocks(markdown string) []string {
-	lines := strings.Split(markdown, "\n")
-
-	var (
-		blocks  []string
-		current []string
-	)
-	flush := func() {
-		if len(current) == 0 {
-			return
-		}
-		blocks = append(blocks, strings.Join(current, "\n"))
-		current = nil
-	}
-
-	for i := 0; i < len(lines); i++ {
-		if claimLinePattern.MatchString(lines[i]) {
-			flush()
-			_, last := consumeMetadata(lines, i+1)
-			i = last
-			continue
-		}
-		current = append(current, lines[i])
-	}
-	flush()
-
-	return blocks
-}
-
 func TestParseClaimsReadsEveryField(t *testing.T) {
 	claims, unparsed, err := ParseClaims(validClaimMarkdown)
 	if err != nil {
 		t.Fatalf("ParseClaims() error = %v", err)
 	}
-	if want := len(unparsedProseBlocks(validClaimMarkdown)); len(unparsed) != want {
+	if want := 3; len(unparsed) != want {
 		t.Fatalf("len(unparsed) = %d, want %d", len(unparsed), want)
 	}
 
@@ -395,5 +363,42 @@ func TestNextClaimIDIsNeverReusedAcrossSequentialAllocations(t *testing.T) {
 		}
 		seen[id] = struct{}{}
 		existing = append(existing, Claim{ID: id})
+	}
+}
+
+func TestParseClaimsPreservesIndentedNonMetadata(t *testing.T) {
+	for _, prose := range []string{
+		"  legacy paragraph with trailing spaces  ",
+		"\t- nested legacy bullet\t",
+		"  {prose in braces}",
+		"  explanation mentioning src: t17",
+		"  {status: active} followed by prose",
+	} {
+		t.Run(prose, func(t *testing.T) {
+			markdown := "- [c-2026-0001] A claim.\n" +
+				"  {status: active, kind: fact, confidence: confirmed, src: t1, rev: 2026-10-11}\n" +
+				prose + "\n"
+			found, unparsed, err := ParseClaims(markdown)
+			if err != nil {
+				t.Fatalf("ParseClaims() error = %v", err)
+			}
+			want := []Unparsed{{Lines: []string{prose, ""}, Before: 1}}
+			if !reflect.DeepEqual(unparsed, want) {
+				t.Fatalf("unparsed = %#v, want %#v", unparsed, want)
+			}
+			if got := RenderMarkdown(found, unparsed); got != markdown {
+				t.Fatalf("RenderMarkdown() = %q, want %q", got, markdown)
+			}
+		})
+	}
+}
+
+func TestNextClaimIDUsesHistoricalIDsAcrossTopics(t *testing.T) {
+	currentProjects := []Claim{{ID: "c-2026-0003"}}
+	currentPreferences := []Claim{{ID: "c-2026-0014"}}
+	deleted := []Claim{{ID: "c-2026-0038"}}
+	allIssued := append(append(currentProjects, currentPreferences...), deleted...)
+	if got := NextClaimID(2026, allIssued); got != "c-2026-0039" {
+		t.Fatalf("NextClaimID(all issued IDs) = %q, want c-2026-0039", got)
 	}
 }

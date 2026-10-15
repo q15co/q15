@@ -14,7 +14,7 @@
 //
 // Parsing is tolerant: recognised claim heads and their metadata are lifted
 // into Claim values, and every other source line is kept verbatim in an
-// Unparsed block so legacy content survives a round trip unchanged.
+// Unparsed block so rendering preserves legacy content.
 package claims
 
 import (
@@ -145,8 +145,8 @@ const claimIndent = "  "
 // A claim starts at a line of the form "- [c-YYYY-NNNN] text" — either with an
 // inline "{…}" metadata span or with an indented continuation carrying the
 // metadata. Text that is not part of a claim is returned as an Unparsed block,
-// with its lines preserved verbatim and in source order, so a parse→render→parse
-// round trip is the identity for any markdown, valid claims or not.
+// with its lines preserved verbatim and in source order. Rendering normalizes
+// recognized claims to the canonical format.
 func ParseClaims(markdown string) ([]Claim, []Unparsed, error) {
 	lines := strings.Split(markdown, "\n")
 
@@ -229,8 +229,8 @@ func metadataGroupLooksValid(group string) bool {
 // consumeMetadata walks the lines after a claim head and collects the ones that
 // belong to that claim's metadata. A continuation keeps its source position:
 // the walk stops at the first blank line, the next claim head, or a line that
-// is neither indented nor a bare "key: value" span, so the parser never
-// swallows a neighbouring unparsed bullet or paragraph.
+// is not a metadata group or a bare known "key: value" span, so the parser
+// never swallows an indented unparsed bullet or paragraph.
 //
 // It returns the joined continuation text and the index of the last consumed
 // line (start-1 when nothing was consumed).
@@ -246,7 +246,7 @@ func consumeMetadata(lines []string, start int) (string, int) {
 		if claimLinePattern.MatchString(line) {
 			break
 		}
-		if !isIndented(line) && !hasMetadataSpan(line) {
+		if !hasMetadataSpan(line) {
 			break
 		}
 		buffered = append(buffered, line)
@@ -256,19 +256,17 @@ func consumeMetadata(lines []string, start int) (string, int) {
 	return strings.Join(buffered, "\n"), last
 }
 
-// hasMetadataSpan reports whether a line contains a metadata span, either as a
-// "{…}" group or as a bare "key: value" span.
+// hasMetadataSpan reports whether the entire line is a metadata continuation.
 func hasMetadataSpan(line string) bool {
 	trimmed := strings.TrimSpace(line)
-	if strings.Contains(trimmed, "{") && metadataGroupPattern.MatchString(trimmed) {
-		return true
+	if strings.HasPrefix(trimmed, "{") {
+		if !strings.HasSuffix(trimmed, "}") ||
+			strings.ContainsAny(trimmed[1:len(trimmed)-1], "{}") {
+			return false
+		}
+		trimmed = strings.TrimSpace(trimmed[1 : len(trimmed)-1])
 	}
-	return metadataFieldPattern.MatchString(trimmed)
-}
-
-// isIndented reports whether a line starts with whitespace.
-func isIndented(line string) bool {
-	return line != strings.TrimLeft(line, " \t")
+	return startsKnownMetadataKey(trimmed)
 }
 
 // parseMetadata extracts the known metadata fields from a raw continuation
@@ -566,8 +564,8 @@ func (u Unparsed) String() string {
 }
 
 // RenderMarkdown rebuilds a document from its parsed parts, interleaving the
-// claims and the unparsed blocks in their original order. For any markdown,
-// RenderMarkdown(ParseClaims(markdown)) reproduces it byte for byte.
+// claims and the unparsed blocks in their original order. Unparsed lines are
+// preserved byte for byte; recognized claims use the canonical format.
 func RenderMarkdown(claims []Claim, unparsed []Unparsed) string {
 	lines := make([]string, 0, len(claims)*2+len(unparsed))
 	blockIndex := 0
@@ -597,9 +595,10 @@ func RenderMarkdown(claims []Claim, unparsed []Unparsed) string {
 	return strings.Join(lines, "\n")
 }
 
-// NextClaimID allocates the next claim ID for year, given the claims already
-// present in a file. The counter is derived from the highest existing
-// "c-<year>-NNNN" value so IDs are monotonic and never reused within a year.
+// NextClaimID returns an ID above every ID for year in existing. Callers must
+// supply all IDs ever issued across every topic, including deleted claims, and
+// serialize allocation with persistence. A single file or current claims alone
+// cannot prevent reuse after a deletion.
 func NextClaimID(year int, existing []Claim) string {
 	highest := 0
 	prefix := fmt.Sprintf("c-%04d-", year)
