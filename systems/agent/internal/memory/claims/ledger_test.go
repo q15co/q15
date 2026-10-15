@@ -341,3 +341,77 @@ func TestParseLedgerRequiresRecordsOutsideHeadingsAndComments(t *testing.T) {
 		t.Fatal("ParseLedger() accepted unstructured evidence")
 	}
 }
+
+const multilineLedgerSeedHeader = `# Conversion Ledger
+
+<!-- One single line per exit: YYYY-MM-DDTHH:MMZ run=<job> src=t<a>..t<b> <outcome>
+"<original item>" → <claim-or-loop-id> (<file>). A dropped or closed item instead
+ends with a parenthesized reason. Records have no indented continuation lines.
+Append only. At startup, ledgers over 256 KB rotate to working/ledger/YYYY-Q.md.
+The ledger is never injected into conversational prompts. -->
+`
+
+func TestLedgerReadersIgnoreMultilineSeedAndCommentedRecords(t *testing.T) {
+	t.Parallel()
+	const record = `2026-10-11T09:30Z run=semantic_memory.extract src=t1 dropped "actual exit" (transient)`
+	const commented = `2026-10-11T09:30Z run=semantic_memory.extract src=t1 dropped "commented example" (transient)`
+	for _, comment := range []string{
+		"<!--\n" + commented + "\n-->\n",
+		"<!--\n2026-10-11 malformed example\n-->\n",
+		"<!-- first --> <!--\n" + commented + "\n-->\n",
+	} {
+		t.Run(comment, func(t *testing.T) {
+			t.Parallel()
+			data := []byte(multilineLedgerSeedHeader + comment + record + "\n")
+			entries, err := ParseLedger(data)
+			if err != nil || len(entries) != 1 || entries[0].Description != "actual exit" {
+				t.Fatalf("ParseLedger() = %#v, %v; want only the actual exit", entries, err)
+			}
+			path := filepath.Join(t.TempDir(), "LEDGER.md")
+			if err := os.WriteFile(path, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if count, err := LedgerEntryCount(path); err != nil || count != 1 {
+				t.Fatalf("LedgerEntryCount() = %d, %v; want 1, nil", count, err)
+			}
+		})
+	}
+}
+
+func TestLedgerReadersRejectMalformedContentOutsideComments(t *testing.T) {
+	t.Parallel()
+	for _, suffix := range []string{
+		"2026-10-11 malformed record\n",
+		"<!-- explanation --> 2026-10-11 malformed record\n",
+		"<!-- unterminated explanation\n",
+	} {
+		t.Run(suffix, func(t *testing.T) {
+			t.Parallel()
+			data := []byte(multilineLedgerSeedHeader + suffix)
+			if entries, err := ParseLedger(data); err == nil {
+				t.Fatalf("ParseLedger() = %#v, nil; want malformed-content error", entries)
+			}
+			path := filepath.Join(t.TempDir(), "LEDGER.md")
+			if err := os.WriteFile(path, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if count, err := LedgerEntryCount(path); err == nil {
+				t.Fatalf("LedgerEntryCount() = %d, nil; want malformed-content error", count)
+			}
+		})
+	}
+	if _, err := ParseLedger([]byte(multilineLedgerSeedHeader + "arbitrary prose\n")); err == nil {
+		t.Fatal("ParseLedger() accepted arbitrary prose outside comments")
+	}
+}
+
+func TestLedgerReaderPreservesCommentMarkersInQuotedDescriptions(t *testing.T) {
+	t.Parallel()
+	data := []byte(
+		"2026-10-11T09:30Z run=semantic_memory.extract src=t1 dropped \"Use <!-- for HTML comments\" (transient)\n",
+	)
+	entries, err := ParseLedger(data)
+	if err != nil || len(entries) != 1 || entries[0].Description != "Use <!-- for HTML comments" {
+		t.Fatalf("ParseLedger() = %#v, %v; want literal comment marker preserved", entries, err)
+	}
+}

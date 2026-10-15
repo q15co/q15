@@ -364,11 +364,14 @@ func parseLedgerSuffix(entry LedgerEntry, rest string) (LedgerEntry, error) {
 // ParseLedger parses records while ignoring blank lines, markdown headings,
 // and standalone HTML comments. Other content is rejected with its line number.
 func ParseLedger(data []byte) ([]LedgerEntry, error) {
+	lines, err := ledgerContentLines(data)
+	if err != nil {
+		return nil, err
+	}
 	var entries []LedgerEntry
-	for index, line := range strings.Split(string(data), "\n") {
+	for index, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") ||
-			(strings.HasPrefix(trimmed, "<!--") && strings.HasSuffix(trimmed, "-->")) {
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue
 		}
 		entry, err := ParseLedgerEntry(line)
@@ -380,9 +383,39 @@ func ParseLedger(data []byte) ([]LedgerEntry, error) {
 	return entries, nil
 }
 
+func ledgerContentLines(data []byte) ([]string, error) {
+	lines := strings.Split(string(data), "\n")
+	inComment, commentLine := false, 0
+	for index, line := range lines {
+		rest := strings.TrimSpace(line)
+		for {
+			if inComment {
+				_, after, closed := strings.Cut(rest, "-->")
+				if !closed {
+					rest = ""
+					break
+				}
+				rest = strings.TrimSpace(after)
+				inComment = false
+			}
+			after, opens := strings.CutPrefix(rest, "<!--")
+			if !opens {
+				break
+			}
+			inComment, commentLine = true, index+1
+			rest = after
+		}
+		lines[index] = rest
+	}
+	if inComment {
+		return nil, fmt.Errorf("ledger line %d: unterminated HTML comment", commentLine)
+	}
+	return lines, nil
+}
+
 // LedgerEntryCount returns the number of records in the file at path. Legacy
-// header prose is ignored; malformed date-prefixed records fail. A missing file
-// counts as zero.
+// header prose and standalone HTML comments are ignored; malformed date-prefixed
+// records fail. A missing file counts as zero.
 func LedgerEntryCount(path string) (int, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -391,8 +424,12 @@ func LedgerEntryCount(path string) (int, error) {
 		}
 		return 0, fmt.Errorf("read ledger %q: %w", path, err)
 	}
+	lines, err := ledgerContentLines(raw)
+	if err != nil {
+		return 0, fmt.Errorf("parse ledger %q: %w", path, err)
+	}
 	count := 0
-	for index, line := range strings.Split(string(raw), "\n") {
+	for index, line := range lines {
 		if !ledgerRecordPrefixPattern.MatchString(strings.TrimSpace(line)) {
 			continue
 		}
