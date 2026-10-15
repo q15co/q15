@@ -137,7 +137,7 @@ func (verificationReviewJob) Build(
 		"Use read_file, web_fetch, or web_search only when they are materially useful for gathering evidence.",
 		"Do not emit JSON or a user-facing answer.",
 		"Do not call mutating tools or attempt to edit any files directly.",
-		"Treat the final response as opaque internal notes that later cognition jobs may read.",
+		"Keep assessment prose as internal notes; the framework validates conflict decision records before storing the artifact.",
 		"Your final response must be non-empty.",
 		"If tool results are partial, blocked, or inconclusive, state that uncertainty explicitly.",
 	}
@@ -244,9 +244,8 @@ type conflictedClaimEntry struct {
 
 // collectConflictedClaims parses the claims of the three semantic roots and
 // of every semantic topic file and returns those marked conflicted, roots
-// first, then topic files by path. Unparseable lines never abort the walk:
-// ParseClaims keeps them in Unparsed blocks and continues past them, and
-// only non-conflicted parsing itself can fail the collection.
+// first, then topic files by path. Unparseable lines remain in Unparsed blocks.
+// Duplicate IDs fail because a resolution must identify one unambiguous claim.
 func collectConflictedClaims(
 	semantic agent.SemanticMemory,
 	topics map[string]string,

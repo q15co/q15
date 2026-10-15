@@ -117,6 +117,21 @@ func TestVerificationReviewRequiresEveryConflictGroupIncludingSingletons(t *test
 	}
 }
 
+func TestVerificationReviewRejectsAmbiguousClaimIDs(t *testing.T) {
+	t.Parallel()
+
+	loader, _ := buildConflictReview(t)
+	loader.topics[conflictTopicPath] = strings.Replace(
+		loader.topics[conflictTopicPath],
+		"["+conflictSecondID+"]",
+		"["+conflictFirstID+"]",
+		1,
+	)
+	if _, err := (verificationReviewJob{}).Build(context.Background(), loader); err == nil {
+		t.Fatal("Build accepted two claims with the same ID in different files")
+	}
+}
+
 func TestConflictGroupsMatchWholeClaimIDs(t *testing.T) {
 	t.Parallel()
 
