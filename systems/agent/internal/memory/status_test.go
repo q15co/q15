@@ -295,3 +295,22 @@ func TestCollectStatusRejectsNonPositiveLimits(t *testing.T) {
 		t.Fatalf("error = %q, want it to name the bad limits", err.Error())
 	}
 }
+
+func TestCollectStatusCountsArchivedRecords(t *testing.T) {
+	files := fullStatusFixtureFiles()
+	files = append(
+		files,
+		fixtureFile{
+			relative: "working/ledger/2026-Q3.md",
+			content:  "# Conversion Ledger\n\n2026-09-01T04:00Z run=semantic_memory.extract src=t1 dropped \"archived item\" (stale)\n",
+		},
+	)
+	store, _ := statusFixtureStore(t, files)
+	status, err := CollectStatus(context.Background(), store, statusFixtureLimits(), statusNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.LedgerEntries != 3 {
+		t.Fatalf("ledger entries = %d, want 3", status.LedgerEntries)
+	}
+}

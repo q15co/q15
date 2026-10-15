@@ -57,8 +57,8 @@ type Status struct {
 	// order, semantic files sorted by path.
 	Files []FileSizeStatus
 
-	// LedgerLines counts valid exit records in the active ledger.
-	LedgerLines int
+	// LedgerEntries counts valid exit records in the active and archived ledgers.
+	LedgerEntries int
 }
 
 // CheckpointStatus is where one conversion checkpoint stands relative to the
@@ -230,7 +230,15 @@ func CollectStatus(
 	if err != nil {
 		return Status{}, fmt.Errorf("count ledger lines: %w", err)
 	}
-	status.LedgerLines = lines
+	history, err := s.LoadConversionLedgerHistory(ctx)
+	if err != nil {
+		return Status{}, fmt.Errorf("load archived ledger: %w", err)
+	}
+	archived, err := claims.ParseLedger([]byte(history))
+	if err != nil {
+		return Status{}, fmt.Errorf("parse archived ledger: %w", err)
+	}
+	status.LedgerEntries = lines + len(archived)
 
 	return status, nil
 }
@@ -295,7 +303,7 @@ func renderStatus(status Status) string {
 			fileSizeMark(file),
 		)
 	}
-	fmt.Fprintf(&out, "ledger entries %d\n", status.LedgerLines)
+	fmt.Fprintf(&out, "ledger entries %d\n", status.LedgerEntries)
 	return out.String()
 }
 
