@@ -24,7 +24,7 @@ type Spec struct {
 	CheckpointSeq int64
 	// Baseline carries pre-run file content captured during Build, keyed by
 	// runtime path, so ApplyResult can diff what the run changed. Content is
-	// as returned by the loader (whitespace-trimmed).
+	// preserved byte for byte, including whitespace and line endings.
 	Baseline map[string]string
 }
 
