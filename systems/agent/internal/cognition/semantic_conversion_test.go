@@ -520,7 +520,7 @@ func TestSemanticConversionRollsBackOnLedgerCompletenessFailure(t *testing.T) {
 		"# Working Memory\n\n## Active Tasks\n\n- None\n",
 	)
 
-	_, err := NewSemanticMemoryExtractionRegistration(0).NewJob().ApplyResult(
+	_, err := NewSemanticMemoryExtractionRegistration(0, 0).NewJob().ApplyResult(
 		context.Background(),
 		loader,
 		JobOutput{
@@ -557,7 +557,7 @@ func TestSemanticConversionRollsBackOnOverCapFailure(t *testing.T) {
 	// Simulate the run blowing the projects root past its cap on disk.
 	loader.files[semanticProjectsRelativePath] = []byte(strings.Repeat("x", semanticRootCapBytes+1))
 
-	_, err := NewSemanticMemoryExtractionRegistration(0).NewJob().ApplyResult(
+	_, err := NewSemanticMemoryExtractionRegistration(0, 0).NewJob().ApplyResult(
 		context.Background(),
 		loader,
 		JobOutput{
@@ -596,7 +596,7 @@ func TestSemanticConversionRollsBackNewTopicFile(t *testing.T) {
 	loader.files[newTopic] = []byte("- [c-2026-0001] new claim\n")
 	loader.semanticSizes = map[string]int64{newTopic: 40}
 
-	_, err := NewSemanticMemoryExtractionRegistration(0).NewJob().ApplyResult(
+	_, err := NewSemanticMemoryExtractionRegistration(0, 0).NewJob().ApplyResult(
 		context.Background(),
 		loader,
 		JobOutput{
@@ -639,7 +639,7 @@ func TestSemanticConversionHappyPathKeepsWrites(t *testing.T) {
 		"semantic/topics/q15.md": int64(len(validConversionClaim)),
 	}
 
-	result, err := NewSemanticMemoryExtractionRegistration(0).NewJob().ApplyResult(
+	result, err := NewSemanticMemoryExtractionRegistration(0, 0).NewJob().ApplyResult(
 		context.Background(),
 		loader,
 		JobOutput{
@@ -683,7 +683,7 @@ func TestSemanticConversionRestoreFailureNamesPathAndKeepsValidation(t *testing.
 		"# Working Memory\n\n## Active Tasks\n\n- None\n",
 	)
 
-	_, err := NewSemanticMemoryExtractionRegistration(0).NewJob().ApplyResult(
+	_, err := NewSemanticMemoryExtractionRegistration(0, 0).NewJob().ApplyResult(
 		context.Background(),
 		loader,
 		JobOutput{
