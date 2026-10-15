@@ -508,10 +508,10 @@ func TestRunnerRunsVerificationReviewAndStoresArtifactWithoutToolCalls(t *testin
 	}
 }
 
-func (s *verificationJobLoader) ReadFileBytes(context.Context, string) ([]byte, bool, error) {
+func (l *verificationJobLoader) ReadFileBytes(context.Context, string) ([]byte, bool, error) {
 	return nil, false, nil
 }
 
-func (s *verificationJobLoader) LoadConversionLedgerHistory(context.Context) (string, error) {
+func (l *verificationJobLoader) LoadConversionLedgerHistory(context.Context) (string, error) {
 	return "", nil
 }
