@@ -23,12 +23,22 @@ import (
 // reports success, because a bare invocation is a request for help; an
 // unrecognised command prints the same list to stderr and returns a usage error,
 // which main turns into exit status 2 rather than the 1 a failed command gets.
+//
+// `--version` and `-V` are answered here rather than as verbs, the same way the
+// spellings that ask for help are: they are what a person types first, and the
+// answer is the three lines `version` prints. `-V` and not `-v`, because `-v` is
+// the conventional shorthand for verbose and nothing here is verbose.
 func Run(ctx context.Context, env command.Env, args []string) error {
 	env = env.WithDefaults()
 
 	if len(args) == 0 || asksForHelp(args[0]) {
 		writeUsage(env.Stdout)
 		return nil
+	}
+	if asksForVersion(args[0]) {
+		// Anything after the flag is still the verb's argument to refuse, so a
+		// mistyped invocation fails where the mistake is.
+		return runVersion(ctx, env, args[1:])
 	}
 
 	v, ok := lookup(args[0])
@@ -43,4 +53,10 @@ func Run(ctx context.Context, env command.Env, args []string) error {
 // naming a verb.
 func asksForHelp(word string) bool {
 	return word == "help" || word == "-h" || word == "--help"
+}
+
+// asksForVersion reports whether a word asks for the release rather than naming
+// a verb.
+func asksForVersion(word string) bool {
+	return word == "-V" || word == "--version"
 }

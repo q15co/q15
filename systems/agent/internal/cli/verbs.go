@@ -88,7 +88,9 @@ func lookup(name string) (verb, bool) {
 // writeUsage prints the command list, generated from the registry so a verb
 // cannot be reachable but undocumented. `help` is not a verb: it is handled
 // before the lookup, and it appears here because an operator looking for a
-// command list should see the word that asks for one.
+// command list should see the word that asks for one. The version spellings are
+// named in the note under the list for the same reason: a flag the parser
+// answers before the lookup is a word nobody can reach by reading the registry.
 func writeUsage(w io.Writer) {
 	fmt.Fprint(w, `q15 renders and drives a q15 stack.
 
@@ -105,7 +107,8 @@ commands:
 	}
 	fmt.Fprint(w, `  help      print this message
 
-The remaining install commands (init, doctor, origin) arrive with the install
-slice; run 'q15 version' to see what this build is.
+--version and -V print the same three lines the version command does, and --help
+and -h print this list. The remaining install commands (init, doctor, origin)
+arrive with the install slice; run 'q15 version' to see what this build is.
 `)
 }
