@@ -206,10 +206,36 @@ func successfulWritePaths(messages []conversation.Message) []string {
 	return out
 }
 
+// appendedWorkingLedgerLines enforces the ledger's append-only rule for one
+// job's run and returns how many non-empty ledger lines the run appended. The
+// pre-run ledger must survive as a prefix of the post-run ledger, because
+// file tools rewrite whole files instead of appending with O_APPEND. runLabel
+// names the job in the failure so the error reads as the run that produced
+// it; every job that can make an item exit shares this one rule.
+func appendedWorkingLedgerLines(
+	ctx context.Context,
+	loader ContextLoader,
+	baseline map[string]string,
+	runLabel string,
+) (int, error) {
+	afterLedger, err := loader.LoadWorkingLedger(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("load post-run working ledger: %w", err)
+	}
+	afterLedger = strings.TrimSpace(afterLedger)
+	beforeLedger := baseline[workingLedgerRuntimePath]
+	if !strings.HasPrefix(afterLedger, beforeLedger) {
+		return 0, fmt.Errorf(
+			"%s rewrote existing ledger lines in %s; the ledger is append-only",
+			runLabel,
+			workingLedgerRuntimePath,
+		)
+	}
+	return countNonEmptyLines(afterLedger[len(beforeLedger):]), nil
+}
+
 // checkLedgerCompleteness diffs working memory against the Build baseline and
-// requires one appended ledger line per removed working-memory bullet. It also
-// requires the pre-run ledger to survive as a prefix, because file tools
-// rewrite the whole file instead of appending with O_APPEND.
+// requires one appended ledger line per removed working-memory bullet.
 func checkLedgerCompleteness(
 	ctx context.Context,
 	loader ContextLoader,
@@ -219,24 +245,15 @@ func checkLedgerCompleteness(
 	if !ok {
 		return 0, 0, fmt.Errorf("spec baseline is missing pre-run working memory")
 	}
-	beforeLedger := baseline[workingLedgerRuntimePath]
 
 	working, err := loader.LoadWorkingMemory(ctx)
 	if err != nil {
 		return 0, 0, fmt.Errorf("load post-run working memory: %w", err)
 	}
-	afterLedger, err := loader.LoadWorkingLedger(ctx)
+	appended, err := appendedWorkingLedgerLines(ctx, loader, baseline, "semantic-memory run")
 	if err != nil {
-		return 0, 0, fmt.Errorf("load post-run working ledger: %w", err)
+		return 0, 0, err
 	}
-	afterLedger = strings.TrimSpace(afterLedger)
-	if !strings.HasPrefix(afterLedger, beforeLedger) {
-		return 0, 0, fmt.Errorf(
-			"semantic-memory run rewrote existing ledger lines in %s; the ledger is append-only",
-			workingLedgerRuntimePath,
-		)
-	}
-	appended := countNonEmptyLines(afterLedger[len(beforeLedger):])
 	removed := removedWorkingItems(before, strings.TrimSpace(working.Content))
 	if len(removed) > appended {
 		return 0, 0, fmt.Errorf(

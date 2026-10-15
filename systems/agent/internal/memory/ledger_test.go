@@ -256,7 +256,6 @@ func TestStoreInitRotatesOversizedLedger(t *testing.T) {
 	}
 }
 
-
 func TestStoreRotatesOversizedLedgerKeepsArchiveChronological(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "memory")
 	store := newTestStore(root, &fakeCommitter{})

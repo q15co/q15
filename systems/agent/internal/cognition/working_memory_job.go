@@ -111,6 +111,10 @@ func (workingMemoryConsolidationJob) Build(
 	if err != nil {
 		return Spec{}, fmt.Errorf("load open loops: %w", err)
 	}
+	ledger, err := loader.LoadWorkingLedger(ctx)
+	if err != nil {
+		return Spec{}, fmt.Errorf("load working ledger: %w", err)
+	}
 	verificationArtifact, err := loader.LoadCognitionArtifact(
 		ctx,
 		VerificationReviewPath,
@@ -187,6 +191,11 @@ func (workingMemoryConsolidationJob) Build(
 	}
 
 	transcriptArtifact := renderTranscriptArtifact(recentMessages)
+
+	snapshots, err := snapshotWorkingMemoryFiles(ctx, loader)
+	if err != nil {
+		return Spec{}, fmt.Errorf("snapshot working-memory targets: %w", err)
+	}
 
 	return Spec{
 		Objective: renderPromptLines(
@@ -314,6 +323,12 @@ func (workingMemoryConsolidationJob) Build(
 		RequireToolCalling: true,
 		AllowedTools:       append([]string(nil), workingMemoryAllowedTools...),
 		CheckpointSeq:      windowEndSeq,
+		Baseline: map[string]string{
+			workingMemoryRuntimePath: strings.TrimSpace(working.Content),
+			workingLedgerRuntimePath: strings.TrimSpace(ledger),
+			openLoopsRuntimePath:     strings.TrimSpace(openLoops),
+		},
+		FileSnapshots: snapshots,
 		ToolCallPolicy: filetools.PathAccessPolicy{
 			ReadPaths: []string{
 				workingMemoryRuntimePath,
@@ -330,17 +345,38 @@ func (workingMemoryConsolidationJob) Build(
 }
 
 func (workingMemoryConsolidationJob) ApplyResult(
-	_ context.Context,
-	_ ContextLoader,
+	ctx context.Context,
+	loader ContextLoader,
 	output JobOutput,
 ) (ParsedResult, error) {
+	// Coverage is checked first, so it is also the first place a run can
+	// fail after its tool calls have already written to the store. It rolls
+	// back exactly like the ledger check below it: a run that ran out of
+	// turns mid-way is the most common failure this job has, and its
+	// half-finished edits would otherwise become the next run's baseline.
 	if !workingMemoryTargetUsed(output.Messages, workingMemoryRuntimePath) &&
 		!workingMemoryTargetUsed(output.Messages, openLoopsRuntimePath) {
-		return ParsedResult{}, fmt.Errorf(
-			"working-memory run must inspect %s or %s with a file tool (final_text=%q)",
-			workingMemoryRuntimePath,
-			openLoopsRuntimePath,
-			compactWorkingMemoryText(output.FinalText),
+		return ParsedResult{}, rollbackFailedRun(
+			ctx,
+			loader,
+			output.Spec.FileSnapshots,
+			fmt.Errorf(
+				"working-memory run must inspect %s or %s with a file tool (final_text=%q)",
+				workingMemoryRuntimePath,
+				openLoopsRuntimePath,
+				compactWorkingMemoryText(output.FinalText),
+			),
+		)
+	}
+	if loader == nil {
+		return ParsedResult{}, fmt.Errorf("context loader is required")
+	}
+	if err := checkWorkingMemoryLedgerCompleteness(ctx, loader, output.Spec.Baseline); err != nil {
+		return ParsedResult{}, rollbackFailedRun(
+			ctx,
+			loader,
+			output.Spec.FileSnapshots,
+			err,
 		)
 	}
 
@@ -353,6 +389,89 @@ func (workingMemoryConsolidationJob) ApplyResult(
 		},
 		CheckpointSeq: output.Spec.CheckpointSeq,
 	}, nil
+}
+
+// Rollback returns the run's writable paths to the state Build snapshotted.
+// The runner calls it when a run fails before ApplyResult - an engine error,
+// a cancelled context, a turn budget that runs out - so a failure leaves no
+// partial writes behind and the next run's baseline is the store as it was.
+func (workingMemoryConsolidationJob) Rollback(
+	ctx context.Context,
+	loader ContextLoader,
+	spec Spec,
+) error {
+	return restoreConversionFiles(ctx, loader, spec.FileSnapshots)
+}
+
+// checkWorkingMemoryLedgerCompleteness enforces "every exit writes exactly
+// one ledger line" for the working-memory job on top of the shared
+// append-only ledger check: every working-memory bullet the run removed and
+// every open-loop line the run closed needs one appended ledger line, and the
+// run fails when it recorded fewer exits than it made. Open-loop lines are
+// bullets in OpenLoopsLineFormat; headings and blank lines are not loops, so
+// the same multiset line-diff as workingItems applies to both files.
+func checkWorkingMemoryLedgerCompleteness(
+	ctx context.Context,
+	loader ContextLoader,
+	baseline map[string]string,
+) error {
+	before, ok := baseline[workingMemoryRuntimePath]
+	if !ok {
+		return fmt.Errorf("spec baseline is missing pre-run working memory")
+	}
+	beforeLoops, ok := baseline[openLoopsRuntimePath]
+	if !ok {
+		return fmt.Errorf("spec baseline is missing pre-run open loops")
+	}
+
+	working, err := loader.LoadWorkingMemory(ctx)
+	if err != nil {
+		return fmt.Errorf("load post-run working memory: %w", err)
+	}
+	afterLoops, err := loader.LoadOpenLoops(ctx)
+	if err != nil {
+		return fmt.Errorf("load post-run open loops: %w", err)
+	}
+	appended, err := appendedWorkingLedgerLines(ctx, loader, baseline, "working-memory run")
+	if err != nil {
+		return err
+	}
+	exits := removedWorkingItems(before, strings.TrimSpace(working.Content))
+	exits = append(exits, removedWorkingItems(beforeLoops, strings.TrimSpace(afterLoops))...)
+	if len(exits) > appended {
+		return fmt.Errorf(
+			"working-memory run removed %d working-memory items and open-loop lines but appended %d ledger lines to %s (first unrecorded: %q)",
+			len(exits),
+			appended,
+			workingLedgerRuntimePath,
+			compactWorkingMemoryText(exits[0]),
+		)
+	}
+	return nil
+}
+
+// snapshotWorkingMemoryFiles captures the pre-run on-disk bytes of the three
+// files a working-memory run may write, so a failed run can be rolled back
+// byte-for-byte. The keys are the runtime-path constants the tool policy and
+// coverage check already key on, never the loader-supplied relative path.
+func snapshotWorkingMemoryFiles(
+	ctx context.Context,
+	loader ContextLoader,
+) (map[string]FileSnapshot, error) {
+	paths := []string{
+		workingMemoryRuntimePath,
+		openLoopsRuntimePath,
+		workingLedgerRuntimePath,
+	}
+	snapshots := make(map[string]FileSnapshot, len(paths))
+	for _, runtimePath := range paths {
+		raw, existed, err := loader.ReadFileBytes(ctx, relativeMemoryPath(runtimePath))
+		if err != nil {
+			return nil, fmt.Errorf("snapshot %s: %w", runtimePath, err)
+		}
+		snapshots[runtimePath] = FileSnapshot{Existed: existed, Content: raw}
+	}
+	return snapshots, nil
 }
 
 func evaluateWorkingMemoryStartup(
