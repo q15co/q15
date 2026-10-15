@@ -243,7 +243,7 @@ func (j workingMemoryConsolidationJob) Build(
 				workingLedgerRuntimePath,
 			),
 			fmt.Sprintf(
-				"Every removed working-memory item requires exactly one converted, moved, or dropped ledger record in %s. Every closed or promoted loop requires exactly one closed record whose description preserves the full old loop, including its ID and metadata, and whose reason explains the outcome.",
+				"Every removed working-memory block requires exactly one converted, moved, or dropped ledger record in %s, including prose, comments, fenced text, and None-like content; only the canonical working-memory headings are exempt. Every closed or promoted loop requires exactly one closed record whose description preserves the full old loop, including its ID and metadata, and whose reason explains the outcome.",
 				workingLedgerRuntimePath,
 			),
 			"Ledger format: YYYY-MM-DDTHH:MMZ run=working_memory.consolidate src=t<a>..t<b> <outcome> \"<full removed item without its bullet marker>\" → <claim-or-loop-id> (<file>). For dropped and closed records, omit the target and include an outcome reason in parentheses. Preserve all existing ledger bytes and append complete newline-terminated records.",

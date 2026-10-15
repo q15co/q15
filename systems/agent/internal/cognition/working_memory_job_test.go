@@ -1752,3 +1752,55 @@ func TestWorkingMemoryConsolidationAcceptsVerifiedExitTargets(t *testing.T) {
 		})
 	}
 }
+
+func TestWorkingMemoryConsolidationAccountsForNonBulletExitBlocks(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct{ name, block, description string }{
+		{name: "prose", block: "Prepare the release.\nInclude its changelog.\n", description: "Prepare the release. Include its changelog."},
+		{name: "fence", block: "```text\nPrepare the release.\n```\n", description: "```text Prepare the release. ```"},
+		{name: "comment", block: "<!-- Prepare the release. -->\n", description: "<!-- Prepare the release. -->"},
+		{name: "numbered list", block: "1. Prepare the release.\n", description: "1. Prepare the release."},
+		{name: "custom heading", block: "## Release notes\nPrepare the release.\n", description: "## Release notes Prepare the release."},
+		{name: "None-like content", block: "- None\n", description: "None"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			before := "# Working Memory\n\n" + test.block
+			loader := &workingMemoryJobLoader{files: map[string][]byte{
+				workingMemoryRelativePath: []byte(before),
+				"working/OPEN_LOOPS.md":   []byte("# Open Loops\n"),
+				"working/LEDGER.md":       []byte("# Ledger\n"),
+			}}
+			spec := buildWorkingMemorySpec(t, loader)
+			loader.files[workingMemoryRelativePath] = []byte("# Working Memory\n")
+			output := JobOutput{
+				Spec:     spec,
+				Messages: workingMemoryTargetToolCall("write_file", workingMemoryRuntimePath),
+			}
+			job := workingMemoryConsolidationJob{}
+			if _, err := job.ApplyResult(context.Background(), loader, output); err == nil {
+				t.Fatal("ApplyResult silently removed an unrecorded block")
+			}
+			assertFileBytesRestored(t, loader, workingMemoryRuntimePath, []byte(before))
+			loader.files[workingMemoryRelativePath] = []byte("# Working Memory\n")
+			loader.files["working/LEDGER.md"] = []byte(
+				"# Ledger\n" + workingExitRecord(
+					claims.OutcomeDropped,
+					test.description,
+					"",
+					"",
+					"completed",
+				),
+			)
+			if _, err := job.ApplyResult(context.Background(), loader, output); err != nil {
+				t.Fatalf("ApplyResult rejected complete exit evidence: %v", err)
+			}
+			assertFileBytesRestored(
+				t,
+				loader,
+				workingMemoryRuntimePath,
+				[]byte("# Working Memory\n"),
+			)
+		})
+	}
+}
