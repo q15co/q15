@@ -622,3 +622,13 @@ func rollbackFailedRun(
 	}
 	return validationErr
 }
+
+func appendedWorkingLedgerLines(
+	ctx context.Context,
+	loader ContextLoader,
+	baseline map[string]string,
+	runLabel string,
+) (int, error) {
+	entries, err := appendedWorkingLedgerEntries(ctx, loader, baseline, runLabel)
+	return len(entries), err
+}
