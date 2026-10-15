@@ -329,3 +329,15 @@ func TestAppendLedgerRejectsMalformedEntryWithoutChangingFile(t *testing.T) {
 		t.Fatalf("AppendLedger() changed existing bytes: %q", after)
 	}
 }
+
+func TestParseLedgerRequiresRecordsOutsideHeadingsAndComments(t *testing.T) {
+	const record = `2026-10-11T09:30Z run=semantic_memory.extract src=t1 dropped "item" (transient noise)`
+	data := []byte("# Conversion ledger\n\n<!-- One line per exit. -->\n" + record + "\n")
+	entries, err := ParseLedger(data)
+	if err != nil || len(entries) != 1 || entries[0].Description != "item" {
+		t.Fatalf("ParseLedger() = %#v, %v; want one item record", entries, err)
+	}
+	if _, err := ParseLedger(append(data, []byte("unstructured exit evidence\n")...)); err == nil {
+		t.Fatal("ParseLedger() accepted unstructured evidence")
+	}
+}
