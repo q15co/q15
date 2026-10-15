@@ -57,8 +57,7 @@ type Status struct {
 	// order, semantic files sorted by path.
 	Files []FileSizeStatus
 
-	// LedgerLines is what claims.LedgerEntryCount counts: non-empty lines of
-	// the current ledger, which includes its format header.
+	// LedgerLines counts valid exit records in the active ledger.
 	LedgerLines int
 }
 
@@ -296,7 +295,7 @@ func renderStatus(status Status) string {
 			fileSizeMark(file),
 		)
 	}
-	fmt.Fprintf(&out, "ledger lines %d\n", status.LedgerLines)
+	fmt.Fprintf(&out, "ledger entries %d\n", status.LedgerLines)
 	return out.String()
 }
 

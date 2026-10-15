@@ -40,7 +40,7 @@ file semantic/facts.md 1234 of 16384 bytes
 file semantic/preferences.md 16384 of 16384 bytes
 file semantic/projects.md 4321 of 16384 bytes
 file semantic/topics/claims.md 40000 of 32768 bytes OVER CAP
-ledger lines 6
+ledger entries 2
 `
 
 // wantBareHeadReport is the golden report for a root that only has a head: a
@@ -54,7 +54,7 @@ job semantic_memory.extract failures 0 last-run never last-success never last-fa
 job verification_review failures 0 last-run never last-success never last-failure never
 file working/WORKING_MEMORY.md 0 of 8192 bytes
 file working/OPEN_LOOPS.md 0 of 4096 bytes
-ledger lines 0
+ledger entries 0
 `
 
 // fixtureFile is one file written into a fixture memory root.
@@ -94,8 +94,8 @@ func fullStatusFixtureFiles() []fixtureFile {
 	if err != nil {
 		panic("read embedded ledger seed: " + err.Error())
 	}
-	ledger += "\n2026-10-12T02:11Z src=t4101..t4110 run=semantic_memory.extract\n"
-	ledger += "2026-10-13T05:10Z src=t4170..t4183 run=semantic_memory.extract"
+	ledger += "\n2026-10-12T02:11Z src=t4101..t4110 run=semantic_memory.extract dropped \"old item\" (stale)\n"
+	ledger += "2026-10-13T05:10Z src=t4170..t4183 run=semantic_memory.extract dropped \"another item\" (stale)"
 
 	return []fixtureFile{
 		{
