@@ -251,6 +251,9 @@ func (s *Store) memoryRecoveryPaths(journal memoryRecovery) ([]string, error) {
 		return paths, fmt.Errorf("list memory recovery topics: %w", err)
 	}
 	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
 		relative := journal.TopicDir + "/" + entry.Name()
 		if _, snapshotted := journal.Snapshots[relative]; !snapshotted {
 			paths = append(paths, relative)

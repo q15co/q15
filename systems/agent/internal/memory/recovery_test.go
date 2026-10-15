@@ -287,3 +287,33 @@ func assertRecoveryGitClean(t *testing.T, root string) {
 		t.Fatalf("recovered Git worktree is dirty: %s, %v", output, err)
 	}
 }
+
+func TestMemoryRecoveryPreservesExistingNestedTopicDirectory(t *testing.T) {
+	root, store, _ := newRecoveryTestStore(t)
+	nested := filepath.Join(root, "semantic/topics/nested/private.md")
+	if err := os.MkdirAll(filepath.Dir(nested), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("outside direct topic write policy\n")
+	if err := os.WriteFile(nested, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	snapshots := recoveryTestSnapshots(t, store)
+	id, err := store.BeginMemoryRecovery(
+		context.Background(),
+		snapshots,
+		semanticTopicsRelativePath,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	corruptRecoveryFiles(t, root, snapshots)
+	if err := store.RecoverMemory(context.Background(), id); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(nested)
+	if err != nil || !bytes.Equal(got, content) {
+		t.Fatalf("nested topic = %q, err=%v; want %q", got, err, content)
+	}
+	assertRecoveryFiles(t, store, snapshots)
+}
