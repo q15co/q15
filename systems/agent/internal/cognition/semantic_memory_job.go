@@ -284,6 +284,7 @@ func (semanticMemoryExtractionJob) Build(
 					"- Claim format: `- [c-YYYY-NNNN] <self-contained statement>` followed by an indented `{status: active|conflicted, kind: fact|inference|preference, confidence: confirmed|likely|uncertain, src: t<seq>[, t<seq>], rev: YYYY-MM-DD}` line. Claim IDs are globally unique and never reused, including IDs recorded in archived ledgers. Preserve existing source markers when revising an existing claim.",
 					"- Open-loop format: `- [l-YYYY-NNNN] <intention>` followed by an indented `{trigger: date:YYYY-MM-DD | event:\"<description>\" | next-session, owner: agent|user, src: t<seq>}` line.",
 					"- Ledger format: one line per exit, `YYYY-MM-DDTHH:MMZ run=semantic_memory.extract src=t<a>..t<b> <outcome> \"<working-memory item>\" → <claim-or-loop-id> (<file>)`. For a drop, omit the target and give the reason in parentheses.",
+					"- Ledger descriptions must preserve the complete removed working-memory block, including continuation text, code fences, and HTML comments, with whitespace collapsed to one line and only its leading list marker omitted. Standalone prose and noncanonical headings also require an exit record; only canonical working-memory headings and the exact `- None` scaffold are exempt.",
 					"- Caps: when a file is near its cap, revise before adding: merge, supersede, or split project detail into a topic file and leave a one-line index entry in projects.md (`- [<slug>] <summary> → topics/<slug>.md`).",
 				),
 			},

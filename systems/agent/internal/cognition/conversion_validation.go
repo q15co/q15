@@ -18,6 +18,10 @@ var (
 	sourceIDPattern          = regexp.MustCompile(`^t[1-9][0-9]*$`)
 	historicalClaimIDPattern = regexp.MustCompile(`\bc-[0-9]{4}-[0-9]{4,}\b`)
 	metadataKeyPattern       = regexp.MustCompile(`(?:^|,\s*)([a-z]+):\s*`)
+	metadataSpanPattern      = regexp.MustCompile(`\{((?:[^{}"]|"(?:\\.|[^"\\])*")*)\}\s*$`)
+	topicIndexPattern        = regexp.MustCompile(
+		`^[-*+] \[([^\]\s/\\]+)\] ([^\r\n]+) → topics/([^\s/\\]+)\.md$`,
+	)
 )
 
 // conversionBaseline captures raw evidence rather than prompt-normalized text.
@@ -192,12 +196,11 @@ func validateLoopItem(item string) error {
 }
 
 func itemMetadata(item string, required ...string) (map[string]string, error) {
-	open := strings.LastIndex(item, "{")
-	endBrace := strings.LastIndex(item, "}")
-	if open < 0 || endBrace < open || strings.TrimSpace(item[endBrace+1:]) != "" {
+	span := metadataSpanPattern.FindStringSubmatch(item)
+	if span == nil {
 		return nil, fmt.Errorf("missing canonical metadata")
 	}
-	raw := strings.TrimSpace(item[open+1 : endBrace])
+	raw := strings.TrimSpace(span[1])
 	matches := metadataKeyPattern.FindAllStringSubmatchIndex(raw, -1)
 	outsideQuotes := make([]bool, len(raw))
 	quoted, escaped := false, false
@@ -347,7 +350,7 @@ func checkSemanticClaims(
 			continue
 		}
 		for _, item := range workingItems(string(raw)) {
-			if strings.Contains(item, "→ topics/") && relative == semanticProjectsRelativePath {
+			if relative == semanticProjectsRelativePath && validTopicIndex(item) {
 				continue
 			}
 			if err := validateClaimItem(item); err != nil {
@@ -375,6 +378,15 @@ func checkSemanticClaims(
 		}
 	}
 	return nil
+}
+
+func validTopicIndex(item string) bool {
+	match := topicIndexPattern.FindStringSubmatch(item)
+	if match == nil || match[1] != match[3] || strings.TrimSpace(match[2]) == "" {
+		return false
+	}
+	parsed, _, err := claims.ParseClaims(item)
+	return err == nil && len(parsed) == 0
 }
 
 type conversionOpenLoop struct {

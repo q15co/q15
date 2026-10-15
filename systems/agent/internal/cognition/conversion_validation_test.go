@@ -256,9 +256,41 @@ func TestConversionCapsRejectMissingInventoryForExistingWrittenFile(t *testing.T
 	}
 }
 
+func TestConversionTopicIndexCannotBypassClaimValidation(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name, item string
+		valid      bool
+	}{
+		{"canonical topic index", "- [deploy] Deployment details → topics/deploy.md", true},
+		{"claim disguised as index", "- [c-2026-0001] Unsupported claim → topics/c-2026-0001.md", false},
+		{"unstructured bullet", "- Unsupported claim → topics/deploy.md", false},
+		{"missing summary", "- [deploy]  → topics/deploy.md", false},
+		{"mismatched slug", "- [deploy] Deployment details → topics/other.md", false},
+		{"path traversal", "- [deploy] Deployment details → topics/../deploy.md", false},
+		{"multiline index", "- [deploy] Deployment details → topics/deploy.md\n  Unsupported extra claim.", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			loader := &conversionValidationLoader{files: map[string]string{
+				semanticProjectsRelativePath: test.item,
+			}}
+			err := checkSemanticClaims(
+				context.Background(),
+				loader,
+				emptyConversionBaseline(),
+				[]string{semanticProjectsRuntimePath},
+			)
+			if (err == nil) != test.valid {
+				t.Fatalf("valid=%v error=%v", test.valid, err)
+			}
+		})
+	}
+}
+
 func TestConversionCanonicalLoopTriggers(t *testing.T) {
 	t.Parallel()
-	for _, trigger := range []string{"date:2026-10-15", `event:"release finished, notify user"`, `event:"release finished, owner: user notified"`, "next-session"} {
+	for _, trigger := range []string{"date:2026-10-15", `event:"release finished, notify user"`, `event:"release finished, owner: user notified"`, `event:"release {target} finished"`, `event:"release \"{target}\" finished"`, "next-session"} {
 		t.Run(trigger, func(t *testing.T) {
 			t.Parallel()
 			if err := validateLoopItem(strings.ReplaceAll(validConversionLoop, "next-session", trigger)); err != nil {
@@ -280,6 +312,108 @@ func TestConversionApplyRejectsProseLedger(t *testing.T) {
 		ApplyResult(context.Background(), loader, JobOutput{Spec: Spec{Baseline: map[string]string{workingMemoryRuntimePath: "- A.\n- B.\n", workingLedgerRuntimePath: ""}}, Messages: conversionRunMessages(workingMemoryRuntimePath, workingLedgerRuntimePath)})
 	if err == nil || !strings.Contains(err.Error(), "invalid appended ledger entry") {
 		t.Fatalf("ApplyResult() error=%v", err)
+	}
+}
+
+func TestConversionApplyAccountsForEveryWorkingBlock(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name, block, description string
+	}{
+		{"paragraph", "Keep the deployment warning.", "Keep the deployment warning."},
+		{"wrapped paragraph", "Keep the deployment warning.\nIt identifies the only safe target.", "Keep the deployment warning. It identifies the only safe target."},
+		{"code block", "```text\n# Working Memory\n\n- None\n```", "```text # Working Memory - None ```"},
+		{"list code block", "- ```text\n# Working Memory\n\n- None\n```", "```text # Working Memory - None ```"},
+		{"comment", "<!--\n# Working Memory\n\n- None\nRetain the warning.\n-->", "<!-- # Working Memory - None Retain the warning. -->"},
+		{"reopened comment", "<!--\nWarning.\n--><!--\n# Working Memory\n- None\n-->", "<!-- Warning. --><!-- # Working Memory - None -->"},
+		{"unrecognized heading", "## Deployment warning", "## Deployment warning"},
+		{"None-like bullet", "- (None).", "(None)."},
+		{"None with detail", "- None\n  A warning remains.", "None A warning remains."},
+		{"plain None", "None", "None"},
+		{"marker-like prose", "-Keep this warning.", "-Keep this warning."},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			before := "# Working Memory\n\n## Temporary Context\n\n" + test.block + "\n"
+			for _, recorded := range []bool{false, true} {
+				t.Run(fmt.Sprint(recorded), func(t *testing.T) {
+					t.Parallel()
+					ledger := ""
+					if recorded {
+						ledger = exitRecord(
+							claims.OutcomeDropped,
+							test.description,
+							"",
+							"",
+							"obsolete",
+						)
+					}
+					loader := &conversionValidationLoader{files: map[string]string{
+						workingMemoryRelativePath: "# Working Memory\n\n## Temporary Context\n\n- None\n",
+						"working/LEDGER.md":       ledger,
+					}}
+					result, err := NewSemanticMemoryExtractionRegistration().NewJob().ApplyResult(
+						context.Background(),
+						loader,
+						JobOutput{
+							Spec: Spec{Baseline: map[string]string{
+								workingMemoryRuntimePath: before,
+								workingLedgerRuntimePath: "",
+							}},
+							Messages: conversionRunMessages(
+								workingMemoryRuntimePath,
+								workingLedgerRuntimePath,
+							),
+						},
+					)
+					if !recorded {
+						if err == nil ||
+							!strings.Contains(err.Error(), "removed 1 working-memory items") {
+							t.Fatalf(
+								"ApplyResult() error=%v; want unrecorded block removal rejected",
+								err,
+							)
+						}
+						return
+					}
+					if err != nil {
+						t.Fatalf("ApplyResult() rejected complete block exit: %v", err)
+					}
+					if result.Metadata["working_items_exited"] != "1" ||
+						result.Metadata["ledger_lines_appended"] != "1" {
+						t.Fatalf(
+							"ApplyResult() metadata=%v; want one exited block and ledger record",
+							result.Metadata,
+						)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestConversionApplyIgnoresOnlyExactWorkingScaffold(t *testing.T) {
+	t.Parallel()
+	before := "# Working Memory\n\n## Current Priorities\n\n- None\n\n## Active Tasks\n\n- None\n\n## Open Threads\n\n- None\n\n## Recent Progress\n\n- None\n\n## Pending Checks\n\n- None\n\n## Temporary Context\n\n- None\n"
+	loader := &conversionValidationLoader{files: map[string]string{
+		workingMemoryRelativePath: "",
+		"working/LEDGER.md":       "",
+	}}
+	result, err := NewSemanticMemoryExtractionRegistration().NewJob().ApplyResult(
+		context.Background(), loader, JobOutput{
+			Spec: Spec{Baseline: map[string]string{
+				workingMemoryRuntimePath: before,
+				workingLedgerRuntimePath: "",
+			}},
+			Messages: conversionRunMessages(workingMemoryRuntimePath),
+		},
+	)
+	if err != nil || result.Metadata["working_items_exited"] != "0" {
+		t.Fatalf(
+			"ApplyResult() metadata=%v error=%v; want scaffold-only edit accepted",
+			result.Metadata,
+			err,
+		)
 	}
 }
 

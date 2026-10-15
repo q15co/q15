@@ -298,11 +298,11 @@ func appendedWorkingLedgerEntries(
 
 func removedWorkingItems(before, after string) []string {
 	remaining := make(map[string]int)
-	for _, item := range workingItems(after) {
+	for _, item := range workingExitItems(after) {
 		remaining[item]++
 	}
 	var removed []string
-	for _, item := range workingItems(before) {
+	for _, item := range workingExitItems(before) {
 		if remaining[item] > 0 {
 			remaining[item]--
 			continue
@@ -312,8 +312,97 @@ func removedWorkingItems(before, after string) []string {
 	return removed
 }
 
-// workingItems includes indented continuation lines and nested bullets in their
-// parent item so deleting a detail cannot evade exit accounting.
+// workingExitItems retains every nonempty block outside the exact working-memory
+// scaffold. Unlike claim and loop parsing, exit accounting cannot ignore prose,
+// examples, or comments that may contain the only copy of working context.
+func workingExitItems(content string) []string {
+	var items []string
+	var current []string
+	listItem, inComment := false, false
+	fence := ""
+	flush := func() {
+		item := strings.TrimRight(strings.Join(current, "\n"), "\n")
+		if strings.TrimSpace(item) != "" && item != "- None" {
+			items = append(items, item)
+		}
+		current = nil
+		listItem = false
+	}
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if inComment {
+			current = append(current, line)
+			if closeIndex := strings.LastIndex(line, "-->"); closeIndex >= 0 {
+				inComment = strings.LastIndex(line, "<!--") > closeIndex
+			}
+			if !inComment && !listItem {
+				flush()
+			}
+			continue
+		}
+		if fence != "" {
+			current = append(current, line)
+			if strings.HasPrefix(trimmed, fence) && strings.Trim(trimmed, fence[:1]) == "" {
+				fence = ""
+				if !listItem {
+					flush()
+				}
+			}
+			continue
+		}
+		if trimmed == "" {
+			if listItem {
+				current = append(current, line)
+			} else {
+				flush()
+			}
+			continue
+		}
+		if workingScaffoldHeading(line) {
+			flush()
+			continue
+		}
+		indented := line != strings.TrimLeft(line, " \t")
+		if !indented &&
+			(strings.HasPrefix(line, "- ") || strings.HasPrefix(line, "* ") || strings.HasPrefix(line, "+ ")) {
+			flush()
+			listItem = true
+		} else if listItem && !indented && strings.TrimSpace(current[len(current)-1]) == "" {
+			flush()
+		}
+		block := strings.HasPrefix(trimmed, "<!--") || strings.HasPrefix(trimmed, "```") ||
+			strings.HasPrefix(trimmed, "~~~")
+		if block && (!listItem || !indented) {
+			flush()
+		}
+		current = append(current, line)
+		if strings.Contains(line, "<!--") {
+			inComment = strings.LastIndex(line, "<!--") > strings.LastIndex(line, "-->")
+		}
+		fenceText := workingItemDescription(trimmed)
+		if strings.HasPrefix(fenceText, "```") || strings.HasPrefix(fenceText, "~~~") {
+			fence = fenceText[:len(fenceText)-len(strings.TrimLeft(fenceText, fenceText[:1]))]
+		}
+		if block && !listItem && !inComment && fence == "" {
+			flush()
+		}
+	}
+	flush()
+	return items
+}
+
+func workingScaffoldHeading(line string) bool {
+	switch line {
+	case "# Working Memory", "## Current Priorities", "## Active Tasks", "## Open Threads",
+		"## Recent Progress", "## Pending Checks", "## Temporary Context":
+		return true
+	default:
+		return false
+	}
+}
+
+// workingItems extracts structured claims and loops with their continuation
+// lines, ignoring documentation blocks and empty seed entries.
 func workingItems(content string) []string {
 	var items []string
 	var current []string
@@ -373,7 +462,8 @@ func workingItems(content string) []string {
 }
 
 func workingItemDescription(item string) string {
-	if len(item) >= 2 {
+	if strings.HasPrefix(item, "- ") || strings.HasPrefix(item, "* ") ||
+		strings.HasPrefix(item, "+ ") {
 		item = item[2:]
 	}
 	return normalizeExitDescription(item)
