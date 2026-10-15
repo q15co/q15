@@ -182,6 +182,158 @@ func TestConversionBuildRejectsPendingRecoveryBeforeAnotherRun(t *testing.T) {
 	}
 }
 
+func TestWorkingMemoryRecoveryPreservesSemanticTopicsAcrossFailureExits(t *testing.T) {
+	for _, failure := range []string{"cancelled model", "coverage", "ledger", "fallback rollback"} {
+		t.Run(failure, func(t *testing.T) {
+			root, store := newCognitionRecoveryStore(t)
+			working := []byte("# Working Memory\n\n- Keep every exit traceable.\n")
+			if err := store.WriteFileBytes(context.Background(), "working/WORKING_MEMORY.md", working); err != nil {
+				t.Fatal(err)
+			}
+			before := cognitionRecoveryBytes(t, store)
+			job := cognition.NewWorkingMemoryConsolidationRegistration(0, 0).NewJob()
+			updateTopics := func() {
+				t.Helper()
+				for _, relative := range []string{"semantic/topics/existing.md", "semantic/topics/independent.md"} {
+					if err := store.WriteFileBytes(context.Background(), relative, []byte("independent topic update\n")); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			corruptWorking := func() {
+				t.Helper()
+				for _, relative := range []string{"working/WORKING_MEMORY.md", "working/OPEN_LOOPS.md", "working/LEDGER.md"} {
+					if err := os.WriteFile(filepath.Join(root, relative), []byte("partial\n"), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if failure == "cancelled model" {
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				model := recoveryModelClient{
+					complete: func(context.Context) (agent.ModelClientResult, error) {
+						updateTopics()
+						corruptWorking()
+						cancel()
+						return agent.ModelClientResult{}, context.Canceled
+					},
+				}
+				runner := cognition.NewRunnerWithEngine(
+					agent.NewEngine(model, nil, []string{"test"}),
+					store,
+				)
+				if _, err := runner.Run(ctx, job, nil); !errors.Is(err, context.Canceled) {
+					t.Fatalf("Run error = %v, want cancellation", err)
+				}
+			} else {
+				spec, err := job.Build(context.Background(), store)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if failure == "fallback rollback" {
+					if err := store.CompleteMemoryRecovery(context.Background(), spec.MemoryRecoveryID); err != nil {
+						t.Fatal(err)
+					}
+					spec.MemoryRecoveryID = ""
+				}
+				updateTopics()
+				corruptWorking()
+				if failure == "fallback rollback" {
+					if err := job.(cognition.Rollbacker).Rollback(context.Background(), store, spec); err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					var messages []conversation.Message
+					if failure == "ledger" {
+						messages = []conversation.Message{
+							conversation.AssistantMessage(conversation.ToolCall("read", "read_file", `{"path":"/memory/working/WORKING_MEMORY.md"}`)),
+							conversation.ToolResultMessage("read", "Path: /memory/working/WORKING_MEMORY.md", false),
+						}
+					}
+					if _, err := job.ApplyResult(context.Background(), store, cognition.JobOutput{Spec: spec, Messages: messages}); err == nil {
+						t.Fatalf("ApplyResult accepted %s failure", failure)
+					}
+				}
+			}
+			for relative, want := range before {
+				if strings.HasPrefix(relative, "semantic/") {
+					continue
+				}
+				got, exists, err := store.ReadFileBytes(context.Background(), relative)
+				if err != nil || !exists || !bytes.Equal(got, want) {
+					t.Errorf(
+						"recovered %s = %q, exists=%v, err=%v; want %q",
+						relative,
+						got,
+						exists,
+						err,
+						want,
+					)
+				}
+			}
+			for _, relative := range []string{"semantic/topics/existing.md", "semantic/topics/independent.md"} {
+				got, exists, err := store.ReadFileBytes(context.Background(), relative)
+				if err != nil || !exists || string(got) != "independent topic update\n" {
+					t.Errorf(
+						"working rollback changed unrelated %s = %q, exists=%v, err=%v",
+						relative,
+						got,
+						exists,
+						err,
+					)
+				}
+			}
+			assertCognitionRecoveryGitClean(t, root)
+		})
+	}
+}
+
+func TestWorkingMemoryRecoveryStartupAfterProcessExitPreservesTopics(t *testing.T) {
+	if root := os.Getenv("Q15_WORKING_RECOVERY_TEST_ROOT"); root != "" {
+		mem := memory.NewStore(memoryrepo.New(root, memoryrepo.NewGitCommitter()), "test")
+		store := &runtimeStore{memory: mem}
+		job := cognition.NewWorkingMemoryConsolidationRegistration(0, 0).NewJob()
+		if _, err := job.Build(context.Background(), store); err != nil {
+			t.Fatal(err)
+		}
+		for _, relative := range []string{"working/WORKING_MEMORY.md", "working/OPEN_LOOPS.md", "working/LEDGER.md"} {
+			if err := os.WriteFile(filepath.Join(root, relative), []byte("partial\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		os.Exit(0)
+	}
+	root, store := newCognitionRecoveryStore(t)
+	before := cognitionRecoveryBytes(t, store)
+	child := exec.Command(
+		os.Args[0],
+		"-test.run=^TestWorkingMemoryRecoveryStartupAfterProcessExitPreservesTopics$",
+	)
+	child.Env = append(os.Environ(), "Q15_WORKING_RECOVERY_TEST_ROOT="+root)
+	if output, err := child.CombinedOutput(); err != nil {
+		t.Fatalf("interrupted working-memory child: %v (%s)", err, output)
+	}
+	fresh := memory.NewStore(memoryrepo.New(root, memoryrepo.NewGitCommitter()), "test")
+	if err := fresh.Init(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for relative, want := range before {
+		got, exists, err := fresh.ReadFileBytes(context.Background(), relative)
+		if err != nil || !exists || !bytes.Equal(got, want) {
+			t.Errorf(
+				"restart changed %s = %q, exists=%v, err=%v; want %q",
+				relative,
+				got,
+				exists,
+				err,
+				want,
+			)
+		}
+	}
+	assertCognitionRecoveryGitClean(t, root)
+}
+
 func newCognitionRecoveryStore(t *testing.T) (string, *runtimeStore) {
 	t.Helper()
 	root := filepath.Join(t.TempDir(), "memory")

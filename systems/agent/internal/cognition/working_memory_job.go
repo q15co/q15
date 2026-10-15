@@ -208,6 +208,10 @@ func (j workingMemoryConsolidationJob) Build(
 	if err != nil {
 		return Spec{}, fmt.Errorf("snapshot working-memory targets: %w", err)
 	}
+	recoveryID, err := loader.BeginMemoryRecovery(ctx, snapshots, "")
+	if err != nil {
+		return Spec{}, fmt.Errorf("prepare working-memory recovery: %w", err)
+	}
 
 	return Spec{
 		Objective: renderPromptLines(
@@ -343,7 +347,8 @@ func (j workingMemoryConsolidationJob) Build(
 			workingLedgerRuntimePath: strings.TrimSpace(ledger),
 			openLoopsRuntimePath:     strings.TrimSpace(openLoops),
 		},
-		FileSnapshots: snapshots,
+		FileSnapshots:    snapshots,
+		MemoryRecoveryID: recoveryID,
 		ToolCallPolicy: filetools.PathAccessPolicy{
 			ReadPaths: []string{
 				workingMemoryRuntimePath,
@@ -364,6 +369,7 @@ func (j workingMemoryConsolidationJob) ApplyResult(
 	loader ContextLoader,
 	output JobOutput,
 ) (ParsedResult, error) {
+
 	// Coverage is checked first, so it is also the first place a run can
 	// fail after its tool calls have already written to the store. It rolls
 	// back exactly like the ledger check below it: a run that ran out of
@@ -371,10 +377,10 @@ func (j workingMemoryConsolidationJob) ApplyResult(
 	// half-finished edits would otherwise become the next run's baseline.
 	if !workingMemoryTargetUsed(output.Messages, workingMemoryRuntimePath) &&
 		!workingMemoryTargetUsed(output.Messages, openLoopsRuntimePath) {
-		return ParsedResult{}, rollbackFailedRun(
+		return ParsedResult{}, rollbackWorkingMemoryRun(
 			ctx,
 			loader,
-			output.Spec.FileSnapshots,
+			output.Spec,
 			fmt.Errorf(
 				"working-memory run must inspect %s or %s with a file tool (final_text=%q)",
 				workingMemoryRuntimePath,
@@ -387,19 +393,19 @@ func (j workingMemoryConsolidationJob) ApplyResult(
 		return ParsedResult{}, fmt.Errorf("context loader is required")
 	}
 	if err := checkWorkingMemoryLedgerCompleteness(ctx, loader, output.Spec.Baseline); err != nil {
-		return ParsedResult{}, rollbackFailedRun(
+		return ParsedResult{}, rollbackWorkingMemoryRun(
 			ctx,
 			loader,
-			output.Spec.FileSnapshots,
+			output.Spec,
 			err,
 		)
 	}
 
 	if err := checkWorkingFileBudgets(ctx, loader, j.budgets); err != nil {
-		return ParsedResult{}, err
+		return ParsedResult{}, rollbackWorkingMemoryRun(ctx, loader, output.Spec, err)
 	}
 	if err := checkOpenLoopLifecycle(ctx, loader, output.Spec); err != nil {
-		return ParsedResult{}, err
+		return ParsedResult{}, rollbackWorkingMemoryRun(ctx, loader, output.Spec, err)
 	}
 
 	summary := summarizeWorkingMemoryNotes(output.FinalText)
@@ -422,7 +428,10 @@ func (workingMemoryConsolidationJob) Rollback(
 	loader ContextLoader,
 	spec Spec,
 ) error {
-	return restoreConversionFiles(ctx, loader, spec.FileSnapshots)
+	if spec.MemoryRecoveryID != "" {
+		return loader.RecoverMemory(ctx, spec.MemoryRecoveryID)
+	}
+	return restoreSnapshotFiles(ctx, loader, spec.FileSnapshots)
 }
 
 // checkWorkingMemoryLedgerCompleteness enforces "every exit writes exactly
@@ -662,4 +671,21 @@ func summarizeWorkingMemoryNotes(text string) string {
 
 func compactWorkingMemoryText(text string) string {
 	return compactCognitionText(text)
+}
+
+func rollbackWorkingMemoryRun(
+	ctx context.Context,
+	loader ContextLoader,
+	spec Spec,
+	validationErr error,
+) error {
+	if loader == nil {
+		return validationErr
+	}
+	cleanupCtx, cancel := memoryRecoveryContext(ctx)
+	defer cancel()
+	if err := (workingMemoryConsolidationJob{}).Rollback(cleanupCtx, loader, spec); err != nil {
+		return fmt.Errorf("%w (rollback also failed: %w)", validationErr, err)
+	}
+	return validationErr
 }

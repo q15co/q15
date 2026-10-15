@@ -567,23 +567,8 @@ func restoreConversionFiles(
 		return nil
 	}
 	var failures []error
-	paths := make([]string, 0, len(snapshots))
-	for runtimePath := range snapshots {
-		paths = append(paths, runtimePath)
-	}
-	sort.Strings(paths)
-	for _, runtimePath := range paths {
-		snap := snapshots[runtimePath]
-		relative := relativeMemoryPath(runtimePath)
-		var err error
-		if snap.Existed {
-			err = loader.WriteFileBytes(ctx, relative, snap.Content)
-		} else {
-			err = loader.DeleteFile(ctx, relative)
-		}
-		if err != nil {
-			failures = append(failures, fmt.Errorf("restore %s: %w", runtimePath, err))
-		}
+	if err := restoreSnapshotFiles(ctx, loader, snapshots); err != nil {
+		failures = append(failures, err)
 	}
 
 	sizes, err := loader.LoadSemanticFileSizes(ctx)
@@ -631,4 +616,34 @@ func appendedWorkingLedgerLines(
 ) (int, error) {
 	entries, err := appendedWorkingLedgerEntries(ctx, loader, baseline, runLabel)
 	return len(entries), err
+}
+
+// restoreSnapshotFiles restores only explicitly captured paths. Jobs with no
+// directory write policy must never enumerate or delete unsnapshotted topics.
+func restoreSnapshotFiles(
+	ctx context.Context,
+	loader ContextLoader,
+	snapshots map[string]FileSnapshot,
+) error {
+	var failures []error
+	paths := make([]string, 0, len(snapshots))
+	for runtimePath := range snapshots {
+		paths = append(paths, runtimePath)
+	}
+	sort.Strings(paths)
+	for _, runtimePath := range paths {
+		snap := snapshots[runtimePath]
+		relative := relativeMemoryPath(runtimePath)
+		var err error
+		if snap.Existed {
+			err = loader.WriteFileBytes(ctx, relative, snap.Content)
+		} else {
+			err = loader.DeleteFile(ctx, relative)
+		}
+		if err != nil {
+			failures = append(failures, fmt.Errorf("restore %s: %w", runtimePath, err))
+		}
+	}
+
+	return errors.Join(failures...)
 }
