@@ -167,7 +167,7 @@ func (verificationReviewJob) Build(
 		sections = append(sections, conflictedClaimsSection(conflicted))
 		contractLines = append(
 			contractLines,
-			"For each pair of cross-referenced claims in the conflicted_claims section, the review artifact must propose one resolution: name the winning claim ID, give the reasoning for it, or state that the evidence is insufficient to decide.",
+			"For each group in conflicted_claims, return exactly one standalone line: `resolution claims=c-YYYY-NNNN,c-YYYY-NNNN winner=c-YYYY-NNNN|insufficient reason=\"<nonempty reasoning>\"`. Copy every member ID into claims, choose a member as winner or use insufficient, and quote the single-line reason with JSON string escapes. Do not add a basis field; the framework binds each accepted decision to the exact input claims.",
 			"Proposed resolutions are input for the conversion pass, which applies them to semantic memory; do not attempt to apply them yourself.",
 		)
 	}
@@ -231,6 +231,7 @@ func (verificationReviewJob) Build(
 		ExposeTools:        true,
 		RequireToolCalling: false,
 		AllowedTools:       append([]string(nil), verificationReviewAllowedTools...),
+		conflictGroups:     groupConflictedClaims(conflicted),
 	}, nil
 }
 
@@ -251,12 +252,22 @@ func collectConflictedClaims(
 	topics map[string]string,
 ) ([]conflictedClaimEntry, error) {
 	entries := make([]conflictedClaimEntry, 0)
+	seen := make(map[string]string)
 	appendConflicted := func(relativePath string, content string) error {
 		parsed, _, err := claims.ParseClaims(content)
 		if err != nil {
 			return fmt.Errorf("parse claims in %q: %w", relativePath, err)
 		}
 		for _, claim := range parsed {
+			if previous, exists := seen[claim.ID]; exists {
+				return fmt.Errorf(
+					"duplicate claim ID %s in %s and %s",
+					claim.ID,
+					previous,
+					relativePath,
+				)
+			}
+			seen[claim.ID] = relativePath
 			if claim.EffectiveStatus() != claims.StatusConflicted {
 				continue
 			}
@@ -352,7 +363,17 @@ func groupConflictedClaims(entries []conflictedClaimEntry) [][]conflictedClaimEn
 // crossReferencesClaims reports whether either claim cites the other's claim
 // id in its text.
 func crossReferencesClaims(a, b claims.Claim) bool {
-	return strings.Contains(a.Text, b.ID) || strings.Contains(b.Text, a.ID)
+	for _, id := range historicalClaimIDPattern.FindAllString(a.Text, -1) {
+		if id == b.ID {
+			return true
+		}
+	}
+	for _, id := range historicalClaimIDPattern.FindAllString(b.Text, -1) {
+		if id == a.ID {
+			return true
+		}
+	}
+	return false
 }
 
 func renderConflictedClaimGroup(group []conflictedClaimEntry) string {
@@ -409,6 +430,10 @@ func (verificationReviewJob) ApplyResult(
 			"verification-review run must return non-empty artifact content (final_text=%q)",
 			compactVerificationReviewText(output.FinalText),
 		)
+	}
+	currentContent, err := bindConflictResolutions(currentContent, output.Spec.conflictGroups)
+	if err != nil {
+		return ParsedResult{}, fmt.Errorf("validate verification conflict resolutions: %w", err)
 	}
 
 	if err := loader.StoreCognitionArtifact(ctx, Artifact{

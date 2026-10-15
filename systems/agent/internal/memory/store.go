@@ -381,12 +381,9 @@ func (s *Store) LoadSemanticMemory(ctx context.Context) (agent.SemanticMemory, e
 	}, nil
 }
 
-// LoadSemanticTopics loads every semantic/topics/*.md file, keyed by
-// repository-relative slash path ("semantic/topics/<slug>.md") with its
-// trimmed content. Topic files routed there by the conversion pass are
-// invisible to LoadSemanticMemory, which returns only the three fixed roots,
-// so jobs that need them read them separately through this accessor rather
-// than having the roots' working set widened behind them.
+// LoadSemanticTopics loads every direct file in semantic/topics/, keyed by
+// repository-relative slash path, preserving every byte. It is separate from
+// LoadSemanticMemory, which returns only the three fixed roots.
 // A missing or empty topics directory yields an empty map.
 func (s *Store) LoadSemanticTopics(ctx context.Context) (map[string]string, error) {
 	_ = ctx
@@ -395,19 +392,25 @@ func (s *Store) LoadSemanticTopics(ctx context.Context) (map[string]string, erro
 	defer release()
 
 	topicsDir := filepath.Join(s.root(), filepath.FromSlash(semanticTopicsRelativePath))
-	files, err := filepath.Glob(filepath.Join(topicsDir, "*.md"))
+	files, err := filepath.Glob(filepath.Join(topicsDir, "*"))
 	if err != nil {
 		return nil, fmt.Errorf("list semantic topic files in %q: %w", topicsDir, err)
 	}
 
 	out := make(map[string]string, len(files))
 	for _, file := range files {
+		info, err := os.Stat(file)
+		if err != nil {
+			return nil, fmt.Errorf("stat semantic topic file %q: %w", file, err)
+		}
+		if info.IsDir() {
+			continue
+		}
 		raw, err := os.ReadFile(file)
 		if err != nil {
 			return nil, fmt.Errorf("read semantic topic file %q: %w", file, err)
 		}
-		out[semanticTopicsRelativePath+"/"+filepath.Base(file)] =
-			strings.TrimSpace(string(raw))
+		out[semanticTopicsRelativePath+"/"+filepath.Base(file)] = string(raw)
 	}
 	return out, nil
 }

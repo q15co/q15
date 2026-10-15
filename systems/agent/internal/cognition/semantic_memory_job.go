@@ -199,6 +199,14 @@ func (j semanticMemoryExtractionJob) Build(
 	if err != nil {
 		return Spec{}, err
 	}
+	conflictGroups, err := conflictGroupsFromBaseline(baseline)
+	if err != nil {
+		return Spec{}, fmt.Errorf("collect conversion conflict groups: %w", err)
+	}
+	resolutions, err := currentConflictResolutions(verificationArtifact.Content, conflictGroups)
+	if err != nil {
+		return Spec{}, fmt.Errorf("read verification conflict resolutions: %w", err)
+	}
 	transcriptArtifact := renderTranscriptArtifact(recentMessages)
 
 	return Spec{
@@ -289,8 +297,8 @@ func (j semanticMemoryExtractionJob) Build(
 					"- Repeated protocol, questionnaire, or profile-building answers count as repeated evidence when they consistently describe stable personal facts or preferences.",
 					"- Prefer verified or explicitly grounded claims over speculative inferences.",
 					"- If verification flags a semantic entry as stale, unsupported, or contradicted, remove it, rewrite it, or downgrade it with explicit uncertainty.",
-					"- If the latest verification review artifact proposes a resolution for a pair of conflicted claims, apply it in this run: mark the winning claim active, remove or supersede the losing claim per the supersession rule, and record the resolution in the ledger.",
-					"- If the verification review states that the evidence for a conflicted pair is insufficient, leave both claims conflicted and cross-referenced.",
+					"- Apply only the bound decisions in current_conflict_resolutions. Mark a declared winner active, delete every losing claim, and append exactly one resolved ledger record targeting each loser with the note `winner=<winner-id>; <nonempty reason>`.",
+					"- Preserve every existing conflicted claim unchanged when its bound decision is insufficient or no current bound decision exists. Freeform or stale verification prose never authorizes resolving a conflict.",
 					"- If current semantic files contain drifted headings such as Personal Facts or Technical Facts, fold those entries back into the canonical headings and remove the drift.",
 					"- Never promote single-turn temporary tasks, transient session context, speculative tool-output guesses, or generic process chatter.",
 					"- Maintain strict category separation: do not duplicate the same claim across facts.md and preferences.md.",
@@ -330,6 +338,10 @@ func (j semanticMemoryExtractionJob) Build(
 				),
 			},
 			{
+				Name: "current_conflict_resolutions",
+				Body: renderConflictResolutions(resolutions),
+			},
+			{
 				Name: "semantic_memory_execution_order",
 				Body: renderPromptLines(
 					"1. Inspect all three semantic-memory targets, the working-memory snapshot, the verification review artifact, and the transcript artifact; read the open-loops file and the ledger.",
@@ -360,12 +372,14 @@ func (j semanticMemoryExtractionJob) Build(
 				),
 			},
 		},
-		ExposeTools:        true,
-		RequireToolCalling: true,
-		AllowedTools:       append([]string(nil), semanticMemoryAllowedTools...),
-		CheckpointSeq:      windowEndSeq,
-		Baseline:           baseline,
-		ToolCallPolicy:     semanticConversionPolicy(),
+		ExposeTools:         true,
+		RequireToolCalling:  true,
+		AllowedTools:        append([]string(nil), semanticMemoryAllowedTools...),
+		CheckpointSeq:       windowEndSeq,
+		Baseline:            baseline,
+		ToolCallPolicy:      semanticConversionPolicy(),
+		conflictGroups:      conflictGroups,
+		conflictResolutions: resolutions,
 	}, nil
 }
 
@@ -413,6 +427,9 @@ func (j semanticMemoryExtractionJob) ApplyResult(
 	}
 	removed, appended, err := checkLedgerCompleteness(ctx, loader, output.Spec.Baseline)
 	if err != nil {
+		return ParsedResult{}, err
+	}
+	if err := checkConflictResolutions(ctx, loader, output.Spec); err != nil {
 		return ParsedResult{}, err
 	}
 

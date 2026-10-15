@@ -95,7 +95,9 @@ func TestStoreLoadSemanticTopicsReturnsTopicFilesByRelativePath(t *testing.T) {
 	); err != nil {
 		t.Fatalf("WriteFile(topic q15) error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(topicsDir, "notes.txt"), []byte("x"), 0o644); err != nil {
+	textTopic := "\n- [c-2026-0002] A contradictory deployment target.\n" +
+		"  {status: conflicted, kind: fact, confidence: likely, src: t12, rev: 2026-10-14}\n\n"
+	if err := os.WriteFile(filepath.Join(topicsDir, "notes.txt"), []byte(textTopic), 0o644); err != nil {
 		t.Fatalf("WriteFile(non-markdown) error = %v", err)
 	}
 	nested := filepath.Join(topicsDir, "nested")
@@ -117,6 +119,9 @@ func TestStoreLoadSemanticTopicsReturnsTopicFilesByRelativePath(t *testing.T) {
 		"\n- [c-2026-0001] The q15 repo carries the memory design.\n\n"
 	if got != want {
 		t.Fatalf("topics[semantic/topics/q15.md] = %q, want %q", got, want)
+	}
+	if got := topics["semantic/topics/notes.txt"]; got != textTopic {
+		t.Fatalf("non-markdown conflicted topic = %q, want exact content %q", got, textTopic)
 	}
 }
 

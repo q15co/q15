@@ -409,7 +409,7 @@ func TestVerificationReviewBuildRendersConflictedClaimsSection(t *testing.T) {
 		"- [c-2026-0401] The deploy target is staging, not production. (file: semantic/facts.md)",
 		"- [c-2026-0432] The deploy target is production, contradicting c-2026-0401. (file: semantic/topics/deploy-targets.md)",
 		"Cross-referenced pair c-2026-0401 and c-2026-0432:",
-		"the review artifact must propose one resolution: name the winning claim ID, give the reasoning for it, or state that the evidence is insufficient to decide",
+		"For each group in conflicted_claims, return exactly one standalone line",
 		"Proposed resolutions are input for the conversion pass, which applies them to semantic memory",
 	} {
 		if !contains(prompt, want) {

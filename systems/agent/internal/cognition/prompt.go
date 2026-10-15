@@ -28,7 +28,9 @@ type Spec struct {
 	// Baseline carries pre-run file content captured during Build, keyed by
 	// runtime path, so ApplyResult can diff what the run changed. Content is
 	// preserved byte for byte, including whitespace and line endings.
-	Baseline map[string]string
+	Baseline            map[string]string
+	conflictGroups      [][]conflictedClaimEntry
+	conflictResolutions []conflictResolution
 }
 
 func renderPrompt(jobType string, spec Spec) (string, error) {
