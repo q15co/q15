@@ -29,6 +29,9 @@ type ContextLoader interface {
 	LoadOpenLoops(ctx context.Context) (string, error)
 	// LoadWorkingLedger returns the trimmed content of working/LEDGER.md.
 	LoadWorkingLedger(ctx context.Context) (string, error)
+	ReadFileBytes(ctx context.Context, relativePath string) ([]byte, bool, error)
+	// LoadConversionLedgerHistory returns archived ledger bytes, oldest first.
+	LoadConversionLedgerHistory(ctx context.Context) (string, error)
 	LoadSkillCatalog(ctx context.Context) (agent.SkillCatalog, error)
 	LoadRecentMessages(ctx context.Context, turns int) ([]conversation.Message, error)
 	LoadLatestMessages(ctx context.Context, turns int) ([]conversation.Message, error)

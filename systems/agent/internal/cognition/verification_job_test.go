@@ -507,3 +507,11 @@ func TestRunnerRunsVerificationReviewAndStoresArtifactWithoutToolCalls(t *testin
 		t.Fatalf("callTools[0] names = %#v, want %#v", gotNames, wantNames)
 	}
 }
+
+func (s *verificationJobLoader) ReadFileBytes(context.Context, string) ([]byte, bool, error) {
+	return nil, false, nil
+}
+
+func (s *verificationJobLoader) LoadConversionLedgerHistory(context.Context) (string, error) {
+	return "", nil
+}

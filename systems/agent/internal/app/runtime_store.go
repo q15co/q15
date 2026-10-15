@@ -127,6 +127,17 @@ func (s *runtimeStore) LoadWorkingLedger(ctx context.Context) (string, error) {
 	return s.memory.ReadWorkingLedger()
 }
 
+func (s *runtimeStore) ReadFileBytes(
+	ctx context.Context,
+	relativePath string,
+) ([]byte, bool, error) {
+	return s.memory.ReadFileBytes(ctx, relativePath)
+}
+
+func (s *runtimeStore) LoadConversionLedgerHistory(ctx context.Context) (string, error) {
+	return s.memory.LoadConversionLedgerHistory(ctx)
+}
+
 func (s *runtimeStore) LoadSkillCatalog(ctx context.Context) (agent.SkillCatalog, error) {
 	_ = ctx
 	if s.skills == nil {

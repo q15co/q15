@@ -449,3 +449,11 @@ func TestRunnerForwardsAllowedToolsAndLoaderToApplyResult(t *testing.T) {
 		t.Fatalf("tool name = %q, want web_fetch", model.callTools[0][0].Name)
 	}
 }
+
+func (s *spyLoader) ReadFileBytes(context.Context, string) ([]byte, bool, error) {
+	return nil, false, nil
+}
+
+func (s *spyLoader) LoadConversionLedgerHistory(context.Context) (string, error) {
+	return "", nil
+}

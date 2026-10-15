@@ -431,7 +431,7 @@ func (s *Store) LoadOpenLoops(ctx context.Context) (string, error) {
 }
 
 // LoadSemanticFileSizes returns the on-disk byte size of each semantic root
-// and each semantic/topics/*.md file, keyed by repository-relative slash
+// and every direct child file of semantic/topics/, keyed by repository-relative slash
 // path. Missing files are omitted.
 func (s *Store) LoadSemanticFileSizes(ctx context.Context) (map[string]int64, error) {
 	_ = ctx
@@ -444,7 +444,7 @@ func (s *Store) LoadSemanticFileSizes(ctx context.Context) (map[string]int64, er
 		candidates = append(candidates, file.relativePath)
 	}
 	topicsDir := filepath.Join(s.root(), filepath.FromSlash(semanticTopicsRelativePath))
-	topics, err := filepath.Glob(filepath.Join(topicsDir, "*.md"))
+	topics, err := filepath.Glob(filepath.Join(topicsDir, "*"))
 	if err != nil {
 		return nil, fmt.Errorf("list semantic topic files in %q: %w", topicsDir, err)
 	}

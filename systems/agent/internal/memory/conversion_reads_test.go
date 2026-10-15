@@ -19,6 +19,9 @@ func TestStoreConversionReadsSeeSizesOpenLoopsAndLedger(t *testing.T) {
 	if err := os.WriteFile(topic, []byte("0123456789"), 0o644); err != nil {
 		t.Fatalf("WriteFile(topic) error = %v", err)
 	}
+	if err := os.WriteFile(filepath.Join(root, "semantic/topics/notes.txt"), []byte("plain"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	nested := filepath.Join(root, "semantic", "topics", "nested")
 	if err := os.MkdirAll(nested, 0o755); err != nil {
 		t.Fatalf("MkdirAll(nested) error = %v", err)
@@ -42,7 +45,7 @@ func TestStoreConversionReadsSeeSizesOpenLoopsAndLedger(t *testing.T) {
 	if _, ok := sizes["semantic/topics/nested/x.md"]; ok {
 		t.Fatalf("sizes include nested topic file: %v", sizes)
 	}
-	if got, want := len(sizes), 4; got != want {
+	if got, want := len(sizes), 5; got != want {
 		t.Fatalf("len(sizes) = %d, want %d (%v)", got, want, sizes)
 	}
 
@@ -63,5 +66,39 @@ func TestStoreConversionReadsSeeSizesOpenLoopsAndLedger(t *testing.T) {
 	}
 	if loops, err := store.LoadOpenLoops(ctx); err != nil || loops != "" {
 		t.Fatalf("LoadOpenLoops(missing) = %q, %v; want empty, nil", loops, err)
+	}
+}
+
+func TestStoreRawReadsAndArchivedLedgerHistory(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "memory")
+	store := newTestStore(root, &fakeCommitter{})
+	ctx := context.Background()
+	if err := store.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte("  bytes\n\nwith trailing space ")
+	if err := os.WriteFile(filepath.Join(root, "working/WORKING_MEMORY.md"), payload, 0600); err != nil {
+		t.Fatal(err)
+	}
+	raw, exists, err := store.ReadFileBytes(ctx, "working/WORKING_MEMORY.md")
+	if err != nil || !exists || string(raw) != string(payload) {
+		t.Fatalf("raw read = %q, %v, %v", raw, exists, err)
+	}
+	for _, path := range []string{"../escape", "/absolute", ""} {
+		if _, _, err := store.ReadFileBytes(ctx, path); err == nil {
+			t.Fatalf("accepted %q", path)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(root, "working/ledger"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	for name, data := range map[string]string{"2026-Q2.md": "older", "2026-Q3.md": "newer\n"} {
+		if err := os.WriteFile(filepath.Join(root, "working/ledger", name), []byte(data), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := store.LoadConversionLedgerHistory(ctx)
+	if err != nil || got != "older\nnewer\n" {
+		t.Fatalf("history = %q, %v", got, err)
 	}
 }

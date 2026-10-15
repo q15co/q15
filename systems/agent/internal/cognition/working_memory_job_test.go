@@ -772,3 +772,11 @@ func findPromptSection(
 	}
 	return agent.PromptSection{}, false
 }
+
+func (s *workingMemoryJobLoader) ReadFileBytes(context.Context, string) ([]byte, bool, error) {
+	return nil, false, nil
+}
+
+func (s *workingMemoryJobLoader) LoadConversionLedgerHistory(context.Context) (string, error) {
+	return "", nil
+}

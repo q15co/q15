@@ -764,3 +764,11 @@ func TestSemanticMemoryExtractionApplyResultUsesFalseChangedForReadOnlyInspectio
 		t.Fatalf("Summary = %q, want %q", got, want)
 	}
 }
+
+func (s *semanticMemoryJobLoader) ReadFileBytes(context.Context, string) ([]byte, bool, error) {
+	return nil, false, nil
+}
+
+func (s *semanticMemoryJobLoader) LoadConversionLedgerHistory(context.Context) (string, error) {
+	return "", nil
+}
