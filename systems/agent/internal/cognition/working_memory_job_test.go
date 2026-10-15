@@ -526,7 +526,7 @@ func TestWorkingMemoryConsolidationParseResultAcceptsAnyNotesAfterTargetInspecti
 
 	result, err := NewWorkingMemoryConsolidationRegistration(0, 0).NewJob().ApplyResult(
 		context.Background(),
-		nil,
+		&workingMemoryJobLoader{},
 		JobOutput{
 			Type:      workingMemoryConsolidationJobType,
 			FinalText: "Updated working memory to reflect the latest active tasks.",
@@ -562,7 +562,7 @@ func TestWorkingMemoryConsolidationParseResultTreatsFinalTextAsNotesOnly(t *test
 
 	result, err := NewWorkingMemoryConsolidationRegistration(0, 0).NewJob().ApplyResult(
 		context.Background(),
-		nil,
+		&workingMemoryJobLoader{},
 		JobOutput{
 			Type:      workingMemoryConsolidationJobType,
 			FinalText: "Left it unchanged.",
@@ -598,7 +598,7 @@ func TestWorkingMemoryConsolidationParseResultUsesDefaultSummaryWhenNotesMissing
 
 	result, err := NewWorkingMemoryConsolidationRegistration(0, 0).NewJob().ApplyResult(
 		context.Background(),
-		nil,
+		&workingMemoryJobLoader{},
 		JobOutput{
 			Type: workingMemoryConsolidationJobType,
 			Messages: []conversation.Message{
