@@ -222,6 +222,14 @@ func (j semanticMemoryExtractionJob) Build(
 	}); err != nil {
 		return Spec{}, err
 	}
+	recoveryID, err := loader.BeginMemoryRecovery(
+		ctx,
+		snapshots,
+		relativeMemoryPath(semanticTopicsRuntimeDir),
+	)
+	if err != nil {
+		return Spec{}, fmt.Errorf("prepare conversion recovery: %w", err)
+	}
 
 	return Spec{
 		Objective: renderPromptLines(
@@ -396,6 +404,7 @@ func (j semanticMemoryExtractionJob) Build(
 		conflictGroups:      conflictGroups,
 		conflictResolutions: resolutions,
 		FileSnapshots:       snapshots,
+		MemoryRecoveryID:    recoveryID,
 	}, nil
 }
 
@@ -499,6 +508,9 @@ func (semanticMemoryExtractionJob) Rollback(
 	loader ContextLoader,
 	spec Spec,
 ) error {
+	if spec.MemoryRecoveryID != "" {
+		return loader.RecoverMemory(ctx, spec.MemoryRecoveryID)
+	}
 	return restoreConversionFiles(ctx, loader, spec.FileSnapshots)
 }
 

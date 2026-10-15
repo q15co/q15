@@ -14,6 +14,7 @@ import (
 const (
 	// defaultCognitionMaxTurns caps the model/tool turns for one cognition run.
 	defaultCognitionMaxTurns = 32
+	memoryRecoveryTimeout    = 30 * time.Second
 )
 
 // ContextLoader provides explicit access to state a cognition job may opt into.
@@ -321,6 +322,7 @@ func (r *Runner) Run(
 
 	systemPrompt, err := renderPrompt(jobType, spec)
 	if err != nil {
+		err = r.withRollbackError(ctx, job, spec, err)
 		notifyRunEvent(ctx, observer, agent.RunEvent{
 			Type: agent.RunEventRunFailed,
 			Err:  err,
@@ -345,7 +347,7 @@ func (r *Runner) Run(
 		Observer:           observer,
 	})
 	if err != nil {
-		rollbackErr := r.rollbackFailedRun(ctx, job, spec)
+		err = r.withRollbackError(ctx, job, spec, err)
 		notifyRunEvent(ctx, observer, agent.RunEvent{
 			Type:      agent.RunEventRunFailed,
 			Turn:      runResult.Turn,
@@ -353,9 +355,6 @@ func (r *Runner) Run(
 			FinalText: runResult.FinalText,
 			Err:       err,
 		})
-		if rollbackErr != nil {
-			return Result{}, fmt.Errorf("%w (rollback also failed: %v)", err, rollbackErr)
-		}
 		return Result{}, err
 	}
 
@@ -368,7 +367,11 @@ func (r *Runner) Run(
 		Turn:      runResult.Turn,
 	}
 	parsed, err := job.ApplyResult(ctx, r.loader, output)
+	if err == nil && spec.MemoryRecoveryID != "" {
+		err = r.loader.CompleteMemoryRecovery(ctx, spec.MemoryRecoveryID)
+	}
 	if err != nil {
+		err = r.withRollbackError(ctx, job, spec, err)
 		notifyRunEvent(ctx, observer, agent.RunEvent{
 			Type:      agent.RunEventRunFailed,
 			Turn:      runResult.Turn,
@@ -407,14 +410,22 @@ func (r *Runner) rollbackFailedRun(
 	job JobDefinition,
 	spec Spec,
 ) error {
-	if len(spec.FileSnapshots) == 0 || r.loader == nil {
+	if r.loader == nil {
+		return nil
+	}
+	cleanupCtx, cancel := memoryRecoveryContext(ctx)
+	defer cancel()
+	if spec.MemoryRecoveryID != "" {
+		return r.loader.RecoverMemory(cleanupCtx, spec.MemoryRecoveryID)
+	}
+	if len(spec.FileSnapshots) == 0 {
 		return nil
 	}
 	rollbacker, ok := job.(Rollbacker)
 	if !ok {
 		return nil
 	}
-	return rollbacker.Rollback(ctx, r.loader, spec)
+	return rollbacker.Rollback(cleanupCtx, r.loader, spec)
 }
 
 func cloneMetadata(in map[string]string) map[string]string {
@@ -443,4 +454,20 @@ func notifyRunEvent(ctx context.Context, observer agent.RunObserver, event agent
 		event.At = time.Now()
 	}
 	observer.OnRunEvent(ctx, event)
+}
+
+func memoryRecoveryContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), memoryRecoveryTimeout)
+}
+
+func (r *Runner) withRollbackError(
+	ctx context.Context,
+	job JobDefinition,
+	spec Spec,
+	runErr error,
+) error {
+	if err := r.rollbackFailedRun(ctx, job, spec); err != nil {
+		return fmt.Errorf("%w (rollback also failed: %w)", runErr, err)
+	}
+	return runErr
 }
