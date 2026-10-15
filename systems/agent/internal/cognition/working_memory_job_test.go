@@ -866,7 +866,7 @@ func TestWorkingMemoryConsolidationOpenLoopsOverbudgetRuleUsesConfiguredBudget(t
 
 	evaluate := workingMemoryOpenLoopsOverbudgetRule(
 		t,
-		NewWorkingMemoryConsolidationRegistration(128),
+		NewWorkingMemoryConsolidationRegistration(0, 128),
 	).Evaluate
 
 	atBudget := &workingMemoryJobLoader{openLoops: strings.Repeat("x", 128)}
