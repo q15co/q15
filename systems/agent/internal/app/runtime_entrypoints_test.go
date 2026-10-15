@@ -353,3 +353,15 @@ func (f *fakeMemoryCommitter) ResetPaths(context.Context, string, []string) erro
 func (s *spyRuntimeStore) LoadConversionLedgerHistory(context.Context) (string, error) {
 	return "", nil
 }
+
+func (*spyRuntimeStore) BeginMemoryRecovery(
+	context.Context,
+	map[string]cognition.FileSnapshot,
+	string,
+) (string, error) {
+	return "", nil
+}
+
+func (*spyRuntimeStore) CompleteMemoryRecovery(context.Context, string) error { return nil }
+
+func (*spyRuntimeStore) RecoverMemory(context.Context, string) error { return nil }

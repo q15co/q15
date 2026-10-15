@@ -742,3 +742,15 @@ func TestRunnerRunsVerificationReviewAndStoresArtifactWithoutToolCalls(t *testin
 func (l *verificationJobLoader) LoadConversionLedgerHistory(context.Context) (string, error) {
 	return "", nil
 }
+
+func (*verificationJobLoader) BeginMemoryRecovery(
+	context.Context,
+	map[string]FileSnapshot,
+	string,
+) (string, error) {
+	return "", nil
+}
+
+func (*verificationJobLoader) CompleteMemoryRecovery(context.Context, string) error { return nil }
+
+func (*verificationJobLoader) RecoverMemory(context.Context, string) error { return nil }

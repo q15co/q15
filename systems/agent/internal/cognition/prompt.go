@@ -37,6 +37,8 @@ type Spec struct {
 	// path that did not exist before the run and must be deleted on rollback
 	// if the run created it.
 	FileSnapshots map[string]FileSnapshot
+	// MemoryRecoveryID identifies the durable journal for this run.
+	MemoryRecoveryID string
 }
 
 // FileSnapshot is the pre-run on-disk state of one writable path.

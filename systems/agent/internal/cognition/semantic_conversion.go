@@ -2,8 +2,10 @@ package cognition
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path"
+	"sort"
 	"strings"
 
 	"github.com/q15co/q15/systems/agent/internal/memory/claims"
@@ -555,7 +557,7 @@ func snapshotConversionFiles(
 // restoreConversionFiles rolls a failed conversion run back to the snapshotted
 // pre-run state: it writes every snapshotted file's bytes back verbatim and
 // deletes any path that had no snapshot but exists now (a file the run
-// created). The first failure is returned with the offending path named.
+// created). Every restoration is attempted and failures name their paths.
 func restoreConversionFiles(
 	ctx context.Context,
 	loader ContextLoader,
@@ -564,22 +566,30 @@ func restoreConversionFiles(
 	if len(snapshots) == 0 {
 		return nil
 	}
-	for runtimePath, snap := range snapshots {
+	var failures []error
+	paths := make([]string, 0, len(snapshots))
+	for runtimePath := range snapshots {
+		paths = append(paths, runtimePath)
+	}
+	sort.Strings(paths)
+	for _, runtimePath := range paths {
+		snap := snapshots[runtimePath]
 		relative := relativeMemoryPath(runtimePath)
+		var err error
 		if snap.Existed {
-			if err := loader.WriteFileBytes(ctx, relative, snap.Content); err != nil {
-				return fmt.Errorf("restore %s: %w", runtimePath, err)
-			}
-			continue
+			err = loader.WriteFileBytes(ctx, relative, snap.Content)
+		} else {
+			err = loader.DeleteFile(ctx, relative)
 		}
-		if err := loader.DeleteFile(ctx, relative); err != nil {
-			return fmt.Errorf("restore %s: %w", runtimePath, err)
+		if err != nil {
+			failures = append(failures, fmt.Errorf("restore %s: %w", runtimePath, err))
 		}
 	}
 
 	sizes, err := loader.LoadSemanticFileSizes(ctx)
 	if err != nil {
-		return fmt.Errorf("list semantic files to restore: %w", err)
+		return errors.Join(
+			append(failures, fmt.Errorf("list semantic files to restore: %w", err))...)
 	}
 	for relative := range sizes {
 		if path.Dir(relative) != relativeMemoryPath(semanticTopicsRuntimeDir) {
@@ -590,10 +600,10 @@ func restoreConversionFiles(
 			continue
 		}
 		if err := loader.DeleteFile(ctx, relative); err != nil {
-			return fmt.Errorf("restore %s: %w", runtimePath, err)
+			failures = append(failures, fmt.Errorf("restore %s: %w", runtimePath, err))
 		}
 	}
-	return nil
+	return errors.Join(failures...)
 }
 
 // rollbackFailedRun restores the snapshotted pre-run state after a validation

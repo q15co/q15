@@ -930,10 +930,6 @@ func (l *semanticMemoryJobLoader) ReadFileBytes(
 	return nil, false, nil
 }
 
-func (l *semanticMemoryJobLoader) LoadConversionLedgerHistory(context.Context) (string, error) {
-	return l.ledgerHistory, nil
-}
-
 func TestSemanticMemoryInitialReplayHalvesAfterFailures(t *testing.T) {
 	loader := &semanticMemoryJobLoader{jobState: JobState{ConsecutiveFailures: 3}}
 	for _, relative := range []string{semanticFactsRelativePath, semanticPreferencesRelativePath, semanticProjectsRelativePath} {
@@ -949,3 +945,15 @@ func TestSemanticMemoryInitialReplayHalvesAfterFailures(t *testing.T) {
 		t.Fatalf("initial replay turns = %d, want 16", loader.loadLatestTurns)
 	}
 }
+
+func (*semanticMemoryJobLoader) BeginMemoryRecovery(
+	context.Context,
+	map[string]FileSnapshot,
+	string,
+) (string, error) {
+	return "", nil
+}
+
+func (*semanticMemoryJobLoader) CompleteMemoryRecovery(context.Context, string) error { return nil }
+
+func (*semanticMemoryJobLoader) RecoverMemory(context.Context, string) error { return nil }

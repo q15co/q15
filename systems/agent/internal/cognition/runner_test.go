@@ -473,3 +473,15 @@ func TestRunnerForwardsAllowedToolsAndLoaderToApplyResult(t *testing.T) {
 func (s *spyLoader) LoadConversionLedgerHistory(context.Context) (string, error) {
 	return "", nil
 }
+
+func (*spyLoader) BeginMemoryRecovery(
+	context.Context,
+	map[string]FileSnapshot,
+	string,
+) (string, error) {
+	return "", nil
+}
+
+func (*spyLoader) CompleteMemoryRecovery(context.Context, string) error { return nil }
+
+func (*spyLoader) RecoverMemory(context.Context, string) error { return nil }

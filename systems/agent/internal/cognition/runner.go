@@ -39,6 +39,15 @@ type ContextLoader interface {
 	LoadConversionLedgerHistory(ctx context.Context) (string, error)
 	WriteFileBytes(ctx context.Context, relativePath string, data []byte) error
 	DeleteFile(ctx context.Context, relativePath string) error
+	// BeginMemoryRecovery durably records the pre-run writable set. A pending
+	// journal must be recovered before another run can begin.
+	BeginMemoryRecovery(
+		ctx context.Context,
+		snapshots map[string]FileSnapshot,
+		topicDir string,
+	) (string, error)
+	CompleteMemoryRecovery(ctx context.Context, id string) error
+	RecoverMemory(ctx context.Context, id string) error
 	LoadSkillCatalog(ctx context.Context) (agent.SkillCatalog, error)
 	LoadRecentMessages(ctx context.Context, turns int) ([]conversation.Message, error)
 	LoadLatestMessages(ctx context.Context, turns int) ([]conversation.Message, error)

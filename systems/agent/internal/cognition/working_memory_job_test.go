@@ -1204,3 +1204,15 @@ func TestWorkingMemoryInitialReplayHalvesAfterFailures(t *testing.T) {
 		t.Fatalf("initial replay turns = %d, want 8", loader.loadRecentTurns)
 	}
 }
+
+func (*workingMemoryJobLoader) BeginMemoryRecovery(
+	context.Context,
+	map[string]FileSnapshot,
+	string,
+) (string, error) {
+	return "", nil
+}
+
+func (*workingMemoryJobLoader) CompleteMemoryRecovery(context.Context, string) error { return nil }
+
+func (*workingMemoryJobLoader) RecoverMemory(context.Context, string) error { return nil }
