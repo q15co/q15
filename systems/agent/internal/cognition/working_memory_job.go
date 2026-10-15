@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
@@ -18,10 +19,6 @@ const (
 	workingMemoryRecentTurns                = 16
 	workingMemoryWindowTurns                = 16
 	workingMemoryMinDirtyTurns        int64 = 6
-	// defaultOpenLoopsBudgetBytes is the open-loops budget whose overrun fires
-	// a working-memory run (DESIGN §6.3); a registration built with a
-	// configured budget replaces it.
-	defaultOpenLoopsBudgetBytes = 4 * 1024
 )
 
 // WorkingMemoryConsolidationJobType is the job type under which the built-in
@@ -92,7 +89,10 @@ func NewWorkingMemoryConsolidationRegistration(
 	}
 }
 
-type workingMemoryConsolidationJob struct{ budgets memoryFileBudgets }
+type workingMemoryConsolidationJob struct {
+	budgets memoryFileBudgets
+	now     func() time.Time
+}
 
 func (workingMemoryConsolidationJob) Type() string {
 	return workingMemoryConsolidationJobType
@@ -106,6 +106,14 @@ func (j workingMemoryConsolidationJob) Build(
 		return Spec{}, fmt.Errorf("context loader is required")
 	}
 
+	now := time.Now().UTC()
+	if j.now != nil {
+		now = j.now().UTC()
+	}
+	loopsBefore, _, err := loader.ReadFileBytes(ctx, "working/OPEN_LOOPS.md")
+	if err != nil {
+		return Spec{}, fmt.Errorf("read pre-run open loops: %w", err)
+	}
 	working, err := loader.LoadWorkingMemory(ctx)
 	if err != nil {
 		return Spec{}, fmt.Errorf("load working memory: %w", err)
@@ -231,6 +239,7 @@ func (j workingMemoryConsolidationJob) Build(
 		),
 		PromptSections: []agent.PromptSection{
 			memoryBudgetPromptSection(j.budgets),
+			{Name: "maintenance_time", Body: now.Format(time.RFC3339)},
 			{
 				Name:       "working_memory_target",
 				Attributes: map[string]string{"path": runtimePath},
@@ -282,7 +291,7 @@ func (j workingMemoryConsolidationJob) Build(
 						"- Loop line format, quoted from the open-loops seed so the two cannot drift:\n%s",
 						OpenLoopsLineFormat,
 					),
-					"- Date-trigger check: any loop whose date trigger has passed moves into working memory's Active Tasks or Pending Checks this run, and its line is then removed from the loops file.",
+					"- Date-trigger check: use maintenance_time as the current UTC time. A date trigger on or before its UTC date is due. Move each due loop into Active Tasks or Pending Checks, retaining its loop ID and full intention, then remove that ID from open loops. Applied results are checked mechanically.",
 				),
 			},
 			{
@@ -318,6 +327,8 @@ func (j workingMemoryConsolidationJob) Build(
 		RequireToolCalling: true,
 		AllowedTools:       append([]string(nil), workingMemoryAllowedTools...),
 		CheckpointSeq:      windowEndSeq,
+		RunAt:              now,
+		Baseline:           map[string]string{openLoopsRuntimePath: string(loopsBefore)},
 		ToolCallPolicy: filetools.PathAccessPolicy{
 			ReadPaths: []string{
 				workingMemoryRuntimePath,
@@ -349,6 +360,9 @@ func (j workingMemoryConsolidationJob) ApplyResult(
 	}
 
 	if err := checkWorkingFileBudgets(ctx, loader, j.budgets); err != nil {
+		return ParsedResult{}, err
+	}
+	if err := checkOpenLoopLifecycle(ctx, loader, output.Spec); err != nil {
 		return ParsedResult{}, err
 	}
 

@@ -1081,7 +1081,9 @@ func TestWorkingMemoryConsolidationParseResultAcceptsEitherTarget(t *testing.T) 
 func TestWorkingMemoryConsolidationPromptGolden(t *testing.T) {
 	t.Parallel()
 
-	spec, err := NewWorkingMemoryConsolidationRegistration(0, 0).NewJob().Build(
+	spec, err := workingMemoryConsolidationJob{
+		now: func() time.Time { return time.Date(2026, 10, 15, 4, 0, 0, 0, time.UTC) },
+	}.Build(
 		context.Background(),
 		goldenWorkingMemoryLoader(),
 	)
@@ -1162,7 +1164,18 @@ func findPromptSection(
 	return agent.PromptSection{}, false
 }
 
-func (l *workingMemoryJobLoader) ReadFileBytes(context.Context, string) ([]byte, bool, error) {
+func (l *workingMemoryJobLoader) ReadFileBytes(
+	_ context.Context,
+	path string,
+) ([]byte, bool, error) {
+	switch path {
+	case workingMemoryRelativePath:
+		return []byte(l.working.Content), true, nil
+	case "working/OPEN_LOOPS.md":
+		return []byte(l.openLoops), true, nil
+	case "working/LEDGER.md":
+		return nil, true, nil
+	}
 	return nil, false, nil
 }
 

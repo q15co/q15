@@ -79,6 +79,14 @@ After the tool work completes, reply with one or two short sentences summarizing
 - If you must proceed with partial context, label the uncertainty explicitly and keep the action reversible.
 </missing_context_gating>
 
+<memory_byte_budgets>
+Keep /memory/working/WORKING_MEMORY.md at or under 8192 bytes and /memory/working/OPEN_LOOPS.md at or under 4096 bytes. The complete file bytes, including whitespace, are checked when this run is applied; an over-budget result fails without truncation.
+</memory_byte_budgets>
+
+<maintenance_time>
+2026-10-15T04:00:00Z
+</maintenance_time>
+
 <working_memory_target path="/memory/working/WORKING_MEMORY.md">
 # Working Memory
 
@@ -142,7 +150,7 @@ closed loop leaves this file and records a line in `working/LEDGER.md`.
 - Loop line format, quoted from the open-loops seed so the two cannot drift:
 - [l-YYYY-NNNN] <what to do> once <condition>.
   {trigger: date:YYYY-MM-DD | event:"<description>" | next-session, owner: agent|user, src: t<seq>}
-- Date-trigger check: any loop whose date trigger has passed moves into working memory's Active Tasks or Pending Checks this run, and its line is then removed from the loops file.
+- Date-trigger check: use maintenance_time as the current UTC time. A date trigger on or before its UTC date is due. Move each due loop into Active Tasks or Pending Checks, retaining its loop ID and full intention, then remove that ID from open loops. Applied results are checked mechanically.
 </open_loops_rules>
 
 <working_memory_execution_order>
