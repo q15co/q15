@@ -391,7 +391,7 @@ func TestWorkingMemoryConsolidationHalvesWindowAfterRepeatedFailures(t *testing.
 			checkpoint: ConsolidationCheckpoint{LastConsolidatedSeq: 40},
 			jobState:   jobState,
 		}
-		_, err := NewWorkingMemoryConsolidationRegistration().NewJob().Build(
+		_, err := NewWorkingMemoryConsolidationRegistration(0, 0).NewJob().Build(
 			context.Background(),
 			loader,
 		)
@@ -826,4 +826,14 @@ func (l *workingMemoryJobLoader) ReadFileBytes(context.Context, string) ([]byte,
 
 func (l *workingMemoryJobLoader) LoadConversionLedgerHistory(context.Context) (string, error) {
 	return "", nil
+}
+
+func TestWorkingMemoryInitialReplayHalvesAfterFailures(t *testing.T) {
+	loader := &workingMemoryJobLoader{jobState: JobState{ConsecutiveFailures: 3}}
+	if _, err := NewWorkingMemoryConsolidationRegistration(0, 0).NewJob().Build(context.Background(), loader); err != nil {
+		t.Fatal(err)
+	}
+	if loader.loadRecentTurns != 8 {
+		t.Fatalf("initial replay turns = %d, want 8", loader.loadRecentTurns)
+	}
 }

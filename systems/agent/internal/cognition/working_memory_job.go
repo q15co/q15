@@ -125,13 +125,13 @@ func (j workingMemoryConsolidationJob) Build(
 			window,
 		)
 	} else {
-		recentMessages, err = loader.LoadRecentMessages(ctx, workingMemoryRecentTurns)
+		recentMessages, err = loader.LoadRecentMessages(ctx, windowTurns)
 		if err != nil {
 			return Spec{}, fmt.Errorf("load recent messages: %w", err)
 		}
 		transcriptStatus = renderTranscriptScopeWithPolicy(
 			"selected by the initial working-memory replay fallback window independent of the consolidation checkpoint",
-			workingMemoryRecentTurns,
+			windowTurns,
 			len(recentMessages),
 		)
 	}

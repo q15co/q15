@@ -509,7 +509,7 @@ func TestSemanticMemoryExtractionHalvesWindowAfterRepeatedFailures(t *testing.T)
 			checkpoint: SemanticExtractionCheckpoint{LastExtractedSeq: 40},
 			jobState:   jobState,
 		}
-		_, err := NewSemanticMemoryExtractionRegistration(0).NewJob().Build(
+		_, err := NewSemanticMemoryExtractionRegistration(0, 0).NewJob().Build(
 			context.Background(),
 			loader,
 		)
@@ -882,4 +882,20 @@ func (l *semanticMemoryJobLoader) ReadFileBytes(
 
 func (l *semanticMemoryJobLoader) LoadConversionLedgerHistory(context.Context) (string, error) {
 	return l.ledgerHistory, nil
+}
+
+func TestSemanticMemoryInitialReplayHalvesAfterFailures(t *testing.T) {
+	loader := &semanticMemoryJobLoader{jobState: JobState{ConsecutiveFailures: 3}}
+	for _, relative := range []string{semanticFactsRelativePath, semanticPreferencesRelativePath, semanticProjectsRelativePath} {
+		loader.semantic.Files = append(
+			loader.semantic.Files,
+			agent.SemanticMemoryFile{RelativePath: relative, Content: "# Semantic\n"},
+		)
+	}
+	if _, err := NewSemanticMemoryExtractionRegistration(0, 0).NewJob().Build(context.Background(), loader); err != nil {
+		t.Fatal(err)
+	}
+	if loader.loadLatestTurns != 16 {
+		t.Fatalf("initial replay turns = %d, want 16", loader.loadLatestTurns)
+	}
 }
