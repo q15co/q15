@@ -394,6 +394,7 @@ func (semanticMemoryExtractionJob) ApplyResult(
 			ctx,
 			loader,
 			output.Spec.FileSnapshots,
+			semanticConversionWriteDirs(),
 			fmt.Errorf(
 				"semantic-memory run must inspect all canonical targets with file tools (missing=%s final_text=%q)",
 				strings.Join(missing, ", "),
@@ -406,6 +407,7 @@ func (semanticMemoryExtractionJob) ApplyResult(
 			ctx,
 			loader,
 			output.Spec.FileSnapshots,
+			semanticConversionWriteDirs(),
 			err,
 		)
 	}
@@ -415,6 +417,7 @@ func (semanticMemoryExtractionJob) ApplyResult(
 			ctx,
 			loader,
 			output.Spec.FileSnapshots,
+			semanticConversionWriteDirs(),
 			err,
 		)
 	}
@@ -449,7 +452,12 @@ func (semanticMemoryExtractionJob) Rollback(
 	loader ContextLoader,
 	spec Spec,
 ) error {
-	return restoreConversionFiles(ctx, loader, spec.FileSnapshots)
+	return restoreConversionFiles(
+		ctx,
+		loader,
+		spec.FileSnapshots,
+		semanticConversionWriteDirs(),
+	)
 }
 
 func evaluateSemanticMemoryState(

@@ -3,6 +3,7 @@ package cognition
 import (
 	"context"
 	"fmt"
+	"path"
 	"regexp"
 	"sort"
 	"strconv"
@@ -370,6 +371,13 @@ func renderMigrationChunkBody(
 	return builder.String()
 }
 
+// semanticMigrationWriteDirs returns the runtime directories a migration run
+// may create files in, which a rollback sweeps for files that have no
+// snapshot because the run created them.
+func semanticMigrationWriteDirs() []string {
+	return []string{semanticTopicsRuntimeDir}
+}
+
 // semanticMigrationPolicy scopes the migration run to the conversion ledger
 // and the topic files. The source roots are deliberately absent: the run
 // cannot read or write them, so the only way content ever leaves a source
@@ -379,7 +387,7 @@ func semanticMigrationPolicy() filetools.PathAccessPolicy {
 		ReadPaths:  []string{workingLedgerRuntimePath},
 		WritePaths: []string{workingLedgerRuntimePath},
 		ReadDirs:   []string{semanticTopicsRuntimeDir},
-		WriteDirs:  []string{semanticTopicsRuntimeDir},
+		WriteDirs:  semanticMigrationWriteDirs(),
 	}
 }
 
@@ -503,6 +511,11 @@ func (semanticMigrationJob) Build(
 		),
 	}
 
+	snapshots, err := snapshotMigrationFiles(ctx, loader, target, sizes)
+	if err != nil {
+		return Spec{}, err
+	}
+
 	return Spec{
 		Objective: renderPromptLines(
 			"This is a supervised background maintenance job, not a user-facing reply.",
@@ -558,31 +571,184 @@ func (semanticMigrationJob) Build(
 		RequireToolCalling: true,
 		AllowedTools:       append([]string(nil), semanticMemoryAllowedTools...),
 		Baseline:           baseline,
+		FileSnapshots:      snapshots,
 		ToolCallPolicy:     semanticMigrationPolicy(),
 	}, nil
 }
 
+// snapshotMigrationFiles captures the pre-run on-disk state of every path a
+// migration run may write, so a failed run can be rolled back byte-for-byte:
+// the conversion ledger, every existing topic file under the topics write
+// dir, the source file this run drains, and the migration cursor artifact the
+// run's completion half rewrites. Topic files the run creates have no
+// snapshot here; rollback deletes them by re-listing the write dir
+// afterwards. The staged archive residue is a drained source like any other
+// and is snapshotted with it: its bullets leave only after their own ledger
+// line, so a failed chunk run has to put them back. Only working/archive/
+// itself is out of scope, because the completion fold deletes it.
+func snapshotMigrationFiles(
+	ctx context.Context,
+	loader ContextLoader,
+	target string,
+	sizes map[string]int64,
+) (map[string]FileSnapshot, error) {
+	snapshots := make(map[string]FileSnapshot, len(sizes)+3)
+	read := func(runtimePath string) error {
+		raw, existed, err := loader.ReadFileBytes(ctx, relativeMemoryPath(runtimePath))
+		if err != nil {
+			return fmt.Errorf("snapshot %s: %w", runtimePath, err)
+		}
+		snapshots[runtimePath] = FileSnapshot{Existed: existed, Content: raw}
+		return nil
+	}
+	if err := read(workingLedgerRuntimePath); err != nil {
+		return nil, err
+	}
+	for relative := range sizes {
+		if path.Dir(relative) != relativeMemoryPath(semanticTopicsRuntimeDir) {
+			continue
+		}
+		if err := read(memoryRuntimePrefix + relative); err != nil {
+			return nil, err
+		}
+	}
+	if err := read(memoryRuntimePrefix + target); err != nil {
+		return nil, err
+	}
+
+	// The cursor is an artifact, not a memory file: the artifact store reads
+	// and restores it. An empty artifact reads as absent, which matches the
+	// cursor loader treating empty content as no migration.
+	artifact, err := loader.LoadCognitionArtifact(ctx, SemanticMigrationCursorArtifactPath)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"snapshot %s: %w",
+			SemanticMigrationCursorArtifactPath,
+			err,
+		)
+	}
+	snapshots[SemanticMigrationCursorArtifactPath] = FileSnapshot{
+		Existed: strings.TrimSpace(artifact.Content) != "",
+		Content: []byte(artifact.Content),
+	}
+	return snapshots, nil
+}
+
+// ApplyResult applies one migration run in two halves: the chunk half, which
+// rolls the store back to the state Build snapshotted on any failure, and the
+// completion half, which deliberately does not (its doc comment explains
+// why).
 func (semanticMigrationJob) ApplyResult(
 	ctx context.Context,
 	loader ContextLoader,
 	output JobOutput,
 ) (ParsedResult, error) {
-	if loader == nil {
-		return ParsedResult{}, fmt.Errorf("context loader is required")
+	chunk, err := applySemanticMigrationChunk(ctx, loader, output)
+	if err != nil {
+		return ParsedResult{}, err
 	}
+	return finishSemanticMigration(ctx, loader, output, chunk)
+}
+
+// Rollback returns the run's writable paths to the state Build snapshotted.
+// The runner calls it when a run fails before ApplyResult - an engine error,
+// a cancelled context, a turn budget that runs out - so a failure leaves no
+// partial writes behind and the next run re-reads the store as it was, the
+// migration cursor included.
+func (semanticMigrationJob) Rollback(
+	ctx context.Context,
+	loader ContextLoader,
+	spec Spec,
+) error {
+	return restoreConversionFiles(
+		ctx,
+		loader,
+		spec.FileSnapshots,
+		semanticMigrationWriteDirs(),
+	)
+}
+
+// applySemanticMigrationChunk runs the chunk half of one migration run and
+// rolls the store back to the state Build snapshotted on every failure, so a
+// failed run leaves nothing the next run would re-count: the ledger keeps
+// none of the run's lines, the topic files are as they were, and the drained
+// source lines are back in the source. The returned error carries both the
+// failure and any rollback failure.
+func applySemanticMigrationChunk(
+	ctx context.Context,
+	loader ContextLoader,
+	output JobOutput,
+) (semanticMigrationChunkResult, error) {
+	if loader == nil {
+		// Without a loader there is nothing to roll back through.
+		return semanticMigrationChunkResult{}, fmt.Errorf("context loader is required")
+	}
+	chunk, err := drainSemanticMigrationChunk(ctx, loader, output)
+	if err != nil {
+		return semanticMigrationChunkResult{}, rollbackFailedRun(
+			ctx,
+			loader,
+			output.Spec.FileSnapshots,
+			semanticMigrationWriteDirs(),
+			err,
+		)
+	}
+	return chunk, nil
+}
+
+// semanticMigrationChunkResult is the validated outcome of one migration
+// chunk run, carried across the completion boundary so the completion half
+// persists exactly what the chunk half computed.
+type semanticMigrationChunkResult struct {
+	// target is the source file the run drained.
+	target string
+	// chunkOffset and chunkBytes describe the window the run consumed.
+	chunkOffset int64
+	chunkBytes  int64
+	// ledgerLines and drainedLines count the run's ledger appends and the
+	// source lines they drained.
+	ledgerLines  int
+	drainedLines int
+	// removedBytes, newOffset and newSize are the drain's effect on the
+	// source file; finished reports the source fully drained.
+	removedBytes int64
+	newOffset    int64
+	newSize      int64
+	finished     bool
+	// residueLines counts the staged residue's lines, for the fold's ledger
+	// line when the run finishes the migration.
+	residueLines int
+	// cursor is the migration cursor as this run leaves it, for the
+	// completion half to persist.
+	cursor SemanticMigrationCursor
+}
+
+// drainSemanticMigrationChunk is the fallible body of the chunk half: the
+// ledger parse and validation, the drain of exactly the ledgered lines, the
+// offset and finished computation, the write and size checks, and the
+// per-file cursor entry. Its caller wraps every failure in the snapshot
+// rollback.
+func drainSemanticMigrationChunk(
+	ctx context.Context,
+	loader ContextLoader,
+	output JobOutput,
+) (semanticMigrationChunkResult, error) {
 	cursor, err := LoadSemanticMigrationCursor(ctx, loader)
 	if err != nil {
-		return ParsedResult{}, fmt.Errorf("load semantic migration cursor: %w", err)
+		return semanticMigrationChunkResult{}, fmt.Errorf(
+			"load semantic migration cursor: %w",
+			err,
+		)
 	}
 	if err := validateMigrationCursor(cursor); err != nil {
-		return ParsedResult{}, err
+		return semanticMigrationChunkResult{}, err
 	}
 	target, _, err := nextMigrationTarget(cursor)
 	if err != nil {
-		return ParsedResult{}, err
+		return semanticMigrationChunkResult{}, err
 	}
 	if target == "" {
-		return ParsedResult{}, fmt.Errorf(
+		return semanticMigrationChunkResult{}, fmt.Errorf(
 			"semantic migration cursor %q records no unfinished source file",
 			SemanticMigrationCursorArtifactPath,
 		)
@@ -593,11 +759,14 @@ func (semanticMigrationJob) ApplyResult(
 	// it stands, and the Build-time hash pins it against mid-run movement.
 	chunk, err := loadMigrationChunk(ctx, loader, target, migrationTargetOffset(cursor, target))
 	if err != nil {
-		return ParsedResult{}, fmt.Errorf("re-load semantic migration chunk: %w", err)
+		return semanticMigrationChunkResult{}, fmt.Errorf(
+			"re-load semantic migration chunk: %w",
+			err,
+		)
 	}
 	if expected := baseline[semanticMigrationBaselineChunkKeyPrefix+target]; expected != "" &&
 		expected != SemanticContentHash(chunk.Content) {
-		return ParsedResult{}, fmt.Errorf(
+		return semanticMigrationChunkResult{}, fmt.Errorf(
 			"semantic migration source %q moved between Build and ApplyResult",
 			target,
 		)
@@ -607,22 +776,24 @@ func (semanticMigrationJob) ApplyResult(
 
 	beforeLedger, ok := baseline[workingLedgerRuntimePath]
 	if !ok {
-		return ParsedResult{}, fmt.Errorf("spec baseline is missing the pre-run ledger")
+		return semanticMigrationChunkResult{}, fmt.Errorf(
+			"spec baseline is missing the pre-run ledger",
+		)
 	}
 	afterLedger, err := loader.LoadWorkingLedger(ctx)
 	if err != nil {
-		return ParsedResult{}, fmt.Errorf("load post-run working ledger: %w", err)
+		return semanticMigrationChunkResult{}, fmt.Errorf("load post-run working ledger: %w", err)
 	}
 	afterLedger = strings.TrimSpace(afterLedger)
 	if !strings.HasPrefix(afterLedger, beforeLedger) {
-		return ParsedResult{}, fmt.Errorf(
+		return semanticMigrationChunkResult{}, fmt.Errorf(
 			"semantic migration run rewrote existing ledger lines in %s; the ledger is append-only",
 			workingLedgerRuntimePath,
 		)
 	}
 	refs, err := parseMigrationLedgerAppends(afterLedger[len(beforeLedger):])
 	if err != nil {
-		return ParsedResult{}, err
+		return semanticMigrationChunkResult{}, err
 	}
 
 	lineByByte := make(map[int64]migrationSourceLine, len(lines))
@@ -637,7 +808,7 @@ func (semanticMigrationJob) ApplyResult(
 	seenBytes := make(map[int64]struct{})
 	for _, ref := range refs {
 		if ref.SourcePath != target {
-			return ParsedResult{}, fmt.Errorf(
+			return semanticMigrationChunkResult{}, fmt.Errorf(
 				"migration ledger line names source %q, but this run is draining %q",
 				ref.SourcePath,
 				target,
@@ -645,14 +816,14 @@ func (semanticMigrationJob) ApplyResult(
 		}
 		line, known := lineByByte[ref.SourceByte]
 		if !known || ref.SourceByte < chunk.Offset || ref.SourceByte >= consumedEnd {
-			return ParsedResult{}, fmt.Errorf(
+			return semanticMigrationChunkResult{}, fmt.Errorf(
 				"migration ledger line cites source %s:%d outside this run's chunk",
 				target,
 				ref.SourceByte,
 			)
 		}
 		if line.Hash != ref.Hash {
-			return ParsedResult{}, fmt.Errorf(
+			return semanticMigrationChunkResult{}, fmt.Errorf(
 				"migration ledger line for %s:%d cites hash %s but the line hashes to %s",
 				target,
 				ref.SourceByte,
@@ -661,7 +832,7 @@ func (semanticMigrationJob) ApplyResult(
 			)
 		}
 		if _, dup := seenBytes[ref.SourceByte]; dup {
-			return ParsedResult{}, fmt.Errorf(
+			return semanticMigrationChunkResult{}, fmt.Errorf(
 				"migration ledger line cites source %s:%d twice",
 				target,
 				ref.SourceByte,
@@ -669,14 +840,14 @@ func (semanticMigrationJob) ApplyResult(
 		}
 		seenBytes[ref.SourceByte] = struct{}{}
 		if !isLegacyBulletLine(line.Raw) {
-			return ParsedResult{}, fmt.Errorf(
+			return semanticMigrationChunkResult{}, fmt.Errorf(
 				"migration ledger line cites structure line %s:%d, which never leaves the file",
 				target,
 				ref.SourceByte,
 			)
 		}
 		if ref.Outcome == string(claims.OutcomeMigrated) && !strings.HasPrefix(ref.TargetID, "c-") {
-			return ParsedResult{}, fmt.Errorf(
+			return semanticMigrationChunkResult{}, fmt.Errorf(
 				"migrated ledger line for %s:%d must name its replacement claim",
 				target,
 				ref.SourceByte,
@@ -688,7 +859,7 @@ func (semanticMigrationJob) ApplyResult(
 		})
 	}
 	if len(refs) == 0 && hadBullets {
-		return ParsedResult{}, fmt.Errorf(
+		return semanticMigrationChunkResult{}, fmt.Errorf(
 			"semantic migration run ledgered nothing for the bullets of %s at offset %d",
 			target,
 			chunk.Offset,
@@ -702,7 +873,7 @@ func (semanticMigrationJob) ApplyResult(
 	if target == SemanticMigrationResidueSourcePath {
 		residueContent, err := loadMigrationSourceContent(ctx, loader, target)
 		if err != nil {
-			return ParsedResult{}, err
+			return semanticMigrationChunkResult{}, err
 		}
 		residueLines = migrationResidueLineCount(residueContent)
 	}
@@ -719,7 +890,7 @@ func (semanticMigrationJob) ApplyResult(
 		})
 		newSize, err = loader.RemoveSemanticLines(ctx, target, drainedLines)
 		if err != nil {
-			return ParsedResult{}, fmt.Errorf(
+			return semanticMigrationChunkResult{}, fmt.Errorf(
 				"drain ledgered source lines of %q: %w",
 				target,
 				err,
@@ -741,7 +912,7 @@ func (semanticMigrationJob) ApplyResult(
 			remaining,
 		)
 		if err != nil {
-			return ParsedResult{}, fmt.Errorf("re-read drained region: %w", err)
+			return semanticMigrationChunkResult{}, fmt.Errorf("re-read drained region: %w", err)
 		}
 		for _, line := range migrationChunkLines(leftoverChunk, "") {
 			if isLegacyBulletLine(line.Raw) {
@@ -753,14 +924,14 @@ func (semanticMigrationJob) ApplyResult(
 	finished := !chunk.More && newOffset == newSize
 
 	if err := checkMigrationRunWrites(ctx, loader, output); err != nil {
-		return ParsedResult{}, err
+		return semanticMigrationChunkResult{}, err
 	}
 	preRunSize, err := migrationBaselineSize(baseline, target)
 	if err != nil {
-		return ParsedResult{}, err
+		return semanticMigrationChunkResult{}, err
 	}
 	if newSize > preRunSize {
-		return ParsedResult{}, fmt.Errorf(
+		return semanticMigrationChunkResult{}, fmt.Errorf(
 			"semantic migration source %q grew under the migration (%d > %d bytes); the drain may only shrink a source file",
 			target,
 			newSize,
@@ -770,7 +941,7 @@ func (semanticMigrationJob) ApplyResult(
 
 	currentContent, err := loadMigrationSourceContent(ctx, loader, target)
 	if err != nil {
-		return ParsedResult{}, err
+		return semanticMigrationChunkResult{}, err
 	}
 	entry := SemanticMigrationFileCursor{
 		Offset:   newOffset,
@@ -778,10 +949,43 @@ func (semanticMigrationJob) ApplyResult(
 		Finished: finished,
 	}
 	cursor.Files[target] = entry
+	return semanticMigrationChunkResult{
+		target:       target,
+		chunkOffset:  chunk.Offset,
+		chunkBytes:   int64(len(chunk.Content)),
+		ledgerLines:  len(refs),
+		drainedLines: len(drainedLines),
+		removedBytes: removedBytes,
+		newOffset:    newOffset,
+		newSize:      newSize,
+		finished:     finished,
+		residueLines: residueLines,
+		cursor:       cursor,
+	}, nil
+}
+
+// finishSemanticMigration is the completion half of one migration run: it
+// persists the cursor the chunk half computed - which every run does - and,
+// when the cursor's last file is finished, runs the archive fold, the
+// checkpoint jump and the rescan before clearing the cursor, then builds the
+// run's metadata and summary.
+//
+// Failures here deliberately do NOT roll the store back to the state Build
+// snapshotted: the fold has already deleted working/archive/, so restoring
+// the pre-run ledger would drop the fold's ledger lines with nothing left to
+// re-derive them from. The unfinished cursor keeps the trigger firing, so the
+// completion is retried instead; the comment on the completion block explains
+// why each of its steps is idempotent.
+func finishSemanticMigration(
+	ctx context.Context,
+	loader ContextLoader,
+	output JobOutput,
+	chunk semanticMigrationChunkResult,
+) (ParsedResult, error) {
 	var jump semanticMigrationCheckpointJump
 	var fold semanticMigrationArchiveFold
 	var rescan semanticMigrationRescan
-	if allMigrationFilesFinished(cursor) {
+	if allMigrationFilesFinished(chunk.cursor) {
 		// The completion runs BEFORE the all-finished cursor is persisted, so a
 		// failure here - or a process that dies here - leaves a cursor whose
 		// last source is still open. The trigger re-fires, the drained source
@@ -790,7 +994,8 @@ func (semanticMigrationJob) ApplyResult(
 		// finished-but-uncleared, with the fold, the jump and the rescan never
 		// done and no run left to do them. Folder, jump and rescan are each
 		// idempotent, so the retry writes no second ledger line.
-		fold, err = completeArchiveFold(ctx, loader, residueLines)
+		var err error
+		fold, err = completeArchiveFold(ctx, loader, chunk.residueLines)
 		if err != nil {
 			return ParsedResult{}, err
 		}
@@ -799,27 +1004,27 @@ func (semanticMigrationJob) ApplyResult(
 			return ParsedResult{}, err
 		}
 		rescan = requestSemanticMigrationRescan(ctx, loader)
-		if err := SaveSemanticMigrationCursor(ctx, loader, cursor); err != nil {
+		if err := SaveSemanticMigrationCursor(ctx, loader, chunk.cursor); err != nil {
 			return ParsedResult{}, err
 		}
 		if err := ClearSemanticMigrationCursor(ctx, loader); err != nil {
 			return ParsedResult{}, err
 		}
-	} else if err := SaveSemanticMigrationCursor(ctx, loader, cursor); err != nil {
+	} else if err := SaveSemanticMigrationCursor(ctx, loader, chunk.cursor); err != nil {
 		return ParsedResult{}, err
 	}
 
 	metadata := map[string]string{
-		"source_file":               target,
-		"chunk_offset":              strconv.FormatInt(chunk.Offset, 10),
-		"chunk_bytes":               strconv.FormatInt(int64(len(chunk.Content)), 10),
-		"source_bytes_drained":      strconv.FormatInt(removedBytes, 10),
-		"source_offset_after":       strconv.FormatInt(newOffset, 10),
-		"source_size_after":         strconv.FormatInt(newSize, 10),
-		"source_lines_drained":      strconv.Itoa(len(drainedLines)),
-		"ledger_lines_appended":     strconv.Itoa(len(refs)),
-		"source_finished":           strconv.FormatBool(finished),
-		"cursor_cleared":            strconv.FormatBool(allMigrationFilesFinished(cursor)),
+		"source_file":               chunk.target,
+		"chunk_offset":              strconv.FormatInt(chunk.chunkOffset, 10),
+		"chunk_bytes":               strconv.FormatInt(chunk.chunkBytes, 10),
+		"source_bytes_drained":      strconv.FormatInt(chunk.removedBytes, 10),
+		"source_offset_after":       strconv.FormatInt(chunk.newOffset, 10),
+		"source_size_after":         strconv.FormatInt(chunk.newSize, 10),
+		"source_lines_drained":      strconv.Itoa(chunk.drainedLines),
+		"ledger_lines_appended":     strconv.Itoa(chunk.ledgerLines),
+		"source_finished":           strconv.FormatBool(chunk.finished),
+		"cursor_cleared":            strconv.FormatBool(allMigrationFilesFinished(chunk.cursor)),
 		"archive_files_folded":      strconv.Itoa(fold.filesFolded),
 		"archive_residue_lines":     strconv.Itoa(fold.residueLines),
 		"checkpoint_jump_seq":       strconv.FormatInt(jump.seq, 10),

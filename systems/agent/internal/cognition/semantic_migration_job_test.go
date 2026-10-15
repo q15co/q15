@@ -43,6 +43,9 @@ type migrationJobLoader struct {
 	rescanRequests        int
 	rescanErr             error
 	rescanAtCheckpointSeq int64
+	// storeArtifactErr fails StoreCognitionArtifact, so a failure in the
+	// migration's completion half - the cursor save - stays testable.
+	storeArtifactErr error
 }
 
 func (l *migrationJobLoader) LoadCoreMemory(
@@ -210,10 +213,19 @@ func (l *migrationJobLoader) AppendWorkingLedger(_ context.Context, line string)
 	return nil
 }
 
+// ReadFileBytes mirrors the store's raw byte reader, routing the ledger to
+// the fake's ledger field so a snapshot and a rollback see the exact bytes
+// the scripted model appended to.
 func (l *migrationJobLoader) ReadFileBytes(
 	_ context.Context,
 	relativePath string,
 ) ([]byte, bool, error) {
+	if relativePath == relativeMemoryPath(workingLedgerRuntimePath) {
+		if l.ledger == "" {
+			return nil, false, nil
+		}
+		return []byte(l.ledger), true, nil
+	}
 	if data, ok := l.files[relativePath]; ok {
 		return []byte(data), true, nil
 	}
@@ -223,16 +235,33 @@ func (l *migrationJobLoader) ReadFileBytes(
 	return nil, false, nil
 }
 
+// WriteFileBytes mirrors the store's byte-faithful writer; the ledger and
+// the topic files land in the fields every other fake accessor reads them
+// from, so a rollback restore is visible to the whole fake.
 func (l *migrationJobLoader) WriteFileBytes(
 	_ context.Context,
 	relativePath string,
 	data []byte,
 ) error {
-	l.files[relativePath] = string(data)
+	switch {
+	case relativePath == relativeMemoryPath(workingLedgerRuntimePath):
+		l.ledger = string(data)
+	case strings.HasPrefix(relativePath, relativeMemoryPath(semanticTopicsRuntimeDir)+"/"):
+		if l.topics == nil {
+			l.topics = make(map[string]string)
+		}
+		l.topics[relativePath] = string(data)
+	default:
+		l.files[relativePath] = string(data)
+	}
 	return nil
 }
 
 func (l *migrationJobLoader) DeleteFile(_ context.Context, relativePath string) error {
+	if relativePath == relativeMemoryPath(workingLedgerRuntimePath) {
+		l.ledger = ""
+		return nil
+	}
 	delete(l.files, relativePath)
 	delete(l.topics, relativePath)
 	return nil
@@ -266,6 +295,9 @@ func (l *migrationJobLoader) StoreCognitionArtifact(
 	_ context.Context,
 	artifact Artifact,
 ) error {
+	if l.storeArtifactErr != nil {
+		return l.storeArtifactErr
+	}
 	if l.artifacts == nil {
 		l.artifacts = make(map[string]string)
 	}
@@ -1109,6 +1141,212 @@ func TestSemanticMigrationCapsNewDestinations(t *testing.T) {
 			"ApplyResult(over-cap topic) error = %v, want the cap failure",
 			err,
 		)
+	}
+}
+
+// TestSemanticMigrationFailedChunkRunRestoresThePreRunStore drives a run
+// whose model appends its ledger lines and extends an over-cap topic, so the
+// run drains the chunk and only then fails validation. The failed run must
+// leave the store byte-identical to its pre-run state, so the next run
+// rebuilds the same chunk instead of double-counting the kept ledger lines.
+func TestSemanticMigrationFailedChunkRunRestoresThePreRunStore(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	job := NewSemanticMigrationRegistration().NewJob()
+
+	preTopic := strings.Repeat("x", 33*1024)
+	const preLedger = "# Conversion Ledger\n"
+	loader := &migrationJobLoader{
+		files:  migrationFixture(250),
+		topics: map[string]string{migrationTopicRelativePath: preTopic},
+		ledger: preLedger,
+	}
+	migrationCursorFor(t, loader, semanticFactsRelativePath)
+	preFacts := loader.files[semanticFactsRelativePath]
+	preCursor := loader.artifacts[SemanticMigrationCursorArtifactPath]
+
+	spec, err := job.Build(ctx, loader)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	// The scripted model appends its ledger lines and extends the over-cap
+	// topic; ApplyResult drains the chunk, and only the cap check after the
+	// drain fails the run.
+	output := migrationFakeModelOutput(t, loader, spec)
+	if _, err := job.ApplyResult(ctx, loader, output); err == nil ||
+		!strings.Contains(err.Error(), "over cap") {
+		t.Fatalf("ApplyResult() error = %v, want the over-cap failure", err)
+	}
+
+	if got := loader.files[semanticFactsRelativePath]; got != preFacts {
+		t.Fatalf("source file not restored byte-for-byte after the failed run")
+	}
+	if got := loader.topics[migrationTopicRelativePath]; got != preTopic {
+		t.Fatalf("topic file not restored byte-for-byte after the failed run")
+	}
+	if got := loader.ledger; got != preLedger {
+		t.Fatalf(
+			"ledger not restored byte-for-byte after the failed run:\n%q",
+			got,
+		)
+	}
+	if got := loader.artifacts[SemanticMigrationCursorArtifactPath]; got != preCursor {
+		t.Fatalf("cursor artifact changed by the failed run")
+	}
+}
+
+// TestSemanticMigrationCompletionFailureKeepsTheChunkWrites fails a run in
+// its completion half - the cursor save after the fold, the jump and the
+// rescan. The completion is retried by the still-open cursor rather than
+// rolled back, so the chunk's ledger lines, its claims and its drain survive.
+func TestSemanticMigrationCompletionFailureKeepsTheChunkWrites(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	job := NewSemanticMigrationRegistration().NewJob()
+	loader := &migrationJobLoader{
+		files:   migrationFixture(1),
+		topics:  map[string]string{},
+		headSeq: 77,
+	}
+	migrationCursorFor(t, loader, semanticFactsRelativePath)
+	preCursor := loader.artifacts[SemanticMigrationCursorArtifactPath]
+	loader.storeArtifactErr = fmt.Errorf("cognition artifact store is offline")
+
+	spec, err := job.Build(ctx, loader)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	output := migrationFakeModelOutput(t, loader, spec)
+	if _, err := job.ApplyResult(ctx, loader, output); err == nil ||
+		!strings.Contains(err.Error(), "store semantic migration cursor") {
+		t.Fatalf(
+			"ApplyResult() error = %v, want the cursor save failure",
+			err,
+		)
+	}
+
+	// The completion half does not roll the chunk back: the ledger line the
+	// model appended and the completion's own jump line stay in the ledger.
+	if got := strings.Count(loader.ledger, "(source="); got != 1 {
+		t.Fatalf(
+			"chunk ledger lines after the completion failure = %d, want 1:\n%s",
+			got,
+			loader.ledger,
+		)
+	}
+	if !strings.Contains(loader.ledger, "migration finished") {
+		t.Fatalf(
+			"jump ledger line rolled back with the completion failure:\n%s",
+			loader.ledger,
+		)
+	}
+	if !strings.Contains(loader.topics[migrationTopicRelativePath], "c-2026-0001") {
+		t.Fatalf(
+			"topic claim rolled back with the completion failure:\n%q",
+			loader.topics[migrationTopicRelativePath],
+		)
+	}
+	if strings.Contains(loader.files[semanticFactsRelativePath], "LEGACY TAIL MARKER") {
+		t.Fatalf("drained source line restored by the completion failure")
+	}
+	if loader.rescanRequests != 1 {
+		t.Fatalf("rescan requests = %d, want 1 before the failed save", loader.rescanRequests)
+	}
+	if got := loader.artifacts[SemanticMigrationCursorArtifactPath]; got != preCursor {
+		t.Fatalf(
+			"cursor artifact changed although its save failed; the retry needs it open",
+		)
+	}
+}
+
+// TestSemanticMigrationRollbackRestoresTheBuildSnapshots exercises the job's
+// Rollback directly: every snapshotted path comes back byte-for-byte, a topic
+// file the run created is deleted, and the cursor artifact returns to its
+// pre-run content.
+func TestSemanticMigrationRollbackRestoresTheBuildSnapshots(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	job := semanticMigrationJob{}
+
+	loader := &migrationJobLoader{
+		files: migrationFixture(3),
+		topics: map[string]string{
+			migrationTopicRelativePath: "- [c-2026-0001] existing claim\n",
+		},
+		ledger: "# Conversion Ledger\n",
+	}
+	migrationCursorFor(t, loader, semanticFactsRelativePath)
+	preFacts := loader.files[semanticFactsRelativePath]
+	preTopic := loader.topics[migrationTopicRelativePath]
+	preLedger := loader.ledger
+	preCursor := loader.artifacts[SemanticMigrationCursorArtifactPath]
+
+	sizes, err := loader.LoadSemanticFileSizes(ctx)
+	if err != nil {
+		t.Fatalf("LoadSemanticFileSizes() error = %v", err)
+	}
+	snapshots, err := snapshotMigrationFiles(ctx, loader, semanticFactsRelativePath, sizes)
+	if err != nil {
+		t.Fatalf("snapshotMigrationFiles() error = %v", err)
+	}
+	// The staged archive residue is a drained source like any other: its
+	// bullets leave only after their own ledger line, so a failed chunk run
+	// has to put them back. Only working/archive/ itself is out of scope.
+	preResidue := "- residue bullet\n"
+	loader.files[SemanticMigrationResidueSourcePath] = preResidue
+	residueSnapshots, err := snapshotMigrationFiles(
+		ctx,
+		loader,
+		SemanticMigrationResidueSourcePath,
+		sizes,
+	)
+	if err != nil {
+		t.Fatalf("snapshotMigrationFiles(residue) error = %v", err)
+	}
+	if _, ok := residueSnapshots[semanticMigrationResidueRuntimePath]; !ok {
+		t.Fatalf("snapshot must cover the archive residue file the run drains")
+	}
+
+	// Simulate the run: a ledger append, an extended and a created topic
+	// file, the drained source, and the advanced cursor.
+	loader.ledger = preLedger +
+		"2026-10-12T09:00Z run=semantic_memory.migrate dropped \"stale\"\n"
+	loader.topics[migrationTopicRelativePath] = preTopic + "- [c-2026-0002] appended claim\n"
+	loader.topics["semantic/topics/new-subject.md"] = "- [c-2026-0003] new claim\n"
+	loader.files[semanticFactsRelativePath] = "# Semantic Facts\n"
+	loader.artifacts[SemanticMigrationCursorArtifactPath] = `{"version":1,"files":{}}` + "\n"
+
+	if err := job.Rollback(ctx, loader, Spec{FileSnapshots: snapshots}); err != nil {
+		t.Fatalf("Rollback() error = %v", err)
+	}
+	if got := loader.files[semanticFactsRelativePath]; got != preFacts {
+		t.Fatalf("source file not restored byte-for-byte:\n%q", got)
+	}
+	if got := loader.topics[migrationTopicRelativePath]; got != preTopic {
+		t.Fatalf("extended topic file not restored byte-for-byte:\n%q", got)
+	}
+	if got := loader.ledger; got != preLedger {
+		t.Fatalf("ledger not restored byte-for-byte:\n%q", got)
+	}
+	if _, ok := loader.topics["semantic/topics/new-subject.md"]; ok {
+		t.Fatalf("run-created topic file was not deleted on rollback")
+	}
+	if got := loader.artifacts[SemanticMigrationCursorArtifactPath]; got != preCursor {
+		t.Fatalf("cursor artifact not restored byte-for-byte:\n%q", got)
+	}
+
+	// A run that drained the residue puts its bullets back the same way.
+	loader.files[SemanticMigrationResidueSourcePath] = ""
+	if err := restoreConversionFiles(
+		ctx,
+		loader,
+		residueSnapshots,
+		semanticMigrationWriteDirs(),
+	); err != nil {
+		t.Fatalf("restoreConversionFiles(residue) error = %v", err)
+	}
+	if got := loader.files[SemanticMigrationResidueSourcePath]; got != preResidue {
+		t.Fatalf("archive residue not restored byte-for-byte:\n%q", got)
 	}
 }
 
