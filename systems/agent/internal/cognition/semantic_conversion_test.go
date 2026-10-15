@@ -622,7 +622,7 @@ func TestSemanticConversionHappyPathKeepsWrites(t *testing.T) {
 
 	postRunWorking := "# Working Memory\n\n## Active Tasks\n\n- Ship T8.\n\n## Open Threads\n\n- None\n"
 	postRunLedger := conversionLedgerBefore +
-		"\n2026-10-14T05:00Z run=semantic_memory.extract converted \"Deploy target switched\" → c-2026-0001 (semantic/topics/q15.md)\n"
+		"\n2026-10-14T05:00Z run=semantic_memory.extract src=t12 converted \"Deploy target switched after staging issue.\" → c-2026-0001 (semantic/topics/q15.md)\n"
 
 	loader := &semanticMemoryJobLoader{
 		files:   conversionPreRunFiles(),
@@ -634,6 +634,10 @@ func TestSemanticConversionHappyPathKeepsWrites(t *testing.T) {
 	// Simulate the run's successful on-disk writes.
 	loader.files[workingMemoryRelativePath] = []byte(postRunWorking)
 	loader.files["working/LEDGER.md"] = []byte(postRunLedger)
+	loader.files["semantic/topics/q15.md"] = []byte(validConversionClaim)
+	loader.semanticSizes = map[string]int64{
+		"semantic/topics/q15.md": int64(len(validConversionClaim)),
+	}
 
 	result, err := NewSemanticMemoryExtractionRegistration(0).NewJob().ApplyResult(
 		context.Background(),
