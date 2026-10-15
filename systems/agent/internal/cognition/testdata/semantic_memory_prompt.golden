@@ -84,6 +84,10 @@ After the tool work completes, reply with one or two short sentences summarizing
 No prior claim IDs are recorded. Start at c-YYYY-0001 for the current year.
 </claim_id_allocation>
 
+<memory_byte_budgets>
+Keep /memory/working/WORKING_MEMORY.md at or under 8192 bytes and /memory/working/OPEN_LOOPS.md at or under 4096 bytes. The complete file bytes, including whitespace, are checked when this run is applied; an over-budget result fails without truncation.
+</memory_byte_budgets>
+
 <semantic_facts_target path="/memory/semantic/facts.md">
 # Semantic Facts
 

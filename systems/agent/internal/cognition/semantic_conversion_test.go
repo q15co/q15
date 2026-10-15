@@ -71,7 +71,7 @@ func applyConversion(
 	writes ...string,
 ) (ParsedResult, error) {
 	t.Helper()
-	return NewSemanticMemoryExtractionRegistration(0).NewJob().ApplyResult(
+	return NewSemanticMemoryExtractionRegistration(0, 0).NewJob().ApplyResult(
 		context.Background(),
 		loader,
 		JobOutput{
@@ -310,7 +310,7 @@ func TestSemanticConversionBuildStashesBaseline(t *testing.T) {
 	t.Parallel()
 
 	loader := goldenSemanticLoader()
-	spec, err := NewSemanticMemoryExtractionRegistration(0).NewJob().
+	spec, err := NewSemanticMemoryExtractionRegistration(0, 0).NewJob().
 		Build(context.Background(), loader)
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
@@ -362,7 +362,7 @@ func goldenSemanticLoader() *semanticMemoryJobLoader {
 func TestSemanticConversionPromptGolden(t *testing.T) {
 	t.Parallel()
 
-	spec, err := NewSemanticMemoryExtractionRegistration(0).NewJob().Build(
+	spec, err := NewSemanticMemoryExtractionRegistration(0, 0).NewJob().Build(
 		context.Background(),
 		goldenSemanticLoader(),
 	)
@@ -413,7 +413,7 @@ func TestSemanticConversionOverbudgetRuleUsesConfiguredBudget(t *testing.T) {
 
 	evaluate := semanticConversionOverbudgetRule(
 		t,
-		NewSemanticMemoryExtractionRegistration(128),
+		NewSemanticMemoryExtractionRegistration(128, 0),
 	).Evaluate
 
 	atBudget := &semanticMemoryJobLoader{
@@ -447,7 +447,7 @@ func TestSemanticConversionOverbudgetRuleDefaultsBudgetWhenUnconfigured(t *testi
 	// does not fire even though the configured value was zero.
 	evaluate := semanticConversionOverbudgetRule(
 		t,
-		NewSemanticMemoryExtractionRegistration(0),
+		NewSemanticMemoryExtractionRegistration(0, 0),
 	).Evaluate
 
 	atDefault := &semanticMemoryJobLoader{

@@ -30,10 +30,17 @@ var workingMemoryAllowedTools = []string{
 // NewWorkingMemoryConsolidationRegistration returns the built-in working-memory
 // consolidation job registration used to exercise the background trigger
 // controller end to end.
-func NewWorkingMemoryConsolidationRegistration() JobRegistration {
+func NewWorkingMemoryConsolidationRegistration(
+	workingMemoryBudgetBytes, openLoopsBudgetBytes int,
+) JobRegistration {
 	return JobRegistration{
 		NewJob: func() JobDefinition {
-			return workingMemoryConsolidationJob{}
+			return workingMemoryConsolidationJob{
+				budgets: memoryFileBudgets{
+					working:   workingMemoryBudgetBytes,
+					openLoops: openLoopsBudgetBytes,
+				},
+			}
 		},
 		Policy: TriggerPolicy{
 			Startup: []StartupRule{{
@@ -52,13 +59,13 @@ func NewWorkingMemoryConsolidationRegistration() JobRegistration {
 	}
 }
 
-type workingMemoryConsolidationJob struct{}
+type workingMemoryConsolidationJob struct{ budgets memoryFileBudgets }
 
 func (workingMemoryConsolidationJob) Type() string {
 	return workingMemoryConsolidationJobType
 }
 
-func (workingMemoryConsolidationJob) Build(
+func (j workingMemoryConsolidationJob) Build(
 	ctx context.Context,
 	loader ContextLoader,
 ) (Spec, error) {
@@ -155,6 +162,7 @@ func (workingMemoryConsolidationJob) Build(
 			"After the tool work completes, reply with one or two short sentences summarizing what changed or that the file was already current.",
 		),
 		PromptSections: []agent.PromptSection{
+			memoryBudgetPromptSection(j.budgets),
 			{
 				Name:       "working_memory_target",
 				Attributes: map[string]string{"path": runtimePath},
@@ -232,9 +240,9 @@ func (workingMemoryConsolidationJob) Build(
 	}, nil
 }
 
-func (workingMemoryConsolidationJob) ApplyResult(
-	_ context.Context,
-	_ ContextLoader,
+func (j workingMemoryConsolidationJob) ApplyResult(
+	ctx context.Context,
+	loader ContextLoader,
 	output JobOutput,
 ) (ParsedResult, error) {
 	if !workingMemoryTargetUsed(output.Messages, workingMemoryRuntimePath) {
@@ -243,6 +251,10 @@ func (workingMemoryConsolidationJob) ApplyResult(
 			workingMemoryRuntimePath,
 			compactWorkingMemoryText(output.FinalText),
 		)
+	}
+
+	if err := checkWorkingFileBudgets(ctx, loader, j.budgets); err != nil {
+		return ParsedResult{}, err
 	}
 
 	summary := summarizeWorkingMemoryNotes(output.FinalText)

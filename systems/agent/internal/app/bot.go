@@ -531,8 +531,14 @@ func (s bridgeSettings) newChatBridge(
 func cognitionJobs(rt config.AgentRuntime) []cognition.JobRegistration {
 	return []cognition.JobRegistration{
 		cognition.NewVerificationReviewRegistration(),
-		cognition.NewSemanticMemoryExtractionRegistration(rt.MemoryWorkingBudgetBytes),
-		cognition.NewWorkingMemoryConsolidationRegistration(),
+		cognition.NewSemanticMemoryExtractionRegistration(
+			rt.MemoryWorkingBudgetBytes,
+			rt.MemoryOpenLoopsBudgetBytes,
+		),
+		cognition.NewWorkingMemoryConsolidationRegistration(
+			rt.MemoryWorkingBudgetBytes,
+			rt.MemoryOpenLoopsBudgetBytes,
+		),
 	}
 }
 

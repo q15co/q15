@@ -520,7 +520,7 @@ func TestOverbudgetTriggerLeavesWorkingMemoryFileUntouched(t *testing.T) {
 
 	run, reason, err := overbudgetRuleEvaluator(
 		t,
-		cognition.NewSemanticMemoryExtractionRegistration(128),
+		cognition.NewSemanticMemoryExtractionRegistration(128, 0),
 	)(
 		context.Background(),
 		cognition.Snapshot{Loader: ruleContextLoader{store}},
