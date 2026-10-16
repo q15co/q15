@@ -608,16 +608,6 @@ func rollbackFailedRun(
 	return validationErr
 }
 
-func appendedWorkingLedgerLines(
-	ctx context.Context,
-	loader ContextLoader,
-	baseline map[string]string,
-	runLabel string,
-) (int, error) {
-	entries, err := appendedWorkingLedgerEntries(ctx, loader, baseline, runLabel)
-	return len(entries), err
-}
-
 // restoreSnapshotFiles restores only explicitly captured paths. Jobs with no
 // directory write policy must never enumerate or delete unsnapshotted topics.
 func restoreSnapshotFiles(
