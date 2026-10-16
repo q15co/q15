@@ -277,6 +277,16 @@ func (s *Store) removeMemoryRecoveryLocked() error {
 }
 
 func (s *Store) validateRecoveryBaseline(journal memoryRecovery) error {
+	if journal.TopicDir != "" {
+		if err := s.validateRecoveryPathAliases(journal.TopicDir); err != nil {
+			return err
+		}
+	}
+	for relative := range journal.Snapshots {
+		if err := s.validateRecoveryPathAliases(relative); err != nil {
+			return err
+		}
+	}
 	paths, err := s.memoryRecoveryPaths(journal)
 	if err != nil {
 		return err
@@ -298,6 +308,24 @@ func (s *Store) validateRecoveryBaseline(journal memoryRecovery) error {
 				"memory recovery baseline changed before journal creation: %s",
 				relative,
 			)
+		}
+	}
+	return nil
+}
+
+func (s *Store) validateRecoveryPathAliases(relative string) error {
+	current := s.root()
+	for _, component := range strings.Split(relative, "/") {
+		current = filepath.Join(current, component)
+		info, err := os.Lstat(current)
+		if os.IsNotExist(err) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("inspect memory recovery path %s: %w", relative, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("memory recovery path %s contains a symlink", relative)
 		}
 	}
 	return nil

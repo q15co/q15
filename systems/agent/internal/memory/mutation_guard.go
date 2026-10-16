@@ -17,12 +17,19 @@ func (s *Store) AcquireFileMutation(ctx context.Context, localPaths []string) (f
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	root, err := canonicalMutationPath(s.root())
+	root, err := filepath.EvalSymlinks(s.root())
 	if err != nil {
 		return nil, fmt.Errorf("resolve memory root: %w", err)
 	}
 	var relatives []string
 	for _, localPath := range localPaths {
+		logical, err := filepath.Rel(s.root(), filepath.Clean(localPath))
+		if err != nil {
+			return nil, err
+		}
+		if logical != ".." && !strings.HasPrefix(logical, ".."+string(filepath.Separator)) {
+			relatives = append(relatives, filepath.ToSlash(logical))
+		}
 		canonical, err := canonicalMutationPath(localPath)
 		if err != nil {
 			return nil, fmt.Errorf("resolve mutation path: %w", err)
@@ -87,11 +94,12 @@ func frameworkWorkingPath(relative string) bool {
 	}
 }
 
-// Resolve existing ancestors so directory aliases cannot bypass the journal's
-// path scope. A new file may have more than one missing parent directory.
+// Resolve parents while preserving the leaf that atomic writes replace. A new
+// file may have more than one missing parent directory.
 func canonicalMutationPath(file string) (string, error) {
-	current := filepath.Clean(file)
-	var suffix []string
+	file = filepath.Clean(file)
+	current := filepath.Dir(file)
+	suffix := []string{filepath.Base(file)}
 	for {
 		resolved, err := filepath.EvalSymlinks(current)
 		if err == nil {
