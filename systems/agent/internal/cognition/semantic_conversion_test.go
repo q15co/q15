@@ -593,8 +593,8 @@ func TestSemanticConversionRollsBackNewTopicFile(t *testing.T) {
 	loader.files[workingMemoryRelativePath] = []byte(
 		"# Working Memory\n\n## Active Tasks\n\n- None\n",
 	)
-	loader.files[newTopic] = []byte("- [c-2026-0001] new claim\n")
-	loader.semanticSizes = map[string]int64{newTopic: 40}
+	loader.files[newTopic] = []byte(validConversionClaim)
+	loader.semanticSizes = map[string]int64{newTopic: int64(len(validConversionClaim))}
 
 	_, err := NewSemanticMemoryExtractionRegistration(0, 0).NewJob().ApplyResult(
 		context.Background(),
