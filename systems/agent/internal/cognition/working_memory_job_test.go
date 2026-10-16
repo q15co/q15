@@ -1153,7 +1153,7 @@ func emptyWorkingMemoryBaseline() map[string]string {
 // pre-run state ApplyResult later diffs and rolls back to.
 func buildWorkingMemorySpec(t *testing.T, loader *workingMemoryJobLoader) Spec {
 	t.Helper()
-	spec, err := NewWorkingMemoryConsolidationRegistration(0).NewJob().Build(
+	spec, err := NewWorkingMemoryConsolidationRegistration(0, 0).NewJob().Build(
 		context.Background(),
 		loader,
 	)
@@ -1210,7 +1210,7 @@ func TestWorkingMemoryConsolidationApplyResultFailsWhenRemovedItemHasNoLedgerLin
 			relativeMemoryPath(workingLedgerRuntimePath): []byte(ledgerBefore + "\n"),
 		},
 	}
-	job := NewWorkingMemoryConsolidationRegistration(0).NewJob()
+	job := NewWorkingMemoryConsolidationRegistration(0, 0).NewJob()
 	spec := buildWorkingMemorySpec(t, loader)
 
 	// The run removes one working-memory item and appends no ledger line.
@@ -1260,7 +1260,7 @@ func TestWorkingMemoryConsolidationApplyResultFailsWhenClosedLoopHasNoLedgerLine
 			relativeMemoryPath(workingLedgerRuntimePath): []byte("# Ledger\n"),
 		},
 	}
-	job := NewWorkingMemoryConsolidationRegistration(0).NewJob()
+	job := NewWorkingMemoryConsolidationRegistration(0, 0).NewJob()
 	spec := buildWorkingMemorySpec(t, loader)
 
 	// The run closes l-2026-0042 without recording it in the ledger.
@@ -1304,7 +1304,7 @@ func TestWorkingMemoryConsolidationApplyResultFailsWhenLedgerPrefixIsRewritten(
 			relativeMemoryPath(workingLedgerRuntimePath): []byte(ledgerBefore),
 		},
 	}
-	job := NewWorkingMemoryConsolidationRegistration(0).NewJob()
+	job := NewWorkingMemoryConsolidationRegistration(0, 0).NewJob()
 	spec := buildWorkingMemorySpec(t, loader)
 
 	// The run rewrites an existing ledger line instead of only appending.
@@ -1350,7 +1350,7 @@ func TestWorkingMemoryConsolidationApplyResultAcceptsRecordedExits(t *testing.T)
 			relativeMemoryPath(workingLedgerRuntimePath): []byte(ledgerBefore),
 		},
 	}
-	job := NewWorkingMemoryConsolidationRegistration(0).NewJob()
+	job := NewWorkingMemoryConsolidationRegistration(0, 0).NewJob()
 	spec := buildWorkingMemorySpec(t, loader)
 
 	// A healthy run: one item exits, one loop closes, and each exit gets
@@ -1414,7 +1414,7 @@ func TestWorkingMemoryConsolidationRollbackRestoresSnapshottedFiles(t *testing.T
 			relativeMemoryPath(workingLedgerRuntimePath): ledgerBytes,
 		},
 	}
-	job := NewWorkingMemoryConsolidationRegistration(0).NewJob()
+	job := NewWorkingMemoryConsolidationRegistration(0, 0).NewJob()
 	spec := buildWorkingMemorySpec(t, loader)
 
 	rollbacker, ok := job.(Rollbacker)
@@ -1466,7 +1466,7 @@ func TestWorkingMemoryConsolidationApplyResultCoverageFailureRollsBack(t *testin
 			relativeMemoryPath(workingMemoryRuntimePath): workingBytes,
 		},
 	}
-	job := NewWorkingMemoryConsolidationRegistration(0).NewJob()
+	job := NewWorkingMemoryConsolidationRegistration(0, 0).NewJob()
 	spec := buildWorkingMemorySpec(t, loader)
 
 	// The run never touched either target through a file tool, so its
