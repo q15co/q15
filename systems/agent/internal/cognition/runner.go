@@ -324,7 +324,11 @@ func (r *Runner) Run(
 	inputMessages = append(inputMessages, conversation.SystemMessage(systemPrompt))
 	inputMessages = append(inputMessages, conversation.CloneMessages(spec.InputMessages)...)
 
-	runResult, err := engine.Run(ctx, agent.EngineRequest{
+	runCtx := ctx
+	if spec.MemoryRecoveryID != "" {
+		runCtx = withMemoryRecoveryOwner(ctx, spec.MemoryRecoveryID)
+	}
+	runResult, err := engine.Run(runCtx, agent.EngineRequest{
 		Messages:           inputMessages,
 		UseTools:           spec.ExposeTools,
 		AllowedTools:       append([]string(nil), spec.AllowedTools...),

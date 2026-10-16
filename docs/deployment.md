@@ -274,3 +274,11 @@ For Compose and Kubernetes alike:
 - Roll back by selecting the previous `YYYY.MM.DD.<run-number>` tag across all three services.
 - Preserve the existing persistent storage for `/workspace`, `/memory`, `/skills`, `/nix`,
   `/var/lib/q15/agent`, and `/var/lib/q15/proxy` during normal upgrades and downgrades.
+
+### Memory write ownership
+
+Mount `/memory` writable in `q15-agent` and read-only in `q15-exec`. This is required for cognition
+recovery: a shell command or background exec session must not change files reserved by an in-flight
+memory run. Use the agent file tools for memory writes; they check ownership and serialize mutations
+with recovery. Compose, Kubernetes, and generated Quadlet units enforce this mount contract. Custom
+deployments must retain it, and direct host edits must wait until cognition is idle.
