@@ -48,7 +48,11 @@ func (l *workingMemoryJobLoader) LoadSemanticTopics(context.Context) (map[string
 }
 
 func (l *workingMemoryJobLoader) LoadWorkingMemory(context.Context) (agent.WorkingMemory, error) {
-	return l.working, nil
+	working := l.working
+	if l.files != nil {
+		working.Content = string(l.files[workingMemoryRelativePath])
+	}
+	return working, nil
 }
 
 func (l *workingMemoryJobLoader) LoadSkillCatalog(context.Context) (agent.SkillCatalog, error) {
@@ -113,10 +117,16 @@ func (l *workingMemoryJobLoader) LoadSemanticFileSizes(context.Context) (map[str
 }
 
 func (l *workingMemoryJobLoader) LoadOpenLoops(context.Context) (string, error) {
+	if l.files != nil {
+		return string(l.files["working/OPEN_LOOPS.md"]), nil
+	}
 	return l.openLoops, nil
 }
 
 func (l *workingMemoryJobLoader) LoadWorkingLedger(context.Context) (string, error) {
+	if l.files != nil {
+		return string(l.files["working/LEDGER.md"]), nil
+	}
 	return l.ledger, nil
 }
 

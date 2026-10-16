@@ -120,6 +120,10 @@ func (j workingMemoryConsolidationJob) Build(
 	if err != nil {
 		return Spec{}, fmt.Errorf("load open loops: %w", err)
 	}
+	ledger, err := loader.LoadWorkingLedger(ctx)
+	if err != nil {
+		return Spec{}, fmt.Errorf("load working ledger: %w", err)
+	}
 	verificationArtifact, err := loader.LoadCognitionArtifact(
 		ctx,
 		VerificationReviewPath,
@@ -200,6 +204,18 @@ func (j workingMemoryConsolidationJob) Build(
 	snapshots, err := snapshotWorkingMemoryFiles(ctx, loader)
 	if err != nil {
 		return Spec{}, fmt.Errorf("snapshot working-memory targets: %w", err)
+	}
+	baseline := map[string]string{
+		workingMemoryRuntimePath: string(snapshots[workingMemoryRuntimePath].Content),
+		workingLedgerRuntimePath: string(snapshots[workingLedgerRuntimePath].Content),
+		openLoopsRuntimePath:     string(snapshots[openLoopsRuntimePath].Content),
+	}
+	if err := validateMemoryBuildEvidence(snapshots, baseline, map[string]string{
+		workingMemoryRuntimePath: working.Content,
+		openLoopsRuntimePath:     openLoops,
+		workingLedgerRuntimePath: ledger,
+	}); err != nil {
+		return Spec{}, err
 	}
 	recoveryID, err := loader.BeginMemoryRecovery(ctx, snapshots, "")
 	if err != nil {
@@ -340,13 +356,9 @@ func (j workingMemoryConsolidationJob) Build(
 		AllowedTools:       append([]string(nil), workingMemoryAllowedTools...),
 		CheckpointSeq:      windowEndSeq,
 		RunAt:              now,
-		Baseline: map[string]string{
-			workingMemoryRuntimePath: string(snapshots[workingMemoryRuntimePath].Content),
-			workingLedgerRuntimePath: string(snapshots[workingLedgerRuntimePath].Content),
-			openLoopsRuntimePath:     string(snapshots[openLoopsRuntimePath].Content),
-		},
-		FileSnapshots:    snapshots,
-		MemoryRecoveryID: recoveryID,
+		Baseline:           baseline,
+		FileSnapshots:      snapshots,
+		MemoryRecoveryID:   recoveryID,
 		ToolCallPolicy: filetools.PathAccessPolicy{
 			ReadPaths: []string{
 				workingMemoryRuntimePath,
