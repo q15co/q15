@@ -46,8 +46,8 @@ func TestMutationLeaseSerializesJournalCreationWithActualWrite(t *testing.T) {
 	go func() {
 		_, err := executor.WriteFile(
 			context.Background(),
-			"/memory/working/WORKING_MEMORY.md",
-			"foreground task\n",
+			"/memory/semantic/facts.md",
+			"foreground semantic update\n",
 		)
 		writeDone <- err
 	}()
@@ -73,9 +73,9 @@ func TestMutationLeaseSerializesJournalCreationWithActualWrite(t *testing.T) {
 	if err := <-beginDone; err == nil || !strings.Contains(err.Error(), "baseline changed") {
 		t.Fatalf("BeginMemoryRecovery = %v, want changed-baseline rejection", err)
 	}
-	if raw, err := os.ReadFile(filepath.Join(root, "working/WORKING_MEMORY.md")); err != nil ||
-		string(raw) != "foreground task\n" {
-		t.Fatalf("foreground task lost: %q, %v", raw, err)
+	if raw, err := os.ReadFile(filepath.Join(root, "semantic/facts.md")); err != nil ||
+		string(raw) != "foreground semantic update\n" {
+		t.Fatalf("foreground semantic update lost: %q, %v", raw, err)
 	}
 	if _, err := os.Stat(store.memoryRecoveryFile()); !os.IsNotExist(err) {
 		t.Fatalf("rejected baseline created journal: %v", err)
@@ -159,5 +159,48 @@ func TestMutationGuardLeavesPathsOutsideWorkingJournalWritable(t *testing.T) {
 	if raw, err := os.ReadFile(filepath.Join(root, "semantic/topics/unrelated.txt")); err != nil ||
 		string(raw) != "independent semantic update\n" {
 		t.Fatalf("working recovery changed independent topic: %q, %v", raw, err)
+	}
+}
+
+func TestWorkingFilesRejectUnownedMutationsEvenWhileIdle(t *testing.T) {
+	root, store, _ := newRecoveryTestStore(t)
+	for relative, content := range map[string]string{
+		"working/WORKING_MEMORY.md": "# Working Memory\n\n- Preserve the active task.\n",
+		"working/OPEN_LOOPS.md":     "# Open Loops\n\n- [l-2026-0042] Preserve the follow-up.\n  {trigger: next-session, owner: agent, src: t42}\n",
+		"working/LEDGER.md":         "# Conversion Ledger\n\n2026-10-16T04:00Z run=working_memory.consolidate src=t42 dropped \"Previous task.\" (completed)\n",
+	} {
+		if err := store.WriteFileBytes(context.Background(), relative, []byte(content)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	executor := fileops.NewGuardedExecutor(
+		fileops.Settings{MemoryLocalDir: root, MemoryRuntimeDir: "/memory"},
+		store,
+	)
+	for _, relative := range []string{"working/WORKING_MEMORY.md", "working/OPEN_LOOPS.md", "working/LEDGER.md"} {
+		before, err := os.ReadFile(filepath.Join(root, relative))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, operation := range []string{"overwrite", "delete"} {
+			var err error
+			if operation == "overwrite" {
+				_, err = executor.WriteFile(context.Background(), "/memory/"+relative, "")
+			} else {
+				_, err = executor.ApplyPatch(context.Background(), "*** Begin Patch\n*** Delete File: /memory/"+relative+"\n*** End Patch")
+			}
+			if err == nil || !strings.Contains(err.Error(), "managed by cognition jobs") {
+				t.Fatalf("%s %s = %v, want framework ownership rejection", operation, relative, err)
+			}
+			after, readErr := os.ReadFile(filepath.Join(root, relative))
+			if readErr != nil || string(after) != string(before) {
+				t.Fatalf("rejected %s changed %s: %q, %v", operation, relative, after, readErr)
+			}
+		}
+	}
+	for _, relative := range []string{"semantic/facts.md", "notes/inbox/editable.md"} {
+		if _, err := executor.WriteFile(context.Background(), "/memory/"+relative, "editable memory\n"); err != nil {
+			t.Fatalf("idle write %s = %v", relative, err)
+		}
 	}
 }

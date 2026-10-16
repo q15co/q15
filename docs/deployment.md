@@ -279,6 +279,7 @@ For Compose and Kubernetes alike:
 
 Mount `/memory` writable in `q15-agent` and read-only in `q15-exec`. This is required for cognition
 recovery: a shell command or background exec session must not change files reserved by an in-flight
-memory run. Use the agent file tools for memory writes; they check ownership and serialize mutations
-with recovery. Compose, Kubernetes, and generated Quadlet units enforce this mount contract. Custom
-deployments must retain it, and direct host edits must wait until cognition is idle.
+memory run. The three working files are maintained only by cognition jobs. Use the agent file tools
+for other memory writes; they check ownership and serialize mutations with recovery. Compose,
+Kubernetes, and generated Quadlet units enforce this mount contract. Custom deployments must retain
+it, and direct host edits must wait until cognition is idle.

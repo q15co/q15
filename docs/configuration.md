@@ -71,8 +71,9 @@ ephemeral, and what must be provided as config/secret input.
 | Provider/API key secrets (env or `_FILE`) | Secret         | **Kubernetes:** required secret keys in `q15-agent-env` and/or `q15-proxy-env` based on configured providers and policy aliases. **Compose:** required Docker secrets or env files for enabled integrations. **Local development:** optional only for integrations you are not using.                                                                                                                                                                                                                 | shared (`q15-agent`, `q15-proxy`) | Includes provider keys, Telegram token, Brave key (optional), Gemini key (optional), and proxy secret aliases resolved from env or `_FILE`.                                                                                                                                                  |
 
 The memory mount is writable in `q15-agent` and read-only in `q15-exec`. Memory changes use the
-agent file tools so cognition can reserve paths while validating a run or recovering a failure.
-Shell commands and background exec sessions can inspect memory but cannot mutate it.
+agent file tools so cognition can reserve paths while validating a run or recovering a failure. The
+three working files are writable only by an owning cognition job, including while the runtime is
+otherwise idle. Shell commands and background exec sessions can inspect memory but cannot mutate it.
 
 ### Ephemeral/Scratch Paths
 

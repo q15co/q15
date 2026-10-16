@@ -65,13 +65,16 @@ setup.
   `/var/lib/q15/agent/schedule/jobs/` stores active definitions and
   `/var/lib/q15/agent/schedule/runs/YYYY/MM/DD/` stores completed run records.
 
-Memory file mutations use the agent's `write_file`, `edit_file`, and `apply_patch` tools. A
-cognition run reserves its snapshotted paths until validation or recovery completes. File tools hold
-the memory repository lease during the actual mutation; another run cannot write a reserved path,
-including through a directory alias. Reads and unrelated memory paths remain available. The
-execution service mounts `/memory` read-only, so shell commands and background sessions cannot
-bypass this ownership boundary. Other deployment arrangements must preserve that mount contract.
-Direct host edits are an operator action and must wait until cognition is idle.
+The working files `WORKING_MEMORY.md`, `OPEN_LOOPS.md`, and `LEDGER.md` are maintained only by
+cognition jobs. Foreground and scheduled runs can read them but cannot mutate them, even while
+cognition is idle; this keeps every exit under the jobs' ledger validation. Other memory file
+mutations use the agent's `write_file`, `edit_file`, and `apply_patch` tools. A cognition run
+reserves its snapshotted paths until validation or recovery completes. File tools hold the memory
+repository lease during the actual mutation; another run cannot write a reserved path, including
+through a directory alias. Reads and unrelated memory paths remain available. The execution service
+mounts `/memory` read-only, so shell commands and background sessions cannot bypass this ownership
+boundary. Other deployment arrangements must preserve that mount contract. Direct host edits are an
+operator action and must wait until cognition is idle.
 
 ## Prompt-Visible Temporal Metadata
 

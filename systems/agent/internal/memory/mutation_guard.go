@@ -55,7 +55,14 @@ func (s *Store) AcquireFileMutation(ctx context.Context, localPaths []string) (f
 		release()
 		return nil, err
 	}
-	if exists && cognition.MemoryRecoveryOwner(ctx) != journal.ID {
+	owner := cognition.MemoryRecoveryOwner(ctx)
+	for _, relative := range relatives {
+		if frameworkWorkingPath(relative) && (!exists || owner == "" || owner != journal.ID) {
+			release()
+			return nil, fmt.Errorf("working-memory path %s is managed by cognition jobs", relative)
+		}
+	}
+	if exists && owner != journal.ID {
 		for _, relative := range relatives {
 			if recoverableMemoryPath(relative, journal.TopicDir) {
 				release()
@@ -67,6 +74,17 @@ func (s *Store) AcquireFileMutation(ctx context.Context, localPaths []string) (f
 		}
 	}
 	return release, nil
+}
+
+func frameworkWorkingPath(relative string) bool {
+	switch relative {
+	case workingDirPath + "/" + workingMemoryFileName,
+		workingDirPath + "/" + openLoopsFileName,
+		workingLedgerRelativePath:
+		return true
+	default:
+		return false
+	}
 }
 
 // Resolve existing ancestors so directory aliases cannot bypass the journal's
