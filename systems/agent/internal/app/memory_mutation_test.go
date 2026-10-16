@@ -246,17 +246,21 @@ func TestSemanticBuildPreservesStoreWriteBetweenPromptAndSnapshot(t *testing.T) 
 
 type changingWorkingBuildStore struct {
 	*runtimeStore
-	executor *fileops.Executor
-	path     string
-	content  string
-	changed  bool
+	root    string
+	path    string
+	content string
+	changed bool
 }
 
 func (s *changingWorkingBuildStore) change(ctx context.Context, path string) error {
 	if s.changed || path != s.path {
 		return nil
 	}
-	_, err := s.executor.WriteFile(ctx, path, s.content)
+	err := os.WriteFile(
+		filepath.Join(s.root, filepath.FromSlash(strings.TrimPrefix(path, "/memory/"))),
+		[]byte(s.content),
+		0o600,
+	)
 	if err == nil {
 		s.changed = true
 	}
@@ -289,7 +293,7 @@ func (s *changingWorkingBuildStore) LoadWorkingLedger(ctx context.Context) (stri
 	return ledger, err
 }
 
-func TestWorkingBuildPreservesForegroundWritesBetweenPromptAndSnapshot(t *testing.T) {
+func TestWorkingBuildPreservesStoreWritesBetweenPromptAndSnapshot(t *testing.T) {
 	for _, test := range []struct{ name, path, content string }{
 		{name: "working", path: "/memory/working/WORKING_MEMORY.md", content: "# Working Memory\n\n- Foreground task arrived during Build.\n"},
 		{name: "open loops", path: "/memory/working/OPEN_LOOPS.md", content: "# Open Loops\n\n- [l-2026-0042] Check the foreground task.\n  {trigger: next-session, owner: agent, src: t42}\n"},
@@ -299,12 +303,9 @@ func TestWorkingBuildPreservesForegroundWritesBetweenPromptAndSnapshot(t *testin
 			root, store := newCognitionRecoveryStore(t)
 			loader := &changingWorkingBuildStore{
 				runtimeStore: store,
-				executor: fileops.NewGuardedExecutor(
-					fileops.Settings{MemoryLocalDir: root, MemoryRuntimeDir: "/memory"},
-					store.memory,
-				),
-				path:    test.path,
-				content: test.content,
+				root:         root,
+				path:         test.path,
+				content:      test.content,
 			}
 			job := cognition.NewWorkingMemoryConsolidationRegistration(0, 0).NewJob()
 			if _, err := job.Build(context.Background(), loader); err == nil ||
