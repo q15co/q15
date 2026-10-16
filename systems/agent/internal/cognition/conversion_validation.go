@@ -18,9 +18,15 @@ var (
 	loopHeadPattern          = regexp.MustCompile(`^[-*+] \[(l-[0-9]{4}-[0-9]{4,})\]\s+(.+)`)
 	sourceIDPattern          = regexp.MustCompile(`^t[1-9][0-9]*$`)
 	historicalClaimIDPattern = regexp.MustCompile(`\bc-[0-9]{4}-[0-9]{4,}\b`)
-	metadataKeyPattern       = regexp.MustCompile(`(?:^|,\s*)([a-z]+):\s*`)
-	metadataSpanPattern      = regexp.MustCompile(`\{((?:[^{}"]|"(?:\\.|[^"\\])*")*)\}\s*$`)
-	topicIndexPattern        = regexp.MustCompile(
+	// metadataKeyPattern splits a metadata span into fields. Only keys the
+	// claim and loop grammars know count as field starts, so a value such as
+	// a mem: memory citation inside a src list is never read as a field of
+	// its own.
+	metadataKeyPattern = regexp.MustCompile(
+		`(?:^|,\s*)([a-z]+):\s*`,
+	)
+	metadataSpanPattern = regexp.MustCompile(`\{((?:[^{}"]|"(?:\\.|[^"\\])*")*)\}\s*$`)
+	topicIndexPattern   = regexp.MustCompile(
 		`^[-*+] \[([^\]\s/\\]+)\] ([^\r\n]+) → topics/([^\s/\\]+)\.md$`,
 	)
 )
@@ -260,9 +266,15 @@ func itemMetadata(item string, required ...string) (map[string]string, error) {
 	return fields, nil
 }
 
+// validSourceList accepts the provenance a claim may cite: transcript
+// sequence markers ("t<seq>") or a memory citation ("mem:<path>:<byte-
+// offset>") naming the memory line a repair run adopted the claim from. The
+// memory form shares the grammar with the ledger's src= field through
+// claims.ValidMemorySource.
 func validSourceList(raw string) bool {
 	for _, source := range strings.Split(raw, ",") {
-		if !sourceIDPattern.MatchString(strings.TrimSpace(source)) {
+		source = strings.TrimSpace(source)
+		if !sourceIDPattern.MatchString(source) && !claims.ValidMemorySource(source) {
 			return false
 		}
 	}

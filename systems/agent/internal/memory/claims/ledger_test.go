@@ -415,3 +415,111 @@ func TestLedgerReaderPreservesCommentMarkersInQuotedDescriptions(t *testing.T) {
 		t.Fatalf("ParseLedger() = %#v, %v; want literal comment marker preserved", entries, err)
 	}
 }
+
+// TestParseLedgerEntryMemoryCitation pins the repair grammar: a src of the
+// form mem:<relative-path>:<byte-offset> parses for both outcomes a repair
+// exit can take, and FormatLedgerEntry renders it back byte-identically, so
+// the citation that authorises a line's deletion round-trips through the
+// ledger untouched.
+func TestParseLedgerEntryMemoryCitation(t *testing.T) {
+	timestamp := time.Date(2026, time.October, 16, 9, 30, 0, 0, time.UTC)
+	tests := []struct {
+		name string
+		line string
+		want LedgerEntry
+	}{
+		{
+			name: "converted memory exit",
+			line: `2026-10-16T09:30Z run=semantic_memory.extract src=mem:semantic/state/notes.md:1234 converted "The alpha project shipped in May." → c-2026-0007 (semantic/facts.md)`,
+			want: LedgerEntry{
+				Timestamp:   timestamp,
+				Run:         "semantic_memory.extract",
+				SourceSeq:   "mem:semantic/state/notes.md:1234",
+				Outcome:     OutcomeConverted,
+				Description: "The alpha project shipped in May.",
+				TargetID:    "c-2026-0007",
+				TargetPath:  "semantic/facts.md",
+			},
+		},
+		{
+			name: "dropped memory exit",
+			line: `2026-10-16T09:30Z run=semantic_memory.extract src=mem:working/scratch.tmp:0 dropped "Scratch: water the plant." (transient chore)`,
+			want: LedgerEntry{
+				Timestamp:   timestamp,
+				Run:         "semantic_memory.extract",
+				SourceSeq:   "mem:working/scratch.tmp:0",
+				Outcome:     OutcomeDropped,
+				Description: "Scratch: water the plant.",
+				Note:        "transient chore",
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := ParseLedgerEntry(test.line)
+			if err != nil {
+				t.Fatalf("ParseLedgerEntry() error = %v", err)
+			}
+			if !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("ParseLedgerEntry() = %#v, want %#v", got, test.want)
+			}
+			if rendered := strings.TrimSuffix(FormatLedgerEntry(test.want), "\n"); rendered != test.line {
+				t.Fatalf("FormatLedgerEntry() = %q, want %q", rendered, test.line)
+			}
+		})
+	}
+}
+
+// TestParseLedgerEntryRefusesMalformedMemoryCitations pins that a src
+// starting with mem: is judged by the memory citation grammar alone: a path
+// outside the two content roots, an empty path, a negative, non-numeric,
+// empty or missing offset, and a range suffix are all refused rather than
+// silently read as transcript markers.
+func TestParseLedgerEntryRefusesMalformedMemoryCitations(t *testing.T) {
+	for _, src := range []string{
+		"mem:core/AGENT.md:12",
+		"mem:notes/inbox/todo.md:12",
+		"mem:semantic:12",
+		"mem::12",
+		"mem:semantic/state/notes.md",
+		"mem:semantic/state/notes.md:",
+		"mem:semantic/state/notes.md:-1",
+		"mem:semantic/state/notes.md:abc",
+		"mem:semantic/state/notes.md:4..t9",
+		"mem:semantic/state/no es.md:4",
+	} {
+		t.Run(src, func(t *testing.T) {
+			line := `2026-10-16T09:30Z run=semantic_memory.extract src=` + src +
+				` dropped "item" (transient)`
+			if got, err := ParseLedgerEntry(line); err == nil {
+				t.Fatalf("ParseLedgerEntry(src=%s) = %#v, want error", src, got)
+			}
+		})
+	}
+}
+
+// TestParseMemorySource splits the citation form at the first colon and
+// keeps the transcript forms untouched, so both provenance grammars share
+// the src= field without ambiguity.
+func TestParseMemorySource(t *testing.T) {
+	t.Parallel()
+
+	relative, offset, ok := ParseMemorySource("mem:semantic/facts.md:1234")
+	if !ok || relative != "semantic/facts.md" || offset != 1234 {
+		t.Fatalf(
+			"ParseMemorySource() = %q, %d, %v; want semantic/facts.md, 1234, true",
+			relative,
+			offset,
+			ok,
+		)
+	}
+	for _, rejected := range []string{
+		"t4391",
+		"t4391..t4414",
+		"mem:working/LEDGER.md:1:2",
+	} {
+		if _, _, ok := ParseMemorySource(rejected); ok {
+			t.Fatalf("ParseMemorySource(%q) accepted; want refused", rejected)
+		}
+	}
+}

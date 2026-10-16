@@ -39,6 +39,15 @@ var semanticMemoryAllowedTools = []string{
 	"embed_search",
 }
 
+// The conversion contract's grammar statements, kept as constants so the
+// memory-repair prompt reuses the exact same words instead of restating the
+// claim format and the ledger grammar in a second place that could drift.
+const (
+	conversionClaimFormatRule  = "- Claim format: `- [c-YYYY-NNNN] <self-contained statement>` followed by an indented `{status: active|conflicted, kind: fact|inference|preference, confidence: confirmed|likely|uncertain, src: t<seq>[, t<seq>], rev: YYYY-MM-DD}` line. Claim IDs are globally unique and never reused, including IDs recorded in archived ledgers. Preserve existing source markers when revising an existing claim."
+	conversionClaimStorageRule = "- Store durable claims only in the canonical semantic roots or direct `semantic/topics/<slug>.md` files. Other topic extensions are not indexed by semantic retrieval and fail claim validation."
+	conversionLedgerFormatRule = "- Ledger format: one line per exit, `YYYY-MM-DDTHH:MMZ run=semantic_memory.extract src=t<a>..t<b> <outcome> \"<working-memory item>\" → <claim-or-loop-id> (<file>)`. For a drop, omit the target and give the reason in parentheses."
+)
+
 // NewSemanticMemoryExtractionRegistration returns the built-in semantic-memory
 // extraction job registration. workingMemoryBudgetBytes is the working-memory
 // byte budget its overbudget state rule enforces; a non-positive value selects
@@ -114,6 +123,19 @@ func (j semanticMemoryExtractionJob) Build(
 ) (Spec, error) {
 	if loader == nil {
 		return Spec{}, fmt.Errorf("context loader is required")
+	}
+
+	// The repair branch comes first, before any content load below it. A
+	// dirty memory surface can mean the semantic roots are exactly what no
+	// model will read, so a repair run is built from the stat-only surface
+	// scan and one bounded chunk of the first target - never from the roots,
+	// the topics, the transcript window or working memory. Loading those
+	// first would hand the repair the very deadlock this mode exists to
+	// break.
+	if spec, repair, err := repairSpec(ctx, loader, j.budgets); err != nil {
+		return Spec{}, err
+	} else if repair {
+		return spec, nil
 	}
 
 	semantic, err := loader.LoadSemanticMemory(ctx)
@@ -368,11 +390,11 @@ func (j semanticMemoryExtractionJob) Build(
 					"- Consistent match: merge into the existing claim, append the new src seq, and bump rev. Never add a second bullet for the same claim.",
 					"- Contradicting match: mark the old claim status: conflicted, add the new claim also as conflicted, and cross-reference both IDs. Never flatten the conflict.",
 					"- Supersession (the new claim is the acknowledged replacement): write the new claim as active, delete the old claim, and append a superseded ledger record targeting the old claim ID with the replacement ID in its reason. Every removed durable claim needs a superseded, retracted, or resolved ledger record targeting its old ID and explaining the reason.",
-					"- Claim format: `- [c-YYYY-NNNN] <self-contained statement>` followed by an indented `{status: active|conflicted, kind: fact|inference|preference, confidence: confirmed|likely|uncertain, src: t<seq>[, t<seq>], rev: YYYY-MM-DD}` line. Claim IDs are globally unique and never reused, including IDs recorded in archived ledgers. Preserve existing source markers when revising an existing claim.",
-					"- Store durable claims only in the canonical semantic roots or direct `semantic/topics/<slug>.md` files. Other topic extensions are not indexed by semantic retrieval and fail claim validation.",
+					conversionClaimFormatRule,
+					conversionClaimStorageRule,
 					"- Retraction: delete an explicitly withdrawn claim and append a retracted ledger record targeting its old ID with the reason. The transcript retains the evidence.",
 					"- Open-loop format: `- [l-YYYY-NNNN] <intention>` followed by an indented `{trigger: date:YYYY-MM-DD | event:\"<description>\" | next-session, owner: agent|user, src: t<seq>}` line.",
-					"- Ledger format: one line per exit, `YYYY-MM-DDTHH:MMZ run=semantic_memory.extract src=t<a>..t<b> <outcome> \"<working-memory item>\" → <claim-or-loop-id> (<file>)`. For a drop, omit the target and give the reason in parentheses.",
+					conversionLedgerFormatRule,
 					"- Ledger descriptions must preserve the complete removed working-memory block, including continuation text, code fences, and HTML comments, with whitespace collapsed to one line and only its leading list marker omitted. Standalone prose and noncanonical headings also require an exit record; only canonical working-memory headings and the exact `- None` scaffold are exempt.",
 					"- Caps: when a file is near its cap, revise before adding: merge, supersede, or split project detail into a topic file and leave a one-line index entry in projects.md (`- [<slug>] <summary> → topics/<slug>.md`).",
 				),
@@ -430,6 +452,14 @@ func (j semanticMemoryExtractionJob) ApplyResult(
 	loader ContextLoader,
 	output JobOutput,
 ) (ParsedResult, error) {
+	if output.Spec.repair {
+		// A repair run routed here: its prompt deliberately contained no
+		// semantic roots, topics, transcript or working memory, so the
+		// transcript-coverage checks below do not apply to it. It is judged
+		// by the repair validation instead: the chunk it drained versus the
+		// ledger and claim files it left behind.
+		return applyRepairResult(ctx, loader, output)
+	}
 	targets := semanticTargetCoverage(
 		output.Messages,
 		semanticFactsRuntimePath,
