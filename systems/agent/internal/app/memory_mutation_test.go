@@ -252,7 +252,7 @@ type changingWorkingBuildStore struct {
 	changed bool
 }
 
-func (s *changingWorkingBuildStore) change(ctx context.Context, path string) error {
+func (s *changingWorkingBuildStore) change(_ context.Context, path string) error {
 	if s.changed || path != s.path {
 		return nil
 	}
