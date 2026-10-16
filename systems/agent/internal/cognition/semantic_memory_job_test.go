@@ -765,10 +765,10 @@ func TestSemanticMemoryExtractionApplyResultUsesFalseChangedForReadOnlyInspectio
 	}
 }
 
-func (s *semanticMemoryJobLoader) ReadFileBytes(context.Context, string) ([]byte, bool, error) {
+func (l *semanticMemoryJobLoader) ReadFileBytes(context.Context, string) ([]byte, bool, error) {
 	return nil, false, nil
 }
 
-func (s *semanticMemoryJobLoader) LoadConversionLedgerHistory(context.Context) (string, error) {
+func (l *semanticMemoryJobLoader) LoadConversionLedgerHistory(context.Context) (string, error) {
 	return "", nil
 }
