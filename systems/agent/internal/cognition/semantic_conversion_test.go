@@ -774,7 +774,7 @@ func TestSemanticConversionRollsBackOnCoverageFailure(t *testing.T) {
 	// inspected every canonical root, which is the coverage check failing.
 	loader.files[workingMemoryRelativePath] = []byte("# Working Memory\n\n- gone\n")
 
-	_, err := NewSemanticMemoryExtractionRegistration(0).NewJob().ApplyResult(
+	_, err := NewSemanticMemoryExtractionRegistration(0, 0).NewJob().ApplyResult(
 		context.Background(),
 		loader,
 		JobOutput{
