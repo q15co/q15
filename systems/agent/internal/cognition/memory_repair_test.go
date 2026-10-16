@@ -97,6 +97,39 @@ func TestCutRepairChunkBoundaries(t *testing.T) {
 	}
 }
 
+// TestCutRepairChunkSkipsLeadingStructure pins the named twin of the
+// adoption loop: a target whose head is headings and blank lines must yield a
+// chunk that starts at its first content line. Cutting at byte zero would
+// produce an empty-content chunk on every run, validation would ask for no
+// progress, and the target would never shrink while the state rule kept
+// refiring on the same bytes.
+func TestCutRepairChunkSkipsLeadingStructure(t *testing.T) {
+	t.Parallel()
+
+	head := []byte("# Heading\n\n\n" + "a content line\n")
+	chunk, err := cutRepairChunk(head)
+	if err != nil {
+		t.Fatalf("cutRepairChunk() error = %v", err)
+	}
+	if len(chunk) != 1 || chunk[0].text != "a content line" {
+		t.Fatalf("chunk = %#v, want only the content line", chunk)
+	}
+	if want := strings.Index(string(head), "a content line"); chunk[0].offset != want {
+		t.Fatalf("offset = %d, want the content line's file offset %d", chunk[0].offset, want)
+	}
+}
+
+// A target that is structure all the way down still yields the empty chunk the
+// adoption step needs, rather than a refusal.
+func TestCutRepairChunkStructureOnlyStillCuts(t *testing.T) {
+	t.Parallel()
+
+	chunk, err := cutRepairChunk([]byte("# Heading\n\n- None\n"))
+	if err != nil || len(chunk) == 0 {
+		t.Fatalf("chunk = %#v err = %v, want the structure lines and no refusal", chunk, err)
+	}
+}
+
 // TestRepairContentLine pins which lines need a ledgered exit: blank lines,
 // markdown headings and the exact working-memory scaffold are structure;
 // everything else is content.

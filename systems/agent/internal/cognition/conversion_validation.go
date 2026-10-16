@@ -22,8 +22,13 @@ var (
 	// claim and loop grammars know count as field starts, so a value such as
 	// a mem: memory citation inside a src list is never read as a field of
 	// its own.
+	// The key set is the one the claims grammar defines (see
+	// claims.metadataFieldPattern) plus the two open-loop keys, so a value such
+	// as a mem: memory citation inside a src list is never read as a field of
+	// its own. An unknown key now fails the span as malformed rather than
+	// being named, which is still a refusal.
 	metadataKeyPattern = regexp.MustCompile(
-		`(?:^|,\s*)([a-z]+):\s*`,
+		`(?:^|,\s*)(status|kind|confidence|src|rev|id|trigger|owner):\s*`,
 	)
 	metadataSpanPattern = regexp.MustCompile(`\{((?:[^{}"]|"(?:\\.|[^"\\])*")*)\}\s*$`)
 	topicIndexPattern   = regexp.MustCompile(

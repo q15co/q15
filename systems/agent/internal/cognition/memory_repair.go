@@ -38,9 +38,10 @@ type repairChunkLine struct {
 // silently truncated or empty chunk. At end of file a final line without a
 // trailing newline is whole, because its last byte is the file's last byte.
 func cutRepairChunk(head []byte) ([]repairChunkLine, error) {
-	window := min(len(head), repairChunkBytes)
+	base := repairChunkStart(head)
+	window := min(len(head), base+repairChunkBytes)
 	var lines []repairChunkLine
-	start := 0
+	start := base
 	for start < window {
 		end := -1
 		if newline := bytes.IndexByte(head[start:window], '\n'); newline >= 0 {
@@ -59,13 +60,35 @@ func cutRepairChunk(head []byte) ([]repairChunkLine, error) {
 		})
 		start = end + 1
 	}
-	if len(lines) == 0 && len(head) > 0 {
+	if len(lines) == 0 && len(head) > base {
 		return nil, fmt.Errorf(
 			"no whole line fits the %d-byte repair window; a first line longer than the window is refused, not truncated",
 			repairChunkBytes,
 		)
 	}
 	return lines, nil
+}
+
+// repairChunkStart returns the byte offset of the first line of head that
+// carries content, so a chunk never consists of structure alone while content
+// waits below it. Without this, a target whose head is headings and blank
+// lines would produce an empty-content chunk on every run: validation would
+// ask for no progress, the target would never shrink, and the layer-1 state
+// rule would refire on the same bytes forever. It returns 0 when every line is
+// structure, which leaves that case to the runtime's adoption step.
+func repairChunkStart(head []byte) int {
+	start := 0
+	for start < len(head) {
+		end := len(head)
+		if newline := bytes.IndexByte(head[start:], '\n'); newline >= 0 {
+			end = start + newline
+		}
+		if repairContentLine(string(head[start:end])) {
+			return start
+		}
+		start = end + 1
+	}
+	return 0
 }
 
 // repairContentLine reports whether one target line carries content the
