@@ -68,7 +68,6 @@ func (s *Store) AcquireFileMutation(ctx context.Context, localPaths []string) (f
 	owner := cognition.MemoryRecoveryOwner(ctx)
 	for _, relative := range relatives {
 		if frameworkWorkingPath(relative) && (!exists || owner == "" || owner != journal.ID) {
-			release()
 			return nil, fmt.Errorf("working-memory path %s is managed by cognition jobs", relative)
 		}
 	}
