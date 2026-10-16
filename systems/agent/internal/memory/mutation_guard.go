@@ -17,6 +17,16 @@ func (s *Store) AcquireFileMutation(ctx context.Context, localPaths []string) (f
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	release := s.repository.Acquire()
+	retainLease := false
+	defer func() {
+		if !retainLease {
+			release()
+		}
+	}()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	root, err := filepath.EvalSymlinks(s.root())
 	if err != nil {
 		return nil, fmt.Errorf("resolve memory root: %w", err)
@@ -46,20 +56,13 @@ func (s *Store) AcquireFileMutation(ctx context.Context, localPaths []string) (f
 	if len(relatives) == 0 {
 		return func() {}, nil
 	}
-	release := s.repository.Acquire()
-	if err := ctx.Err(); err != nil {
-		release()
-		return nil, err
-	}
 	for _, relative := range relatives {
 		if relative == ".git" || strings.HasPrefix(relative, ".git/") {
-			release()
 			return nil, fmt.Errorf("memory repository metadata is managed by the runtime")
 		}
 	}
 	journal, exists, err := s.loadMemoryRecoveryLocked()
 	if err != nil {
-		release()
 		return nil, err
 	}
 	owner := cognition.MemoryRecoveryOwner(ctx)
@@ -72,7 +75,6 @@ func (s *Store) AcquireFileMutation(ctx context.Context, localPaths []string) (f
 	if exists && owner != journal.ID {
 		for _, relative := range relatives {
 			if recoverableMemoryPath(relative, journal.TopicDir) {
-				release()
 				return nil, fmt.Errorf(
 					"memory path %s is reserved by a cognition run; retry after recovery completes",
 					relative,
@@ -80,6 +82,7 @@ func (s *Store) AcquireFileMutation(ctx context.Context, localPaths []string) (f
 			}
 		}
 	}
+	retainLease = true
 	return release, nil
 }
 

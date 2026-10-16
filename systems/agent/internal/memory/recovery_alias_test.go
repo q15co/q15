@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/q15co/q15/systems/agent/internal/fileops"
 	"github.com/q15co/q15/systems/agent/internal/memoryrepo"
@@ -160,4 +161,55 @@ func TestBeginMemoryRecoveryAllowsRootAliasAndMissingTopicDirectory(t *testing.T
 func isRecoveryOwnershipRejection(err error) bool {
 	return err != nil && (strings.Contains(err.Error(), "reserved by a cognition run") ||
 		strings.Contains(err.Error(), "managed by cognition jobs"))
+}
+
+func TestMutationGuardResolvesDanglingParentAfterAcquiringLease(t *testing.T) {
+	root, store, _ := newRecoveryTestStore(t)
+	topics := filepath.Join(root, filepath.FromSlash(semanticTopicsRelativePath))
+	if err := os.Remove(topics); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../../semantic/topics", filepath.Join(root, "notes/inbox/topic-alias")); err != nil {
+		t.Fatal(err)
+	}
+	snapshots := recoveryTestSnapshots(t, store)
+	delete(snapshots, "/memory/semantic/topics/missing.md")
+	if _, err := store.BeginMemoryRecovery(context.Background(), snapshots, semanticTopicsRelativePath); err != nil {
+		t.Fatal(err)
+	}
+	executor := fileops.NewGuardedExecutor(
+		fileops.Settings{MemoryLocalDir: root, MemoryRuntimeDir: "/memory"},
+		store,
+	)
+	release := store.repository.Acquire()
+	started := make(chan struct{})
+	finished := make(chan error, 1)
+	go func() {
+		close(started)
+		_, err := executor.WriteFile(
+			context.Background(),
+			"/memory/notes/inbox/topic-alias/injected.md",
+			"unowned update\n",
+		)
+		finished <- err
+	}()
+	<-started
+	select {
+	case err := <-finished:
+		release()
+		t.Fatalf("mutation completed while another mutation held the lease: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	// An owning write may create the topic directory while holding this lease.
+	err := os.MkdirAll(topics, 0o755)
+	release()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := <-finished; !isRecoveryOwnershipRejection(err) {
+		t.Fatalf("dangling parent bypassed topic ownership: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(topics, "injected.md")); !os.IsNotExist(err) {
+		t.Fatalf("unowned mutation created a reserved topic: %v", err)
+	}
 }
