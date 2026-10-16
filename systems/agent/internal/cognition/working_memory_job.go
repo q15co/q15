@@ -112,10 +112,6 @@ func (j workingMemoryConsolidationJob) Build(
 	if j.now != nil {
 		now = j.now().UTC()
 	}
-	loopsBefore, _, err := loader.ReadFileBytes(ctx, "working/OPEN_LOOPS.md")
-	if err != nil {
-		return Spec{}, fmt.Errorf("read pre-run open loops: %w", err)
-	}
 	working, err := loader.LoadWorkingMemory(ctx)
 	if err != nil {
 		return Spec{}, fmt.Errorf("load working memory: %w", err)
