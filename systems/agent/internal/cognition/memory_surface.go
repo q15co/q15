@@ -148,9 +148,12 @@ func sortMemorySurfaceTargets(targets []MemorySurfaceTarget) {
 
 // evaluateMemorySurfaceRepairable is the semantic job's cheap surface
 // trigger: it fires when the stat-only scan sees at least one repairable
-// target. Like every state rule it only reads, and the scan behind it stats
-// every file and opens none, so evaluating it never turns into hidden file
-// I/O. A clean surface changes nothing about the job's other triggers.
+// target that no durable repair refusal suppresses. Like every state rule it
+// only reads; on top of the scan - which stats every file and opens none -
+// it reads the one small refusal artifact, so evaluating it never turns into
+// hidden file I/O beyond that one record. The refusal filter is what stops
+// the rule from firing forever on a target no repair run can drain. A clean
+// or fully refused surface changes nothing about the job's other triggers.
 func evaluateMemorySurfaceRepairable(
 	ctx context.Context,
 	snapshot Snapshot,
@@ -167,10 +170,18 @@ func evaluateMemorySurfaceRepairable(
 	if len(surface.Targets) == 0 {
 		return false, "", nil
 	}
-	first := surface.Targets[0]
+	refusals, err := loadRepairRefusals(ctx, snapshot.Loader)
+	if err != nil {
+		return false, "", fmt.Errorf("load repair refusals: %w", err)
+	}
+	targets := withoutRefusedRepairTargets(surface.Targets, refusals)
+	if len(targets) == 0 {
+		return false, "", nil
+	}
+	first := targets[0]
 	return true, fmt.Sprintf(
 		"repairable_targets=%d first_path=%s first_bytes=%d",
-		len(surface.Targets),
+		len(targets),
 		first.Path,
 		first.Bytes,
 	), nil

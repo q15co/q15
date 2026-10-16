@@ -548,8 +548,15 @@ func (c *Controller) runPending(ctx context.Context, pending pendingRun) error {
 			runErr = fmt.Errorf("store consolidation checkpoint: %w", runErr)
 		}
 	}
+	// A repair run consumes no transcript at all, so it must never advance the
+	// extraction checkpoint. Its result carries the repair bit and the store is
+	// skipped outright: reporting the checkpoint the run was handed is not
+	// enough on its own, because when that value is zero the covered boundary
+	// above reads it as "advance to the head" and the whole unprocessed
+	// backlog would be marked extracted.
 	var semanticExtractionCheckpoint SemanticExtractionCheckpoint
-	if runErr == nil && shouldAdvanceSemanticExtractionCheckpoint(pending.job.jobType) {
+	if runErr == nil && shouldAdvanceSemanticExtractionCheckpoint(pending.job.jobType) &&
+		!result.Repair {
 		semanticExtractionCheckpoint, runErr = c.store.StoreSemanticExtractionCheckpoint(
 			ctx,
 			SemanticExtractionCheckpoint{

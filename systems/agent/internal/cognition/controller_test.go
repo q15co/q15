@@ -843,6 +843,98 @@ func TestControllerPartialSemanticRunAdvancesCheckpointToCoveredWindow(t *testin
 	}
 }
 
+// TestControllerRepairRunLeavesZeroExtractionCheckpointUntouched pins the
+// checkpoint rule for a repair run: it consumes no transcript, so a store
+// whose extraction checkpoint is still zero stays at zero even though the
+// run reports no boundary at all (which every other job reads as "advance to
+// the head"). An ordinary run on the same fixture still advances.
+func TestControllerRepairRunLeavesZeroExtractionCheckpointUntouched(t *testing.T) {
+	store := newFakeControllerStore()
+	store.setHead(3, time.Date(2026, time.April, 8, 9, 30, 0, 0, time.UTC))
+
+	repair := true
+	controller := newControllerForTest(t, store, JobRegistration{
+		NewJob: func() JobDefinition {
+			return fakeJob{
+				jobType: semanticMemoryExtractionJobType,
+				build: func(context.Context, ContextLoader) (Spec, error) {
+					return Spec{
+						Objective:          "Extract semantic memory.",
+						CompletionContract: "Return `status: ok`.",
+					}, nil
+				},
+				apply: func(context.Context, ContextLoader, JobOutput) (ParsedResult, error) {
+					if repair {
+						// The repair run reports the checkpoint it was handed
+						// (zero here) and carries the repair bit.
+						return ParsedResult{Summary: "repair", Repair: true}, nil
+					}
+					return ParsedResult{Summary: "semantic"}, nil
+				},
+			}
+		},
+		Policy: TriggerPolicy{
+			State: []StateRule{{
+				ID: "dirty",
+				Evaluate: func(context.Context, Snapshot, JobState) (bool, string, error) {
+					return true, "dirty", nil
+				},
+			}},
+		},
+	})
+	controller.started = time.Now().UTC()
+
+	pending, ok, err := controller.nextPendingRun(context.Background(), false, false, true)
+	if err != nil {
+		t.Fatalf("nextPendingRun() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("nextPendingRun() ok = false, want true")
+	}
+	if err := controller.runPending(context.Background(), pending); err != nil {
+		t.Fatalf("runPending() error = %v", err)
+	}
+
+	if checkpoint := store.semanticCheckpoint(); checkpoint != (SemanticExtractionCheckpoint{}) {
+		t.Fatalf(
+			"after a repair run the semantic checkpoint = %#v, want the zero value untouched",
+			checkpoint,
+		)
+	}
+	records := store.runRecords()
+	if len(records) != 1 || !records[0].Succeeded {
+		t.Fatalf("run records = %#v, want one successful repair run", records)
+	}
+	if _, ok := records[0].Metadata["semantic_extraction_checkpoint_seq"]; ok {
+		t.Fatalf(
+			"repair run metadata = %#v, want no semantic checkpoint metadata",
+			records[0].Metadata,
+		)
+	}
+
+	// The ordinary run on the same fixture still advances the checkpoint to
+	// the head it covered.
+	repair = false
+	store.setHead(4, time.Date(2026, time.April, 8, 9, 31, 0, 0, time.UTC))
+
+	pending, ok, err = controller.nextPendingRun(context.Background(), false, false, true)
+	if err != nil {
+		t.Fatalf("nextPendingRun() (ordinary) error = %v", err)
+	}
+	if !ok {
+		t.Fatal("nextPendingRun() (ordinary) ok = false, want true")
+	}
+	if err := controller.runPending(context.Background(), pending); err != nil {
+		t.Fatalf("runPending() (ordinary) error = %v", err)
+	}
+	if checkpoint := store.semanticCheckpoint(); checkpoint.LastExtractedSeq != 4 {
+		t.Fatalf(
+			"after the ordinary run checkpoint.LastExtractedSeq = %d, want the covered head 4",
+			checkpoint.LastExtractedSeq,
+		)
+	}
+}
+
 func TestControllerPartialWorkingMemoryRunAdvancesConsolidationCheckpointToCoveredWindow(
 	t *testing.T,
 ) {

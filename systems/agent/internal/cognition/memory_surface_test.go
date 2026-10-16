@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestScanMemorySurfaceExactlyAtCapIsNotRepairable pins the shared boundary
@@ -247,6 +248,64 @@ func TestEvaluateMemorySurfaceRepairable(t *testing.T) {
 		)
 		if err != nil || !run {
 			t.Fatalf("run=%v err=%v, want true nil", run, err)
+		}
+		for _, want := range []string{"repairable_targets=1", "semantic/state/head.json"} {
+			if !strings.Contains(reason, want) {
+				t.Fatalf("reason %q does not contain %q", reason, want)
+			}
+		}
+	})
+
+	// refusedRuleLoader renders the durable refusal artifact for paths and
+	// wraps it with the canned listing the rule reads.
+	refusedRuleLoader := func(t *testing.T, paths ...string) *surfaceProbeLoader {
+		t.Helper()
+		set := make(map[string]repairRefusal, len(paths))
+		for _, path := range paths {
+			set[path] = repairRefusal{
+				Path:       path,
+				Reason:     "first content line is 102400 bytes",
+				RecordedAt: time.Date(2026, time.October, 16, 5, 0, 0, 0, time.UTC),
+			}
+		}
+		artifactStore := &semanticMemoryJobLoader{artifacts: map[string]Artifact{}}
+		if err := storeRepairRefusals(context.Background(), artifactStore, set); err != nil {
+			t.Fatalf("storeRepairRefusals() error = %v", err)
+		}
+		return &surfaceProbeLoader{
+			semanticMemoryJobLoader: semanticMemoryJobLoader{artifacts: artifactStore.artifacts},
+		}
+	}
+
+	t.Run("a refused target does not fire", func(t *testing.T) {
+		t.Parallel()
+		loader := refusedRuleLoader(t, "semantic/state/head.json")
+		loader.memoryFiles = []MemoryFile{{Path: "semantic/state/head.json", Bytes: 512}}
+		run, reason, err := evaluateMemorySurfaceRepairable(
+			context.Background(),
+			Snapshot{Loader: loader},
+			memoryFileBudgets{working: 8192, openLoops: 4096},
+		)
+		if err != nil || run || reason != "" {
+			t.Fatalf("run=%v reason=%q err=%v, want the refusal to keep the rule silent",
+				run, reason, err)
+		}
+	})
+
+	t.Run("a refusal for one target leaves the next firing", func(t *testing.T) {
+		t.Parallel()
+		loader := refusedRuleLoader(t, "working/WORKING_MEMORY.md")
+		loader.memoryFiles = []MemoryFile{
+			{Path: "working/WORKING_MEMORY.md", Bytes: 8193},
+			{Path: "semantic/state/head.json", Bytes: 512},
+		}
+		run, reason, err := evaluateMemorySurfaceRepairable(
+			context.Background(),
+			Snapshot{Loader: loader},
+			memoryFileBudgets{working: 8192, openLoops: 4096},
+		)
+		if err != nil || !run {
+			t.Fatalf("run=%v err=%v, want the remaining target to fire", run, err)
 		}
 		for _, want := range []string{"repairable_targets=1", "semantic/state/head.json"} {
 			if !strings.Contains(reason, want) {
