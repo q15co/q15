@@ -31,6 +31,11 @@ type ContextLoader interface {
 	// the three roots as its working set, so topic files must be read
 	// explicitly by the jobs that want them.
 	LoadSemanticTopics(ctx context.Context) (map[string]string, error)
+	// ListMemoryFiles returns every regular file under the two memory content
+	// roots with its on-disk byte size, sorted by repository-relative path.
+	// The enumeration is stat-only: it reads no file contents, so a state
+	// rule can afford it on every evaluation.
+	ListMemoryFiles(ctx context.Context) ([]MemoryFile, error)
 	LoadWorkingMemory(ctx context.Context) (agent.WorkingMemory, error)
 	// LoadOpenLoops returns the trimmed content of working/OPEN_LOOPS.md.
 	LoadOpenLoops(ctx context.Context) (string, error)

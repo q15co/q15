@@ -153,6 +153,10 @@ func (s *spyLoader) LoadSemanticFileSizes(context.Context) (map[string]int64, er
 	return nil, nil
 }
 
+func (s *spyLoader) ListMemoryFiles(context.Context) ([]MemoryFile, error) {
+	return nil, nil
+}
+
 func (s *spyLoader) LoadOpenLoops(context.Context) (string, error) {
 	return "", nil
 }

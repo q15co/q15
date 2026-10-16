@@ -44,6 +44,10 @@ func (l *verificationJobLoader) LoadSemanticTopics(
 	return l.topics, nil
 }
 
+func (l *verificationJobLoader) ListMemoryFiles(context.Context) ([]MemoryFile, error) {
+	return nil, nil
+}
+
 func (l *verificationJobLoader) LoadWorkingMemory(context.Context) (agent.WorkingMemory, error) {
 	return l.working, nil
 }
