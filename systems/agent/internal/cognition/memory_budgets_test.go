@@ -47,7 +47,14 @@ func TestBothMemoryJobsRejectOverBudgetResults(t *testing.T) {
 		},
 	}
 	working := NewWorkingMemoryConsolidationRegistration(4, 4).NewJob()
-	if _, err := working.ApplyResult(context.Background(), l, JobOutput{Messages: conversionRunMessages(workingMemoryRuntimePath)}); err == nil ||
+	if _, err := working.ApplyResult(context.Background(), l, JobOutput{
+		Spec: Spec{Baseline: map[string]string{
+			workingMemoryRuntimePath: "over budget",
+			openLoopsRuntimePath:     "",
+			workingLedgerRuntimePath: "",
+		}},
+		Messages: conversionRunMessages(workingMemoryRuntimePath),
+	}); err == nil ||
 		!strings.Contains(err.Error(), "byte budget") {
 		t.Fatalf("working ApplyResult = %v", err)
 	}
