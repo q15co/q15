@@ -55,12 +55,16 @@ func TestCognitionRunnerOwnsFileMutationsUntilRecovery(t *testing.T) {
 		string(got) != "independent note\n" {
 		t.Fatalf("recovery changed unrelated note: %q, %v", got, err)
 	}
-	if _, err := executor.WriteFile(context.Background(), "/memory/working/WORKING_MEMORY.md", "foreground update\n"); err != nil {
-		t.Fatalf("write after recovery: %v", err)
+	if _, err := executor.WriteFile(context.Background(), "/memory/working/WORKING_MEMORY.md", "foreground update\n"); err == nil ||
+		!strings.Contains(err.Error(), "managed by cognition jobs") {
+		t.Fatalf("unowned write after recovery = %v, want framework ownership rejection", err)
 	}
 	if got, err := os.ReadFile(filepath.Join(root, "working/WORKING_MEMORY.md")); err != nil ||
-		string(got) != "foreground update\n" {
-		t.Fatalf("foreground write lost: %q, %v", got, err)
+		!bytes.Equal(got, before) {
+		t.Fatalf("unowned write changed recovered working memory: %q, %v", got, err)
+	}
+	if _, err := executor.WriteFile(context.Background(), "/memory/notes/inbox/after-recovery.md", "independent note after recovery\n"); err != nil {
+		t.Fatalf("unrelated write after recovery = %v, want released mutation lease", err)
 	}
 }
 
@@ -146,8 +150,12 @@ func TestMemoryMutationGuardChecksResolvedTargetsAndEveryPatchPath(t *testing.T)
 					"changed\n",
 				)
 			}
-			if err == nil || !strings.Contains(err.Error(), "reserved by a cognition run") {
-				t.Fatalf("mutation error = %v, want ownership rejection", err)
+			want := "managed by cognition jobs"
+			if name == "new topic" {
+				want = "reserved by a cognition run"
+			}
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("mutation error = %v, want ownership rejection %q", err, want)
 			}
 			if got, err := os.ReadFile(filepath.Join(root, "working/WORKING_MEMORY.md")); err != nil ||
 				!bytes.Equal(got, before) {
@@ -183,8 +191,8 @@ func TestMemoryMutationGuardProtectsRepositoryMetadata(t *testing.T) {
 
 type changingWorkingPromptStore struct {
 	*runtimeStore
-	executor *fileops.Executor
-	changed  bool
+	root    string
+	changed bool
 }
 
 func (s *changingWorkingPromptStore) LoadWorkingMemory(
@@ -192,25 +200,19 @@ func (s *changingWorkingPromptStore) LoadWorkingMemory(
 ) (agent.WorkingMemory, error) {
 	working, err := s.runtimeStore.LoadWorkingMemory(ctx)
 	if err == nil && !s.changed {
-		_, err = s.executor.WriteFile(
-			ctx,
-			"/memory/working/WORKING_MEMORY.md",
-			"# Working Memory\n\n- Foreground task arrived during Build.\n",
+		err = os.WriteFile(
+			filepath.Join(s.root, "working/WORKING_MEMORY.md"),
+			[]byte("# Working Memory\n\n- Foreground task arrived during Build.\n"),
+			0o600,
 		)
 		s.changed = true
 	}
 	return working, err
 }
 
-func TestSemanticBuildPreservesForegroundWriteBetweenPromptAndSnapshot(t *testing.T) {
+func TestSemanticBuildPreservesStoreWriteBetweenPromptAndSnapshot(t *testing.T) {
 	root, store := newCognitionRecoveryStore(t)
-	loader := &changingWorkingPromptStore{
-		runtimeStore: store,
-		executor: fileops.NewGuardedExecutor(
-			fileops.Settings{MemoryLocalDir: root, MemoryRuntimeDir: "/memory"},
-			store.memory,
-		),
-	}
+	loader := &changingWorkingPromptStore{runtimeStore: store, root: root}
 	job := cognition.NewSemanticMemoryExtractionRegistration(0, 0).NewJob()
 	if _, err := job.Build(context.Background(), loader); err == nil ||
 		!strings.Contains(err.Error(), "memory changed while building job evidence") {
