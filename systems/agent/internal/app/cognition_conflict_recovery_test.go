@@ -16,26 +16,6 @@ import (
 	filetools "github.com/q15co/q15/systems/agent/internal/tools/files"
 )
 
-type recoveryFileExecutor struct {
-	stubFileExecutor
-	settings fileops.Settings
-}
-
-func (e recoveryFileExecutor) ReadFile(
-	_ context.Context,
-	path string,
-	offset, limit int,
-) (fileops.ReadResult, error) {
-	return fileops.ReadFile(e.settings, path, offset, limit)
-}
-
-func (e recoveryFileExecutor) WriteFile(
-	_ context.Context,
-	path, content string,
-) (fileops.WriteResult, error) {
-	return fileops.WriteFile(e.settings, path, content)
-}
-
 func TestCognitionRunnerRestoresRealStoreAfterConflictValidationFailure(t *testing.T) {
 	root, store := newCognitionRecoveryStore(t)
 	ctx := context.Background()
@@ -115,9 +95,10 @@ func TestCognitionRunnerRestoresRealStoreAfterConflictValidationFailure(t *testi
 			Messages: []conversation.Message{conversation.AssistantMessage(parts...)},
 		}, nil
 	}}
-	executor := recoveryFileExecutor{
-		settings: fileops.Settings{MemoryLocalDir: root, MemoryRuntimeDir: "/memory"},
-	}
+	executor := fileops.NewGuardedExecutor(
+		fileops.Settings{MemoryLocalDir: root, MemoryRuntimeDir: "/memory"},
+		store.memory,
+	)
 	tools, err := agent.NewToolRegistry(
 		filetools.NewReadFile(executor),
 		filetools.NewWriteFile(executor),
