@@ -107,7 +107,7 @@ func (j semanticMemoryExtractionJob) Build(
 	if err != nil {
 		return Spec{}, fmt.Errorf("load working memory: %w", err)
 	}
-	_, err = loader.LoadWorkingLedger(ctx)
+	ledger, err := loader.LoadWorkingLedger(ctx)
 	if err != nil {
 		return Spec{}, fmt.Errorf("load working ledger: %w", err)
 	}
@@ -212,6 +212,15 @@ func (j semanticMemoryExtractionJob) Build(
 	snapshots, err := snapshotConversionFiles(ctx, loader)
 	if err != nil {
 		return Spec{}, fmt.Errorf("snapshot conversion targets: %w", err)
+	}
+	if err := validateMemoryBuildEvidence(snapshots, baseline, map[string]string{
+		semanticFactsRuntimePath:       factsContent,
+		semanticPreferencesRuntimePath: preferencesContent,
+		semanticProjectsRuntimePath:    projectsContent,
+		workingMemoryRuntimePath:       working.Content,
+		workingLedgerRuntimePath:       ledger,
+	}); err != nil {
+		return Spec{}, err
 	}
 
 	return Spec{
