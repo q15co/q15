@@ -46,6 +46,7 @@ If a target file needs changes, update only that file with write_file, edit_file
 If a target file does not need changes, call read_file on it and leave it unchanged.
 Every working-memory item you remove or rewrite, including its continuation lines, is an exit and needs exactly one valid ledger line appended to /memory/working/LEDGER.md in this run. Copy the entire original item text into the quoted description, collapsing whitespace and omitting only the initial bullet marker. Converted and moved exits require an existing valid target; drops require a reason. Unrelated or duplicate exit records fail validation.
 Only append complete newline-terminated records to the ledger: preserve every existing byte, including leading whitespace and final line boundaries. Never edit, reorder, or delete existing ledger lines.
+Conversion may add open-loop intentions, but must preserve every existing open-loop item unchanged, including its ID and metadata. Working-memory maintenance owns modifying, promoting and closing existing loops.
 Keep every semantic root file at or under 16384 bytes and every topic file at or under 32768 bytes. A run that leaves a file it wrote over its cap fails validation.
 Keep the semantic-memory update bounded, structured, and auditable.
 Do not copy transcript detail or verification-review prose verbatim into semantic memory.

@@ -19,6 +19,7 @@ func emptyConversionBaseline() map[string]string {
 	return map[string]string{
 		workingMemoryRuntimePath: "",
 		workingLedgerRuntimePath: "",
+		openLoopsRuntimePath:     "",
 	}
 }
 
@@ -59,6 +60,7 @@ func conversionBaseline() map[string]string {
 	return map[string]string{
 		workingMemoryRuntimePath: conversionWorkingBefore,
 		workingLedgerRuntimePath: conversionLedgerBefore,
+		openLoopsRuntimePath:     "",
 	}
 }
 

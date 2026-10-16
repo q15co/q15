@@ -201,6 +201,7 @@ func (semanticMemoryExtractionJob) Build(
 				workingLedgerRuntimePath,
 			),
 			"Only append complete newline-terminated records to the ledger: preserve every existing byte, including leading whitespace and final line boundaries. Never edit, reorder, or delete existing ledger lines.",
+			"Conversion may add open-loop intentions, but must preserve every existing open-loop item unchanged, including its ID and metadata. Working-memory maintenance owns modifying, promoting and closing existing loops.",
 			fmt.Sprintf(
 				"Keep every semantic root file at or under %d bytes and every topic file at or under %d bytes. A run that leaves a file it wrote over its cap fails validation.",
 				semanticRootCapBytes,

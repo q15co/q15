@@ -211,6 +211,9 @@ func checkLedgerCompleteness(
 	}
 	exits := 0
 	for _, entry := range entries {
+		if entry.Run != semanticMemoryExtractionJobType {
+			return 0, 0, fmt.Errorf("semantic-memory ledger entry has wrong run %q", entry.Run)
+		}
 		switch entry.Outcome {
 		case claims.OutcomeConverted, claims.OutcomeMoved, claims.OutcomeDropped:
 			description := normalizeExitDescription(entry.Description)
@@ -238,6 +241,9 @@ func checkLedgerCompleteness(
 		}
 	}
 	if err := validateExitTargets(ctx, loader, entries); err != nil {
+		return 0, 0, err
+	}
+	if err := checkPreservedOpenLoops(ctx, loader, baseline); err != nil {
 		return 0, 0, err
 	}
 	return len(removed), len(entries), nil

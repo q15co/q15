@@ -86,7 +86,11 @@ func TestConversionExitEvidenceMatchesEveryOutcomeAndTarget(t *testing.T) {
 	removed, appended, err := checkLedgerCompleteness(
 		context.Background(),
 		loader,
-		map[string]string{workingMemoryRuntimePath: before, workingLedgerRuntimePath: ""},
+		map[string]string{
+			workingMemoryRuntimePath: before,
+			workingLedgerRuntimePath: "",
+			openLoopsRuntimePath:     "",
+		},
 	)
 	if err != nil || removed != 3 || appended != 3 {
 		t.Fatalf("checkLedgerCompleteness() = %d, %d, %v; want 3, 3, nil", removed, appended, err)
@@ -184,7 +188,11 @@ func TestConversionMultilineRemovalRequiresCompleteDescription(t *testing.T) {
 			removed, _, err := checkLedgerCompleteness(
 				context.Background(),
 				loader,
-				map[string]string{workingMemoryRuntimePath: before, workingLedgerRuntimePath: ""},
+				map[string]string{
+					workingMemoryRuntimePath: before,
+					workingLedgerRuntimePath: "",
+					openLoopsRuntimePath:     "",
+				},
 			)
 			valid := strings.Contains(description, "Critical")
 			if (err == nil) != valid || (valid && removed != 1) {
@@ -363,6 +371,7 @@ func TestConversionApplyAccountsForEveryWorkingBlock(t *testing.T) {
 							Spec: Spec{Baseline: map[string]string{
 								workingMemoryRuntimePath: before,
 								workingLedgerRuntimePath: "",
+								openLoopsRuntimePath:     "",
 							}},
 							Messages: conversionRunMessages(
 								workingMemoryRuntimePath,
@@ -408,6 +417,7 @@ func TestConversionApplyIgnoresOnlyExactWorkingScaffold(t *testing.T) {
 			Spec: Spec{Baseline: map[string]string{
 				workingMemoryRuntimePath: before,
 				workingLedgerRuntimePath: "",
+				openLoopsRuntimePath:     "",
 			}},
 			Messages: conversionRunMessages(workingMemoryRuntimePath),
 		},

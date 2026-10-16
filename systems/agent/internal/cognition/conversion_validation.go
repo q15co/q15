@@ -314,6 +314,18 @@ func checkSemanticClaims(
 		if !existed {
 			return fmt.Errorf("semantic claim inventory file %s is missing", relative)
 		}
+		if previous, present := baseline[runtimePath]; !present || previous != string(raw) {
+			changed[runtimePath] = true
+		}
+		if limit := semanticCapFor(runtimePath); changed[runtimePath] && limit > 0 &&
+			len(raw) > limit {
+			return fmt.Errorf(
+				"changed semantic file %s is over cap (%d>%d)",
+				relative,
+				len(raw),
+				limit,
+			)
+		}
 		parsed, _, err := claims.ParseClaims(string(raw))
 		if err != nil {
 			return err
