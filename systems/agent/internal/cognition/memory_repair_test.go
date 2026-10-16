@@ -399,6 +399,8 @@ func repairPreFiles() map[string]string {
 		semanticPreferencesRelativePath: "# Semantic Preferences\n",
 		semanticProjectsRelativePath:    "# Semantic Projects\n",
 		"working/LEDGER.md":             repairLedgerPre,
+		"working/WORKING_MEMORY.md":     "# Working Memory\n\n- None\n",
+		"working/OPEN_LOOPS.md":         "# Open Loops\n\n- None\n",
 	}
 }
 
@@ -818,7 +820,7 @@ func TestSemanticRepairValidationRefusals(t *testing.T) {
 			mutate: func(f *repairApplyFixture) {
 				f.targetPost = &grown
 			},
-			wantError: "made no progress",
+			wantError: "retained bytes were rewritten",
 		},
 		{
 			name: "ledger history rewritten",

@@ -193,7 +193,7 @@ func validateLoopItem(item string) error {
 	if fields["owner"] != "agent" && fields["owner"] != "user" {
 		return fmt.Errorf("invalid loop owner %q", fields["owner"])
 	}
-	if !sourceIDPattern.MatchString(fields["src"]) {
+	if !sourceIDPattern.MatchString(fields["src"]) && !claims.ValidMemorySource(fields["src"]) {
 		return fmt.Errorf("invalid loop src %q", fields["src"])
 	}
 	trigger := fields["trigger"]

@@ -7,13 +7,15 @@ closed loop leaves this file and records a line in `working/LEDGER.md`.
 Loop format (one entry per loop):
 
 - [l-YYYY-NNNN] <what to do> once <condition>.
-  {trigger: date:YYYY-MM-DD | event:"<description>" | next-session, owner: agent|user, src: t<seq>}
+  {trigger: date:YYYY-MM-DD | event:"<description>" | next-session,
+   owner: agent|user, src: t<seq> | mem:<relative-path>:<byte-offset>}
 
 Fields:
 - id: l-YYYY-NNNN, year + counter, assigned at write time, never reused.
 - trigger: date:YYYY-MM-DD, event:"<description>", or next-session.
 - owner: agent or user.
-- src: transcript seqs (t<seq>) that evidence the loop.
+- src: a transcript marker (t<seq>) or memory-file citation
+  (mem:<relative-path>:<byte-offset>) that evidences the loop.
 - date-trigger check: any loop whose date trigger has passed moves into working memory
   Active Tasks or Pending Checks on the next working-memory run.
 - closure: delete the line and append a ledger entry recording the outcome seq.

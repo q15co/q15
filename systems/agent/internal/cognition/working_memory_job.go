@@ -41,7 +41,8 @@ var workingMemoryAllowedTools = []string{
 // prompt and the file the model edits cannot drift apart. The store's seed
 // tests fail if that comment and this constant ever disagree.
 const OpenLoopsLineFormat = `- [l-YYYY-NNNN] <what to do> once <condition>.
-  {trigger: date:YYYY-MM-DD | event:"<description>" | next-session, owner: agent|user, src: t<seq>}`
+  {trigger: date:YYYY-MM-DD | event:"<description>" | next-session,
+   owner: agent|user, src: t<seq> | mem:<relative-path>:<byte-offset>}`
 
 // NewWorkingMemoryConsolidationRegistration returns the built-in working-memory
 // consolidation job registration used to exercise the background trigger

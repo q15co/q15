@@ -19,6 +19,11 @@ import (
 // repairChunkBytes bounds how much of a target one run may read.
 const repairChunkBytes = 8 * 1024
 
+// Each line carries a digest and an offset in the prompt. Bound that framing
+// as well as source bytes so short lines cannot expand an 8 KiB window into
+// hundreds of kilobytes of model input.
+const repairChunkMaxLines = 128
+
 // repairChunkLine is one whole line inside a repair chunk, pinned by its
 // byte offset in the pre-run file and by the SHA-256 of its bytes without
 // the trailing newline. That is the convention the src=mem:<path>:<offset>
@@ -42,7 +47,7 @@ func cutRepairChunk(head []byte) ([]repairChunkLine, error) {
 	window := min(len(head), base+repairChunkBytes)
 	var lines []repairChunkLine
 	start := base
-	for start < window {
+	for start < window && len(lines) < repairChunkMaxLines {
 		end := -1
 		if newline := bytes.IndexByte(head[start:window], '\n'); newline >= 0 {
 			end = start + newline
@@ -104,12 +109,16 @@ func repairContentLine(line string) bool {
 	return !strings.HasPrefix(trimmed, "#")
 }
 
+type repairRecoveryPreparer interface {
+	BeginMemoryRepairRecovery(context.Context, map[string]FileSnapshot, string) (string, error)
+}
+
 // repairSpec builds the bounded repair run for the first repairable surface
 // target, or reports a clean surface with (Spec{}, false, nil). It is small
 // and self-contained on purpose: the surface being dirty can mean the
 // semantic roots are exactly what is too large to read, so a repair prompt
-// never loads the roots, the topics, the transcript or working memory - only
-// the stat-only surface scan and one bounded chunk of the target.
+// never includes the roots, topics, transcript or working memory as prompt
+// context. Raw snapshots still cover the complete writable set for recovery.
 func repairSpec(
 	ctx context.Context,
 	loader ContextLoader,
@@ -161,7 +170,19 @@ func repairSpec(
 		return Spec{}, false, fmt.Errorf("load semantic extraction checkpoint: %w", err)
 	}
 
+	preparer, ok := loader.(repairRecoveryPreparer)
+	if !ok {
+		return Spec{}, false, fmt.Errorf(
+			"context loader does not support durable memory repair recovery",
+		)
+	}
+	recoveryID, err := preparer.BeginMemoryRepairRecovery(ctx, snapshots, target.Path)
+	if err != nil {
+		return Spec{}, false, fmt.Errorf("prepare memory repair recovery: %w", err)
+	}
+
 	return Spec{
+		MemoryRecoveryID:   recoveryID,
 		Objective:          renderRepairObjective(target),
 		CompletionContract: renderRepairContract(target),
 		PromptSections: []agent.PromptSection{
@@ -188,7 +209,7 @@ func repairSpec(
 }
 
 // snapshotRepairWriteSet adds every path a repair run may touch besides the
-// target - the conversion ledger, the three semantic roots and the direct
+// target - all three working files, the three semantic roots and the direct
 // topic children - to the snapshots with their pre-run bytes, so a failed
 // run rolls back byte-for-byte through the existing rollback path.
 func snapshotRepairWriteSet(
@@ -196,7 +217,7 @@ func snapshotRepairWriteSet(
 	loader ContextLoader,
 	snapshots map[string]FileSnapshot,
 ) error {
-	for _, runtimePath := range append(semanticRuntimePaths(), workingLedgerRuntimePath) {
+	for _, runtimePath := range append(semanticRuntimePaths(), workingMemoryRuntimePath, openLoopsRuntimePath, workingLedgerRuntimePath) {
 		if _, done := snapshots[runtimePath]; done {
 			continue
 		}
@@ -245,6 +266,9 @@ func repairToolPolicy(target MemorySurfaceTarget) filetools.PathAccessPolicy {
 		seen[runtimePath] = true
 		paths = append(paths, runtimePath)
 	}
+	if target.Path == workingMemoryRelativePath {
+		paths = append(paths, openLoopsRuntimePath)
+	}
 	return filetools.PathAccessPolicy{
 		ReadPaths:  append([]string(nil), paths...),
 		WritePaths: paths,
@@ -290,27 +314,34 @@ func renderRepairObjective(target MemorySurfaceTarget) string {
 // files.
 func renderRepairContract(target MemorySurfaceTarget) string {
 	lines := []string{
-		"Every content line in the repair chunk leaves the target in this run, in exactly one of two ways: rewritten as a claim in a canonical claim file and recorded converted, or recorded dropped with a reason. Markdown headings, blank lines and the exact `- None` scaffold are structure and need no exit.",
+		"Every content line in the repair chunk leaves the target in this run: rewritten as a claim in a canonical claim file and recorded converted, or recorded dropped with a reason. Markdown headings, blank lines and the exact `- None` scaffold are structure and need no exit.",
 		fmt.Sprintf(
 			"Append exactly one ledger line per exit to %s: run=%s, src naming the drained line as src=mem:%s:<byte-offset> with the offset from the chunk listing, and the quoted description copying that line's entire text with whitespace collapsed.",
 			workingLedgerRuntimePath,
 			semanticMemoryExtractionJobType,
 			target.Path,
 		),
-		"Each content line of the chunk is cited exactly once. A cited line must no longer appear in the target when the run ends, and a content line that stays in the chunk range must have no citation: an un-ledgered chunk line, a claim with no ledger line, a citation outside the chunk or a cited line still present all roll the whole run back.",
-		"Delete from the target exactly the lines that left, and nothing that did not. Structure lines may leave with the content lines they separated. When the same text appears on several chunk lines, remove every copy you cite and keep no copy whose text went out as drained.",
+		"Each content line of the chunk is cited exactly once. A cited occurrence must no longer appear in the covered prefix when the run ends: an un-ledgered chunk line, a claim with no ledger line, a citation outside the chunk or a cited line still present all roll the whole run back.",
+		"Delete exactly the cited line occurrences from the target. Structure in the covered prefix may leave with them. Preserve every byte after the chunk, including identical uncited copies of a cited line, and preserve the order and bytes of retained structure.",
 		fmt.Sprintf(
 			"Keep every semantic root file at or under %d bytes and every topic file at or under %d bytes: a written file that ends over its cap fails validation. The target itself is judged by shrinking, not by its cap.",
 			semanticRootCapBytes,
 			semanticTopicCapBytes,
 		),
-		"Rewrite nothing outside the target except the ledger and the claim files.",
+		"Rewrite nothing outside the target except the ledger and the claim files; a working-memory repair may also append new open loops.",
 		"After the tool work completes, reply with one or two short sentences summarizing what left the target.",
+	}
+	if target.Path == workingMemoryRelativePath {
+		lines = append(
+			lines,
+			"Preserve unfinished intentions by moving them to /memory/working/OPEN_LOOPS.md and recording moved, targeting their new loop ID. Keep the full intention, cite that line as the loop's src: mem:<path>:<byte-offset>, and provide canonical trigger and owner metadata. Preserve every existing loop and keep the complete open-loops file within its configured byte budget.",
+			OpenLoopsLineFormat,
+		)
 	}
 	if target.Named {
 		lines = append(
 			lines,
-			"The target is schema-owned: leave the file in place even if this run drains it to headings alone. Later runs keep shrinking it from the new head.",
+			"The target is schema-owned: leave the file in place and shrink it on every run, including a structure-only chunk. Remove redundant structure only inside the covered prefix, preserve required canonical headings, and keep all uncovered tail bytes. A run that makes no progress fails and follows the job failure and degradation path.",
 		)
 	} else {
 		lines = append(lines,
@@ -405,12 +436,13 @@ func applyRepairResult(
 	ctx context.Context,
 	loader ContextLoader,
 	output JobOutput,
+	budgets memoryFileBudgets,
 ) (ParsedResult, error) {
 	if loader == nil {
 		return ParsedResult{}, fmt.Errorf("context loader is required")
 	}
 	target := output.Spec.repairTarget
-	drained, err := validateRepairRun(ctx, loader, output, target)
+	drained, err := validateRepairRun(ctx, loader, output, target, budgets)
 	if err != nil {
 		return ParsedResult{}, rollbackFailedRun(
 			ctx,
@@ -452,6 +484,7 @@ func validateRepairRun(
 	loader ContextLoader,
 	output JobOutput,
 	target MemorySurfaceTarget,
+	budgets memoryFileBudgets,
 ) (int, error) {
 	targetRuntime := memoryRuntimePrefix + target.Path
 	snapshot, ok := output.Spec.FileSnapshots[targetRuntime]
@@ -486,13 +519,13 @@ func validateRepairRun(
 		return 0, err
 	}
 
-	content := make(map[int]string)
+	content := make(map[uint64]string)
 	for _, line := range chunk {
 		if repairContentLine(line.text) {
-			content[line.offset] = line.text
+			content[uint64(line.offset)] = line.text
 		}
 	}
-	cited := make(map[int]claims.LedgerEntry, len(entries))
+	cited := make(map[uint64]claims.LedgerEntry, len(entries))
 	for _, entry := range entries {
 		if entry.Run != semanticMemoryExtractionJobType {
 			return 0, fmt.Errorf(
@@ -500,9 +533,10 @@ func validateRepairRun(
 				entry.Run,
 			)
 		}
-		if entry.Outcome != claims.OutcomeConverted && entry.Outcome != claims.OutcomeDropped {
+		if entry.Outcome != claims.OutcomeConverted && entry.Outcome != claims.OutcomeDropped &&
+			!(target.Path == workingMemoryRelativePath && entry.Outcome == claims.OutcomeMoved) {
 			return 0, fmt.Errorf(
-				"memory repair ledger entry has outcome %q; a repair exit is converted or dropped",
+				"memory repair ledger entry has outcome %q; a repair exit is converted or dropped (or moved for working memory)",
 				entry.Outcome,
 			)
 		}
@@ -514,7 +548,7 @@ func validateRepairRun(
 				target.Path,
 			)
 		}
-		offset := int(citationOffset)
+		offset := citationOffset
 		text, inChunk := content[offset]
 		if !inChunk {
 			return 0, fmt.Errorf(
@@ -556,36 +590,140 @@ func validateRepairRun(
 		return 0, err
 	}
 
-	if postExisted {
-		postLines := make(map[string]bool)
-		for _, line := range strings.Split(strings.TrimSuffix(string(post), "\n"), "\n") {
-			postLines[line] = true
-		}
-		for offset, entry := range cited {
-			line := content[offset]
-			if postLines[line] {
-				return 0, fmt.Errorf(
-					"chunk line drained by %s is still present in %s: %q",
-					entry.SourceSeq,
-					target.Path,
-					compactSemanticMemoryText(line),
-				)
-			}
-		}
-		if len(content) > 0 && len(post) >= len(pre) {
-			return 0, fmt.Errorf(
-				"memory repair run made no progress on %s (%d bytes before, %d after)",
-				target.Path,
-				len(pre),
-				len(post),
-			)
+	if err := checkRepairRetention(pre, post, chunk, cited); err != nil {
+		return 0, fmt.Errorf("memory repair target %s: %w", target.Path, err)
+	}
+	if err := checkRepairHeadings(target.Path, pre, post); err != nil {
+		return 0, err
+	}
+	if postExisted && (len(content) > 0 || target.Named) && len(post) >= len(pre) {
+		return 0, fmt.Errorf(
+			"memory repair run made no progress on %s (%d bytes before, %d after)",
+			target.Path, len(pre), len(post),
+		)
+	}
+	if target.Path == workingMemoryRelativePath {
+		if err := checkRepairOpenLoops(ctx, loader, output.Spec.Baseline, entries, budgets.openLoops); err != nil {
+			return 0, err
 		}
 	}
 
-	if err := checkRepairCaps(ctx, loader, written, targetRuntime); err != nil {
+	changed, err := repairChangedPaths(ctx, loader, output.Spec.Baseline, written)
+	if err != nil {
+		return 0, err
+	}
+	if err := checkRepairCaps(ctx, loader, changed, targetRuntime); err != nil {
 		return 0, err
 	}
 	return len(entries), nil
+}
+
+// checkRepairRetention permits only the cited occurrences and surrounding
+// structure inside the covered prefix to leave. The uncovered suffix is pinned
+// byte-for-byte, even when it contains text identical to a cited occurrence.
+func checkRepairRetention(
+	pre, post []byte,
+	chunk []repairChunkLine,
+	cited map[uint64]claims.LedgerEntry,
+) error {
+	end := 0
+	if len(chunk) > 0 {
+		last := chunk[len(chunk)-1]
+		end = last.offset + len(last.text)
+		if end < len(pre) && pre[end] == '\n' {
+			end++
+		}
+	}
+	tail := pre[end:]
+	if !bytes.HasSuffix(post, tail) {
+		return fmt.Errorf("changed or removed uncited bytes outside the repair chunk")
+	}
+	remaining := post[:len(post)-len(tail)]
+	for offset := 0; offset < end; {
+		next := end
+		if newline := bytes.IndexByte(pre[offset:end], '\n'); newline >= 0 {
+			next = offset + newline + 1
+		}
+		line := pre[offset:next]
+		if _, drained := cited[uint64(offset)]; !drained && bytes.HasPrefix(remaining, line) {
+			remaining = remaining[len(line):]
+		}
+		offset = next
+	}
+	if len(remaining) != 0 {
+		return fmt.Errorf(
+			"cited content is still present in the covered prefix or retained bytes were rewritten",
+		)
+	}
+	return nil
+}
+
+func checkRepairOpenLoops(
+	ctx context.Context,
+	loader ContextLoader,
+	baseline map[string]string,
+	entries []claims.LedgerEntry,
+	budget int,
+) error {
+	raw, _, err := loader.ReadFileBytes(ctx, openLoopsRelativePath)
+	if err != nil {
+		return fmt.Errorf("load repair open loops: %w", err)
+	}
+	if len(raw) > effectiveOpenLoopsBudget(budget) {
+		return fmt.Errorf(
+			"memory repair left open loops over byte budget (%d>%d)",
+			len(raw),
+			effectiveOpenLoopsBudget(budget),
+		)
+	}
+	before, err := parseOpenLoops(baseline[openLoopsRuntimePath])
+	if err != nil {
+		return fmt.Errorf("parse pre-run repair open loops: %w", err)
+	}
+	after, err := parseOpenLoops(string(raw))
+	if err != nil {
+		return fmt.Errorf("parse post-run repair open loops: %w", err)
+	}
+	kept := make(map[string]conversionOpenLoop, len(after))
+	for _, loop := range after {
+		kept[loop.ID] = loop
+	}
+	existing := make(map[string]bool, len(before))
+	for _, loop := range before {
+		existing[loop.ID] = true
+		if current, found := kept[loop.ID]; !found || current.Item != loop.Item {
+			return fmt.Errorf("memory repair changed or removed existing open loop %s", loop.ID)
+		}
+	}
+	moved := make(map[string]bool)
+	for _, entry := range entries {
+		if entry.Outcome != claims.OutcomeMoved {
+			continue
+		}
+		loop, found := kept[entry.TargetID]
+		if !found || existing[entry.TargetID] || moved[entry.TargetID] ||
+			loop.Src != entry.SourceSeq {
+			return fmt.Errorf(
+				"moved repair exit %s requires a new open loop citing %s",
+				entry.TargetID,
+				entry.SourceSeq,
+			)
+		}
+		intention := workingItemDescription(strings.TrimSpace(entry.Description))
+		if normalizeExitDescription(loop.Text) != intention {
+			return fmt.Errorf(
+				"moved repair exit %s did not preserve its full intention",
+				entry.TargetID,
+			)
+		}
+		moved[entry.TargetID] = true
+	}
+	for id := range kept {
+		if !existing[id] && !moved[id] {
+			return fmt.Errorf("open loop %s has no moved repair exit", id)
+		}
+	}
+	return nil
 }
 
 // checkRepairClaimExits enforces the claim half of the repair bijection:
@@ -615,7 +753,17 @@ func checkRepairClaimExits(
 		}
 	}
 
-	preClaims := make(map[string]bool)
+	sizes, err := loader.LoadSemanticFileSizes(ctx)
+	if err != nil {
+		return fmt.Errorf("inventory post-run repair claims: %w", err)
+	}
+	for relative := range sizes {
+		if runtimePath := memoryRuntimePrefix + relative; semanticClaimPath(runtimePath) {
+			claimFiles[runtimePath] = true
+		}
+	}
+
+	preClaims := make(map[string]map[string]bool)
 	ordered := make([]string, 0, len(claimFiles))
 	for runtimePath := range claimFiles {
 		ordered = append(ordered, runtimePath)
@@ -630,12 +778,17 @@ func checkRepairClaimExits(
 		if err != nil {
 			return fmt.Errorf("parse pre-run claims in %s: %w", runtimePath, err)
 		}
+		sources, err := repairClaimSources(raw)
+		if err != nil {
+			return fmt.Errorf("read pre-run provenance in %s: %w", runtimePath, err)
+		}
 		for _, claim := range parsed {
-			preClaims[claim.ID] = true
+			preClaims[claim.ID] = sources[claim.ID]
 		}
 	}
 
 	postClaims := make(map[string]string)
+	postSources := make(map[string]map[string]bool)
 	for _, runtimePath := range ordered {
 		raw, existed, err := loader.ReadFileBytes(ctx, relativeMemoryPath(runtimePath))
 		if err != nil {
@@ -648,6 +801,10 @@ func checkRepairClaimExits(
 		if err != nil {
 			return fmt.Errorf("parse post-run claims in %s: %w", runtimePath, err)
 		}
+		sources, err := repairClaimSources(string(raw))
+		if err != nil {
+			return fmt.Errorf("read post-run provenance in %s: %w", runtimePath, err)
+		}
 		for _, claim := range parsed {
 			if previous, duplicate := postClaims[claim.ID]; duplicate {
 				return fmt.Errorf(
@@ -658,14 +815,24 @@ func checkRepairClaimExits(
 				)
 			}
 			postClaims[claim.ID] = runtimePath
+			postSources[claim.ID] = sources[claim.ID]
 		}
 	}
-	for id := range preClaims {
+	for id, sources := range preClaims {
 		if _, kept := postClaims[id]; !kept {
 			return fmt.Errorf(
 				"memory repair run removed durable claim %s with no lifecycle record",
 				id,
 			)
+		}
+		for source := range sources {
+			if !postSources[id][source] {
+				return fmt.Errorf(
+					"memory repair removed existing provenance %s from claim %s",
+					source,
+					id,
+				)
+			}
 		}
 	}
 
@@ -697,11 +864,29 @@ func checkRepairClaimExits(
 				entry.TargetID,
 			)
 		}
+		if !postSources[entry.TargetID][entry.SourceSeq] {
+			return fmt.Errorf(
+				"converted repair claim %s does not cite drained source %s",
+				entry.TargetID,
+				entry.SourceSeq,
+			)
+		}
 		converted[entry.TargetID] = entry.TargetPath
 	}
+	history, err := loader.LoadConversionLedgerHistory(ctx)
+	if err != nil {
+		return fmt.Errorf("load historical repair claim IDs: %w", err)
+	}
+	historical := make(map[string]bool)
+	for _, id := range historicalClaimIDPattern.FindAllString(history+"\n"+baseline[workingLedgerRuntimePath], -1) {
+		historical[id] = true
+	}
 	for id, runtimePath := range postClaims {
-		if preClaims[id] {
+		if _, existed := preClaims[id]; existed {
 			continue
+		}
+		if historical[id] {
+			return fmt.Errorf("repair claim ID %s was previously used and cannot be reused", id)
 		}
 		if _, ledgered := converted[id]; !ledgered {
 			return fmt.Errorf(
@@ -712,6 +897,66 @@ func checkRepairClaimExits(
 		}
 	}
 	return nil
+}
+
+func repairClaimSources(raw string) (map[string]map[string]bool, error) {
+	byID := make(map[string]map[string]bool)
+	for _, item := range workingItems(raw) {
+		parsed, _, err := claims.ParseClaims(item)
+		if err != nil {
+			return nil, err
+		}
+		if len(parsed) != 1 {
+			continue
+		}
+		fields, err := itemMetadata(item, "status", "kind", "confidence", "src", "rev")
+		if err != nil {
+			return nil, err
+		}
+		if !validSourceList(fields["src"]) {
+			return nil, fmt.Errorf("invalid claim sources %q", fields["src"])
+		}
+		sources := make(map[string]bool)
+		for _, source := range strings.Split(fields["src"], ",") {
+			sources[strings.TrimSpace(source)] = true
+		}
+		byID[parsed[0].ID] = sources
+	}
+	return byID, nil
+}
+
+func repairChangedPaths(
+	ctx context.Context,
+	loader ContextLoader,
+	baseline map[string]string,
+	written []string,
+) ([]string, error) {
+	sizes, err := loader.LoadSemanticFileSizes(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("inventory repair result: %w", err)
+	}
+	paths := make(map[string]bool)
+	for runtimePath := range baseline {
+		paths[runtimePath] = true
+	}
+	for relative := range sizes {
+		paths[memoryRuntimePrefix+relative] = true
+	}
+	for _, runtimePath := range written {
+		paths[runtimePath] = true
+	}
+	var changed []string
+	for runtimePath := range paths {
+		raw, _, err := loader.ReadFileBytes(ctx, relativeMemoryPath(runtimePath))
+		if err != nil {
+			return nil, fmt.Errorf("inspect repair result %s: %w", runtimePath, err)
+		}
+		if accessIncludesPath(written, runtimePath) || string(raw) != baseline[runtimePath] {
+			changed = append(changed, runtimePath)
+		}
+	}
+	sort.Strings(changed)
+	return changed, nil
 }
 
 // checkRepairCaps is the repair side of checkSemanticCaps: every file the

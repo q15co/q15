@@ -73,7 +73,7 @@ func (s *Store) AcquireFileMutation(ctx context.Context, localPaths []string) (f
 	}
 	if exists && owner != journal.ID {
 		for _, relative := range relatives {
-			if recoverableMemoryPath(relative, journal.TopicDir) {
+			if journal.ownsPath(relative) {
 				return nil, fmt.Errorf(
 					"memory path %s is reserved by a cognition run; retry after recovery completes",
 					relative,

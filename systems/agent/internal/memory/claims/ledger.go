@@ -3,6 +3,7 @@ package claims
 import (
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -320,7 +321,7 @@ func ParseMemorySource(source string) (relativePath string, offset uint64, ok bo
 			!strings.HasPrefix(relative, "working/")) {
 		return "", 0, false
 	}
-	if !ledgerMemoryPathPattern.MatchString(relative) {
+	if !ledgerMemoryPathPattern.MatchString(relative) || path.Clean(relative) != relative {
 		return "", 0, false
 	}
 	parsed, err := strconv.ParseUint(rawOffset, 10, 64)

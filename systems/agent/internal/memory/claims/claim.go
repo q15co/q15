@@ -76,7 +76,7 @@ type Claim struct {
 	Kind Kind
 	// Confidence is the strength of evidence.
 	Confidence Confidence
-	// Src lists transcript sequence markers ("t<seq>") evidencing the claim.
+	// Src lists transcript markers and memory-file citations evidencing the claim.
 	Src []string
 	// Rev is the date of the last touch, "YYYY-MM-DD".
 	Rev string
@@ -426,7 +426,9 @@ func parseSourceIDs(raw string) []string {
 	var out []string
 	seen := make(map[string]struct{})
 	for _, field := range splitSourceList(raw) {
-		field = stripRangeEndpoints(field)
+		if !ValidMemorySource(field) {
+			field = stripRangeEndpoints(field)
+		}
 		if field == "" {
 			continue
 		}
@@ -440,7 +442,7 @@ func parseSourceIDs(raw string) []string {
 }
 
 // splitSourceList splits a src value on its separator characters, keeping only
-// transcript markers ("t<digits>") and dropping prose around them.
+// transcript markers and memory citations, dropping prose around them.
 func splitSourceList(raw string) []string {
 	var (
 		tokens  []string
@@ -466,6 +468,11 @@ func splitSourceList(raw string) []string {
 
 	markers := make([]string, 0, len(tokens))
 	for _, token := range tokens {
+		memorySource := strings.Trim(token, `"'()[]{}`)
+		if ValidMemorySource(memorySource) {
+			markers = append(markers, memorySource)
+			continue
+		}
 		if marker, ok := forceTranscriptMarker(token); ok {
 			markers = append(markers, marker)
 		}

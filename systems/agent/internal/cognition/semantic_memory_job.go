@@ -458,7 +458,7 @@ func (j semanticMemoryExtractionJob) ApplyResult(
 		// transcript-coverage checks below do not apply to it. It is judged
 		// by the repair validation instead: the chunk it drained versus the
 		// ledger and claim files it left behind.
-		return applyRepairResult(ctx, loader, output)
+		return applyRepairResult(ctx, loader, output, j.budgets)
 	}
 	targets := semanticTargetCoverage(
 		output.Messages,

@@ -151,7 +151,8 @@ closed loop leaves this file and records a line in `working/LEDGER.md`.
 - Open loops are prospective memory: unfinished intentions with a trigger, a distinct level from live working-memory state and from durable semantic claims.
 - Loop line format, quoted from the open-loops seed so the two cannot drift:
 - [l-YYYY-NNNN] <what to do> once <condition>.
-  {trigger: date:YYYY-MM-DD | event:"<description>" | next-session, owner: agent|user, src: t<seq>}
+  {trigger: date:YYYY-MM-DD | event:"<description>" | next-session,
+   owner: agent|user, src: t<seq> | mem:<relative-path>:<byte-offset>}
 - Date-trigger check: use maintenance_time as the current UTC time. A date trigger on or before its UTC date is due. Move each due loop into Active Tasks or Pending Checks, retaining its loop ID and full intention, then remove that ID from open loops. Applied results are checked mechanically.
 </open_loops_rules>
 

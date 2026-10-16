@@ -21,10 +21,11 @@ import (
 const memoryRecoveryPath = ".git/q15-memory-recovery.json"
 
 type memoryRecovery struct {
-	Version   int                               `json:"version"`
-	ID        string                            `json:"id"`
-	Snapshots map[string]cognition.FileSnapshot `json:"snapshots"`
-	TopicDir  string                            `json:"topic_dir,omitempty"`
+	Version      int                               `json:"version"`
+	ID           string                            `json:"id"`
+	Snapshots    map[string]cognition.FileSnapshot `json:"snapshots"`
+	TopicDir     string                            `json:"topic_dir,omitempty"`
+	RepairTarget string                            `json:"repair_target,omitempty"`
 }
 
 // BeginMemoryRecovery persists a rollback journal before tools can change the
@@ -33,6 +34,27 @@ func (s *Store) BeginMemoryRecovery(
 	ctx context.Context,
 	snapshots map[string]cognition.FileSnapshot,
 	topicDir string,
+) (string, error) {
+	return s.beginMemoryRecovery(ctx, snapshots, topicDir, "")
+}
+
+// BeginMemoryRepairRecovery adds exactly one surface-repair target to the
+// conversion writable set. Other unnamed content files remain outside the journal.
+func (s *Store) BeginMemoryRepairRecovery(
+	ctx context.Context,
+	snapshots map[string]cognition.FileSnapshot,
+	target string,
+) (string, error) {
+	if !validRepairRecoveryTarget(target) {
+		return "", fmt.Errorf("invalid memory repair recovery target %q", target)
+	}
+	return s.beginMemoryRecovery(ctx, snapshots, semanticTopicsRelativePath, target)
+}
+
+func (s *Store) beginMemoryRecovery(
+	ctx context.Context,
+	snapshots map[string]cognition.FileSnapshot,
+	topicDir, repairTarget string,
 ) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -51,8 +73,9 @@ func (s *Store) BeginMemoryRecovery(
 	}
 	journal := memoryRecovery{
 		Version: 1, ID: hex.EncodeToString(nonce[:]),
-		Snapshots: make(map[string]cognition.FileSnapshot, len(snapshots)),
-		TopicDir:  topicDir,
+		Snapshots:    make(map[string]cognition.FileSnapshot, len(snapshots)),
+		TopicDir:     topicDir,
+		RepairTarget: repairTarget,
 	}
 	for runtimePath, snapshot := range snapshots {
 		relative := strings.TrimPrefix(runtimePath, "/memory/")
@@ -193,7 +216,14 @@ func (journal memoryRecovery) validate() error {
 	if journal.TopicDir != "" && journal.TopicDir != semanticTopicsRelativePath {
 		return fmt.Errorf("invalid memory recovery topic directory %q", journal.TopicDir)
 	}
+	if journal.RepairTarget != "" &&
+		(journal.TopicDir != semanticTopicsRelativePath || !validRepairRecoveryTarget(journal.RepairTarget)) {
+		return fmt.Errorf("invalid memory repair recovery target %q", journal.RepairTarget)
+	}
 	required := []string{"working/WORKING_MEMORY.md", "working/OPEN_LOOPS.md", "working/LEDGER.md"}
+	if journal.RepairTarget != "" {
+		required = append(required, journal.RepairTarget)
+	}
 	if journal.TopicDir != "" {
 		required = append(
 			required,
@@ -209,11 +239,24 @@ func (journal memoryRecovery) validate() error {
 	}
 	for relative := range journal.Snapshots {
 		clean, err := resolveMemoryFilePath(relative)
-		if err != nil || clean != relative || !recoverableMemoryPath(relative, journal.TopicDir) {
+		if err != nil || clean != relative || !journal.ownsPath(relative) {
 			return fmt.Errorf("invalid memory recovery path %q", relative)
 		}
 	}
 	return nil
+}
+
+func validRepairRecoveryTarget(relative string) bool {
+	clean, err := resolveMemoryFilePath(relative)
+	if err != nil || clean != relative || relative == workingLedgerRelativePath ||
+		strings.HasPrefix(relative, "working/ledger/") {
+		return false
+	}
+	return strings.HasPrefix(relative, "semantic/") || strings.HasPrefix(relative, "working/")
+}
+
+func (journal memoryRecovery) ownsPath(relative string) bool {
+	return relative == journal.RepairTarget || recoverableMemoryPath(relative, journal.TopicDir)
 }
 
 func recoverableMemoryPath(relative, topicDir string) bool {
