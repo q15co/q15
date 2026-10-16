@@ -3,6 +3,7 @@ package cognition
 import (
 	"context"
 	"fmt"
+	"path"
 	"regexp"
 	"sort"
 	"strconv"
@@ -67,7 +68,7 @@ func validateExitTargets(
 			}
 		case claims.OutcomeConverted:
 			runtimePath := memoryRuntimePrefix + entry.TargetPath
-			if semanticCapFor(runtimePath) == 0 || !claimIDPattern.MatchString(entry.TargetID) {
+			if !semanticClaimPath(runtimePath) || !claimIDPattern.MatchString(entry.TargetID) {
 				return fmt.Errorf(
 					"converted ledger exit has invalid claim target %q (%s)",
 					entry.TargetID,
@@ -126,6 +127,12 @@ func validateExitTargets(
 		}
 	}
 	return nil
+}
+
+// Inventories also cover non-Markdown topics for caps and rollback. Durable
+// claims must live in files the semantic topic loader and embed scanner read.
+func semanticClaimPath(runtimePath string) bool {
+	return semanticCapFor(runtimePath) > 0 && strings.EqualFold(path.Ext(runtimePath), ".md")
 }
 
 func validateClaimItem(item string) error {
@@ -310,6 +317,12 @@ func checkSemanticClaims(
 		parsed, _, err := claims.ParseClaims(string(raw))
 		if err != nil {
 			return err
+		}
+		if len(parsed) > 0 && !semanticClaimPath(runtimePath) {
+			return fmt.Errorf(
+				"durable claims in %s cannot be indexed; semantic claim files must end in .md",
+				relative,
+			)
 		}
 		for _, claim := range parsed {
 			if previous, ok := seen[claim.ID]; ok {

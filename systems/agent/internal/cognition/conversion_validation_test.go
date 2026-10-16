@@ -199,10 +199,11 @@ func TestConversionClaimIdentityAndProvenance(t *testing.T) {
 	for _, test := range []struct {
 		name, history, previous, current, other string
 		valid                                   bool
+		wantError                               string
 	}{
 		{name: "new claim", current: validConversionClaim, valid: true},
 		{name: "reused archived claim", history: exitRecord(claims.OutcomeRetracted, "False claim.", "c-2026-0001", "", "false"), current: validConversionClaim},
-		{name: "duplicate across topic", current: validConversionClaim, other: validConversionClaim},
+		{name: "duplicate across topic", current: validConversionClaim, other: validConversionClaim, wantError: "duplicate claim ID"},
 		{name: "lost provenance", previous: validConversionClaim, current: strings.ReplaceAll(validConversionClaim, "src: t12", "src: t13")},
 		{name: "preserved provenance", previous: validConversionClaim, current: strings.ReplaceAll(validConversionClaim, "src: t12", "src: t12, t13"), valid: true},
 		{name: "backwards revision", previous: validConversionClaim, current: strings.ReplaceAll(validConversionClaim, "2026-10-14", "2026-10-13")},
@@ -215,7 +216,7 @@ func TestConversionClaimIdentityAndProvenance(t *testing.T) {
 				history: test.history,
 			}
 			if test.other != "" {
-				loader.files["semantic/topics/other.txt"] = test.other
+				loader.files["semantic/topics/other.md"] = test.other
 			}
 			baseline := map[string]string{
 				semanticFactsRuntimePath: test.previous,
@@ -229,6 +230,9 @@ func TestConversionClaimIdentityAndProvenance(t *testing.T) {
 			)
 			if (err == nil) != test.valid {
 				t.Fatalf("valid=%v error=%v", test.valid, err)
+			}
+			if test.wantError != "" && !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("error=%v; want %q", err, test.wantError)
 			}
 		})
 	}
@@ -457,5 +461,103 @@ func TestConversionLoopParserIgnoresSeedDocumentation(t *testing.T) {
 	loops, err := parseOpenLoops(content)
 	if err != nil || len(loops) != 1 || loops[0].ID != "l-2026-0001" {
 		t.Fatalf("parseOpenLoops() = %#v, %v", loops, err)
+	}
+}
+
+func TestConversionTargetsRequireIndexedSemanticPaths(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		target string
+		valid  bool
+	}{
+		{semanticFactsRelativePath, true},
+		{semanticPreferencesRelativePath, true},
+		{semanticProjectsRelativePath, true},
+		{"semantic/topics/deploy.md", true},
+		{"semantic/topics/deploy.txt", false},
+		{"semantic/topics/deploy.MD", true},
+		{"semantic/topics/nested/deploy.md", false},
+	} {
+		t.Run(test.target, func(t *testing.T) {
+			t.Parallel()
+			loader := &conversionValidationLoader{
+				files: map[string]string{test.target: validConversionClaim},
+			}
+			err := validateExitTargets(context.Background(), loader, []claims.LedgerEntry{{
+				Outcome: claims.OutcomeConverted, TargetID: "c-2026-0001", TargetPath: test.target,
+			}})
+			if (err == nil) != test.valid {
+				t.Fatalf("valid=%v error=%v", test.valid, err)
+			}
+		})
+	}
+}
+
+func TestConversionApplyRejectsNonMarkdownDurableClaims(t *testing.T) {
+	t.Parallel()
+	const relative = "semantic/topics/deploy.txt"
+	for _, test := range []struct {
+		name     string
+		baseline map[string]string
+		writes   []string
+		ledger   string
+	}{
+		{name: "new claim", baseline: emptyConversionBaseline(), writes: []string{memoryRuntimePrefix + relative}},
+		{name: "moved existing claim", baseline: map[string]string{
+			workingMemoryRuntimePath: "", workingLedgerRuntimePath: "",
+			semanticFactsRuntimePath: validConversionClaim,
+		}, writes: []string{semanticFactsRuntimePath, memoryRuntimePrefix + relative}},
+		{name: "unwritten invalid baseline", baseline: map[string]string{
+			workingMemoryRuntimePath: "", workingLedgerRuntimePath: "",
+			memoryRuntimePrefix + relative: validConversionClaim,
+		}},
+		{name: "converted working item", baseline: map[string]string{
+			workingMemoryRuntimePath: "- Deployment detail.\n", workingLedgerRuntimePath: "",
+		}, writes: []string{memoryRuntimePrefix + relative, workingMemoryRuntimePath, workingLedgerRuntimePath},
+			ledger: exitRecord(claims.OutcomeConverted, "Deployment detail.", "c-2026-0001", relative, "")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			loader := &conversionValidationLoader{files: map[string]string{
+				workingMemoryRelativePath: "", "working/LEDGER.md": test.ledger, relative: validConversionClaim,
+			}}
+			_, err := NewSemanticMemoryExtractionRegistration().NewJob().ApplyResult(
+				context.Background(), loader, JobOutput{
+					Spec: Spec{
+						Baseline: test.baseline,
+					}, Messages: conversionRunMessages(test.writes...),
+				},
+			)
+			if err == nil ||
+				!strings.Contains(err.Error(), "semantic claim files must end in .md") {
+				t.Fatalf("ApplyResult() error=%v; want non-Markdown durable claim rejected", err)
+			}
+		})
+	}
+}
+
+func TestConversionCapsStillCoverNonMarkdownFiles(t *testing.T) {
+	t.Parallel()
+	const relative = "semantic/topics/notes.txt"
+	for _, size := range []int{semanticTopicCapBytes, semanticTopicCapBytes + 1} {
+		t.Run(fmt.Sprint(size), func(t *testing.T) {
+			t.Parallel()
+			loader := &conversionValidationLoader{files: map[string]string{
+				workingMemoryRelativePath: "", "working/LEDGER.md": "", relative: strings.Repeat("x", size),
+			}}
+			_, err := NewSemanticMemoryExtractionRegistration().NewJob().ApplyResult(
+				context.Background(), loader, JobOutput{
+					Spec:     Spec{Baseline: emptyConversionBaseline()},
+					Messages: conversionRunMessages(memoryRuntimePrefix + relative),
+				},
+			)
+			if size == semanticTopicCapBytes {
+				if err != nil {
+					t.Fatalf("ApplyResult() rejected an at-cap non-claim file: %v", err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), "over cap") {
+				t.Fatalf("ApplyResult() error=%v; want over-cap non-Markdown file rejected", err)
+			}
+		})
 	}
 }
