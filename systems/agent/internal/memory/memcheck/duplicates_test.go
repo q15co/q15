@@ -262,6 +262,49 @@ func TestCheckDuplicatesEmptyRoot(t *testing.T) {
 	}
 }
 
+func TestCheckDuplicatesIncludesEveryDirectTopicFile(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	topics := filepath.Join(root, "semantic", "topics")
+	files := map[string]string{
+		"notes.txt": "- [c-2026-0901] The deployment target is stable.\n" +
+			"- [c-2026-0902] The deployment target is stable.\n",
+		".hidden":           "- [c-2026-0903] The ferry departs at sunrise.\n",
+		"extensionless":     "- [c-2026-0904] The garden gate is blue.\n",
+		"nested/ignored.md": "- [c-2026-0905] A nested file is outside this inventory.\n",
+	}
+	for relative, content := range files {
+		path := filepath.Join(topics, filepath.FromSlash(relative))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	report, err := CheckDuplicates(root, DefaultDuplicateOptions())
+	if err != nil {
+		t.Fatalf("CheckDuplicates() error=%v", err)
+	}
+	if len(report.Files) != 3 || report.Claims != 4 || report.ComparedPairs != 1 ||
+		len(report.Pairs) != 1 || report.Rate != 1 {
+		t.Fatalf(
+			"CheckDuplicates() report=%+v; want three files, four claims and one duplicate pair",
+			report,
+		)
+	}
+	for index, relative := range []string{"semantic/topics/.hidden", "semantic/topics/extensionless", "semantic/topics/notes.txt"} {
+		if report.Files[index].Path != relative {
+			t.Fatalf("file %d=%q; want %q", index, report.Files[index].Path, relative)
+		}
+	}
+	pair := report.Pairs[0]
+	if pair.File != "semantic/topics/notes.txt" || pair.FirstID != "c-2026-0901" ||
+		pair.SecondID != "c-2026-0902" {
+		t.Fatalf("duplicate pair=%+v; want the two claims in notes.txt", pair)
+	}
+}
+
 // TestCheckDuplicatesSkipsEmptyClaims pins that a claim which parses to no
 // text is counted but never compared, so its weight cannot hide duplicates.
 func TestCheckDuplicatesSkipsEmptyClaims(t *testing.T) {

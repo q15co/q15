@@ -19,8 +19,7 @@ const DefaultDuplicateThreshold = 0.8
 
 // DuplicateRateLimit is the corpus duplicate rate the design requires the
 // conversion pass to stay under (DESIGN.md §7.3, "assert rate < 5 %"). A
-// report at or above this rate is the failure the conversion job's golden
-// tests and the post-migration corpus check are looking for.
+// report at or above this rate exceeds that bound.
 const DuplicateRateLimit = 0.05
 
 // semanticFileRelativePaths are the canonical semantic root files a memory
@@ -279,7 +278,7 @@ func semanticClaimFiles(root string) ([]claimFile, error) {
 		}
 	}
 	topicsDir := filepath.Join(root, filepath.FromSlash(semanticTopicsRelativeDir))
-	topics, err := filepath.Glob(filepath.Join(topicsDir, "*.md"))
+	topics, err := filepath.Glob(filepath.Join(topicsDir, "*"))
 	if err != nil {
 		return nil, fmt.Errorf("list semantic topics in %q: %w", topicsDir, err)
 	}
@@ -294,6 +293,13 @@ func semanticClaimFiles(root string) ([]claimFile, error) {
 	files := make([]claimFile, 0, len(relativePaths))
 	for _, relative := range relativePaths {
 		path := filepath.Join(root, filepath.FromSlash(relative))
+		info, err := os.Stat(path)
+		if err != nil {
+			return nil, fmt.Errorf("stat semantic file %q: %w", relative, err)
+		}
+		if info.IsDir() {
+			continue
+		}
 		raw, err := os.ReadFile(path)
 		if err != nil {
 			return nil, fmt.Errorf("read semantic file %q: %w", relative, err)

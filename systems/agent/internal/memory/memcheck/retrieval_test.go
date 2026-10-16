@@ -144,6 +144,30 @@ func TestCheckRetrievalMissNamesTheClaim(t *testing.T) {
 	}
 }
 
+func TestCheckRetrievalRequiresExactClaimID(t *testing.T) {
+	t.Parallel()
+	for _, text := range []string{
+		"- [c-2026-01010] A different claim with the same ID prefix.",
+		"- [prefix-c-2026-0101] A different identifier containing the ID.",
+		"- [c-2026-0101_suffix] A different identifier containing the ID.",
+	} {
+		t.Run(text, func(t *testing.T) {
+			t.Parallel()
+			report, err := memcheck.CheckRetrieval(
+				context.Background(), "testdata", searchingFake{hits: []memcheck.SemanticHit{{
+					ID: "unrelated", FilePath: "semantic/facts.md", Text: text,
+				}}}, memcheck.DefaultRetrievalOptions(),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !missesInclude(report.Misses, "c-2026-0101") {
+				t.Fatal("a different identifier falsely covered c-2026-0101")
+			}
+		})
+	}
+}
+
 // TestCheckRetrievalTopKHonored pins that the check hands its TopK to the
 // searcher and judges only that prefix: a self-hit at position four is inside
 // a top-four search but outside the design's top three.
@@ -205,7 +229,16 @@ func TestCheckRetrievalSampleStride(t *testing.T) {
 	if first.sampled != 5 {
 		t.Fatalf("sampled = %d, want the cap of 5", first.sampled)
 	}
-	for i, id := range sampleWantIDs(len(corpusClaimIDs), 5) {
+	wantIDs := []string{"c-2026-0101", "c-2026-0201", "c-2026-0301", "c-2026-0303", "c-2026-0305"}
+	if len(first.misses) != len(wantIDs) || len(second.misses) != len(wantIDs) {
+		t.Fatalf(
+			"first/second sample sizes=%d/%d; want %d",
+			len(first.misses),
+			len(second.misses),
+			len(wantIDs),
+		)
+	}
+	for i, id := range wantIDs {
 		if first.misses[i].ClaimID != id {
 			t.Fatalf("sample %d = %s, want stride pick %s", i, first.misses[i].ClaimID, id)
 		}
@@ -244,17 +277,6 @@ func runSampleSearch(
 type sampleResult struct {
 	sampled int
 	misses  []memcheck.RetrievalMiss
-}
-
-// sampleWantIDs replays stride sampling off the corpus list length to pin
-// which claims the check picks.
-func sampleWantIDs(total, maxClaims int) []string {
-	step := total / maxClaims
-	picks := make([]string, 0, maxClaims)
-	for i := 0; i < maxClaims; i++ {
-		picks = append(picks, corpusClaimIDs[i*step])
-	}
-	return picks
 }
 
 func missesInclude(misses []memcheck.RetrievalMiss, claimID string) bool {

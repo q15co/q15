@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/q15co/q15/systems/agent/internal/memory/claims"
 )
@@ -38,7 +39,7 @@ type SemanticHit struct {
 // SemanticSearcher searches the semantic collection with raw query text and
 // returns up to topK hits. The retrieval check holds this interface instead of
 // any concrete client, so the check itself stays offline: the default test run
-// uses fakes, and only the integration-tagged test constructs a searcher over
+// uses fakes, and only the opt-in integration test constructs a searcher over
 // a live Qdrant and embedder.
 type SemanticSearcher interface {
 	SearchSemantic(ctx context.Context, text string, topK int) ([]SemanticHit, error)
@@ -114,7 +115,7 @@ func (r RetrievalReport) OK() bool {
 // catches format regressions that break chunking: a claim whose text no
 // longer reaches its own chunk cannot be retrieved by that text.
 //
-// A hit covers a claim when the hit's stored text contains the claim's ID and
+// A hit covers a claim when the hit's stored text contains the complete claim ID and
 // the hit's payload path is the claim's file. The scanner writes payload
 // paths under the memory mount (cognition's runtime prefix), so the match
 // also accepts the path as a suffix after a slash, covering both the runtime
@@ -221,10 +222,20 @@ func hitsCoverClaim(hits []SemanticHit, claim retrievedClaim) bool {
 }
 
 // hitCoversClaim matches one hit to one claim: the chunk's stored text must
-// contain the claim ID, and the chunk's payload path must be the claim's file
+// contain the complete claim ID token, and the payload path must be the claim's file
 // whether it was written with a runtime prefix or as the bare relative path.
 func hitCoversClaim(hit SemanticHit, claim retrievedClaim) bool {
-	if !strings.Contains(hit.Text, claim.claim.ID) {
+	tokens := strings.FieldsFunc(hit.Text, func(char rune) bool {
+		return !unicode.IsLetter(char) && !unicode.IsDigit(char) && char != '-' && char != '_'
+	})
+	found := false
+	for _, token := range tokens {
+		if token == claim.claim.ID {
+			found = true
+			break
+		}
+	}
+	if !found {
 		return false
 	}
 	if hit.FilePath == claim.file {

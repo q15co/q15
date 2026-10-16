@@ -15,7 +15,7 @@
 // root: it queries the vector store through a SemanticSearcher the caller
 // supplies. This package never constructs a network client itself, so the
 // default test run touches no network and no Qdrant; the live check is the
-// integration-tagged test, following the repository's existing convention
+// opt-in integration test, following the repository's existing convention
 // (an Integration-named test that skips until its environment variables are
 // set, as provider/ollama's TestOllamaLocalIntegration does).
 package memcheck
