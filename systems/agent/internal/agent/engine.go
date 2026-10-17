@@ -167,6 +167,7 @@ func (e *Engine) Run(ctx context.Context, req EngineRequest) (EngineResult, erro
 			turn,
 			req.Observer,
 			&failureBudget,
+			size.total,
 		)
 		if err != nil {
 			return EngineResult{
@@ -374,6 +375,7 @@ func (e *Engine) completeWithObserver(
 	turn int,
 	observer RunObserver,
 	budget *modelFailureBudget,
+	inputBytes int,
 ) (string, ModelClientResult, error) {
 	modelRefs := normalizeModelRefs(e.modelRefSource())
 	if len(modelRefs) == 0 {
@@ -387,6 +389,7 @@ func (e *Engine) completeWithObserver(
 	if requireToolCalling {
 		requirements.ToolCalling = true
 	}
+	requirements.InputBytes = inputBytes
 
 	plan, err := e.planner.Plan(modelRefs, requirements)
 	if err != nil {
