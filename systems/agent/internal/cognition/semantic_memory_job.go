@@ -23,6 +23,7 @@ const (
 	semanticMemoryRecentTurns       = 32
 	semanticMemoryWindowTurns       = 16
 	semanticMemoryMinDirtyTurns     = 12
+	memorySurfaceRepairableRuleID   = "memory_surface_repairable"
 )
 
 // SemanticMemoryExtractionJobType is the job type under which the built-in
@@ -91,7 +92,7 @@ func NewSemanticMemoryExtractionRegistration(
 					},
 				},
 				{
-					ID: "memory_surface_repairable",
+					ID: memorySurfaceRepairableRuleID,
 					Evaluate: func(
 						ctx context.Context,
 						snapshot Snapshot,
