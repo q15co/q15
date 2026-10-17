@@ -738,11 +738,7 @@ func validateRepairRun(
 		}
 		if got, want := normalizeExitDescription(entry.Description),
 			normalizeExitDescription(text); got != want {
-			return 0, fmt.Errorf(
-				"memory repair ledger description %q does not copy the drained chunk line %q",
-				entry.Description,
-				compactSemanticMemoryText(text),
-			)
+			return 0, repairDescriptionMismatch(got, want)
 		}
 		cited[offset] = entry
 	}
@@ -790,6 +786,28 @@ func validateRepairRun(
 		return 0, err
 	}
 	return len(entries), nil
+}
+
+func repairDescriptionMismatch(got, want string) error {
+	offset := 0
+	for offset < min(len(got), len(want)) && got[offset] == want[offset] {
+		offset++
+	}
+	ledgerByte, sourceByte := "end", "end"
+	if offset < len(got) {
+		ledgerByte = fmt.Sprintf("0x%02x", got[offset])
+	}
+	if offset < len(want) {
+		sourceByte = fmt.Sprintf("0x%02x", want[offset])
+	}
+	return fmt.Errorf(
+		"memory repair ledger description does not copy the drained chunk line at normalized byte offset %d (ledger=%s source=%s; ledger_bytes=%d source_bytes=%d)",
+		offset,
+		ledgerByte,
+		sourceByte,
+		len(got),
+		len(want),
+	)
 }
 
 // checkRepairRetention permits only the cited occurrences and surrounding
