@@ -10,6 +10,9 @@ import (
 type Requirements struct {
 	Text        bool
 	ToolCalling bool
+	// InputBytes is an optional conservative context allowance, not a token count.
+	// Zero leaves context-size filtering disabled.
+	InputBytes int
 }
 
 // Capabilities describes the capability set available for one candidate model.

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/q15co/q15/systems/agent/internal/modelselection"
@@ -44,6 +45,27 @@ func (r *routedModelAdapter) Plan(
 				Reason: reason,
 			})
 			continue
+		}
+		// Serialized bytes are a conservative input allowance for bounded text
+		// requests. Reserve a quarter of known context for output and provider
+		// framing; unknown metadata retains the registry's usable default.
+		if requirements.InputBytes > 0 && m.MaxContextTokens > 0 {
+			allowance := m.MaxContextTokens - m.MaxContextTokens/4
+			if requirements.InputBytes > allowance {
+				plan.Skipped = append(
+					plan.Skipped,
+					modelselection.Skip{
+						Ref: ref,
+						Reason: fmt.Sprintf(
+							"request of %d encoded bytes exceeds conservative context allowance %d (known context %d tokens)",
+							requirements.InputBytes,
+							allowance,
+							m.MaxContextTokens,
+						),
+					},
+				)
+				continue
+			}
 		}
 		plan.EligibleRefs = append(plan.EligibleRefs, ref)
 	}
