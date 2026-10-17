@@ -260,6 +260,7 @@ func (j workingMemoryConsolidationJob) Build(
 				workingLedgerRuntimePath,
 			),
 			"Ledger format: YYYY-MM-DDTHH:MMZ run=working_memory.consolidate src=t<a>..t<b> <outcome> \"<full removed item without its bullet marker>\" → <claim-or-loop-id> (<file>). For dropped and closed records, omit the target and include an outcome reason in parentheses. Preserve all existing ledger bytes and append complete newline-terminated records.",
+			ledgerDescriptionQuotingRule,
 			"A closed loop that produced durable knowledge also merits a claim in the semantic store; this job does not write semantic memory, so leave the claim to the conversion pass.",
 			"Apply supported verification corrections in the working-memory artifact; preserve explicit uncertainty when verification downgraded confidence.",
 			"Do not copy the verification review artifact verbatim into working memory.",
