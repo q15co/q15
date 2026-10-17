@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/memory/claims"
@@ -313,17 +314,17 @@ func buildRepairSpec(
 	return Spec{
 		MemoryRecoveryID:   recoveryID,
 		Objective:          renderRepairObjective(target),
-		CompletionContract: renderRepairContract(target),
+		CompletionContract: renderTypedRepairContract(target),
 		PromptSections: []agent.PromptSection{
 			{Name: "claim_id_allocation", Body: claimIDs},
 			repairTargetSection(target),
 			repairChunkSection(target, chunk, repairChunkWindowBytes(raw)),
 			repairRulesSection(target),
 		},
-		ExposeTools:        true,
-		RequireToolCalling: true,
-		AllowedTools:       append([]string(nil), semanticMemoryAllowedTools...),
-		ToolCallPolicy:     repairToolPolicy(target),
+		ExposeTools:    true,
+		AllowedTools:   []string{"read_file", "embed_search"},
+		ToolCallPolicy: repairToolPolicy(target),
+		RunAt:          time.Now().UTC(),
 		// A repair run consumes no transcript, so it reports the extraction
 		// checkpoint it was handed - state accounting still sees the true
 		// boundary - while the repair bit the result carries back is what
@@ -398,9 +399,8 @@ func snapshotRepairWriteSet(
 	return nil
 }
 
-// repairToolPolicy scopes a repair run's file tools to exactly its writable
-// set: the target, the conversion ledger, and the claim files (the semantic
-// roots and the direct topic children). Nothing else may be rewritten.
+// repairToolPolicy permits only evidence reads. The runtime owns every mutation
+// after the complete typed decision plan has passed validation.
 func repairToolPolicy(target MemorySurfaceTarget) filetools.PathAccessPolicy {
 	targetRuntime := memoryRuntimePrefix + target.Path
 	seen := make(map[string]bool)
@@ -420,10 +420,8 @@ func repairToolPolicy(target MemorySurfaceTarget) filetools.PathAccessPolicy {
 		paths = append(paths, openLoopsRuntimePath)
 	}
 	return filetools.PathAccessPolicy{
-		ReadPaths:  append([]string(nil), paths...),
-		WritePaths: paths,
-		ReadDirs:   []string{semanticTopicsRuntimeDir},
-		WriteDirs:  []string{semanticTopicsRuntimeDir},
+		ReadPaths: append([]string(nil), paths...),
+		ReadDirs:  []string{semanticTopicsRuntimeDir},
 	}
 }
 
@@ -456,54 +454,6 @@ func renderRepairObjective(target MemorySurfaceTarget) string {
 	)
 }
 
-// renderRepairContract carries the exit rules: every content line of the
-// chunk becomes a claim or a recorded drop with a citation naming the line
-// it drained, the lines that left are deleted from the target, an un-named
-// target is removed by the runtime once it holds no content line, and
-// nothing outside the target is rewritten except the ledger and the claim
-// files.
-func renderRepairContract(target MemorySurfaceTarget) string {
-	lines := []string{
-		"Every content line in the repair chunk leaves the target in this run: rewritten as a claim in a canonical claim file and recorded converted, or recorded dropped with a reason. Markdown headings, blank lines and the exact `- None` scaffold are structure and need no exit.",
-		fmt.Sprintf(
-			"Append exactly one ledger line per exit to %s: run=%s, src naming the drained line as src=mem:%s:<byte-offset> with the offset from the chunk listing. Copy that row's ledger_description literal into the description field exactly, including its surrounding quotes and escape characters; it decodes to the line's entire text with whitespace collapsed. The decoded literal is also the original source line unless the row supplies a separate raw_line literal preserving its original whitespace.",
-			workingLedgerRuntimePath,
-			semanticMemoryExtractionJobType,
-			target.Path,
-		),
-		"Each content line of the chunk is cited exactly once. A cited occurrence must no longer appear in the covered prefix when the run ends: an un-ledgered chunk line, a claim with no ledger line, a citation outside the chunk or a cited line still present all roll the whole run back.",
-		"Delete exactly the cited line occurrences from the target. Structure in the covered prefix may leave with them. Preserve every byte after the chunk, including identical uncited copies of a cited line, and preserve the order and bytes of retained structure.",
-		fmt.Sprintf(
-			"Keep every semantic root file at or under %d bytes and every topic file at or under %d bytes: a written file that ends over its cap fails validation. The target itself is judged by shrinking, not by its cap.",
-			semanticRootCapBytes,
-			semanticTopicCapBytes,
-		),
-		"Rewrite nothing outside the target except the ledger and the claim files; a working-memory repair may also append new open loops.",
-		"After the tool work completes, reply with one or two short sentences summarizing what left the target.",
-	}
-	if target.Path == workingMemoryRelativePath {
-		lines = append(
-			lines,
-			"Preserve unfinished intentions by moving them to /memory/working/OPEN_LOOPS.md and recording moved, targeting their new loop ID. Keep the full intention, cite that line as the loop's src: mem:<path>:<byte-offset>, and provide canonical trigger and owner metadata. Preserve every existing loop and keep the complete open-loops file within its configured byte budget.",
-			OpenLoopsLineFormat,
-		)
-	}
-	if target.Named {
-		lines = append(
-			lines,
-			"The target is schema-owned: leave the file in place and shrink it on every run, including a structure-only chunk. Remove redundant structure only inside the covered prefix, preserve required canonical headings, and keep all uncovered tail bytes. A run that makes no progress fails and follows the job failure and degradation path.",
-		)
-	} else {
-		lines = append(lines,
-			"If this run leaves the target holding no content line, the runtime removes it afterwards and appends one ledger line recording the adoption (outcome dropped, src=mem:"+target.Path+":0). Removing the file is the runtime's step, never a tool call of yours.",
-		)
-	}
-	return renderPromptLines(lines...)
-}
-
-// repairTargetSection binds the two spellings of the target path: the
-// runtime path the file tools use and the repository-relative path the
-// ledger citation uses.
 func repairTargetSection(target MemorySurfaceTarget) agent.PromptSection {
 	attributes := map[string]string{
 		"path":  memoryRuntimePrefix + target.Path,
@@ -575,8 +525,6 @@ func repairRulesSection(target MemorySurfaceTarget) agent.PromptSection {
 		Body: renderPromptLines(
 			conversionClaimFormatRule,
 			conversionClaimStorageRule,
-			conversionLedgerFormatRule,
-			ledgerDescriptionQuotingRule,
 			fmt.Sprintf(
 				"- Memory citation: a repair exit cites the line it drained as src=mem:%s:<byte-offset> with the offset from the chunk listing (the path is repository-relative, without the runtime prefix). Transcript markers (t<seq>, t<a>..t<b>) keep their meaning for the conversions that have them.",
 				target.Path,
@@ -586,22 +534,23 @@ func repairRulesSection(target MemorySurfaceTarget) agent.PromptSection {
 	}
 }
 
-// applyRepairResult validates one bounded repair run against the chunk its
+// applyWrittenRepairResult validates one bounded repair run against the chunk its
 // spec drained and then performs the runtime's own step: removing a fully
 // adopted un-named target and recording the adoption on the ledger. A failed
 // validation rolls the whole run back through the runner's existing
 // rollback path, exactly like the steady-state conversion.
-func applyRepairResult(
+func applyWrittenRepairResult(
 	ctx context.Context,
 	loader ContextLoader,
 	output JobOutput,
 	budgets memoryFileBudgets,
+	written []string,
 ) (ParsedResult, error) {
 	if loader == nil {
 		return ParsedResult{}, fmt.Errorf("context loader is required")
 	}
 	target := output.Spec.repairTarget
-	drained, err := validateRepairRun(ctx, loader, output, target, budgets)
+	drained, err := validateRepairRun(ctx, loader, output, target, budgets, written)
 	if err != nil {
 		return ParsedResult{}, rollbackFailedRun(
 			ctx,
@@ -631,7 +580,7 @@ func applyRepairResult(
 		)
 	}
 	return ParsedResult{
-		Summary: summarizeSemanticMemoryNotes(output.FinalText),
+		Summary: fmt.Sprintf("Repaired %d memory lines.", drained),
 		Metadata: map[string]string{
 			"repair":                "true",
 			"repair_target":         target.Path,
@@ -659,6 +608,7 @@ func validateRepairRun(
 	output JobOutput,
 	target MemorySurfaceTarget,
 	budgets memoryFileBudgets,
+	written []string,
 ) (int, error) {
 	targetRuntime := memoryRuntimePrefix + target.Path
 	snapshot, ok := output.Spec.FileSnapshots[targetRuntime]
@@ -755,7 +705,6 @@ func validateRepairRun(
 	if err := validateExitTargets(ctx, loader, entries); err != nil {
 		return 0, err
 	}
-	written := successfulWritePaths(output.Messages)
 	if err := checkRepairClaimExits(ctx, loader, output.Spec.Baseline, entries, written); err != nil {
 		return 0, err
 	}
