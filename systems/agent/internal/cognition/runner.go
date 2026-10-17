@@ -15,6 +15,7 @@ const (
 	// defaultCognitionMaxTurns caps the model/tool turns for one cognition run.
 	defaultCognitionMaxTurns               = 32
 	defaultCognitionMaxFailedModelAttempts = 3
+	defaultCognitionMaxRequestBytes        = 256 * 1024
 	memoryRecoveryTimeout                  = 30 * time.Second
 )
 
@@ -378,6 +379,7 @@ func (r *Runner) Run(
 		RequireToolCalling:     spec.RequireToolCalling,
 		Observer:               observer,
 		MaxFailedModelAttempts: defaultCognitionMaxFailedModelAttempts,
+		MaxRequestBytes:        defaultCognitionMaxRequestBytes,
 	})
 	if err != nil {
 		err = r.withRollbackError(ctx, job, spec, err)

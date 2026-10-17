@@ -44,6 +44,8 @@ type EngineRequest struct {
 	Observer           RunObserver
 	// MaxFailedModelAttempts bounds provider failures across all turns. Zero is unlimited.
 	MaxFailedModelAttempts int
+	// MaxRequestBytes bounds canonical JSON input on every model turn. Zero disables it.
+	MaxRequestBytes int
 }
 
 // EngineResult captures the engine-produced messages and final outcome for one
@@ -142,6 +144,21 @@ func (e *Engine) Run(ctx context.Context, req EngineRequest) (EngineResult, erro
 			)
 		}
 
+		size, err := checkRequestBudget(requestMessages, toolDefs, req.MaxRequestBytes)
+		if err != nil {
+			return EngineResult{Messages: copyMessages(messages[start:]), Turn: turn}, err
+		}
+		if req.MaxRequestBytes > 0 {
+			log.Printf(
+				"q15: model request turn=%d canonical_bytes=%d message_bytes=%d tool_definition_bytes=%d max_bytes=%d",
+				turn,
+				size.total,
+				size.messages,
+				size.tools,
+				req.MaxRequestBytes,
+			)
+		}
+
 		modelRef, result, err := e.completeWithObserver(
 			ctx,
 			requestMessages,
@@ -188,6 +205,14 @@ func (e *Engine) Run(ctx context.Context, req EngineRequest) (EngineResult, erro
 			}, nil
 		}
 
+		if _, err := checkRequestBudget(messages, toolDefs, req.MaxRequestBytes); err != nil {
+			return EngineResult{
+				Messages: copyMessages(messages[start:]),
+				ModelRef: modelRef,
+				Turn:     turn,
+			}, err
+		}
+
 		for _, call := range toolCalls {
 			if err := ctx.Err(); err != nil {
 				return EngineResult{
@@ -204,11 +229,19 @@ func (e *Engine) Run(ctx context.Context, req EngineRequest) (EngineResult, erro
 			})
 
 			toolResult, err := e.runTool(ctx, toolRegistry, req.ToolCallPolicy, call)
-			output := toolResult.Output
 			if err != nil {
-				output = "tool error: " + err.Error()
-				toolResult = ToolResult{Output: output}
+				toolResult = ToolResult{Output: "tool error: " + err.Error()}
 			}
+
+			toolResult, err = boundToolResult(
+				messages,
+				toolDefs,
+				call,
+				toolResult,
+				err,
+				req.MaxRequestBytes,
+			)
+			output := toolResult.Output
 
 			emitRunEvent(ctx, req.Observer, RunEvent{
 				Type:       RunEventToolFinished,
