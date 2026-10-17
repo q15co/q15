@@ -47,6 +47,12 @@ const (
 
 const workingMemorySeedPath = seedDirPath + "/" + workingMemoryFileName
 
+const openLoopsFileName = "OPEN_LOOPS.md"
+
+const openLoopsSeedPath = seedDirPath + "/" + openLoopsFileName
+
+const semanticTopicsRelativePath = semanticDirPath + "/topics"
+
 const (
 	semanticFactsFileName       = "facts.md"
 	semanticPreferencesFileName = "preferences.md"
@@ -171,7 +177,19 @@ func (s *Store) Init(ctx context.Context) error {
 	if err := s.ensureSemanticMemory(); err != nil {
 		return err
 	}
+	if err := s.ensureSemanticTopicsDir(); err != nil {
+		return err
+	}
 	if err := s.ensureWorkingMemory(); err != nil {
+		return err
+	}
+	if err := s.ensureOpenLoops(); err != nil {
+		return err
+	}
+	if err := s.ensureWorkingLedger(); err != nil {
+		return err
+	}
+	if err := s.rotateWorkingLedger(time.Now().UTC()); err != nil {
 		return err
 	}
 	if err := s.ensureHeadState(); err != nil {
@@ -667,6 +685,24 @@ func (s *Store) ensureWorkingMemory() error {
 		workingMemorySeedPath,
 	); err != nil {
 		return fmt.Errorf("initialize working memory seed %q: %w", workingMemorySeedPath, err)
+	}
+	return nil
+}
+
+func (s *Store) ensureSemanticTopicsDir() error {
+	path := filepath.Join(s.root(), semanticTopicsRelativePath)
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		return fmt.Errorf("create semantic topics dir %q: %w", path, err)
+	}
+	return nil
+}
+
+func (s *Store) ensureOpenLoops() error {
+	if err := s.ensureSeedFile(
+		filepath.Join(workingDirPath, openLoopsFileName),
+		openLoopsSeedPath,
+	); err != nil {
+		return fmt.Errorf("initialize open loops seed %q: %w", openLoopsSeedPath, err)
 	}
 	return nil
 }
