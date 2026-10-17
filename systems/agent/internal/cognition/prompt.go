@@ -39,6 +39,16 @@ type Spec struct {
 	FileSnapshots map[string]FileSnapshot
 	// MemoryRecoveryID identifies the durable journal for this run.
 	MemoryRecoveryID string
+	// repair marks the spec as the semantic job's bounded repair mode: the
+	// memory surface held a repairable target, so the run drains one chunk of
+	// repairTarget instead of running the transcript-driven conversion. A
+	// repair prompt never carries the semantic roots, the topics, the
+	// transcript or working memory, so ApplyResult routes it to the repair
+	// validation and skips the transcript-coverage checks that only make
+	// sense once those inputs exist.
+	repair bool
+	// repairTarget names the memory-surface file a repair run drains.
+	repairTarget MemorySurfaceTarget
 }
 
 // FileSnapshot is the pre-run on-disk state of one writable path.

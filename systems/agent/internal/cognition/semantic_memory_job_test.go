@@ -967,6 +967,14 @@ func (*semanticMemoryJobLoader) BeginMemoryRecovery(
 	return "", nil
 }
 
+func (*semanticMemoryJobLoader) BeginMemoryRepairRecovery(
+	context.Context,
+	map[string]FileSnapshot,
+	string,
+) (string, error) {
+	return "repair-test-recovery", nil
+}
+
 func (*semanticMemoryJobLoader) CompleteMemoryRecovery(context.Context, string) error { return nil }
 
 func (*semanticMemoryJobLoader) RecoverMemory(context.Context, string) error { return nil }

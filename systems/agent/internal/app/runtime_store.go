@@ -162,6 +162,14 @@ func (s *runtimeStore) BeginMemoryRecovery(
 	return s.memory.BeginMemoryRecovery(ctx, snapshots, topicDir)
 }
 
+func (s *runtimeStore) BeginMemoryRepairRecovery(
+	ctx context.Context,
+	snapshots map[string]cognition.FileSnapshot,
+	target string,
+) (string, error) {
+	return s.memory.BeginMemoryRepairRecovery(ctx, snapshots, target)
+}
+
 func (s *runtimeStore) CompleteMemoryRecovery(ctx context.Context, id string) error {
 	return s.memory.CompleteMemoryRecovery(ctx, id)
 }

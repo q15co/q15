@@ -575,3 +575,37 @@ func TestConversionCapsStillCoverNonMarkdownFiles(t *testing.T) {
 		})
 	}
 }
+
+// TestItemMetadataAcceptsMixedSourceList pins the merge path a repair run
+// takes. A claim that keeps its transcript markers and appends the memory
+// citation of the line it absorbed must parse: the pattern that splits a
+// metadata span into fields must not read "mem:" as a field of its own, or
+// every such claim fails validation and the run rolls back on the same chunk
+// forever.
+func TestItemMetadataAcceptsMixedSourceList(t *testing.T) {
+	t.Parallel()
+
+	item := `- A claim. {status: active, kind: fact, confidence: confirmed, ` +
+		`src: t4391, mem:semantic/state/notes.md:14}`
+	fields, err := itemMetadata(item, "status", "kind", "confidence", "src")
+	if err != nil {
+		t.Fatalf("itemMetadata() error = %v, want the mixed source list to parse", err)
+	}
+	for _, want := range []string{"t4391", "mem:semantic/state/notes.md:14"} {
+		if !strings.Contains(fields["src"], want) {
+			t.Fatalf("src = %q, want it to contain %q", fields["src"], want)
+		}
+	}
+
+	// The narrowing's point is that a non-key is never read as a field. An
+	// unknown key after a known one is therefore no longer named, and is left
+	// to the value checks at the call sites (the status, kind and confidence
+	// enums, and the source-list grammar for src).
+	fields, err = itemMetadata(`- A claim. {status: active, nope: x}`, "status")
+	if err != nil {
+		t.Fatalf("itemMetadata() error = %v, want the span to parse", err)
+	}
+	if _, ok := fields["nope"]; ok || strings.Contains(fields["status"], "nope") == false {
+		t.Fatalf("fields = %#v, want nope: left inside the status value, not a field", fields)
+	}
+}

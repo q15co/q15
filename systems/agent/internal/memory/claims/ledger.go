@@ -3,6 +3,7 @@ package claims
 import (
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -46,7 +47,8 @@ type LedgerEntry struct {
 	// example "semantic_memory.extract".
 	Run string
 	// SourceSeq is the transcript marker or range the exit covers ("t4391"
-	// or "t4391..t4414").
+	// or "t4391..t4414"), or a memory citation naming the line a memory
+	// repair run drained out of a memory file ("mem:semantic/facts.md:1234").
 	SourceSeq string
 	// Outcome is what became of the item.
 	Outcome LedgerOutcome
@@ -267,9 +269,22 @@ func ParseLedgerEntry(line string) (LedgerEntry, error) {
 var (
 	ledgerRunPattern          = regexp.MustCompile(`^[a-zA-Z0-9_.:-]+$`)
 	ledgerRecordPrefixPattern = regexp.MustCompile(`^[0-9]{4}-`)
+	// ledgerMemoryPathPattern bounds the repository-relative path a memory
+	// citation may name. It deliberately excludes ':' so the path and the
+	// byte offset stay unambiguous when split at the first colon.
+	ledgerMemoryPathPattern = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
 )
 
+// ledgerMemorySourcePrefix opens a memory citation in a src field:
+// mem:<relative-path>:<byte-offset> names one line a memory repair run
+// drained out of a memory file, where no transcript marker exists to cite.
+const ledgerMemorySourcePrefix = "mem:"
+
 func validLedgerSource(source string) bool {
+	if strings.HasPrefix(source, ledgerMemorySourcePrefix) {
+		_, _, ok := ParseMemorySource(source)
+		return ok
+	}
 	first, last, hasRange := strings.Cut(source, "..")
 	parseMarker := func(marker string) (uint64, error) {
 		if !strings.HasPrefix(marker, "t") || len(marker) == 1 {
@@ -286,6 +301,43 @@ func validLedgerSource(source string) bool {
 	}
 	to, err := parseMarker(last)
 	return err == nil && to >= from
+}
+
+// ParseMemorySource splits a memory citation of the form
+// mem:<relative-path>:<byte-offset> into its path and offset. The path must
+// sit under one of the two memory content roots (semantic/ or working/) and
+// match the portable path alphabet; the offset is decimal. Anything else -
+// an empty path, a path outside the roots, a negative or non-numeric or
+// empty offset, or a range suffix - is refused, because the citation is what
+// authorises a repair run to delete the line it names.
+func ParseMemorySource(source string) (relativePath string, offset uint64, ok bool) {
+	rest, found := strings.CutPrefix(source, ledgerMemorySourcePrefix)
+	if !found {
+		return "", 0, false
+	}
+	relative, rawOffset, found := strings.Cut(rest, ":")
+	if !found ||
+		(!strings.HasPrefix(relative, "semantic/") &&
+			!strings.HasPrefix(relative, "working/")) {
+		return "", 0, false
+	}
+	if !ledgerMemoryPathPattern.MatchString(relative) || path.Clean(relative) != relative {
+		return "", 0, false
+	}
+	parsed, err := strconv.ParseUint(rawOffset, 10, 64)
+	if err != nil {
+		return "", 0, false
+	}
+	return relative, parsed, true
+}
+
+// ValidMemorySource reports whether source is one well-formed memory
+// citation. The claims metadata grammar accepts it alongside transcript
+// markers, so a claim adopted out of a memory file can cite the line it
+// drained from.
+func ValidMemorySource(source string) bool {
+	_, _, ok := ParseMemorySource(source)
+	return ok
 }
 
 func consumeLedgerQuote(raw string) (string, string, error) {
