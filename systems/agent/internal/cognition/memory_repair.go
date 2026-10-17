@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"path"
 	"sort"
@@ -16,13 +17,38 @@ import (
 	filetools "github.com/q15co/q15/systems/agent/internal/tools/files"
 )
 
-// repairChunkBytes bounds how much of a target one run may read.
+// repairChunkBytes is the default bound on how much of a target one run may
+// read.
 const repairChunkBytes = 8 * 1024
 
 // Each line carries a digest and an offset in the prompt. Bound that framing
 // as well as source bytes so short lines cannot expand an 8 KiB window into
 // hundreds of kilobytes of model input.
 const repairChunkMaxLines = 128
+
+// repairChunkMaxBytes is the largest window one run may open: the default
+// window grows past repairChunkBytes only to fit one first line whole, up to
+// this bound. A first line beyond it can never be drained by a repair run,
+// so repairSpec answers it with the runtime's own step - adoption for an
+// un-named target, a durable refusal for a named one - instead of building a
+// run that would fail on the same bytes forever.
+const repairChunkMaxBytes = 64 * 1024
+
+// repairLineTooLongError reports a first content line that not even the
+// maximum repair window holds whole. A repair run only ever drains whole
+// lines, so this line can never exit: repairSpec turns the error into the
+// runtime's own answer rather than an erroring run.
+type repairLineTooLongError struct {
+	lineBytes int
+}
+
+func (e *repairLineTooLongError) Error() string {
+	return fmt.Sprintf(
+		"first content line is %d bytes, over the %d-byte maximum repair window; refused, not truncated",
+		e.lineBytes,
+		repairChunkMaxBytes,
+	)
+}
 
 // repairChunkLine is one whole line inside a repair chunk, pinned by its
 // byte offset in the pre-run file and by the SHA-256 of its bytes without
@@ -36,15 +62,16 @@ type repairChunkLine struct {
 }
 
 // cutRepairChunk slices the head of a repair target into whole lines bounded
-// by repairChunkBytes. The file is its own cursor: the chunk is always the
-// head of the file as it stands before the run. A line that straddles the
-// window boundary waits for a later run, and a window that holds no whole
-// line at all - a first line longer than the window - is an error, never a
-// silently truncated or empty chunk. At end of file a final line without a
-// trailing newline is whole, because its last byte is the file's last byte.
+// by the window repairChunkWindow reports. The file is its own cursor: the
+// chunk is always the head of the file as it stands before the run. A line
+// that straddles the window boundary waits for a later run, and a window
+// that holds no whole line at all - a first line longer than the maximum
+// window - is a repairLineTooLongError, never a silently truncated or empty
+// chunk. At end of file a final line without a trailing newline is whole,
+// because its last byte is the file's last byte.
 func cutRepairChunk(head []byte) ([]repairChunkLine, error) {
 	base := repairChunkStart(head)
-	window := min(len(head), base+repairChunkBytes)
+	window := repairChunkWindow(head, base)
 	var lines []repairChunkLine
 	start := base
 	for start < window && len(lines) < repairChunkMaxLines {
@@ -66,12 +93,43 @@ func cutRepairChunk(head []byte) ([]repairChunkLine, error) {
 		start = end + 1
 	}
 	if len(lines) == 0 && len(head) > base {
-		return nil, fmt.Errorf(
-			"no whole line fits the %d-byte repair window; a first line longer than the window is refused, not truncated",
-			repairChunkBytes,
-		)
+		return nil, &repairLineTooLongError{lineBytes: repairFirstLineBytes(head, base)}
 	}
 	return lines, nil
+}
+
+// repairChunkWindow returns the end offset of the window one chunk may span.
+// The default window starts repairChunkBytes past the chunk's first line,
+// but a first line that straddles that boundary grows the window up to
+// repairChunkMaxBytes so the line is still cut whole: lines after the first
+// keep waiting for later runs, but the first line itself can never wait -
+// no later run would see a different head - so it either fits the grown
+// window or repairSpec must answer it without a model run.
+func repairChunkWindow(head []byte, base int) int {
+	window := min(len(head), base+repairChunkBytes)
+	if firstLen := repairFirstLineBytes(head, base); firstLen >= repairChunkBytes &&
+		firstLen <= repairChunkMaxBytes {
+		if end := base + firstLen + 1; end > window {
+			window = min(len(head), end)
+		}
+	}
+	return window
+}
+
+// repairFirstLineBytes returns the length of the line starting at base,
+// excluding any trailing newline.
+func repairFirstLineBytes(head []byte, base int) int {
+	if newline := bytes.IndexByte(head[base:], '\n'); newline >= 0 {
+		return newline
+	}
+	return len(head) - base
+}
+
+// repairChunkWindowBytes returns the size of the window one chunk of head
+// was cut from, measured from the chunk's first line.
+func repairChunkWindowBytes(head []byte) int {
+	base := repairChunkStart(head)
+	return repairChunkWindow(head, base) - base
 }
 
 // repairChunkStart returns the byte offset of the first line of head that
@@ -114,7 +172,8 @@ type repairRecoveryPreparer interface {
 }
 
 // repairSpec builds the bounded repair run for the first repairable surface
-// target, or reports a clean surface with (Spec{}, false, nil). It is small
+// target, reports a clean surface with (Spec{}, false, nil), or returns a
+// handled NoWork spec after runtime-only adoption or refusal. It is small
 // and self-contained on purpose: the surface being dirty can mean the
 // semantic roots are exactly what is too large to read, so a repair prompt
 // never includes the roots, topics, transcript or working memory as prompt
@@ -132,22 +191,98 @@ func repairSpec(
 	if len(surface.Targets) == 0 {
 		return Spec{}, false, nil
 	}
-	target := surface.Targets[0]
-	raw, existed, err := loader.ReadFileBytes(ctx, target.Path)
+	// The refusal set is loaded only on a dirty surface, so the ordinary
+	// build pays nothing for it, and it is applied by the callers - the
+	// state rule and this loop - never inside the stat-only scan. Pruning
+	// here is what clears an entry whose path was repaired, edited back
+	// inside the schema, or removed: anything the surface no longer lists as
+	// repairable has nothing left to suppress.
+	refusals, err := loadRepairRefusals(ctx, loader)
 	if err != nil {
-		return Spec{}, false, fmt.Errorf("read repair target %s: %w", target.Path, err)
+		return Spec{}, false, fmt.Errorf("load repair refusals: %w", err)
 	}
-	if !existed {
-		return Spec{}, false, fmt.Errorf(
-			"repair target %s vanished between the surface scan and the read",
-			target.Path,
-		)
+	if pruned, changed := pruneRepairRefusals(refusals, surface); changed {
+		refusals = pruned
+		if err := storeRepairRefusals(ctx, loader, refusals); err != nil {
+			return Spec{}, false, fmt.Errorf("prune repair refusals: %w", err)
+		}
 	}
-	chunk, err := cutRepairChunk(raw)
-	if err != nil {
-		return Spec{}, false, fmt.Errorf("cut repair chunk of %s: %w", target.Path, err)
+	for _, target := range surface.Targets {
+		if !claims.ValidMemorySource("mem:" + target.Path + ":0") {
+			if err := recordRepairRefusalReason(ctx, loader, refusals, target,
+				"unsupported memory citation path: the filename cannot be represented by the repair ledger grammar; rename the file to a portable path before retrying"); err != nil {
+				return Spec{}, false, err
+			}
+			continue
+		}
+		raw, existed, err := loader.ReadFileBytes(ctx, target.Path)
+		if err != nil {
+			return Spec{}, false, fmt.Errorf("read repair target %s: %w", target.Path, err)
+		}
+		if !existed {
+			return Spec{}, false, fmt.Errorf(
+				"repair target %s vanished between the surface scan and the read",
+				target.Path,
+			)
+		}
+		chunk, err := cutRepairChunk(raw)
+		if err != nil {
+			var tooLong *repairLineTooLongError
+			if !errors.As(err, &tooLong) {
+				return Spec{}, false, fmt.Errorf("cut repair chunk of %s: %w", target.Path, err)
+			}
+			if target.Named {
+				if err := recordRepairRefusal(ctx, loader, refusals, target, tooLong); err != nil {
+					return Spec{}, false, err
+				}
+				continue
+			}
+			if err := adoptUnreadableRepairTarget(ctx, loader, target, raw, tooLong); err != nil {
+				return Spec{}, false, err
+			}
+			continue
+		}
+		if _, refused := refusals[target.Path]; refused {
+			// The file changed since the refusal was recorded: a shorter first
+			// line, an edit by hand, a merge. Re-cutting every refused target is
+			// what stops an entry suppressing a file a run could now drain. The
+			// state rule stays read-only, so the build is the only place on this
+			// route that may clear it.
+			delete(refusals, target.Path)
+			if err := storeRepairRefusals(ctx, loader, refusals); err != nil {
+				return Spec{}, false, fmt.Errorf(
+					"clear repair refusal for %s: %w",
+					target.Path,
+					err,
+				)
+			}
+		}
+		spec, err := buildRepairSpec(ctx, loader, target, raw, chunk)
+		if err != nil {
+			return Spec{}, false, err
+		}
+		return spec, true, nil
 	}
+	return Spec{NoWork: &NoWorkResult{
+		Summary: "Memory repair deferred ordinary conversion; no model work was performed.",
+		Metadata: map[string]string{
+			"memory_repair_no_work":  "true",
+			"memory_repair_refusals": strconv.Itoa(len(refusals)),
+		},
+	}}, true, nil
+}
 
+// buildRepairSpec assembles the bounded repair run for the one chosen
+// target: the spec pins the pre-run bytes of the target and every writable
+// side file, so a failed run rolls back byte-for-byte, and the prompt
+// carries exactly the chunk the run must drain.
+func buildRepairSpec(
+	ctx context.Context,
+	loader ContextLoader,
+	target MemorySurfaceTarget,
+	raw []byte,
+	chunk []repairChunkLine,
+) (Spec, error) {
 	snapshots := map[string]FileSnapshot{
 		// The target is pinned to the bytes the chunk was cut from, so the
 		// prompt, the rollback restore and the validation all describe the
@@ -155,7 +290,7 @@ func repairSpec(
 		memoryRuntimePrefix + target.Path: {Existed: true, Content: raw},
 	}
 	if err := snapshotRepairWriteSet(ctx, loader, snapshots); err != nil {
-		return Spec{}, false, err
+		return Spec{}, err
 	}
 	baseline := make(map[string]string, len(snapshots))
 	for runtimePath, snapshot := range snapshots {
@@ -163,22 +298,16 @@ func repairSpec(
 	}
 	claimIDs, err := conversionClaimIDSummary(ctx, loader, baseline)
 	if err != nil {
-		return Spec{}, false, err
+		return Spec{}, err
 	}
 	checkpoint, err := loader.LoadSemanticExtractionCheckpoint(ctx)
 	if err != nil {
-		return Spec{}, false, fmt.Errorf("load semantic extraction checkpoint: %w", err)
+		return Spec{}, fmt.Errorf("load semantic extraction checkpoint: %w", err)
 	}
 
-	preparer, ok := loader.(repairRecoveryPreparer)
-	if !ok {
-		return Spec{}, false, fmt.Errorf(
-			"context loader does not support durable memory repair recovery",
-		)
-	}
-	recoveryID, err := preparer.BeginMemoryRepairRecovery(ctx, snapshots, target.Path)
+	recoveryID, err := beginRepairRecovery(ctx, loader, snapshots, target.Path)
 	if err != nil {
-		return Spec{}, false, fmt.Errorf("prepare memory repair recovery: %w", err)
+		return Spec{}, err
 	}
 
 	return Spec{
@@ -188,7 +317,7 @@ func repairSpec(
 		PromptSections: []agent.PromptSection{
 			{Name: "claim_id_allocation", Body: claimIDs},
 			repairTargetSection(target),
-			repairChunkSection(target, chunk),
+			repairChunkSection(target, chunk, repairChunkWindowBytes(raw)),
 			repairRulesSection(target),
 		},
 		ExposeTools:        true,
@@ -196,16 +325,37 @@ func repairSpec(
 		AllowedTools:       append([]string(nil), semanticMemoryAllowedTools...),
 		ToolCallPolicy:     repairToolPolicy(target),
 		// A repair run consumes no transcript, so it reports the extraction
-		// checkpoint it was handed: the controller then keeps the checkpoint
-		// where it was instead of marking unprocessed turns as extracted.
-		// The zero-checkpoint corner still advances to the run head, as every
-		// job does when it holds no window boundary.
+		// checkpoint it was handed - state accounting still sees the true
+		// boundary - while the repair bit the result carries back is what
+		// holds the checkpoint in place: the controller skips the checkpoint
+		// store for a repair run, so a zero handed checkpoint no longer
+		// advances to the run head.
 		CheckpointSeq: checkpoint.LastExtractedSeq,
 		Baseline:      baseline,
 		FileSnapshots: snapshots,
 		repair:        true,
 		repairTarget:  target,
-	}, true, nil
+	}, nil
+}
+
+func beginRepairRecovery(
+	ctx context.Context,
+	loader ContextLoader,
+	snapshots map[string]FileSnapshot,
+	targetPath string,
+) (string, error) {
+	preparer, ok := loader.(repairRecoveryPreparer)
+	if !ok {
+		return "", fmt.Errorf("context loader does not support durable memory repair recovery")
+	}
+	id, err := preparer.BeginMemoryRepairRecovery(ctx, snapshots, targetPath)
+	if err != nil {
+		return "", fmt.Errorf("prepare memory repair recovery: %w", err)
+	}
+	if id == "" {
+		return "", fmt.Errorf("prepare memory repair recovery returned no journal identity")
+	}
+	return id, nil
 }
 
 // snapshotRepairWriteSet adds every path a repair run may touch besides the
@@ -379,9 +529,12 @@ func repairTargetSection(target MemorySurfaceTarget) agent.PromptSection {
 // repairChunkSection lists the chunk's lines, each with its byte offset in
 // the pre-run file and the SHA-256 of its bytes without the trailing
 // newline - the address a ledger citation uses to name the line it drained.
+// windowBytes is the byte size of the window the chunk was cut from:
+// repairChunkBytes by default, grown only to fit an outsized first line.
 func repairChunkSection(
 	target MemorySurfaceTarget,
 	chunk []repairChunkLine,
+	windowBytes int,
 ) agent.PromptSection {
 	lines := make([]string, 0, len(chunk))
 	for _, line := range chunk {
@@ -402,7 +555,7 @@ func repairChunkSection(
 		Name: "repair_chunk",
 		Attributes: map[string]string{
 			"path":         memoryRuntimePrefix + target.Path,
-			"window_bytes": strconv.Itoa(repairChunkBytes),
+			"window_bytes": strconv.Itoa(windowBytes),
 		},
 		Body: strings.Join(lines, "\n"),
 	}
@@ -451,8 +604,19 @@ func applyRepairResult(
 			err,
 		)
 	}
-	removed, err := adoptDrainedRepairTarget(ctx, loader, target)
+	removed, err := adoptDrainedRepairTarget(ctx, loader, target, output.Spec.MemoryRecoveryID)
 	if err != nil {
+		return ParsedResult{}, rollbackFailedRun(
+			ctx,
+			loader,
+			output.Spec.FileSnapshots,
+			err,
+		)
+	}
+	// A target whose repair run just validated holds no refusal anymore: a
+	// refused target never reaches a run, so an entry for it can only be a
+	// stale one from a concurrent recording, and it clears here.
+	if err := clearRepairRefusal(ctx, loader, target.Path); err != nil {
 		return ParsedResult{}, rollbackFailedRun(
 			ctx,
 			loader,
@@ -469,6 +633,10 @@ func applyRepairResult(
 			"chunk_lines_exited":    strconv.Itoa(drained),
 		},
 		CheckpointSeq: output.Spec.CheckpointSeq,
+		// The repair bit is what makes the checkpoint hold unconditional:
+		// the controller skips the semantic checkpoint store for a repair
+		// run, so a zero handed checkpoint cannot advance to the run head.
+		Repair: true,
 	}, nil
 }
 
@@ -1004,6 +1172,7 @@ func adoptDrainedRepairTarget(
 	ctx context.Context,
 	loader ContextLoader,
 	target MemorySurfaceTarget,
+	recoveryID string,
 ) (bool, error) {
 	if target.Named {
 		return false, nil
@@ -1018,14 +1187,78 @@ func adoptDrainedRepairTarget(
 				return false, nil
 			}
 		}
+	}
+	if err := appendRepairAdoptionRecord(ctx, loader, target.Path, repairAdoptionNote, recoveryID); err != nil {
+		return false, err
+	}
+	if existed {
 		if err := loader.DeleteFile(ctx, target.Path); err != nil {
 			return false, fmt.Errorf("remove adopted memory file %s: %w", target.Path, err)
 		}
 	}
-	if err := appendRepairAdoptionRecord(ctx, loader, target.Path); err != nil {
-		return false, err
-	}
 	return true, nil
+}
+
+// repairAdoptionNote is the ledger note for the adoption the runtime records
+// when it removes an un-named target whose content lines have all drained.
+const repairAdoptionNote = "un-named memory file adopted by a memory repair run: no content line remained, so the runtime removed the file"
+
+// adoptUnreadableRepairTarget is the runtime's own answer to an un-named
+// target whose first content line not even the maximum repair window can
+// hold: that line can never exit, so no repair run can drain the file and
+// none is built. The runtime records exactly one adoption line on the
+// ledger - the file-level citation src=mem:<path>:0 with outcome dropped and
+// the note naming the reason - and then removes the file itself, without
+// which the state rule would fire on the same bytes forever.
+func adoptUnreadableRepairTarget(
+	ctx context.Context,
+	loader ContextLoader,
+	target MemorySurfaceTarget,
+	raw []byte,
+	tooLong *repairLineTooLongError,
+) error {
+	snapshots := map[string]FileSnapshot{
+		memoryRuntimePrefix + target.Path: {Existed: true, Content: raw},
+	}
+	if err := snapshotRepairWriteSet(ctx, loader, snapshots); err != nil {
+		return err
+	}
+	id, err := beginRepairRecovery(ctx, loader, snapshots, target.Path)
+	if err != nil {
+		return err
+	}
+	ownerCtx := withMemoryRecoveryOwner(ctx, id)
+	note := fmt.Sprintf(
+		"un-named memory file adopted by a memory repair run: first content line is %d bytes, over the %d-byte maximum repair window, so the runtime removed the file unreadable",
+		tooLong.lineBytes,
+		repairChunkMaxBytes,
+	)
+	if err := appendRepairAdoptionRecord(ownerCtx, loader, target.Path, note, id); err != nil {
+		return recoverRepairAdoption(ctx, loader, id, err)
+	}
+	if err := loader.DeleteFile(ownerCtx, target.Path); err != nil {
+		return recoverRepairAdoption(ctx, loader, id,
+			fmt.Errorf("remove unreadable memory file %s: %w", target.Path, err))
+	}
+	if err := loader.CompleteMemoryRecovery(ctx, id); err != nil {
+		return recoverRepairAdoption(ctx, loader, id,
+			fmt.Errorf("complete unreadable memory adoption: %w", err))
+	}
+	return nil
+}
+
+func recoverRepairAdoption(
+	ctx context.Context,
+	loader ContextLoader,
+	id string,
+	adoptionErr error,
+) error {
+	cleanupCtx, cancel := memoryRecoveryContext(ctx)
+	defer cancel()
+	if err := loader.RecoverMemory(cleanupCtx, id); err != nil {
+		return fmt.Errorf("%w (adoption rollback also failed: %w)", adoptionErr, err)
+	}
+	return adoptionErr
 }
 
 // appendRepairAdoptionRecord appends the one ledger line that records an
@@ -1036,18 +1269,45 @@ func appendRepairAdoptionRecord(
 	ctx context.Context,
 	loader ContextLoader,
 	relativePath string,
+	note string,
+	recoveryID string,
 ) error {
+	if recoveryID == "" {
+		return fmt.Errorf("repair adoption requires a recovery journal identity")
+	}
+	note += "; repair_id=" + recoveryID
 	ledger, _, err := loader.ReadFileBytes(ctx, workingLedgerRelativePath)
 	if err != nil {
 		return fmt.Errorf("load working ledger for the adoption record: %w", err)
 	}
-	entry := claims.FormatLedgerEntry(claims.LedgerEntry{
+	history, err := loader.LoadConversionLedgerHistory(ctx)
+	if err != nil {
+		return fmt.Errorf("load ledger history for adoption: %w", err)
+	}
+	wanted := claims.LedgerEntry{
 		Run:         semanticMemoryExtractionJobType,
 		SourceSeq:   "mem:" + relativePath + ":0",
 		Outcome:     claims.OutcomeDropped,
 		Description: relativePath,
-		Note:        "un-named memory file adopted by a memory repair run: no content line remained, so the runtime removed the file",
-	})
+		Note:        note,
+	}
+	// A retry of the same journal may already have this exact record in the
+	// active ledger or an archive. A new journal gives a re-created path its
+	// own exit, even when the path and bytes match an earlier adoption.
+	for _, content := range []string{string(ledger), history} {
+		entries, err := claims.ParseLedger([]byte(content))
+		if err != nil {
+			return fmt.Errorf("parse adoption ledger history: %w", err)
+		}
+		for _, entry := range entries {
+			if entry.Run == wanted.Run && entry.SourceSeq == wanted.SourceSeq &&
+				entry.Outcome == wanted.Outcome && entry.Description == wanted.Description &&
+				entry.TargetID == "" && entry.TargetPath == "" && entry.Note == wanted.Note {
+				return nil
+			}
+		}
+	}
+	entry := claims.FormatLedgerEntry(wanted)
 	if _, err := claims.ParseLedgerEntry(strings.TrimSuffix(entry, "\n")); err != nil {
 		return fmt.Errorf("format repair adoption record: %w", err)
 	}

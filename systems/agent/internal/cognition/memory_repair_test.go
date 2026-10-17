@@ -3,6 +3,7 @@ package cognition
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -60,8 +61,9 @@ func TestCutRepairChunk(t *testing.T) {
 
 // TestCutRepairChunkBoundaries pins the window edges: a line ending exactly
 // at the boundary is in, a straddling line waits for the next run, a first
-// line longer than the window is an error rather than a silent truncation,
-// and a final line at end of file without a trailing newline is whole.
+// line longer than the maximum window is an error rather than a silent
+// truncation, and a final line at end of file without a trailing newline is
+// whole.
 func TestCutRepairChunkBoundaries(t *testing.T) {
 	t.Parallel()
 
@@ -81,8 +83,10 @@ func TestCutRepairChunkBoundaries(t *testing.T) {
 		t.Fatalf("straddling line: chunk=%v err=%v, want only the first line", chunk, err)
 	}
 
-	if _, err := cutRepairChunk([]byte(strings.Repeat("z", repairChunkBytes+1))); err == nil {
-		t.Fatal("a single line longer than the window was accepted; want refusal, not truncation")
+	if _, err := cutRepairChunk([]byte(strings.Repeat("z", repairChunkMaxBytes+1))); err == nil {
+		t.Fatal(
+			"a single line longer than the maximum window was accepted; want refusal, not truncation",
+		)
 	}
 	// An empty file holds no line to drain at all, which is the adoption case
 	// rather than a refusal: the run is a no-op and the runtime removes the file.
@@ -94,6 +98,63 @@ func TestCutRepairChunkBoundaries(t *testing.T) {
 	chunk, err = cutRepairChunk([]byte("one\ntwo"))
 	if err != nil || len(chunk) != 2 || chunk[1].offset != 4 || chunk[1].text != "two" {
 		t.Fatalf("EOF-terminated line: chunk=%v err=%v, want both lines whole", chunk, err)
+	}
+}
+
+// TestCutRepairChunkGrowsWindowForOutsizedFirstLine pins the adaptive
+// window: a first line past the default repairChunkBytes window but inside
+// repairChunkMaxBytes is cut whole, with its exact offset and SHA, and the
+// window grows only to fit that line - the next line still waits for the
+// next run. Only a first line past the maximum is refused, which is what
+// repairSpec turns into an adoption or a durable refusal instead of a run
+// that fails forever.
+func TestCutRepairChunkGrowsWindowForOutsizedFirstLine(t *testing.T) {
+	t.Parallel()
+
+	big := strings.Repeat("b", 20*1024)
+	head := big + "\nsecond line stays for the next run\n"
+	chunk, err := cutRepairChunk([]byte(head))
+	if err != nil {
+		t.Fatalf("cutRepairChunk() error = %v, want the 20 KiB first line cut whole", err)
+	}
+	if len(chunk) != 1 || chunk[0].text != big || chunk[0].offset != 0 {
+		t.Fatalf(
+			"chunk = %d lines starting at %d, want only the whole 20 KiB first line at offset 0",
+			len(chunk),
+			chunk[0].offset,
+		)
+	}
+	if chunk[0].sum != sha256.Sum256([]byte(big)) {
+		t.Fatalf("chunk[0] sum = %x, want sha256 of the line without newline", chunk[0].sum)
+	}
+
+	// Leading structure shifts the line, and the reported offset stays
+	// file-absolute.
+	prefixed := "# Heading\n\n" + big + "\n"
+	chunk, err = cutRepairChunk([]byte(prefixed))
+	if err != nil || len(chunk) != 1 || chunk[0].text != big {
+		t.Fatalf("chunk = %#v err = %v, want only the content line", chunk, err)
+	}
+	if want := strings.Index(prefixed, big); chunk[0].offset != want {
+		t.Fatalf("offset = %d, want the content line's file offset %d", chunk[0].offset, want)
+	}
+
+	// The exact boundary: a first line of exactly repairChunkMaxBytes fits
+	// its grown window; one byte past it is refused.
+	if chunk, err = cutRepairChunk(
+		[]byte(strings.Repeat("m", repairChunkMaxBytes) + "\n"),
+	); err != nil || len(chunk) != 1 || len(chunk[0].text) != repairChunkMaxBytes {
+		t.Fatalf("at maximum: %d lines err = %v, want the whole line", len(chunk), err)
+	}
+	if _, err := cutRepairChunk(
+		[]byte(strings.Repeat("m", repairChunkMaxBytes+1) + "\n"),
+	); err == nil {
+		t.Fatal("one byte past the maximum: want a refusal, not a truncated chunk")
+	} else {
+		var tooLong *repairLineTooLongError
+		if !errors.As(err, &tooLong) || tooLong.lineBytes != repairChunkMaxBytes+1 {
+			t.Fatalf("error = %v, want repairLineTooLongError naming the line size", err)
+		}
 	}
 }
 
@@ -645,6 +706,9 @@ func TestSemanticRepairRunAdoptsDrainedUnNamedTarget(t *testing.T) {
 	if got, want := result.CheckpointSeq, int64(100); got != want {
 		t.Fatalf("CheckpointSeq = %d, want the carried extraction checkpoint %d", got, want)
 	}
+	if !result.Repair {
+		t.Fatal("Repair = false, want the repair bit carried onto the result")
+	}
 	if len(loader.deleted) != 1 || loader.deleted[0] != repairNotesPath {
 		t.Fatalf("deleted = %v, want exactly the drained target", loader.deleted)
 	}
@@ -944,4 +1008,472 @@ func reflectKeys(loader *repairProbeLoader) []string {
 		keys = append(keys, path)
 	}
 	return keys
+}
+
+// TestSemanticRepairRunDrainsOutsizedFirstLine pins the adaptive window end
+// to end: a first line longer than the default window but inside the maximum
+// is offered whole, cited by its real offset, and the run validates and
+// shrinks the target like any other repair - and no refusal is recorded for
+// a line the grown window could hold.
+func TestSemanticRepairRunDrainsOutsizedFirstLine(t *testing.T) {
+	t.Parallel()
+
+	bundle := "Cached minified bundle " + strings.Repeat("x", 20*1024)
+	bundleOffset := len("# Old notes\n")
+	pre := "# Old notes\n" + bundle + "\n" + repairAlphaLine + "\n"
+	files := repairPreFiles()
+	files[repairNotesPath] = pre
+	listing := make([]MemoryFile, 0, len(files))
+	for path, content := range files {
+		listing = append(listing, MemoryFile{Path: path, Bytes: int64(len(content))})
+	}
+	loader := &repairProbeLoader{
+		semanticMemoryJobLoader: &semanticMemoryJobLoader{
+			files:      repairRawFiles(files),
+			checkpoint: SemanticExtractionCheckpoint{LastExtractedSeq: 100},
+		},
+		memoryFiles: listing,
+	}
+
+	job := NewSemanticMemoryExtractionRegistration(0, 0).NewJob()
+	spec, err := job.Build(context.Background(), loader)
+	if err != nil {
+		t.Fatalf("Build() error = %v, want a repair spec that fits the outsized line", err)
+	}
+	if !spec.repair || spec.repairTarget.Path != repairNotesPath {
+		t.Fatalf("repair target = %#v, want the oversized notes file", spec.repairTarget)
+	}
+	var chunkWindow string
+	for _, section := range spec.PromptSections {
+		if section.Name == "repair_chunk" {
+			chunkWindow = section.Attributes["window_bytes"]
+		}
+	}
+	if want := fmt.Sprintf("%d", len(bundle)+1); chunkWindow != want {
+		t.Fatalf("repair_chunk window_bytes = %q, want the grown window %q", chunkWindow, want)
+	}
+	prompt, err := renderPrompt(semanticMemoryExtractionJobType, spec)
+	if err != nil {
+		t.Fatalf("renderPrompt() error = %v", err)
+	}
+	if !strings.Contains(prompt, bundle) {
+		t.Fatal("repair prompt does not carry the whole outsized first line")
+	}
+	if !strings.Contains(prompt, fmt.Sprintf("offset=%d ", bundleOffset)) {
+		t.Fatalf("repair prompt does not cite the line at its file offset %d", bundleOffset)
+	}
+
+	// The outsized line exits as a recorded drop: one ledger line citing it
+	// by offset, and the line itself gone from the target.
+	drop := fmt.Sprintf(
+		"2026-10-16T05:00Z run=%s src=mem:%s:%d dropped %q (minified cache kept nowhere)\n",
+		semanticMemoryExtractionJobType,
+		repairNotesPath,
+		bundleOffset,
+		bundle,
+	)
+	loader.files["working/LEDGER.md"] = []byte(repairLedgerPre + drop)
+	loader.files[repairNotesPath] = []byte("# Old notes\n" + repairAlphaLine + "\n")
+
+	result, err := job.ApplyResult(context.Background(), loader, JobOutput{
+		Type:      semanticMemoryExtractionJobType,
+		Spec:      spec,
+		FinalText: "Dropped the cached bundle line.",
+		Messages: repairRunMessages(
+			memoryRuntimePrefix+repairNotesPath,
+			workingLedgerRuntimePath,
+		),
+	})
+	if err != nil {
+		t.Fatalf("ApplyResult() error = %v", err)
+	}
+	if got := result.Metadata["chunk_lines_exited"]; got != "1" {
+		t.Fatalf("chunk_lines_exited = %q, want 1", got)
+	}
+	if got := result.Metadata["repair_target_removed"]; got != "false" {
+		t.Fatalf("repair_target_removed = %q, want false: content lines remain", got)
+	}
+	if len(loader.deleted) != 0 {
+		t.Fatalf("deleted = %v, want no deletion while the target holds content", loader.deleted)
+	}
+	refusals, err := loadRepairRefusals(context.Background(), loader)
+	if err != nil || len(refusals) != 0 {
+		t.Fatalf(
+			"refusals = %#v err = %v, want none for a line the grown window held",
+			refusals,
+			err,
+		)
+	}
+}
+
+// TestSemanticRepairAdoptsUnreadableUnNamedTarget pins the runtime's own
+// answer to a first line no window can hold on an un-named file: no repair
+// run is built, exactly one adoption record lands on the ledger naming the
+// reason, and the file itself is removed - so the next pass sees a clean
+// surface and records nothing twice.
+func TestSemanticRepairAdoptsUnreadableUnNamedTarget(t *testing.T) {
+	t.Parallel()
+
+	huge := strings.Repeat("j", 100*1024)
+	files := repairPreFiles()
+	files[repairNotesPath] = huge + "\n"
+	listing := make([]MemoryFile, 0, len(files))
+	for path, content := range files {
+		listing = append(listing, MemoryFile{Path: path, Bytes: int64(len(content))})
+	}
+	loader := &repairProbeLoader{
+		semanticMemoryJobLoader: &semanticMemoryJobLoader{
+			files:      repairRawFiles(files),
+			checkpoint: SemanticExtractionCheckpoint{LastExtractedSeq: 100},
+		},
+		memoryFiles: listing,
+	}
+
+	spec, repair, err := repairSpec(context.Background(), loader, memoryFileBudgets{})
+	if err != nil {
+		t.Fatalf("repairSpec() error = %v, want the adoption to settle the pass without a run", err)
+	}
+	if !repair || spec.NoWork == nil || len(spec.PromptSections) != 0 {
+		t.Fatalf(
+			"repairSpec() = %d sections, repair=%v, want handled runtime-only maintenance",
+			len(spec.PromptSections),
+			repair,
+		)
+	}
+	if len(loader.forbidden) != 0 {
+		t.Fatalf("adoption loaded forbidden inputs %v", loader.forbidden)
+	}
+	if len(loader.deleted) != 1 || loader.deleted[0] != repairNotesPath {
+		t.Fatalf("deleted = %v, want exactly the unreadable target", loader.deleted)
+	}
+	if _, exists := loader.files[repairNotesPath]; exists {
+		t.Fatal("the unreadable file is still in the store after its adoption")
+	}
+	refusals, err := loadRepairRefusals(context.Background(), loader)
+	if err != nil || len(refusals) != 0 {
+		t.Fatalf(
+			"refusals = %#v err = %v, want none: an un-named file is adopted, not refused",
+			refusals,
+			err,
+		)
+	}
+
+	ledger := string(loader.files["working/LEDGER.md"])
+	appended := strings.TrimSuffix(strings.TrimPrefix(ledger, repairLedgerPre), "\n")
+	if strings.Count(appended, "\n") != 0 || !strings.HasPrefix(ledger, repairLedgerPre) {
+		t.Fatalf("ledger = %q, want exactly one adoption record appended", ledger)
+	}
+	record, err := claims.ParseLedgerEntry(appended)
+	if err != nil {
+		t.Fatalf("adoption record does not parse: %v", err)
+	}
+	if record.Run != semanticMemoryExtractionJobType ||
+		record.SourceSeq != "mem:"+repairNotesPath+":0" ||
+		record.Outcome != claims.OutcomeDropped ||
+		record.Description != repairNotesPath ||
+		!strings.Contains(record.Note, "102400") ||
+		!strings.Contains(record.Note, "unreadable") {
+		t.Fatalf("adoption record = %#v, want the file-level drop naming the reason", record)
+	}
+
+	// The next pass sees the surface without the file and settles cleanly,
+	// recording nothing more.
+	kept := listing[:0]
+	for _, file := range listing {
+		if file.Path != repairNotesPath {
+			kept = append(kept, file)
+		}
+	}
+	loader.memoryFiles = kept
+	if _, repair, err := repairSpec(context.Background(), loader, memoryFileBudgets{}); err != nil ||
+		repair {
+		t.Fatalf("second repairSpec() = %v, %v, want a clean surface", repair, err)
+	}
+	if ledger := string(loader.files["working/LEDGER.md"]); strings.Count(
+		ledger,
+		"src=mem:"+repairNotesPath+":0",
+	) != 1 {
+		t.Fatalf("ledger = %q, want the adoption recorded exactly once across passes", ledger)
+	}
+}
+
+// TestSemanticRepairRefusesUnreadableNamedTarget pins the named half of the
+// unreadable case: the file is schema-owned and must never be deleted, so
+// the runtime records a durable refusal in the job-owned cognition artifact
+// instead, the build stops failing, and the state rule stops firing on the
+// refused path while it applies.
+func TestSemanticRepairRefusesUnreadableNamedTarget(t *testing.T) {
+	t.Parallel()
+
+	topic := "semantic/topics/giant.md"
+	huge := strings.Repeat("j", 100*1024) + "\n"
+	listing := []MemoryFile{
+		{Path: semanticFactsRelativePath, Bytes: 100},
+		{Path: "working/WORKING_MEMORY.md", Bytes: 8192},
+		{Path: "working/LEDGER.md", Bytes: 4096},
+		{Path: topic, Bytes: int64(len(huge))},
+	}
+	base := goldenSemanticLoader()
+	base.rawFiles = map[string]string{topic: huge}
+	loader := &repairProbeLoader{
+		semanticMemoryJobLoader: base,
+		memoryFiles:             listing,
+	}
+
+	spec, err := NewSemanticMemoryExtractionRegistration(0, 0).NewJob().Build(
+		context.Background(),
+		loader,
+	)
+	if err != nil {
+		t.Fatalf(
+			"Build() error = %v, want the refusal recorded and ordinary conversion deferred",
+			err,
+		)
+	}
+	if spec.repair {
+		t.Fatal(
+			"Build() built a repair run for a target no window can hold; want the refusal alone",
+		)
+	}
+	if spec.NoWork == nil || len(spec.PromptSections) != 0 || len(loader.forbidden) != 0 {
+		t.Fatalf(
+			"refused Build() = %#v, forbidden loads=%v, want no ordinary input",
+			spec,
+			loader.forbidden,
+		)
+	}
+	if len(loader.deleted) != 0 {
+		t.Fatalf("deleted = %v, want nothing deleted: a named file is schema-owned", loader.deleted)
+	}
+
+	refusals, err := loadRepairRefusals(context.Background(), loader)
+	if err != nil {
+		t.Fatalf("loadRepairRefusals() error = %v", err)
+	}
+	refusal, recorded := refusals[topic]
+	if !recorded || len(refusals) != 1 {
+		t.Fatalf("refusals = %#v, want exactly one entry naming %s", refusals, topic)
+	}
+	for _, want := range []string{"102400", fmt.Sprintf("%d", repairChunkMaxBytes)} {
+		if !strings.Contains(refusal.Reason, want) {
+			t.Fatalf("refusal reason = %q, want it to name %q", refusal.Reason, want)
+		}
+	}
+	if refusal.RecordedAt.IsZero() {
+		t.Fatal("refusal carries no written-at time")
+	}
+
+	// While the refusal stands, the state rule no longer fires on the file.
+	ruleLoader := &surfaceProbeLoader{
+		semanticMemoryJobLoader: semanticMemoryJobLoader{artifacts: loader.artifacts},
+		memoryFiles:             listing,
+	}
+	run, reason, err := evaluateMemorySurfaceRepairable(
+		context.Background(),
+		Snapshot{Loader: ruleLoader},
+		memoryFileBudgets{working: 8192, openLoops: 4096},
+	)
+	if err != nil || run {
+		t.Fatalf("rule with refusal: run=%v reason=%q err=%v, want it silent", run, reason, err)
+	}
+}
+
+// TestSemanticRepairRecordsRefusalAndBuildsNextTarget pins that a refused
+// target does not block the pass: the refusal is recorded for the named
+// oversize file, and the same build still returns the repair spec for the
+// next repairable target.
+func TestSemanticRepairRecordsRefusalAndBuildsNextTarget(t *testing.T) {
+	t.Parallel()
+
+	topic := "semantic/topics/giant.md"
+	raw := repairRawFiles(repairPreFiles())
+	raw[topic] = []byte(strings.Repeat("j", 100*1024) + "\n")
+	listing := make([]MemoryFile, 0, len(raw))
+	for path, content := range raw {
+		listing = append(listing, MemoryFile{Path: path, Bytes: int64(len(content))})
+	}
+	loader := &repairProbeLoader{
+		semanticMemoryJobLoader: &semanticMemoryJobLoader{
+			files:      raw,
+			checkpoint: SemanticExtractionCheckpoint{LastExtractedSeq: 100},
+		},
+		memoryFiles: listing,
+	}
+
+	spec, repair, err := repairSpec(context.Background(), loader, memoryFileBudgets{})
+	if err != nil {
+		t.Fatalf("repairSpec() error = %v", err)
+	}
+	if !repair || spec.repairTarget.Path != repairNotesPath {
+		t.Fatalf(
+			"repair target = %#v repair=%v, want the pass to move on to %s after refusing the topic",
+			spec.repairTarget,
+			repair,
+			repairNotesPath,
+		)
+	}
+	if len(loader.deleted) != 0 {
+		t.Fatalf("deleted = %v, want nothing deleted for a named target", loader.deleted)
+	}
+	refusals, err := loadRepairRefusals(context.Background(), loader)
+	if err != nil || len(refusals) != 1 {
+		t.Fatalf("refusals = %#v err = %v, want exactly the refused topic", refusals, err)
+	}
+	if _, recorded := refusals[topic]; !recorded {
+		t.Fatalf("refusals = %#v, want the entry naming %s", refusals, topic)
+	}
+}
+
+// TestSemanticRepairRefusalClearsOnceFileIsUnderCap pins the refusal's exit:
+// once the file no longer sits on the repairable surface - here it was
+// edited back under its cap - the next repair build prunes the entry, so the
+// artifact cannot leak a refusal for a file the schema is happy with.
+func TestSemanticRepairRefusalClearsOnceFileIsUnderCap(t *testing.T) {
+	t.Parallel()
+
+	topic := "semantic/topics/giant.md"
+	raw := repairRawFiles(repairPreFiles())
+	raw[topic] = []byte(strings.Repeat("j", 100*1024) + "\n")
+	listing := make([]MemoryFile, 0, len(raw))
+	for path, content := range raw {
+		listing = append(listing, MemoryFile{Path: path, Bytes: int64(len(content))})
+	}
+	loader := &repairProbeLoader{
+		semanticMemoryJobLoader: &semanticMemoryJobLoader{
+			files:      raw,
+			checkpoint: SemanticExtractionCheckpoint{LastExtractedSeq: 100},
+		},
+		memoryFiles: listing,
+	}
+
+	if _, repair, err := repairSpec(context.Background(), loader, memoryFileBudgets{}); err != nil ||
+		!repair {
+		t.Fatalf("first repairSpec() = %v, %v, want the refusal and the notes spec", repair, err)
+	}
+	refusals, err := loadRepairRefusals(context.Background(), loader)
+	if err != nil || len(refusals) != 1 {
+		t.Fatalf(
+			"refusals after the first pass = %#v err = %v, want the refused topic",
+			refusals,
+			err,
+		)
+	}
+
+	// The topic is edited back under its cap; the notes file stays
+	// repairable, so the pass still runs and reconciles the refusal set.
+	loader.files[topic] = []byte("# Giant\n")
+	for i, file := range listing {
+		if file.Path == topic {
+			listing[i].Bytes = int64(len("# Giant\n"))
+		}
+	}
+	loader.memoryFiles = listing
+
+	spec, repair, err := repairSpec(context.Background(), loader, memoryFileBudgets{})
+	if err != nil || !repair || spec.repairTarget.Path != repairNotesPath {
+		t.Fatalf(
+			"second repairSpec() = %v, %v, %v, want the notes repair to proceed",
+			spec.repairTarget,
+			repair,
+			err,
+		)
+	}
+	refusals, err = loadRepairRefusals(context.Background(), loader)
+	if err != nil || len(refusals) != 0 {
+		t.Fatalf(
+			"refusals after the topic came back under cap = %#v err = %v, want the entry cleared",
+			refusals,
+			err,
+		)
+	}
+}
+
+// TestLoadRepairRefusalsTreatsUndecodableArtifactAsEmpty pins the blast radius
+// of a damaged refusal artifact. It is job-owned and rewritten by the next
+// recording or prune, so an undecodable one must read as no refusals: failing
+// instead would make every surface rule evaluation error, fail the build, and
+// cancel the runtime in a boot loop that no run could break.
+func TestLoadRepairRefusalsTreatsUndecodableArtifactAsEmpty(t *testing.T) {
+	t.Parallel()
+
+	loader := &semanticMemoryJobLoader{artifacts: map[string]Artifact{
+		repairRefusalsArtifactPath: {
+			RelativePath: repairRefusalsArtifactPath,
+			Content:      "not json at all",
+		},
+	}}
+	set, err := loadRepairRefusals(context.Background(), loader)
+	if err != nil {
+		t.Fatalf("loadRepairRefusals() error = %v, want nought but an empty set", err)
+	}
+	if len(set) != 0 {
+		t.Fatalf("set = %#v, want empty", set)
+	}
+}
+
+// TestAppendRepairAdoptionRecordIsIdempotent pins the retry. The record is
+// written before the file is removed, so a delete that fails leaves it behind
+// and the next build runs the step again; without this the ledger would gain a
+// line per attempt while the same target kept failing.
+func TestAppendRepairAdoptionRecordIsIdempotent(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	loader := &semanticMemoryJobLoader{files: repairRawFiles(repairPreFiles())}
+	if err := appendRepairAdoptionRecord(ctx, loader, repairNotesPath, repairAdoptionNote, "same-repair"); err != nil {
+		t.Fatalf("first append error = %v", err)
+	}
+	first := string(loader.files["working/LEDGER.md"])
+	if err := appendRepairAdoptionRecord(ctx, loader, repairNotesPath, repairAdoptionNote, "same-repair"); err != nil {
+		t.Fatalf("second append error = %v", err)
+	}
+	second := string(loader.files["working/LEDGER.md"])
+	if second != first {
+		t.Fatalf("the retry rewrote the ledger:\nfirst:  %q\nsecond: %q", first, second)
+	}
+	if got := strings.Count(second, "src=mem:"+repairNotesPath+":0"); got != 1 {
+		t.Fatalf("adoption records = %d, want exactly one", got)
+	}
+}
+
+// TestRepairSpecClearsRefusalOnceTargetBecomesCuttable pins the third clearing
+// route. A refusal is recorded because no window held the first line, and the
+// same file edited back to a short first line must not stay suppressed by it:
+// the state rule is read-only, so the build re-cuts refused targets and drops
+// the entry the moment one of them cuts again.
+func TestRepairSpecClearsRefusalOnceTargetBecomesCuttable(t *testing.T) {
+	t.Parallel()
+
+	const refusals = `{"refusals":[{"path":"semantic/state/notes.md",` +
+		`"reason":"was unreadable","recorded_at":"2026-10-16T05:00:00Z"}]}`
+	loader := &repairProbeLoader{
+		semanticMemoryJobLoader: &semanticMemoryJobLoader{
+			files:      repairRawFiles(repairPreFiles()),
+			checkpoint: SemanticExtractionCheckpoint{LastExtractedSeq: 100},
+			artifacts: map[string]Artifact{
+				repairRefusalsArtifactPath: {
+					RelativePath: repairRefusalsArtifactPath,
+					Content:      refusals,
+				},
+			},
+		},
+		memoryFiles: repairPreListing(),
+	}
+
+	spec, err := NewSemanticMemoryExtractionRegistration(0, 0).NewJob().Build(
+		context.Background(),
+		loader,
+	)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if !spec.repair || spec.repairTarget.Path != repairNotesPath {
+		t.Fatalf("spec = %#v, want a repair run for the target that now cuts", spec.repairTarget)
+	}
+	if got := loader.artifacts[repairRefusalsArtifactPath].Content; strings.Contains(
+		got,
+		repairNotesPath,
+	) {
+		t.Fatalf("refusal survived a target that cuts again: %q", got)
+	}
 }

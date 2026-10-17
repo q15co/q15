@@ -132,10 +132,17 @@ type ParsedResult struct {
 	// zero value means the run covered everything up to the run head, which is
 	// the default behaviour for every job that does not window its input.
 	CheckpointSeq int64
+	// Repair marks the run as the semantic job's bounded memory-repair mode.
+	// A repair run consumes no transcript, so the controller reads this bit
+	// and never stores a semantic extraction checkpoint for it - not even the
+	// run head, which a zero CheckpointSeq would otherwise select.
+	Repair bool
 }
 
 // Result is the completed structured outcome for one cognition job.
 type Result struct {
+	// NoWork means no transcript or model work was performed by this attempt.
+	NoWork    bool
 	Type      string
 	Summary   string
 	Metadata  map[string]string
@@ -147,6 +154,9 @@ type Result struct {
 	// the job worked through a bounded window. Zero means the run covered
 	// everything up to the run head.
 	CheckpointSeq int64
+	// Repair marks a bounded memory-repair run of the semantic job; the
+	// controller uses it to skip the semantic extraction checkpoint store.
+	Repair bool
 }
 
 // Runner executes typed cognition jobs on the shared model/tool engine.
@@ -303,15 +313,6 @@ func (r *Runner) Run(
 		return Result{}, err
 	}
 
-	engine, err := r.engineForJob(jobType)
-	if err != nil {
-		notifyRunEvent(ctx, observer, agent.RunEvent{
-			Type: agent.RunEventRunFailed,
-			Err:  err,
-		})
-		return Result{}, fmt.Errorf("configure cognition engine for job %q: %w", jobType, err)
-	}
-
 	notifyRunEvent(ctx, observer, agent.RunEvent{
 		Type: agent.RunEventRunStarted,
 	})
@@ -323,6 +324,26 @@ func (r *Runner) Run(
 			Err:  err,
 		})
 		return Result{}, fmt.Errorf("build cognition job %q: %w", jobType, err)
+	}
+	if spec.NoWork != nil {
+		result := Result{
+			Type:     jobType,
+			NoWork:   true,
+			Summary:  strings.TrimSpace(spec.NoWork.Summary),
+			Metadata: cloneMetadata(spec.NoWork.Metadata),
+		}
+		notifyRunEvent(ctx, observer, agent.RunEvent{Type: agent.RunEventRunFinished})
+		return result, nil
+	}
+
+	engine, err := r.engineForJob(jobType)
+	if err != nil {
+		err = r.withRollbackError(ctx, job, spec, err)
+		notifyRunEvent(ctx, observer, agent.RunEvent{
+			Type: agent.RunEventRunFailed,
+			Err:  err,
+		})
+		return Result{}, fmt.Errorf("configure cognition engine for job %q: %w", jobType, err)
 	}
 
 	systemPrompt, err := renderPrompt(jobType, spec)
@@ -396,6 +417,7 @@ func (r *Runner) Run(
 		ModelRef:      runResult.ModelRef,
 		Turn:          runResult.Turn,
 		CheckpointSeq: parsed.CheckpointSeq,
+		Repair:        parsed.Repair,
 	}
 	notifyRunEvent(ctx, observer, agent.RunEvent{
 		Type:      agent.RunEventRunFinished,

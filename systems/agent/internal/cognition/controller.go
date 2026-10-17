@@ -105,6 +105,7 @@ type JobState struct {
 	LastFailureAt       time.Time            `json:"last_failure_at,omitempty"`
 	LastObservedSeq     int64                `json:"last_observed_seq,omitempty"`
 	LastRunInputSeq     int64                `json:"last_run_input_seq,omitempty"`
+	LastRunNoWork       bool                 `json:"last_run_no_work,omitempty"`
 	LastSuccessInputSeq int64                `json:"last_success_input_seq,omitempty"`
 	DirtySinceSeq       int64                `json:"dirty_since_seq,omitempty"`
 	DirtySinceAt        time.Time            `json:"dirty_since_at,omitempty"`
@@ -510,6 +511,7 @@ func (c *Controller) runPending(ctx context.Context, pending pendingRun) error {
 	state := cloneJobState(pending.state)
 	state.LastRunAt = startedAt
 	state.LastRunInputSeq = pending.headSeq
+	state.LastRunNoWork = false
 	state.LastRunCause = pending.cause
 	if pending.cause.Kind == RunCauseSchedule {
 		if state.LastScheduledFor == nil {
@@ -534,9 +536,13 @@ func (c *Controller) runPending(ctx context.Context, pending pendingRun) error {
 	if result.CheckpointSeq > 0 && result.CheckpointSeq < coveredSeq {
 		coveredSeq = result.CheckpointSeq
 	}
+	if result.Repair {
+		coveredSeq = result.CheckpointSeq
+	}
 
 	var consolidationCheckpoint ConsolidationCheckpoint
-	if runErr == nil && shouldAdvanceConsolidationCheckpoint(pending.job.jobType) {
+	if runErr == nil && !result.NoWork &&
+		shouldAdvanceConsolidationCheckpoint(pending.job.jobType) {
 		consolidationCheckpoint, runErr = c.store.StoreConsolidationCheckpoint(
 			ctx,
 			ConsolidationCheckpoint{
@@ -548,8 +554,15 @@ func (c *Controller) runPending(ctx context.Context, pending pendingRun) error {
 			runErr = fmt.Errorf("store consolidation checkpoint: %w", runErr)
 		}
 	}
+	// A repair run consumes no transcript at all, so it must never advance the
+	// extraction checkpoint. Its result carries the repair bit and the store is
+	// skipped outright: reporting the checkpoint the run was handed is not
+	// enough on its own, because when that value is zero the covered boundary
+	// above reads it as "advance to the head" and the whole unprocessed
+	// backlog would be marked extracted.
 	var semanticExtractionCheckpoint SemanticExtractionCheckpoint
-	if runErr == nil && shouldAdvanceSemanticExtractionCheckpoint(pending.job.jobType) {
+	if runErr == nil && shouldAdvanceSemanticExtractionCheckpoint(pending.job.jobType) &&
+		!result.Repair && !result.NoWork {
 		semanticExtractionCheckpoint, runErr = c.store.StoreSemanticExtractionCheckpoint(
 			ctx,
 			SemanticExtractionCheckpoint{
@@ -571,6 +584,9 @@ func (c *Controller) runPending(ctx context.Context, pending pendingRun) error {
 	if runErr != nil {
 		state.LastFailureAt = finishedAt
 		state.ConsecutiveFailures++
+		state = preserveDirtyState(state, pending.headSeq, headSeq, headAt)
+	} else if result.NoWork {
+		state.LastRunNoWork = true
 		state = preserveDirtyState(state, pending.headSeq, headSeq, headAt)
 	} else {
 		state.LastSuccessAt = finishedAt
@@ -618,7 +634,7 @@ func (c *Controller) runPending(ctx context.Context, pending pendingRun) error {
 	if err := c.store.AppendRunRecord(ctx, record); err != nil {
 		return err
 	}
-	if isCheckpointAdvancingJobType(pending.job.jobType) {
+	if isCheckpointAdvancingJobType(pending.job.jobType) && !result.NoWork {
 		if err := c.updateStallAlert(ctx, pending.job.jobType, state, runErr); err != nil {
 			return err
 		}
@@ -786,6 +802,9 @@ func (c *Controller) nextScheduledAt(ctx context.Context, now time.Time) (time.T
 }
 
 func shouldEvaluateStateRules(state JobState, headSeq int64) bool {
+	if state.LastRunNoWork && headSeq <= state.LastRunInputSeq {
+		return false
+	}
 	if state.LastRunInputSeq == 0 {
 		return true
 	}

@@ -192,9 +192,13 @@ func (l *semanticMemoryJobLoader) LoadCognitionArtifact(
 }
 
 func (l *semanticMemoryJobLoader) StoreCognitionArtifact(
-	context.Context,
-	Artifact,
+	_ context.Context,
+	artifact Artifact,
 ) error {
+	if l.artifacts == nil {
+		l.artifacts = make(map[string]Artifact)
+	}
+	l.artifacts[artifact.RelativePath] = artifact
 	return nil
 }
 
