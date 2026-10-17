@@ -172,7 +172,8 @@ type repairRecoveryPreparer interface {
 }
 
 // repairSpec builds the bounded repair run for the first repairable surface
-// target, or reports a clean surface with (Spec{}, false, nil). It is small
+// target, reports a clean surface with (Spec{}, false, nil), or returns a
+// handled NoWork spec after runtime-only adoption or refusal. It is small
 // and self-contained on purpose: the surface being dirty can mean the
 // semantic roots are exactly what is too large to read, so a repair prompt
 // never includes the roots, topics, transcript or working memory as prompt
@@ -207,6 +208,13 @@ func repairSpec(
 		}
 	}
 	for _, target := range surface.Targets {
+		if !claims.ValidMemorySource("mem:" + target.Path + ":0") {
+			if err := recordRepairRefusalReason(ctx, loader, refusals, target,
+				"unsupported memory citation path: the filename cannot be represented by the repair ledger grammar; rename the file to a portable path before retrying"); err != nil {
+				return Spec{}, false, err
+			}
+			continue
+		}
 		raw, existed, err := loader.ReadFileBytes(ctx, target.Path)
 		if err != nil {
 			return Spec{}, false, fmt.Errorf("read repair target %s: %w", target.Path, err)
@@ -229,7 +237,7 @@ func repairSpec(
 				}
 				continue
 			}
-			if err := adoptUnreadableRepairTarget(ctx, loader, target, tooLong); err != nil {
+			if err := adoptUnreadableRepairTarget(ctx, loader, target, raw, tooLong); err != nil {
 				return Spec{}, false, err
 			}
 			continue
@@ -255,7 +263,13 @@ func repairSpec(
 		}
 		return spec, true, nil
 	}
-	return Spec{}, false, nil
+	return Spec{NoWork: &NoWorkResult{
+		Summary: "Memory repair deferred ordinary conversion; no model work was performed.",
+		Metadata: map[string]string{
+			"memory_repair_no_work":  "true",
+			"memory_repair_refusals": strconv.Itoa(len(refusals)),
+		},
+	}}, true, nil
 }
 
 // buildRepairSpec assembles the bounded repair run for the one chosen
@@ -291,15 +305,9 @@ func buildRepairSpec(
 		return Spec{}, fmt.Errorf("load semantic extraction checkpoint: %w", err)
 	}
 
-	preparer, ok := loader.(repairRecoveryPreparer)
-	if !ok {
-		return Spec{}, false, fmt.Errorf(
-			"context loader does not support durable memory repair recovery",
-		)
-	}
-	recoveryID, err := preparer.BeginMemoryRepairRecovery(ctx, snapshots, target.Path)
+	recoveryID, err := beginRepairRecovery(ctx, loader, snapshots, target.Path)
 	if err != nil {
-		return Spec{}, false, fmt.Errorf("prepare memory repair recovery: %w", err)
+		return Spec{}, err
 	}
 
 	return Spec{
@@ -328,6 +336,26 @@ func buildRepairSpec(
 		repair:        true,
 		repairTarget:  target,
 	}, nil
+}
+
+func beginRepairRecovery(
+	ctx context.Context,
+	loader ContextLoader,
+	snapshots map[string]FileSnapshot,
+	targetPath string,
+) (string, error) {
+	preparer, ok := loader.(repairRecoveryPreparer)
+	if !ok {
+		return "", fmt.Errorf("context loader does not support durable memory repair recovery")
+	}
+	id, err := preparer.BeginMemoryRepairRecovery(ctx, snapshots, targetPath)
+	if err != nil {
+		return "", fmt.Errorf("prepare memory repair recovery: %w", err)
+	}
+	if id == "" {
+		return "", fmt.Errorf("prepare memory repair recovery returned no journal identity")
+	}
+	return id, nil
 }
 
 // snapshotRepairWriteSet adds every path a repair run may touch besides the
@@ -576,7 +604,7 @@ func applyRepairResult(
 			err,
 		)
 	}
-	removed, err := adoptDrainedRepairTarget(ctx, loader, target)
+	removed, err := adoptDrainedRepairTarget(ctx, loader, target, output.Spec.MemoryRecoveryID)
 	if err != nil {
 		return ParsedResult{}, rollbackFailedRun(
 			ctx,
@@ -1144,6 +1172,7 @@ func adoptDrainedRepairTarget(
 	ctx context.Context,
 	loader ContextLoader,
 	target MemorySurfaceTarget,
+	recoveryID string,
 ) (bool, error) {
 	if target.Named {
 		return false, nil
@@ -1158,12 +1187,14 @@ func adoptDrainedRepairTarget(
 				return false, nil
 			}
 		}
+	}
+	if err := appendRepairAdoptionRecord(ctx, loader, target.Path, repairAdoptionNote, recoveryID); err != nil {
+		return false, err
+	}
+	if existed {
 		if err := loader.DeleteFile(ctx, target.Path); err != nil {
 			return false, fmt.Errorf("remove adopted memory file %s: %w", target.Path, err)
 		}
-	}
-	if err := appendRepairAdoptionRecord(ctx, loader, target.Path, repairAdoptionNote); err != nil {
-		return false, err
 	}
 	return true, nil
 }
@@ -1183,20 +1214,51 @@ func adoptUnreadableRepairTarget(
 	ctx context.Context,
 	loader ContextLoader,
 	target MemorySurfaceTarget,
+	raw []byte,
 	tooLong *repairLineTooLongError,
 ) error {
+	snapshots := map[string]FileSnapshot{
+		memoryRuntimePrefix + target.Path: {Existed: true, Content: raw},
+	}
+	if err := snapshotRepairWriteSet(ctx, loader, snapshots); err != nil {
+		return err
+	}
+	id, err := beginRepairRecovery(ctx, loader, snapshots, target.Path)
+	if err != nil {
+		return err
+	}
+	ownerCtx := withMemoryRecoveryOwner(ctx, id)
 	note := fmt.Sprintf(
 		"un-named memory file adopted by a memory repair run: first content line is %d bytes, over the %d-byte maximum repair window, so the runtime removed the file unreadable",
 		tooLong.lineBytes,
 		repairChunkMaxBytes,
 	)
-	if err := appendRepairAdoptionRecord(ctx, loader, target.Path, note); err != nil {
-		return err
+	if err := appendRepairAdoptionRecord(ownerCtx, loader, target.Path, note, id); err != nil {
+		return recoverRepairAdoption(ctx, loader, id, err)
 	}
-	if err := loader.DeleteFile(ctx, target.Path); err != nil {
-		return fmt.Errorf("remove unreadable memory file %s: %w", target.Path, err)
+	if err := loader.DeleteFile(ownerCtx, target.Path); err != nil {
+		return recoverRepairAdoption(ctx, loader, id,
+			fmt.Errorf("remove unreadable memory file %s: %w", target.Path, err))
+	}
+	if err := loader.CompleteMemoryRecovery(ctx, id); err != nil {
+		return recoverRepairAdoption(ctx, loader, id,
+			fmt.Errorf("complete unreadable memory adoption: %w", err))
 	}
 	return nil
+}
+
+func recoverRepairAdoption(
+	ctx context.Context,
+	loader ContextLoader,
+	id string,
+	adoptionErr error,
+) error {
+	cleanupCtx, cancel := memoryRecoveryContext(ctx)
+	defer cancel()
+	if err := loader.RecoverMemory(cleanupCtx, id); err != nil {
+		return fmt.Errorf("%w (adoption rollback also failed: %w)", adoptionErr, err)
+	}
+	return adoptionErr
 }
 
 // appendRepairAdoptionRecord appends the one ledger line that records an
@@ -1208,27 +1270,44 @@ func appendRepairAdoptionRecord(
 	loader ContextLoader,
 	relativePath string,
 	note string,
+	recoveryID string,
 ) error {
+	if recoveryID == "" {
+		return fmt.Errorf("repair adoption requires a recovery journal identity")
+	}
+	note += "; repair_id=" + recoveryID
 	ledger, _, err := loader.ReadFileBytes(ctx, workingLedgerRelativePath)
 	if err != nil {
 		return fmt.Errorf("load working ledger for the adoption record: %w", err)
 	}
-	// Idempotent on purpose. This record is written before the file is
-	// removed, so a delete that fails leaves the record behind and the next
-	// build retries the whole step; without this check the ledger would gain a
-	// line per attempt while the target kept failing. The two adoption notes
-	// are distinct constants, so a path cannot match the other kind's record.
-	if strings.Contains(string(ledger), "src=mem:"+relativePath+":0") &&
-		strings.Contains(string(ledger), note) {
-		return nil
+	history, err := loader.LoadConversionLedgerHistory(ctx)
+	if err != nil {
+		return fmt.Errorf("load ledger history for adoption: %w", err)
 	}
-	entry := claims.FormatLedgerEntry(claims.LedgerEntry{
+	wanted := claims.LedgerEntry{
 		Run:         semanticMemoryExtractionJobType,
 		SourceSeq:   "mem:" + relativePath + ":0",
 		Outcome:     claims.OutcomeDropped,
 		Description: relativePath,
 		Note:        note,
-	})
+	}
+	// A retry of the same journal may already have this exact record in the
+	// active ledger or an archive. A new journal gives a re-created path its
+	// own exit, even when the path and bytes match an earlier adoption.
+	for _, content := range []string{string(ledger), history} {
+		entries, err := claims.ParseLedger([]byte(content))
+		if err != nil {
+			return fmt.Errorf("parse adoption ledger history: %w", err)
+		}
+		for _, entry := range entries {
+			if entry.Run == wanted.Run && entry.SourceSeq == wanted.SourceSeq &&
+				entry.Outcome == wanted.Outcome && entry.Description == wanted.Description &&
+				entry.TargetID == "" && entry.TargetPath == "" && entry.Note == wanted.Note {
+				return nil
+			}
+		}
+	}
+	entry := claims.FormatLedgerEntry(wanted)
 	if _, err := claims.ParseLedgerEntry(strings.TrimSuffix(entry, "\n")); err != nil {
 		return fmt.Errorf("format repair adoption record: %w", err)
 	}

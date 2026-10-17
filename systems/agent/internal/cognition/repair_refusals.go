@@ -9,19 +9,17 @@ import (
 	"time"
 )
 
-// repairRefusal is one durable refusal: a named memory-surface target whose
-// first content line is longer than repairChunkMaxBytes, so no repair run
-// can ever drain it. A named file is schema-owned and is never deleted, so
-// the refusal is the record that stands in for the adoption an un-named
-// file would get: it names the path, the reason, and when it was written.
+// repairRefusal records a target that cannot safely enter a repair run:
+// either its path has no valid ledger citation or its schema-owned first
+// content line exceeds repairChunkMaxBytes. Refusal preserves every byte and
+// names the path, the reason, and when it was written.
 //
 // An entry is cleared three ways, and only these:
 //   - applyRepairResult drops it when a repair run succeeds on the path
 //     (repaired).
 //   - repairSpec prunes it when the surface scan no longer lists the path as
 //     repairable (edited back inside the schema) or at all (gone).
-//   - Nothing else; while the path stays a refused repairable target the
-//     entry must stay, or the state rule would fire on it again.
+//   - repairSpec clears a formerly unreadable target once it can cut a chunk.
 type repairRefusal struct {
 	Path       string    `json:"path"`
 	Reason     string    `json:"reason"`
@@ -150,13 +148,23 @@ func recordRepairRefusal(
 	target MemorySurfaceTarget,
 	tooLong *repairLineTooLongError,
 ) error {
+	return recordRepairRefusalReason(ctx, loader, set, target, fmt.Sprintf(
+		"first content line is %d bytes, over the %d-byte maximum repair window, so no repair run can drain it",
+		tooLong.lineBytes,
+		repairChunkMaxBytes,
+	))
+}
+
+func recordRepairRefusalReason(
+	ctx context.Context,
+	loader ContextLoader,
+	set map[string]repairRefusal,
+	target MemorySurfaceTarget,
+	reason string,
+) error {
 	set[target.Path] = repairRefusal{
-		Path: target.Path,
-		Reason: fmt.Sprintf(
-			"first content line is %d bytes, over the %d-byte maximum repair window, so no repair run can drain it",
-			tooLong.lineBytes,
-			repairChunkMaxBytes,
-		),
+		Path:       target.Path,
+		Reason:     reason,
 		RecordedAt: time.Now().UTC(),
 	}
 	if err := storeRepairRefusals(ctx, loader, set); err != nil {

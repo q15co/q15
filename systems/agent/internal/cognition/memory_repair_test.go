@@ -1133,9 +1133,9 @@ func TestSemanticRepairAdoptsUnreadableUnNamedTarget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("repairSpec() error = %v, want the adoption to settle the pass without a run", err)
 	}
-	if repair || len(spec.PromptSections) != 0 {
+	if !repair || spec.NoWork == nil || len(spec.PromptSections) != 0 {
 		t.Fatalf(
-			"repairSpec() = %d sections, repair=%v, want no repair run for the unreadable target",
+			"repairSpec() = %d sections, repair=%v, want handled runtime-only maintenance",
 			len(spec.PromptSections),
 			repair,
 		)
@@ -1226,13 +1226,20 @@ func TestSemanticRepairRefusesUnreadableNamedTarget(t *testing.T) {
 	)
 	if err != nil {
 		t.Fatalf(
-			"Build() error = %v, want the refusal recorded and the ordinary build to proceed",
+			"Build() error = %v, want the refusal recorded and ordinary conversion deferred",
 			err,
 		)
 	}
 	if spec.repair {
 		t.Fatal(
 			"Build() built a repair run for a target no window can hold; want the refusal alone",
+		)
+	}
+	if spec.NoWork == nil || len(spec.PromptSections) != 0 || len(loader.forbidden) != 0 {
+		t.Fatalf(
+			"refused Build() = %#v, forbidden loads=%v, want no ordinary input",
+			spec,
+			loader.forbidden,
 		)
 	}
 	if len(loader.deleted) != 0 {
@@ -1413,11 +1420,11 @@ func TestAppendRepairAdoptionRecordIsIdempotent(t *testing.T) {
 
 	ctx := context.Background()
 	loader := &semanticMemoryJobLoader{files: repairRawFiles(repairPreFiles())}
-	if err := appendRepairAdoptionRecord(ctx, loader, repairNotesPath, repairAdoptionNote); err != nil {
+	if err := appendRepairAdoptionRecord(ctx, loader, repairNotesPath, repairAdoptionNote, "same-repair"); err != nil {
 		t.Fatalf("first append error = %v", err)
 	}
 	first := string(loader.files["working/LEDGER.md"])
-	if err := appendRepairAdoptionRecord(ctx, loader, repairNotesPath, repairAdoptionNote); err != nil {
+	if err := appendRepairAdoptionRecord(ctx, loader, repairNotesPath, repairAdoptionNote, "same-repair"); err != nil {
 		t.Fatalf("second append error = %v", err)
 	}
 	second := string(loader.files["working/LEDGER.md"])

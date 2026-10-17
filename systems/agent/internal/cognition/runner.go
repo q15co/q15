@@ -141,6 +141,8 @@ type ParsedResult struct {
 
 // Result is the completed structured outcome for one cognition job.
 type Result struct {
+	// NoWork means no transcript or model work was performed by this attempt.
+	NoWork    bool
 	Type      string
 	Summary   string
 	Metadata  map[string]string
@@ -311,15 +313,6 @@ func (r *Runner) Run(
 		return Result{}, err
 	}
 
-	engine, err := r.engineForJob(jobType)
-	if err != nil {
-		notifyRunEvent(ctx, observer, agent.RunEvent{
-			Type: agent.RunEventRunFailed,
-			Err:  err,
-		})
-		return Result{}, fmt.Errorf("configure cognition engine for job %q: %w", jobType, err)
-	}
-
 	notifyRunEvent(ctx, observer, agent.RunEvent{
 		Type: agent.RunEventRunStarted,
 	})
@@ -331,6 +324,26 @@ func (r *Runner) Run(
 			Err:  err,
 		})
 		return Result{}, fmt.Errorf("build cognition job %q: %w", jobType, err)
+	}
+	if spec.NoWork != nil {
+		result := Result{
+			Type:     jobType,
+			NoWork:   true,
+			Summary:  strings.TrimSpace(spec.NoWork.Summary),
+			Metadata: cloneMetadata(spec.NoWork.Metadata),
+		}
+		notifyRunEvent(ctx, observer, agent.RunEvent{Type: agent.RunEventRunFinished})
+		return result, nil
+	}
+
+	engine, err := r.engineForJob(jobType)
+	if err != nil {
+		err = r.withRollbackError(ctx, job, spec, err)
+		notifyRunEvent(ctx, observer, agent.RunEvent{
+			Type: agent.RunEventRunFailed,
+			Err:  err,
+		})
+		return Result{}, fmt.Errorf("configure cognition engine for job %q: %w", jobType, err)
 	}
 
 	systemPrompt, err := renderPrompt(jobType, spec)

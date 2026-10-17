@@ -11,6 +11,9 @@ import (
 
 // Spec describes one typed cognition job execution.
 type Spec struct {
+	// NoWork completes this attempt without loading a model or applying a result.
+	// It leaves transcript coverage unchanged when maintenance cannot proceed.
+	NoWork             *NoWorkResult
 	Objective          string
 	CompletionContract string
 	InputMessages      []conversation.Message
@@ -49,6 +52,12 @@ type Spec struct {
 	repair bool
 	// repairTarget names the memory-surface file a repair run drains.
 	repairTarget MemorySurfaceTarget
+}
+
+// NoWorkResult records a deliberate deferral or runtime-only maintenance step.
+type NoWorkResult struct {
+	Summary  string
+	Metadata map[string]string
 }
 
 // FileSnapshot is the pre-run on-disk state of one writable path.
