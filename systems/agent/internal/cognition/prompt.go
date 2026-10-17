@@ -56,8 +56,9 @@ type Spec struct {
 
 // NoWorkResult records a deliberate deferral or runtime-only maintenance step.
 type NoWorkResult struct {
-	Summary  string
-	Metadata map[string]string
+	Summary          string
+	Metadata         map[string]string
+	WaitingForRepair bool
 }
 
 // FileSnapshot is the pre-run on-disk state of one writable path.

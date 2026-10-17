@@ -142,14 +142,15 @@ type ParsedResult struct {
 // Result is the completed structured outcome for one cognition job.
 type Result struct {
 	// NoWork means no transcript or model work was performed by this attempt.
-	NoWork    bool
-	Type      string
-	Summary   string
-	Metadata  map[string]string
-	FinalText string
-	Messages  []conversation.Message
-	ModelRef  string
-	Turn      int
+	NoWork           bool
+	WaitingForRepair bool
+	Type             string
+	Summary          string
+	Metadata         map[string]string
+	FinalText        string
+	Messages         []conversation.Message
+	ModelRef         string
+	Turn             int
 	// CheckpointSeq is the transcript sequence this run actually processed when
 	// the job worked through a bounded window. Zero means the run covered
 	// everything up to the run head.
@@ -327,10 +328,11 @@ func (r *Runner) Run(
 	}
 	if spec.NoWork != nil {
 		result := Result{
-			Type:     jobType,
-			NoWork:   true,
-			Summary:  strings.TrimSpace(spec.NoWork.Summary),
-			Metadata: cloneMetadata(spec.NoWork.Metadata),
+			Type:             jobType,
+			NoWork:           true,
+			WaitingForRepair: spec.NoWork.WaitingForRepair,
+			Summary:          strings.TrimSpace(spec.NoWork.Summary),
+			Metadata:         cloneMetadata(spec.NoWork.Metadata),
 		}
 		notifyRunEvent(ctx, observer, agent.RunEvent{Type: agent.RunEventRunFinished})
 		return result, nil

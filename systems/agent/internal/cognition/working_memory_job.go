@@ -108,6 +108,16 @@ func (j workingMemoryConsolidationJob) Build(
 	if loader == nil {
 		return Spec{}, fmt.Errorf("context loader is required")
 	}
+	rawWorking, _, err := loader.ReadFileBytes(ctx, workingMemoryRelativePath)
+	if err != nil {
+		return Spec{}, fmt.Errorf("check working-memory repair requirement: %w", err)
+	}
+	if len(rawWorking) > effectiveWorkingMemoryBudget(j.budgets.working) {
+		return Spec{NoWork: &NoWorkResult{
+			Summary:          "Working-memory consolidation deferred until bounded repair brings its input within budget.",
+			WaitingForRepair: true,
+		}}, nil
+	}
 
 	now := time.Now().UTC()
 	if j.now != nil {
