@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -428,6 +429,116 @@ func TestStoreLoadWorkingMemory(t *testing.T) {
 	}
 	if strings.Contains(working.Content, "# Inbox") {
 		t.Fatalf("working memory should not include notes content:\n%s", working.Content)
+	}
+}
+
+func TestStoreLoadWorkingMemoryReturnsOversizedFileWhole(t *testing.T) {
+	t.Parallel()
+
+	root := filepath.Join(t.TempDir(), "memory")
+	store := newTestStore(root, &fakeCommitter{})
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	// Far over any budget, with no leading or trailing whitespace so the
+	// store's trim cannot be mistaken for truncation: LoadWorkingMemory has
+	// no budget of its own and must never shorten the artifact.
+	oversized := strings.Repeat("carry this whole line\n", 2000) + "end marker"
+	workingPath := filepath.Join(root, "working", "WORKING_MEMORY.md")
+	if err := os.WriteFile(workingPath, []byte(oversized), 0o644); err != nil {
+		t.Fatalf("WriteFile(oversized working memory) error = %v", err)
+	}
+
+	working, err := store.LoadWorkingMemory(context.Background())
+	if err != nil {
+		t.Fatalf("LoadWorkingMemory() error = %v", err)
+	}
+	if len(working.Content) != len(oversized) || working.Content != oversized {
+		t.Fatalf(
+			"LoadWorkingMemory() returned %d bytes, want the file whole (%d bytes)",
+			len(working.Content),
+			len(oversized),
+		)
+	}
+}
+
+// ruleContextLoader adapts the store to the ContextLoader a trigger snapshot
+// carries, adding the one method the conversion pass can call that the store
+// does not name: the skill catalog.
+type ruleContextLoader struct {
+	*Store
+}
+
+func (ruleContextLoader) LoadSkillCatalog(context.Context) (agent.SkillCatalog, error) {
+	return agent.SkillCatalog{}, nil
+}
+
+func (ruleContextLoader) LoadWorkingLedger(context.Context) (string, error) {
+	return "", nil
+}
+
+var _ cognition.ContextLoader = ruleContextLoader{}
+
+// overbudgetRuleEvaluator returns the working_memory_overbudget state rule of
+// a semantic conversion registration, failing the test when it is missing.
+func overbudgetRuleEvaluator(
+	t *testing.T,
+	registration cognition.JobRegistration,
+) cognition.StateEvaluator {
+	t.Helper()
+	for _, rule := range registration.Policy.State {
+		if rule.ID == "working_memory_overbudget" {
+			return rule.Evaluate
+		}
+	}
+	t.Fatal("registration has no working_memory_overbudget state rule")
+	return nil
+}
+
+// TestOverbudgetTriggerLeavesWorkingMemoryFileUntouched pins the contract
+// between the store and the conversion pass's overbudget trigger: the rule
+// reads the file whole against its configured byte budget and writes nothing,
+// so an over-budget working memory survives the run that reports it.
+func TestOverbudgetTriggerLeavesWorkingMemoryFileUntouched(t *testing.T) {
+	t.Parallel()
+
+	root := filepath.Join(t.TempDir(), "memory")
+	store := newTestStore(root, &fakeCommitter{})
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	oversized := strings.Repeat("carry this whole line\n", 2000) + "end marker"
+	workingPath := filepath.Join(root, "working", "WORKING_MEMORY.md")
+	if err := os.WriteFile(workingPath, []byte(oversized), 0o644); err != nil {
+		t.Fatalf("WriteFile(oversized working memory) error = %v", err)
+	}
+	before, err := os.ReadFile(workingPath)
+	if err != nil {
+		t.Fatalf("ReadFile(working memory) before rule error = %v", err)
+	}
+
+	run, reason, err := overbudgetRuleEvaluator(
+		t,
+		cognition.NewSemanticMemoryExtractionRegistration(128, 0),
+	)(
+		context.Background(),
+		cognition.Snapshot{Loader: ruleContextLoader{store}},
+		cognition.JobState{},
+	)
+	if err != nil || !run {
+		t.Fatalf("overbudget rule against the store: run=%v err=%v, want true nil", run, err)
+	}
+	if !strings.Contains(reason, "budget=128") {
+		t.Fatalf("reason %q does not name the configured budget", reason)
+	}
+
+	after, err := os.ReadFile(workingPath)
+	if err != nil {
+		t.Fatalf("ReadFile(working memory) after rule error = %v", err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("overbudget rule rewrote the working-memory file on disk")
 	}
 }
 

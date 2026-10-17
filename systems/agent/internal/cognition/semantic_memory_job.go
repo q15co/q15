@@ -34,11 +34,21 @@ var semanticMemoryAllowedTools = []string{
 }
 
 // NewSemanticMemoryExtractionRegistration returns the built-in semantic-memory
-// extraction job registration.
-func NewSemanticMemoryExtractionRegistration() JobRegistration {
+// extraction job registration. workingMemoryBudgetBytes is the working-memory
+// byte budget its overbudget state rule enforces; a non-positive value selects
+// the built-in default, so a zero-value construction behaves as a registration
+// built from the documented defaults.
+func NewSemanticMemoryExtractionRegistration(
+	workingMemoryBudgetBytes, openLoopsBudgetBytes int,
+) JobRegistration {
 	return JobRegistration{
 		NewJob: func() JobDefinition {
-			return semanticMemoryExtractionJob{}
+			return semanticMemoryExtractionJob{
+				budgets: memoryFileBudgets{
+					working:   workingMemoryBudgetBytes,
+					openLoops: openLoopsBudgetBytes,
+				},
+			}
 		},
 		Policy: TriggerPolicy{
 			Schedule: []ScheduleRule{{
@@ -51,21 +61,31 @@ func NewSemanticMemoryExtractionRegistration() JobRegistration {
 					Evaluate: evaluateSemanticMemoryState,
 				},
 				{
-					ID:       "working_memory_overbudget",
-					Evaluate: evaluateWorkingMemoryOverbudget,
+					ID: "working_memory_overbudget",
+					Evaluate: func(
+						ctx context.Context,
+						snapshot Snapshot,
+						_ JobState,
+					) (bool, string, error) {
+						return evaluateWorkingMemoryOverbudget(
+							ctx,
+							snapshot,
+							workingMemoryBudgetBytes,
+						)
+					},
 				},
 			},
 		},
 	}
 }
 
-type semanticMemoryExtractionJob struct{}
+type semanticMemoryExtractionJob struct{ budgets memoryFileBudgets }
 
 func (semanticMemoryExtractionJob) Type() string {
 	return semanticMemoryExtractionJobType
 }
 
-func (semanticMemoryExtractionJob) Build(
+func (j semanticMemoryExtractionJob) Build(
 	ctx context.Context,
 	loader ContextLoader,
 ) (Spec, error) {
@@ -216,6 +236,7 @@ func (semanticMemoryExtractionJob) Build(
 		),
 		PromptSections: []agent.PromptSection{
 			{Name: "claim_id_allocation", Body: claimIDs},
+			memoryBudgetPromptSection(j.budgets),
 			{
 				Name:       "semantic_facts_target",
 				Attributes: map[string]string{"path": semanticFactsRuntimePath},
@@ -330,7 +351,7 @@ func (semanticMemoryExtractionJob) Build(
 	}, nil
 }
 
-func (semanticMemoryExtractionJob) ApplyResult(
+func (j semanticMemoryExtractionJob) ApplyResult(
 	ctx context.Context,
 	loader ContextLoader,
 	output JobOutput,
@@ -367,6 +388,9 @@ func (semanticMemoryExtractionJob) ApplyResult(
 		return ParsedResult{}, err
 	}
 	if err := checkSemanticClaims(ctx, loader, output.Spec.Baseline, successfulWritePaths(output.Messages)); err != nil {
+		return ParsedResult{}, err
+	}
+	if err := checkWorkingFileBudgets(ctx, loader, j.budgets); err != nil {
 		return ParsedResult{}, err
 	}
 	removed, appended, err := checkLedgerCompleteness(ctx, loader, output.Spec.Baseline)

@@ -101,12 +101,15 @@ pricing. Provider matching uses models.dev's `api` and `doc` URLs;
 tasks are excluded. Models without capability metadata report `capabilities_known: false`, and
 unknown structured-output support is `null`.
 
-`agent.name` and `agent.memory_recent_turns` are the only agent fields. The current model is runtime
-state, not config: on first run q15 auto-selects a first-eligible roster model (preferring a
-tool-calling model) and persists it; the agent/user then changes it with `list_providers`,
-`list_models`, `switch_model`, and `switch_cognition_model`. Background cognition jobs inherit the
-interactive model unless `switch_cognition_model` sets a per-job override. Each path tries its model
-first, then falls through to other eligible roster models if it's unavailable.
+`agent.name`, `agent.memory_recent_turns`, and the two `agent.memory_*_budget_bytes` caps are the
+only agent fields. The budgets bound the working-memory and open-loops files the cognition
+conversion pass reads and both memory jobs enforce when applying results. Files are never truncated;
+an over-budget working memory fires a conversion run instead of being shortened. The current model
+is runtime state, not config: on first run q15 auto-selects a first-eligible roster model
+(preferring a tool-calling model) and persists it; the agent/user then changes it with
+`list_providers`, `list_models`, `switch_model`, and `switch_cognition_model`. Background cognition
+jobs inherit the interactive model unless `switch_cognition_model` sets a per-job override. Each
+path tries its model first, then falls through to other eligible roster models if it's unavailable.
 
 ```yaml
 providers:

@@ -88,7 +88,7 @@ func TestSemanticConversionChecksBytesAfterFailedFileTool(t *testing.T) {
 					true,
 				),
 			)
-			_, err := NewSemanticMemoryExtractionRegistration().NewJob().
+			_, err := NewSemanticMemoryExtractionRegistration(0, 0).NewJob().
 				ApplyResult(context.Background(), loader, JobOutput{
 					Spec: Spec{Baseline: baseline}, Messages: messages,
 				})

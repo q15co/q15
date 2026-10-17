@@ -320,7 +320,7 @@ func TestConversionApplyRejectsProseLedger(t *testing.T) {
 			"working/LEDGER.md":       "one arbitrary sentence\ntwo arbitrary sentences\n",
 		},
 	}
-	_, err := NewSemanticMemoryExtractionRegistration().NewJob().
+	_, err := NewSemanticMemoryExtractionRegistration(0, 0).NewJob().
 		ApplyResult(context.Background(), loader, JobOutput{Spec: Spec{Baseline: map[string]string{workingMemoryRuntimePath: "- A.\n- B.\n", workingLedgerRuntimePath: ""}}, Messages: conversionRunMessages(workingMemoryRuntimePath, workingLedgerRuntimePath)})
 	if err == nil || !strings.Contains(err.Error(), "invalid appended ledger entry") {
 		t.Fatalf("ApplyResult() error=%v", err)
@@ -364,21 +364,25 @@ func TestConversionApplyAccountsForEveryWorkingBlock(t *testing.T) {
 						workingMemoryRelativePath: "# Working Memory\n\n## Temporary Context\n\n- None\n",
 						"working/LEDGER.md":       ledger,
 					}}
-					result, err := NewSemanticMemoryExtractionRegistration().NewJob().ApplyResult(
-						context.Background(),
-						loader,
-						JobOutput{
-							Spec: Spec{Baseline: map[string]string{
-								workingMemoryRuntimePath: before,
-								workingLedgerRuntimePath: "",
-								openLoopsRuntimePath:     "",
-							}},
-							Messages: conversionRunMessages(
-								workingMemoryRuntimePath,
-								workingLedgerRuntimePath,
-							),
-						},
-					)
+					result, err := NewSemanticMemoryExtractionRegistration(
+						0,
+						0,
+					).NewJob().
+						ApplyResult(
+							context.Background(),
+							loader,
+							JobOutput{
+								Spec: Spec{Baseline: map[string]string{
+									workingMemoryRuntimePath: before,
+									workingLedgerRuntimePath: "",
+									openLoopsRuntimePath:     "",
+								}},
+								Messages: conversionRunMessages(
+									workingMemoryRuntimePath,
+									workingLedgerRuntimePath,
+								),
+							},
+						)
 					if !recorded {
 						if err == nil ||
 							!strings.Contains(err.Error(), "removed 1 working-memory items") {
@@ -412,7 +416,7 @@ func TestConversionApplyIgnoresOnlyExactWorkingScaffold(t *testing.T) {
 		workingMemoryRelativePath: "",
 		"working/LEDGER.md":       "",
 	}}
-	result, err := NewSemanticMemoryExtractionRegistration().NewJob().ApplyResult(
+	result, err := NewSemanticMemoryExtractionRegistration(0, 0).NewJob().ApplyResult(
 		context.Background(), loader, JobOutput{
 			Spec: Spec{Baseline: map[string]string{
 				workingMemoryRuntimePath: before,
@@ -531,7 +535,7 @@ func TestConversionApplyRejectsNonMarkdownDurableClaims(t *testing.T) {
 			loader := &conversionValidationLoader{files: map[string]string{
 				workingMemoryRelativePath: "", "working/LEDGER.md": test.ledger, relative: validConversionClaim,
 			}}
-			_, err := NewSemanticMemoryExtractionRegistration().NewJob().ApplyResult(
+			_, err := NewSemanticMemoryExtractionRegistration(0, 0).NewJob().ApplyResult(
 				context.Background(), loader, JobOutput{
 					Spec: Spec{
 						Baseline: test.baseline,
@@ -555,7 +559,7 @@ func TestConversionCapsStillCoverNonMarkdownFiles(t *testing.T) {
 			loader := &conversionValidationLoader{files: map[string]string{
 				workingMemoryRelativePath: "", "working/LEDGER.md": "", relative: strings.Repeat("x", size),
 			}}
-			_, err := NewSemanticMemoryExtractionRegistration().NewJob().ApplyResult(
+			_, err := NewSemanticMemoryExtractionRegistration(0, 0).NewJob().ApplyResult(
 				context.Background(), loader, JobOutput{
 					Spec:     Spec{Baseline: emptyConversionBaseline()},
 					Messages: conversionRunMessages(memoryRuntimePrefix + relative),

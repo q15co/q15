@@ -113,6 +113,11 @@ providers:
 agent:
   name: Q15
   memory_recent_turns: 6
+  # Byte budgets enforced when either memory job applies a result.
+  # Absent keys use these defaults. Files are read whole and never truncated.
+  # An over-budget result fails validation.
+  memory_working_budget_bytes: 8192
+  memory_open_loops_budget_bytes: 4096
   tools:
     web_search:
       brave_api_key_env: BRAVE_API_KEY

@@ -140,7 +140,7 @@ func toolCallResult(id, name, arguments string) agent.ModelClientResult {
 func TestWorkingMemoryConsolidationRegistration(t *testing.T) {
 	t.Parallel()
 
-	registration := NewWorkingMemoryConsolidationRegistration()
+	registration := NewWorkingMemoryConsolidationRegistration(0, 0)
 	job := registration.NewJob()
 	if job == nil {
 		t.Fatal("NewJob() = nil")
@@ -201,7 +201,7 @@ func TestWorkingMemoryConsolidationBuildLoadsWorkingMemoryTranscriptAndVerificat
 		},
 	}
 
-	spec, err := NewWorkingMemoryConsolidationRegistration().NewJob().Build(
+	spec, err := NewWorkingMemoryConsolidationRegistration(0, 0).NewJob().Build(
 		context.Background(),
 		loader,
 	)
@@ -332,7 +332,7 @@ func TestWorkingMemoryConsolidationBuildUsesConsolidationCheckpointWindow(t *tes
 		},
 	}
 
-	spec, err := NewWorkingMemoryConsolidationRegistration().NewJob().Build(
+	spec, err := NewWorkingMemoryConsolidationRegistration(0, 0).NewJob().Build(
 		context.Background(),
 		loader,
 	)
@@ -387,7 +387,7 @@ func TestWorkingMemoryConsolidationBuildFallsBackToRecentMessages(t *testing.T) 
 		},
 	}
 
-	spec, err := NewWorkingMemoryConsolidationRegistration().NewJob().Build(
+	spec, err := NewWorkingMemoryConsolidationRegistration(0, 0).NewJob().Build(
 		context.Background(),
 		loader,
 	)
@@ -431,7 +431,7 @@ func TestWorkingMemoryConsolidationBuildHandlesMissingVerificationArtifact(t *te
 		},
 	}
 
-	spec, err := NewWorkingMemoryConsolidationRegistration().NewJob().Build(
+	spec, err := NewWorkingMemoryConsolidationRegistration(0, 0).NewJob().Build(
 		context.Background(),
 		loader,
 	)
@@ -463,7 +463,7 @@ func TestWorkingMemoryConsolidationBuildHandlesMissingVerificationArtifact(t *te
 func TestWorkingMemoryConsolidationParseResultRejectsMissingToolUse(t *testing.T) {
 	t.Parallel()
 
-	_, err := NewWorkingMemoryConsolidationRegistration().NewJob().ApplyResult(
+	_, err := NewWorkingMemoryConsolidationRegistration(0, 0).NewJob().ApplyResult(
 		context.Background(),
 		nil,
 		JobOutput{
@@ -479,7 +479,7 @@ func TestWorkingMemoryConsolidationParseResultRejectsMissingToolUse(t *testing.T
 func TestWorkingMemoryConsolidationParseResultIgnoresFailedAndMisleadingToolResults(t *testing.T) {
 	t.Parallel()
 
-	_, err := NewWorkingMemoryConsolidationRegistration().NewJob().ApplyResult(
+	_, err := NewWorkingMemoryConsolidationRegistration(0, 0).NewJob().ApplyResult(
 		context.Background(),
 		nil,
 		JobOutput{
@@ -524,9 +524,9 @@ func TestWorkingMemoryConsolidationParseResultIgnoresFailedAndMisleadingToolResu
 func TestWorkingMemoryConsolidationParseResultAcceptsAnyNotesAfterTargetInspection(t *testing.T) {
 	t.Parallel()
 
-	result, err := NewWorkingMemoryConsolidationRegistration().NewJob().ApplyResult(
+	result, err := NewWorkingMemoryConsolidationRegistration(0, 0).NewJob().ApplyResult(
 		context.Background(),
-		nil,
+		&workingMemoryJobLoader{},
 		JobOutput{
 			Type:      workingMemoryConsolidationJobType,
 			FinalText: "Updated working memory to reflect the latest active tasks.",
@@ -560,9 +560,9 @@ func TestWorkingMemoryConsolidationParseResultAcceptsAnyNotesAfterTargetInspecti
 func TestWorkingMemoryConsolidationParseResultTreatsFinalTextAsNotesOnly(t *testing.T) {
 	t.Parallel()
 
-	result, err := NewWorkingMemoryConsolidationRegistration().NewJob().ApplyResult(
+	result, err := NewWorkingMemoryConsolidationRegistration(0, 0).NewJob().ApplyResult(
 		context.Background(),
-		nil,
+		&workingMemoryJobLoader{},
 		JobOutput{
 			Type:      workingMemoryConsolidationJobType,
 			FinalText: "Left it unchanged.",
@@ -596,9 +596,9 @@ func TestWorkingMemoryConsolidationParseResultTreatsFinalTextAsNotesOnly(t *test
 func TestWorkingMemoryConsolidationParseResultUsesDefaultSummaryWhenNotesMissing(t *testing.T) {
 	t.Parallel()
 
-	result, err := NewWorkingMemoryConsolidationRegistration().NewJob().ApplyResult(
+	result, err := NewWorkingMemoryConsolidationRegistration(0, 0).NewJob().ApplyResult(
 		context.Background(),
-		nil,
+		&workingMemoryJobLoader{},
 		JobOutput{
 			Type: workingMemoryConsolidationJobType,
 			Messages: []conversation.Message{
@@ -693,7 +693,7 @@ func TestRunnerRunsWorkingMemoryConsolidationAndUpdatesMemory(t *testing.T) {
 
 	result, err := runner.Run(
 		context.Background(),
-		NewWorkingMemoryConsolidationRegistration().NewJob(),
+		NewWorkingMemoryConsolidationRegistration(0, 0).NewJob(),
 		nil,
 	)
 	if err != nil {
@@ -721,7 +721,7 @@ func TestRunnerRunsWorkingMemoryConsolidationAndUpdatesMemory(t *testing.T) {
 func TestWorkingMemoryConsolidationStateRuleUsesDirtyTailThreshold(t *testing.T) {
 	t.Parallel()
 
-	registration := NewWorkingMemoryConsolidationRegistration()
+	registration := NewWorkingMemoryConsolidationRegistration(0, 0)
 	evaluate := registration.Policy.State[0].Evaluate
 	belowThresholdHead := workingMemoryMinDirtyTurns - 1
 	atThresholdHead := workingMemoryMinDirtyTurns
