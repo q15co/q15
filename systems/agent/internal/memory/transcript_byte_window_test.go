@@ -59,9 +59,11 @@ func TestCognitionWindowDoesNotSkipOversizedSingleTurn(t *testing.T) {
 		)
 	}
 	blocked, err := store.LoadMessagesSinceSeqWindow(ctx, window.LastSeq, 8)
-	if err == nil || blocked.LastSeq != 0 || len(blocked.Messages) != 0 {
+	if err != nil || blocked.LastSeq != 1 || blocked.PartialTurn == nil ||
+		blocked.PartialTurn.TurnSeq != 2 ||
+		len(blocked.Messages) == 0 {
 		t.Fatalf(
-			"oversized turn was silently truncated or skipped: last=%d error=%v",
+			"oversized turn was skipped instead of partially covered: last=%d error=%v",
 			blocked.LastSeq,
 			err,
 		)
@@ -112,7 +114,8 @@ func TestCognitionWindowCountsJSONEscaping(t *testing.T) {
 		t.Fatal(err)
 	}
 	window, err := store.LoadMessagesSinceSeqWindow(ctx, 0, 1)
-	if err == nil || window.LastSeq != 0 {
+	if err != nil || window.LastSeq != 0 || window.PartialTurn == nil ||
+		len(conversation.TextValue(window.Messages[0])) >= 12*1024 {
 		t.Fatal("window measured raw text instead of serialized evidence")
 	}
 }

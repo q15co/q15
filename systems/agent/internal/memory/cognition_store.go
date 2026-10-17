@@ -438,7 +438,8 @@ func sameConsolidationCheckpoint(
 	left consolidationCheckpointState,
 	right consolidationCheckpointState,
 ) bool {
-	return left.LastConsolidatedSeq == right.LastConsolidatedSeq &&
+	return sameTranscriptCursor(left.PartialTurn, right.PartialTurn) &&
+		left.LastConsolidatedSeq == right.LastConsolidatedSeq &&
 		strings.TrimSpace(
 			left.LastConsolidatedTurnID,
 		) == strings.TrimSpace(
@@ -451,7 +452,8 @@ func sameSemanticExtractionCheckpoint(
 	left semanticExtractionCheckpointState,
 	right semanticExtractionCheckpointState,
 ) bool {
-	return left.LastExtractedSeq == right.LastExtractedSeq &&
+	return sameTranscriptCursor(left.PartialTurn, right.PartialTurn) &&
+		left.LastExtractedSeq == right.LastExtractedSeq &&
 		strings.TrimSpace(
 			left.LastExtractedTurnID,
 		) == strings.TrimSpace(
@@ -482,6 +484,7 @@ func consolidationCheckpointStateFromCognition(
 	checkpoint cognition.ConsolidationCheckpoint,
 ) consolidationCheckpointState {
 	return consolidationCheckpointState{
+		PartialTurn:            checkpoint.PartialTurn,
 		LastConsolidatedTurnID: strings.TrimSpace(checkpoint.LastConsolidatedTurnID),
 		LastConsolidatedSeq:    max(0, checkpoint.LastConsolidatedSeq),
 		LastConsolidatedAt:     checkpoint.LastConsolidatedAt.UTC(),
@@ -493,6 +496,7 @@ func consolidationCheckpointStateToCognition(
 	checkpoint consolidationCheckpointState,
 ) cognition.ConsolidationCheckpoint {
 	return cognition.ConsolidationCheckpoint{
+		PartialTurn:            checkpoint.PartialTurn,
 		LastConsolidatedTurnID: strings.TrimSpace(checkpoint.LastConsolidatedTurnID),
 		LastConsolidatedSeq:    max(0, checkpoint.LastConsolidatedSeq),
 		LastConsolidatedAt:     checkpoint.LastConsolidatedAt.UTC(),
@@ -504,6 +508,7 @@ func semanticExtractionCheckpointStateFromCognition(
 	checkpoint cognition.SemanticExtractionCheckpoint,
 ) semanticExtractionCheckpointState {
 	return semanticExtractionCheckpointState{
+		PartialTurn:         checkpoint.PartialTurn,
 		LastExtractedTurnID: strings.TrimSpace(checkpoint.LastExtractedTurnID),
 		LastExtractedSeq:    max(0, checkpoint.LastExtractedSeq),
 		LastExtractedAt:     checkpoint.LastExtractedAt.UTC(),
@@ -515,6 +520,7 @@ func semanticExtractionCheckpointStateToCognition(
 	checkpoint semanticExtractionCheckpointState,
 ) cognition.SemanticExtractionCheckpoint {
 	return cognition.SemanticExtractionCheckpoint{
+		PartialTurn:         checkpoint.PartialTurn,
 		LastExtractedTurnID: strings.TrimSpace(checkpoint.LastExtractedTurnID),
 		LastExtractedSeq:    max(0, checkpoint.LastExtractedSeq),
 		LastExtractedAt:     checkpoint.LastExtractedAt.UTC(),
@@ -580,4 +586,11 @@ func normalizeCognitionArtifactPath(relativePath string) (string, error) {
 		)
 	}
 	return normalized, nil
+}
+
+func sameTranscriptCursor(a, b *cognition.TranscriptCursor) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
 }

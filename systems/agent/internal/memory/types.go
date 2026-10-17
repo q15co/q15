@@ -3,6 +3,7 @@ package memory
 import (
 	"time"
 
+	"github.com/q15co/q15/systems/agent/internal/cognition"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
 )
 
@@ -23,17 +24,19 @@ type headState struct {
 }
 
 type consolidationCheckpointState struct {
-	LastConsolidatedTurnID string    `json:"last_consolidated_turn_id,omitempty"`
-	LastConsolidatedSeq    int64     `json:"last_consolidated_seq,omitempty"`
-	LastConsolidatedAt     time.Time `json:"last_consolidated_at,omitempty"`
-	UpdatedAt              time.Time `json:"updated_at,omitempty"`
+	PartialTurn            *cognition.TranscriptCursor `json:"partial_turn,omitempty"`
+	LastConsolidatedTurnID string                      `json:"last_consolidated_turn_id,omitempty"`
+	LastConsolidatedSeq    int64                       `json:"last_consolidated_seq,omitempty"`
+	LastConsolidatedAt     time.Time                   `json:"last_consolidated_at,omitempty"`
+	UpdatedAt              time.Time                   `json:"updated_at,omitempty"`
 }
 
 type semanticExtractionCheckpointState struct {
-	LastExtractedTurnID string    `json:"last_extracted_turn_id,omitempty"`
-	LastExtractedSeq    int64     `json:"last_extracted_seq,omitempty"`
-	LastExtractedAt     time.Time `json:"last_extracted_at,omitempty"`
-	UpdatedAt           time.Time `json:"updated_at,omitempty"`
+	PartialTurn         *cognition.TranscriptCursor `json:"partial_turn,omitempty"`
+	LastExtractedTurnID string                      `json:"last_extracted_turn_id,omitempty"`
+	LastExtractedSeq    int64                       `json:"last_extracted_seq,omitempty"`
+	LastExtractedAt     time.Time                   `json:"last_extracted_at,omitempty"`
+	UpdatedAt           time.Time                   `json:"updated_at,omitempty"`
 }
 
 type turnPathEntry struct {

@@ -55,5 +55,35 @@ func renderInitialTranscriptScope(policy string, turns int, window TurnWindow) s
 			window.RemainingTurns,
 		)
 	}
+	return renderPartialTranscriptScope(scope, window)
+}
+
+type partialTranscriptWindowLoader interface {
+	LoadTranscriptWindow(context.Context, int64, int, *TranscriptCursor) (TurnWindow, error)
+}
+
+func loadTranscriptWindow(
+	ctx context.Context,
+	loader ContextLoader,
+	after int64,
+	turns int,
+	cursor *TranscriptCursor,
+) (TurnWindow, error) {
+	if windowed, ok := loader.(partialTranscriptWindowLoader); ok {
+		return windowed.LoadTranscriptWindow(ctx, after, turns, cursor)
+	}
+	if cursor != nil {
+		return TurnWindow{}, fmt.Errorf("loader cannot resume a partial transcript turn")
+	}
+	return loader.LoadMessagesSinceSeqWindow(ctx, after, turns)
+}
+
+func renderPartialTranscriptScope(scope string, window TurnWindow) string {
+	if window.PartialTurn != nil {
+		scope += fmt.Sprintf(
+			"\nTurn seq %d is only partially included. Later bytes remain unprocessed; do not assume this fragment is the complete turn.",
+			window.PartialTurn.TurnSeq,
+		)
+	}
 	return scope
 }

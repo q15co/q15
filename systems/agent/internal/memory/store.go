@@ -293,7 +293,7 @@ func (s *Store) LoadMessagesSinceSeq(
 
 // LoadMessagesSinceSeqWindow loads complete oldest turns after the boundary,
 // bounded by maxTurns and the rendered cognition byte budget. LastSeq names
-// only turns actually included; an oversized first turn fails without skipping it.
+// only complete turns; PartialTurn records how to resume an oversized turn.
 //
 // It is the bounded counterpart of LoadMessagesSinceSeq, which is only safe
 // while the backlog after the boundary stays small: a caller that keeps a
@@ -1285,7 +1285,7 @@ func (s *Store) loadMessagesSinceSeqWindowLocked(
 		return cognition.TurnWindow{}, nil
 	}
 
-	return s.loadByteBoundedTranscriptWindowLocked(entries[start:], maxTurns)
+	return s.loadByteBoundedTranscriptWindowLocked(entries[start:], maxTurns, afterSeq, nil)
 }
 
 func (s *Store) headStatePath() string {

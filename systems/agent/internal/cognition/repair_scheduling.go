@@ -130,6 +130,7 @@ func (c *Controller) notifyRepairProgress(ctx context.Context) error {
 			continue
 		}
 		state.MaintenancePending = true
+		state.TranscriptPending = true
 		if err := c.store.StoreJobState(ctx, job.jobType, state); err != nil {
 			return err
 		}
