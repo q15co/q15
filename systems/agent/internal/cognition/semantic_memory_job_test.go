@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -29,6 +30,8 @@ type semanticMemoryJobLoader struct {
 	semanticSizes           map[string]int64
 	openLoops               string
 	ledger                  string
+	rawFiles                map[string]string
+	ledgerHistory           string
 }
 
 func (l *semanticMemoryJobLoader) LoadCoreMemory(context.Context) (agent.CoreMemory, error) {
@@ -47,7 +50,20 @@ func (l *semanticMemoryJobLoader) LoadWorkingMemory(context.Context) (agent.Work
 }
 
 func (l *semanticMemoryJobLoader) LoadSemanticFileSizes(context.Context) (map[string]int64, error) {
-	return l.semanticSizes, nil
+	sizes := map[string]int64{
+		semanticFactsRelativePath:       0,
+		semanticPreferencesRelativePath: 0,
+		semanticProjectsRelativePath:    0,
+	}
+	for path, size := range l.semanticSizes {
+		sizes[path] = size
+	}
+	for path, raw := range l.rawFiles {
+		if strings.HasPrefix(path, "semantic/") {
+			sizes[path] = int64(len(raw))
+		}
+	}
+	return sizes, nil
 }
 
 func (l *semanticMemoryJobLoader) LoadOpenLoops(context.Context) (string, error) {
@@ -155,8 +171,8 @@ func TestSemanticMemoryExtractionRegistration(t *testing.T) {
 	if got, want := registration.Policy.Schedule[0].Spec, semanticMemoryScheduleSpec; got != want {
 		t.Fatalf("schedule spec = %q, want %q", got, want)
 	}
-	if len(registration.Policy.State) != 1 {
-		t.Fatalf("state rules = %d, want 1", len(registration.Policy.State))
+	if len(registration.Policy.State) != 2 {
+		t.Fatalf("state rules = %d, want 2", len(registration.Policy.State))
 	}
 }
 
@@ -288,7 +304,7 @@ func TestSemanticMemoryExtractionBuildLoadsSemanticWorkingVerificationAndTranscr
 		"<semantic_memory_rules>",
 		"<semantic_memory_execution_order>",
 		"This is a background maintenance job, not a user-facing reply.",
-		"Extract conservative durable knowledge into the canonical semantic-memory files.",
+		"Run the conversion pass from working memory to semantic memory: every item that leaves working memory is converted into a semantic claim, moved to open loops, or dropped, and every exit is recorded in the conversion ledger.",
 		"Treat durable user-profile knowledge as first-class semantic memory, not just active project context.",
 		"Always inspect all three semantic-memory target files with file tools during this run.",
 		"Call read_file, write_file, edit_file, or apply_patch on each of /memory/semantic/facts.md, /memory/semantic/preferences.md, and /memory/semantic/projects.md before your final response.",
@@ -459,10 +475,10 @@ func TestSemanticMemoryExtractionApplyResultCarriesWindowCheckpoint(t *testing.T
 
 	result, err := NewSemanticMemoryExtractionRegistration().NewJob().ApplyResult(
 		context.Background(),
-		nil,
+		&semanticMemoryJobLoader{},
 		JobOutput{
 			Type:      semanticMemoryExtractionJobType,
-			Spec:      Spec{CheckpointSeq: 64},
+			Spec:      Spec{CheckpointSeq: 64, Baseline: emptyConversionBaseline()},
 			FinalText: "Semantic memory is current.",
 			Messages: []conversation.Message{
 				conversation.AssistantMessage(
@@ -545,7 +561,7 @@ func TestSemanticMemoryExtractionApplyResultRejectsMissingTargetCoverage(t *test
 
 	_, err := NewSemanticMemoryExtractionRegistration().NewJob().ApplyResult(
 		context.Background(),
-		nil,
+		&semanticMemoryJobLoader{},
 		JobOutput{
 			Type:      semanticMemoryExtractionJobType,
 			FinalText: "Semantic memory is current.",
@@ -575,7 +591,7 @@ func TestSemanticMemoryExtractionApplyResultIgnoresFailedAndMisleadingToolResult
 
 	_, err := NewSemanticMemoryExtractionRegistration().NewJob().ApplyResult(
 		context.Background(),
-		nil,
+		&semanticMemoryJobLoader{},
 		JobOutput{
 			Type:      semanticMemoryExtractionJobType,
 			FinalText: "Semantic memory is current.",
@@ -621,9 +637,10 @@ func TestSemanticMemoryExtractionApplyResultTracksChangedMetadata(t *testing.T) 
 
 	result, err := NewSemanticMemoryExtractionRegistration().NewJob().ApplyResult(
 		context.Background(),
-		nil,
+		&semanticMemoryJobLoader{},
 		JobOutput{
 			Type:      semanticMemoryExtractionJobType,
+			Spec:      Spec{Baseline: emptyConversionBaseline()},
 			FinalText: "Updated semantic memory conservatively.",
 			Messages: []conversation.Message{
 				conversation.AssistantMessage(
@@ -702,9 +719,10 @@ func TestSemanticMemoryExtractionApplyResultUsesFalseChangedForReadOnlyInspectio
 
 	result, err := NewSemanticMemoryExtractionRegistration().NewJob().ApplyResult(
 		context.Background(),
-		nil,
+		&semanticMemoryJobLoader{},
 		JobOutput{
 			Type: semanticMemoryExtractionJobType,
+			Spec: Spec{Baseline: emptyConversionBaseline()},
 			Messages: []conversation.Message{
 				conversation.AssistantMessage(
 					conversation.ToolCall(
@@ -765,10 +783,34 @@ func TestSemanticMemoryExtractionApplyResultUsesFalseChangedForReadOnlyInspectio
 	}
 }
 
-func (l *semanticMemoryJobLoader) ReadFileBytes(context.Context, string) ([]byte, bool, error) {
+func (l *semanticMemoryJobLoader) ReadFileBytes(
+	_ context.Context,
+	relative string,
+) ([]byte, bool, error) {
+	if raw, ok := l.rawFiles[relative]; ok {
+		return []byte(raw), true, nil
+	}
+	switch relative {
+	case workingMemoryRelativePath:
+		return []byte(l.working.Content), true, nil
+	case "working/LEDGER.md":
+		return []byte(l.ledger), true, nil
+	case "working/OPEN_LOOPS.md":
+		return []byte(l.openLoops), true, nil
+	}
+	for _, file := range l.semantic.Files {
+		if file.RelativePath == relative {
+			return []byte(file.Content), true, nil
+		}
+	}
+	for _, root := range semanticRuntimePaths() {
+		if relative == strings.TrimPrefix(root, memoryRuntimePrefix) {
+			return nil, true, nil
+		}
+	}
 	return nil, false, nil
 }
 
 func (l *semanticMemoryJobLoader) LoadConversionLedgerHistory(context.Context) (string, error) {
-	return "", nil
+	return l.ledgerHistory, nil
 }
