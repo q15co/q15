@@ -759,3 +759,65 @@ func TestSemanticCapBytesMatchesTheConversionRule(t *testing.T) {
 		}
 	}
 }
+
+func TestSemanticConversionRollsBackOnCoverageFailure(t *testing.T) {
+	t.Parallel()
+
+	loader := &semanticMemoryJobLoader{
+		files:   conversionPreRunFiles(),
+		working: agent.WorkingMemory{Content: conversionWorkingBefore},
+		ledger:  conversionLedgerBefore,
+	}
+	snapshots := conversionSnapshots(t, loader)
+
+	// The run wrote to working memory and then ran out of turns before it had
+	// inspected every canonical root, which is the coverage check failing.
+	loader.files[workingMemoryRelativePath] = []byte("# Working Memory\n\n- gone\n")
+
+	_, err := NewSemanticMemoryExtractionRegistration(0, 0).NewJob().ApplyResult(
+		context.Background(),
+		loader,
+		JobOutput{
+			Type:      semanticMemoryExtractionJobType,
+			Spec:      Spec{Baseline: conversionBaseline(), FileSnapshots: snapshots},
+			FinalText: "Ran out of turns.",
+			// One canonical root inspected, two missed: this run ran out of
+			// turns mid-way, after it had already written to working memory.
+			Messages: []conversation.Message{
+				conversation.AssistantMessage(
+					conversation.ToolCall(
+						"read-1",
+						"read_file",
+						fmt.Sprintf(`{"path":%q}`, semanticFactsRuntimePath),
+					),
+				),
+				conversation.ToolResultMessage(
+					"read-1",
+					"Path: "+semanticFactsRuntimePath,
+					false,
+				),
+				conversation.AssistantMessage(
+					conversation.ToolCall(
+						"write-1",
+						"write_file",
+						fmt.Sprintf(
+							`{"path":%q,"content":"x"}`,
+							workingMemoryRuntimePath,
+						),
+					),
+				),
+				conversation.ToolResultMessage(
+					"write-1",
+					"Path: "+workingMemoryRuntimePath,
+					false,
+				),
+			},
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "must inspect all canonical targets") {
+		t.Fatalf("ApplyResult() error = %v, want the coverage failure", err)
+	}
+	if got := string(loader.files[workingMemoryRelativePath]); got != conversionWorkingBefore {
+		t.Fatalf("working memory not restored after the coverage failure:\n%s", got)
+	}
+}

@@ -14,6 +14,7 @@ import (
 const (
 	// defaultCognitionMaxTurns caps the model/tool turns for one cognition run.
 	defaultCognitionMaxTurns = 32
+	memoryRecoveryTimeout    = 30 * time.Second
 )
 
 // ContextLoader provides explicit access to state a cognition job may opt into.
@@ -97,6 +98,14 @@ type JobDefinition interface {
 	Type() string
 	Build(ctx context.Context, loader ContextLoader) (Spec, error)
 	ApplyResult(ctx context.Context, loader ContextLoader, output JobOutput) (ParsedResult, error)
+}
+
+// Rollbacker is implemented by a job whose Spec carries the pre-run state of
+// every path its run can write. The runner asks it to restore that state when
+// the run fails, because partial writes from a failed run would otherwise
+// survive on disk and become the next run's baseline.
+type Rollbacker interface {
+	Rollback(ctx context.Context, loader ContextLoader, spec Spec) error
 }
 
 // JobOutput is the validated raw engine output for one cognition run.
@@ -313,6 +322,7 @@ func (r *Runner) Run(
 
 	systemPrompt, err := renderPrompt(jobType, spec)
 	if err != nil {
+		err = r.withRollbackError(ctx, job, spec, err)
 		notifyRunEvent(ctx, observer, agent.RunEvent{
 			Type: agent.RunEventRunFailed,
 			Err:  err,
@@ -337,6 +347,7 @@ func (r *Runner) Run(
 		Observer:           observer,
 	})
 	if err != nil {
+		err = r.withRollbackError(ctx, job, spec, err)
 		notifyRunEvent(ctx, observer, agent.RunEvent{
 			Type:      agent.RunEventRunFailed,
 			Turn:      runResult.Turn,
@@ -356,7 +367,11 @@ func (r *Runner) Run(
 		Turn:      runResult.Turn,
 	}
 	parsed, err := job.ApplyResult(ctx, r.loader, output)
+	if err == nil && spec.MemoryRecoveryID != "" {
+		err = r.loader.CompleteMemoryRecovery(ctx, spec.MemoryRecoveryID)
+	}
 	if err != nil {
+		err = r.withRollbackError(ctx, job, spec, err)
 		notifyRunEvent(ctx, observer, agent.RunEvent{
 			Type:      agent.RunEventRunFailed,
 			Turn:      runResult.Turn,
@@ -386,6 +401,33 @@ func (r *Runner) Run(
 	return result, nil
 }
 
+// rollbackFailedRun restores the pre-run state of a failed run when the job
+// and the spec make that possible: the spec must carry snapshots, there must be
+// a loader to write them back through, and the job must implement Rollbacker.
+// A job that carries no snapshots is left exactly as it is.
+func (r *Runner) rollbackFailedRun(
+	ctx context.Context,
+	job JobDefinition,
+	spec Spec,
+) error {
+	if r.loader == nil {
+		return nil
+	}
+	cleanupCtx, cancel := memoryRecoveryContext(ctx)
+	defer cancel()
+	if spec.MemoryRecoveryID != "" {
+		return r.loader.RecoverMemory(cleanupCtx, spec.MemoryRecoveryID)
+	}
+	if len(spec.FileSnapshots) == 0 {
+		return nil
+	}
+	rollbacker, ok := job.(Rollbacker)
+	if !ok {
+		return nil
+	}
+	return rollbacker.Rollback(cleanupCtx, r.loader, spec)
+}
+
 func cloneMetadata(in map[string]string) map[string]string {
 	if len(in) == 0 {
 		return nil
@@ -412,4 +454,20 @@ func notifyRunEvent(ctx context.Context, observer agent.RunObserver, event agent
 		event.At = time.Now()
 	}
 	observer.OnRunEvent(ctx, event)
+}
+
+func memoryRecoveryContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), memoryRecoveryTimeout)
+}
+
+func (r *Runner) withRollbackError(
+	ctx context.Context,
+	job JobDefinition,
+	spec Spec,
+	runErr error,
+) error {
+	if err := r.rollbackFailedRun(ctx, job, spec); err != nil {
+		return fmt.Errorf("%w (rollback also failed: %w)", runErr, err)
+	}
+	return runErr
 }

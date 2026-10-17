@@ -615,7 +615,9 @@ func rollbackFailedRun(
 	snapshots map[string]FileSnapshot,
 	validationErr error,
 ) error {
-	if restoreErr := restoreConversionFiles(ctx, loader, snapshots); restoreErr != nil {
+	cleanupCtx, cancel := memoryRecoveryContext(ctx)
+	defer cancel()
+	if restoreErr := restoreConversionFiles(cleanupCtx, loader, snapshots); restoreErr != nil {
 		return fmt.Errorf("%w (rollback also failed: %v)", validationErr, restoreErr)
 	}
 	return validationErr
