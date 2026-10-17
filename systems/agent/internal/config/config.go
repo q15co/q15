@@ -24,6 +24,16 @@ const (
 // disabled, so a stack can run before that volume exists.
 const DefaultBridgeListenTarget = "unix:///run/q15/bridge.sock"
 
+// DefaultMemoryWorkingBudgetBytes and DefaultMemoryOpenLoopsBudgetBytes are
+// the byte budgets a configuration resolves to when the fields are absent.
+// Read-only status reporting judges sizes against these when it cannot read a
+// rendered agent configuration, so the fallback spells the same values the
+// loader's resolution applies.
+const (
+	DefaultMemoryWorkingBudgetBytes   = defaultMemoryWorkingBudgetBytes
+	DefaultMemoryOpenLoopsBudgetBytes = defaultMemoryOpenLoopsBudgetBytes
+)
+
 // SchemaVersion is the configuration schema version this build reads and
 // writes. The CLI writes it into every configuration it renders, and loading
 // refuses a configuration written by a build that understands a different

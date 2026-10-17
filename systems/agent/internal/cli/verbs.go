@@ -58,6 +58,11 @@ var verbs = []verb{
 		run:     runStatus,
 	},
 	{
+		name:    "memory",
+		summary: "report conversion lag, failures and file budgets from the memory root",
+		run:     runMemory,
+	},
+	{
 		name:    "logs",
 		summary: "print the journal of the stack, or of one service in it",
 		run:     runLogs,
