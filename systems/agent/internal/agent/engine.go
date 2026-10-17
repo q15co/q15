@@ -229,10 +229,8 @@ func (e *Engine) Run(ctx context.Context, req EngineRequest) (EngineResult, erro
 			})
 
 			toolResult, err := e.runTool(ctx, toolRegistry, req.ToolCallPolicy, call)
-			output := toolResult.Output
 			if err != nil {
-				output = "tool error: " + err.Error()
-				toolResult = ToolResult{Output: output}
+				toolResult = ToolResult{Output: "tool error: " + err.Error()}
 			}
 
 			toolResult, err = boundToolResult(
@@ -243,7 +241,7 @@ func (e *Engine) Run(ctx context.Context, req EngineRequest) (EngineResult, erro
 				err,
 				req.MaxRequestBytes,
 			)
-			output = toolResult.Output
+			output := toolResult.Output
 
 			emitRunEvent(ctx, req.Observer, RunEvent{
 				Type:       RunEventToolFinished,
