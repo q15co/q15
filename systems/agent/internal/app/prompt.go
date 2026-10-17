@@ -296,7 +296,7 @@ func renderRuntimeEnvironmentPrompt(
 			"- projects.md: Active Projects, Durable Project Knowledge",
 			"- Do not invent new top-level sections in canonical semantic memory; merge content into the existing headings instead.",
 			fmt.Sprintf(
-				"- Other files under %s/working are not implicitly prompt-visible; only WORKING_MEMORY.md is auto-injected.",
+				"- WORKING_MEMORY.md and OPEN_LOOPS.md under %s/working are auto-injected; fetch other working files with file tools.",
 				info.MemoryDir,
 			),
 			fmt.Sprintf(

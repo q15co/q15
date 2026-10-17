@@ -107,6 +107,15 @@ func (b *ContextBuilder) Build(
 				systemMessages = append(systemMessages, message)
 			}
 		}
+		if openLoopsStore, ok := b.store.(OpenLoopsStore); ok {
+			openLoops, err := openLoopsStore.LoadOpenLoops(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("load open loops: %w", err)
+			}
+			if message, ok := injectOpenLoops(openLoops); ok {
+				systemMessages = append(systemMessages, message)
+			}
+		}
 	}
 
 	var recentMessages []conversation.Message

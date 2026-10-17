@@ -62,7 +62,7 @@ func TestComposeSystemPromptIncludesRuntimeAndExecGuidance(t *testing.T) {
 		"- preferences.md: User Preferences, Collaboration Preferences",
 		"- projects.md: Active Projects, Durable Project Knowledge",
 		"- Do not invent new top-level sections in canonical semantic memory; merge content into the existing headings instead.",
-		"- Other files under /memory/working are not implicitly prompt-visible; only WORKING_MEMORY.md is auto-injected.",
+		"- WORKING_MEMORY.md and OPEN_LOOPS.md under /memory/working are auto-injected; fetch other working files with file tools.",
 		"- Transcript sequence bookkeeping lives under /memory/history/state/head.json.",
 		"- Auxiliary notebook files live under /memory/notes/inbox, /memory/notes/zettel, and /memory/notes/maps using the built-in zettelkasten layout; they are never implicit prompt-visible working state.",
 		"- Runtime media root: /media",
