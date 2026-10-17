@@ -20,6 +20,12 @@ const (
 	// maxRunsPerDrainPass bounds how many jobs a single drain pass may run
 	// back to back.
 	maxRunsPerDrainPass = 8
+
+	// stallAlertFailures is the consecutive-failure count at which the
+	// controller leaves an operator-visible alert artifact for a
+	// checkpoint-advancing job, and at which the job's next success clears it
+	// again.
+	stallAlertFailures = 6
 )
 
 // StateEvaluator decides whether a registered startup or state trigger should
@@ -146,6 +152,10 @@ type ControllerStore interface {
 		SemanticExtractionCheckpoint,
 	) (SemanticExtractionCheckpoint, error)
 	AppendRunRecord(context.Context, RunRecord) error
+	// DeleteCognitionArtifact removes one job-owned cognition artifact under
+	// the runtime memory root, so the controller can clear a stall alert
+	// artifact after the job recovers.
+	DeleteCognitionArtifact(ctx context.Context, relativePath string) error
 }
 
 // Controller coordinates startup, scheduled, and state-driven cognition jobs.
@@ -608,6 +618,11 @@ func (c *Controller) runPending(ctx context.Context, pending pendingRun) error {
 	if err := c.store.AppendRunRecord(ctx, record); err != nil {
 		return err
 	}
+	if isCheckpointAdvancingJobType(pending.job.jobType) {
+		if err := c.updateStallAlert(ctx, pending.job.jobType, state, runErr); err != nil {
+			return err
+		}
+	}
 	if headSeq > pending.headSeq {
 		c.NotifyStateChange()
 	}
@@ -783,6 +798,72 @@ func shouldAdvanceConsolidationCheckpoint(jobType string) bool {
 
 func shouldAdvanceSemanticExtractionCheckpoint(jobType string) bool {
 	return strings.TrimSpace(jobType) == semanticMemoryExtractionJobType
+}
+
+func isCheckpointAdvancingJobType(jobType string) bool {
+	return shouldAdvanceConsolidationCheckpoint(jobType) ||
+		shouldAdvanceSemanticExtractionCheckpoint(jobType)
+}
+
+// updateStallAlert keeps the operator-visible stall alert artifact in step
+// with one checkpoint-advancing run: after stallAlertFailures consecutive
+// failures the controller writes cognition/alerts/<job_type>.md with the state
+// and failure in hand, and the next successful run deletes it again. The call
+// happens after the run outcome and its record are persisted, so a failing
+// artifact write or delete surfaces only as a controller error and never
+// changes the recorded outcome of the run itself.
+func (c *Controller) updateStallAlert(
+	ctx context.Context,
+	jobType string,
+	state JobState,
+	runErr error,
+) error {
+	if runErr == nil {
+		return c.clearStallAlert(ctx, jobType)
+	}
+	if state.ConsecutiveFailures < stallAlertFailures {
+		return nil
+	}
+	if err := c.loader.StoreCognitionArtifact(ctx, Artifact{
+		RelativePath: StallAlertPath(jobType),
+		Content:      renderStallAlert(jobType, state, runErr),
+	}); err != nil {
+		return fmt.Errorf("store stall alert for job %q: %w", jobType, err)
+	}
+	return nil
+}
+
+func (c *Controller) clearStallAlert(ctx context.Context, jobType string) error {
+	if err := c.store.DeleteCognitionArtifact(ctx, StallAlertPath(jobType)); err != nil {
+		return fmt.Errorf("delete stall alert for job %q: %w", jobType, err)
+	}
+	return nil
+}
+
+func renderStallAlert(jobType string, state JobState, runErr error) string {
+	lastFailure := ""
+	if runErr != nil {
+		lastFailure = strings.ReplaceAll(strings.TrimSpace(runErr.Error()), "\n", " | ")
+	}
+	lines := []string{
+		fmt.Sprintf("# Cognition stall alert: %s", jobType),
+		"",
+		fmt.Sprintf(
+			"The checkpoint-advancing cognition job `%s` has failed %d consecutive runs and its next runs use a halved transcript input window.",
+			jobType,
+			state.ConsecutiveFailures,
+		),
+		"This alert artifact is deleted automatically by the job's next successful run.",
+		"",
+		fmt.Sprintf("- job_type: %s", jobType),
+		fmt.Sprintf("- consecutive_failures: %d", state.ConsecutiveFailures),
+		fmt.Sprintf(
+			"- last_failure_at: %s",
+			state.LastFailureAt.UTC().Format(time.RFC3339Nano),
+		),
+		fmt.Sprintf("- last_failure: %s", lastFailure),
+	}
+	return strings.Join(lines, "\n") + "\n"
 }
 
 func syncDirtyState(state JobState, headSeq int64, headAt time.Time) (JobState, bool) {

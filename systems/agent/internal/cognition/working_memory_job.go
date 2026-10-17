@@ -94,6 +94,15 @@ func (j workingMemoryConsolidationJob) Build(
 	if err != nil {
 		return Spec{}, fmt.Errorf("load consolidation checkpoint: %w", err)
 	}
+	windowTurns, err := degradedWindowTurns(
+		ctx,
+		loader,
+		workingMemoryConsolidationJobType,
+		workingMemoryWindowTurns,
+	)
+	if err != nil {
+		return Spec{}, fmt.Errorf("load consolidation job state: %w", err)
+	}
 	var recentMessages []conversation.Message
 	var transcriptStatus string
 	windowEndSeq := int64(0)
@@ -101,7 +110,7 @@ func (j workingMemoryConsolidationJob) Build(
 		window, loadErr := loader.LoadMessagesSinceSeqWindow(
 			ctx,
 			consolidationCheckpoint.LastConsolidatedSeq,
-			workingMemoryWindowTurns,
+			windowTurns,
 		)
 		if loadErr != nil {
 			return Spec{}, fmt.Errorf(
@@ -116,13 +125,13 @@ func (j workingMemoryConsolidationJob) Build(
 			window,
 		)
 	} else {
-		recentMessages, err = loader.LoadRecentMessages(ctx, workingMemoryRecentTurns)
+		recentMessages, err = loader.LoadRecentMessages(ctx, windowTurns)
 		if err != nil {
 			return Spec{}, fmt.Errorf("load recent messages: %w", err)
 		}
 		transcriptStatus = renderTranscriptScopeWithPolicy(
 			"selected by the initial working-memory replay fallback window independent of the consolidation checkpoint",
-			workingMemoryRecentTurns,
+			windowTurns,
 			len(recentMessages),
 		)
 	}

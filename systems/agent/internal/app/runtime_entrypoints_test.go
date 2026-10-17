@@ -160,6 +160,10 @@ func (s *spyRuntimeStore) AppendRunRecord(
 	return nil
 }
 
+func (s *spyRuntimeStore) DeleteCognitionArtifact(context.Context, string) error {
+	return nil
+}
+
 type appFakeCognitionJob struct{}
 
 func (appFakeCognitionJob) Type() string {
