@@ -13,8 +13,9 @@ import (
 
 const (
 	// defaultCognitionMaxTurns caps the model/tool turns for one cognition run.
-	defaultCognitionMaxTurns = 32
-	memoryRecoveryTimeout    = 30 * time.Second
+	defaultCognitionMaxTurns               = 32
+	defaultCognitionMaxFailedModelAttempts = 3
+	memoryRecoveryTimeout                  = 30 * time.Second
 )
 
 // ContextLoader provides explicit access to state a cognition job may opt into.
@@ -370,12 +371,13 @@ func (r *Runner) Run(
 		runCtx = withMemoryRecoveryOwner(ctx, spec.MemoryRecoveryID)
 	}
 	runResult, err := engine.Run(runCtx, agent.EngineRequest{
-		Messages:           inputMessages,
-		UseTools:           spec.ExposeTools,
-		AllowedTools:       append([]string(nil), spec.AllowedTools...),
-		ToolCallPolicy:     spec.ToolCallPolicy,
-		RequireToolCalling: spec.RequireToolCalling,
-		Observer:           observer,
+		Messages:               inputMessages,
+		UseTools:               spec.ExposeTools,
+		AllowedTools:           append([]string(nil), spec.AllowedTools...),
+		ToolCallPolicy:         spec.ToolCallPolicy,
+		RequireToolCalling:     spec.RequireToolCalling,
+		Observer:               observer,
+		MaxFailedModelAttempts: defaultCognitionMaxFailedModelAttempts,
 	})
 	if err != nil {
 		err = r.withRollbackError(ctx, job, spec, err)

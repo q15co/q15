@@ -595,3 +595,36 @@ func TestEngineRun_PreservesOrderedModelAttemptFailures(t *testing.T) {
 		t.Fatalf("Unwrap() = %#v, want %#v", unwrapped, err2)
 	}
 }
+
+func TestEngineUnlimitedFailureBudgetPreservesFallback(t *testing.T) {
+	model := &fakeModelClient{
+		complete: func(context.Context, string, []conversation.Message, []ToolDefinition) (ModelClientResult, error) {
+			return ModelClientResult{}, errors.New("synthetic provider failure")
+		},
+	}
+	engine := NewEngine(model, nil, []string{"first", "second", "third", "fourth"})
+	_, err := engine.Run(context.Background(), EngineRequest{})
+	var fallback *ModelFallbackError
+	if !errors.As(err, &fallback) || len(model.callModels) != 4 {
+		t.Fatalf("unlimited engine fallback changed: attempts=%v error=%v", model.callModels, err)
+	}
+}
+
+func TestEngineFailureLimitRetainsCause(t *testing.T) {
+	cause := errors.New("synthetic provider failure")
+	model := &failingModelClient{err: cause}
+	_, err := NewEngine(
+		model,
+		nil,
+		[]string{"first", "second", "third", "fourth"},
+	).Run(context.Background(), EngineRequest{MaxFailedModelAttempts: 3})
+	var limited *ModelAttemptLimitError
+	if !errors.As(err, &limited) || limited.Limit != 3 || len(limited.AttemptFailures) != 3 ||
+		!errors.Is(err, cause) {
+		t.Fatalf("limit did not retain failures and cause: %v", err)
+	}
+	if strings.Contains(err.Error(), "all models failed") ||
+		strings.Contains(err.Error(), "fourth") {
+		t.Fatalf("limit claimed an untried model failed: %v", err)
+	}
+}
