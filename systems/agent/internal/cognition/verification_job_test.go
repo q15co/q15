@@ -87,6 +87,18 @@ func (l *verificationJobLoader) LoadSemanticExtractionCheckpoint(
 	return SemanticExtractionCheckpoint{}, nil
 }
 
+func (l *verificationJobLoader) LoadSemanticFileSizes(context.Context) (map[string]int64, error) {
+	return nil, nil
+}
+
+func (l *verificationJobLoader) LoadOpenLoops(context.Context) (string, error) {
+	return "", nil
+}
+
+func (l *verificationJobLoader) LoadWorkingLedger(context.Context) (string, error) {
+	return "", nil
+}
+
 func (l *verificationJobLoader) LoadCognitionArtifact(
 	_ context.Context,
 	relativePath string,
@@ -494,4 +506,12 @@ func TestRunnerRunsVerificationReviewAndStoresArtifactWithoutToolCalls(t *testin
 	if !reflect.DeepEqual(gotNames, wantNames) {
 		t.Fatalf("callTools[0] names = %#v, want %#v", gotNames, wantNames)
 	}
+}
+
+func (l *verificationJobLoader) ReadFileBytes(context.Context, string) ([]byte, bool, error) {
+	return nil, false, nil
+}
+
+func (l *verificationJobLoader) LoadConversionLedgerHistory(context.Context) (string, error) {
+	return "", nil
 }

@@ -20,7 +20,18 @@ const (
 type ContextLoader interface {
 	LoadCoreMemory(ctx context.Context) (agent.CoreMemory, error)
 	LoadSemanticMemory(ctx context.Context) (agent.SemanticMemory, error)
+	// LoadSemanticFileSizes returns the on-disk byte size of every semantic
+	// root and topic file, keyed by memory-relative path (for example
+	// "semantic/topics/q15.md").
+	LoadSemanticFileSizes(ctx context.Context) (map[string]int64, error)
 	LoadWorkingMemory(ctx context.Context) (agent.WorkingMemory, error)
+	// LoadOpenLoops returns the trimmed content of working/OPEN_LOOPS.md.
+	LoadOpenLoops(ctx context.Context) (string, error)
+	// LoadWorkingLedger returns the trimmed content of working/LEDGER.md.
+	LoadWorkingLedger(ctx context.Context) (string, error)
+	ReadFileBytes(ctx context.Context, relativePath string) ([]byte, bool, error)
+	// LoadConversionLedgerHistory returns archived ledger bytes, oldest first.
+	LoadConversionLedgerHistory(ctx context.Context) (string, error)
 	LoadSkillCatalog(ctx context.Context) (agent.SkillCatalog, error)
 	LoadRecentMessages(ctx context.Context, turns int) ([]conversation.Message, error)
 	LoadLatestMessages(ctx context.Context, turns int) ([]conversation.Message, error)

@@ -89,6 +89,18 @@ func (s *spyRuntimeStore) LoadCognitionArtifact(
 	return cognition.Artifact{}, nil
 }
 
+func (s *spyRuntimeStore) LoadSemanticFileSizes(context.Context) (map[string]int64, error) {
+	return nil, nil
+}
+
+func (s *spyRuntimeStore) LoadOpenLoops(context.Context) (string, error) {
+	return "", nil
+}
+
+func (s *spyRuntimeStore) LoadWorkingLedger(context.Context) (string, error) {
+	return "", nil
+}
+
 func (s *spyRuntimeStore) StoreCognitionArtifact(
 	context.Context,
 	cognition.Artifact,
@@ -316,4 +328,12 @@ func (f *fakeMemoryCommitter) CommitPaths(context.Context, string, string, []str
 
 func (f *fakeMemoryCommitter) ResetPaths(context.Context, string, []string) error {
 	return nil
+}
+
+func (s *spyRuntimeStore) ReadFileBytes(context.Context, string) ([]byte, bool, error) {
+	return nil, false, nil
+}
+
+func (s *spyRuntimeStore) LoadConversionLedgerHistory(context.Context) (string, error) {
+	return "", nil
 }

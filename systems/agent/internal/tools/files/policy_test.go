@@ -93,6 +93,66 @@ func TestPathAccessPolicyRejectsPathsOutsideAllowlist(t *testing.T) {
 	}
 }
 
+func TestPathAccessPolicyAllowsDirectChildrenOfListedDirs(t *testing.T) {
+	t.Parallel()
+
+	policy := PathAccessPolicy{
+		ReadPaths:  []string{"/srv/notes/facts.md"},
+		WritePaths: []string{"/srv/notes/facts.md"},
+		ReadDirs:   []string{"/srv/notes/topics/"},
+		WriteDirs:  []string{"/srv/notes/topics"},
+	}
+	for _, call := range []agent.ToolCall{
+		{Name: "read_file", Arguments: `{"path":"/srv/notes/topics/q15.md"}`},
+		{Name: "write_file", Arguments: `{"path":"/srv/notes/topics/new-topic.md","content":"x"}`},
+		{Name: "edit_file", Arguments: `{"path":"/srv/notes/topics/./q15.md","old_text":"a","new_text":"b"}`},
+		{Name: "apply_patch", Arguments: `{"patch":"*** Begin Patch\n*** Add File: /srv/notes/topics/fresh.md\n+x\n*** End Patch"}`},
+		{Name: "write_file", Arguments: `{"path":"/srv/notes/facts.md","content":"x"}`},
+	} {
+		if err := policy.CheckToolCall(call); err != nil {
+			t.Fatalf("CheckToolCall(%s %s) error = %v", call.Name, call.Arguments, err)
+		}
+	}
+}
+
+func TestPathAccessPolicyDirMatchingIsNotAPrefixMatch(t *testing.T) {
+	t.Parallel()
+
+	policy := PathAccessPolicy{
+		ReadDirs:  []string{"/srv/notes/topics"},
+		WriteDirs: []string{"/srv/notes/topics"},
+	}
+	for _, target := range []string{
+		"/srv/notes/topics",                 // the directory itself
+		"/srv/notes/topics/nested/deep.md",  // nested subdirectory
+		"/srv/notes/topicsevil.md",          // shared string prefix
+		"/srv/notes/topics-old/a.md",        // sibling directory
+		"/srv/notes/topics/../facts.md",     // traversal out of the dir
+		"/srv/notes/topics/../../core/x.md", // traversal further out
+		"srv/notes/topics/a.md",             // relative path
+		"/srv/core/AGENT.md",                // unrelated path
+	} {
+		for _, call := range []agent.ToolCall{
+			{Name: "read_file", Arguments: `{"path":"` + target + `"}`},
+			{Name: "write_file", Arguments: `{"path":"` + target + `","content":"x"}`},
+		} {
+			if err := policy.CheckToolCall(call); err == nil {
+				t.Fatalf("CheckToolCall(%s %q) error = nil, want rejection", call.Name, target)
+			}
+		}
+	}
+
+	// Moving a topic file out of the directory must be rejected on the
+	// destination even though the source is allowed.
+	err := policy.CheckToolCall(agent.ToolCall{
+		Name:      "apply_patch",
+		Arguments: `{"patch":"*** Begin Patch\n*** Update File: /srv/notes/topics/a.md\n*** Move to: /srv/core/AGENT.md\n*** End Patch"}`,
+	})
+	if err == nil || !strings.Contains(err.Error(), "/srv/core/AGENT.md") {
+		t.Fatalf("CheckToolCall(move out) error = %v, want rejection", err)
+	}
+}
+
 func TestInspectToolCallAccessExtractsPatchMovePaths(t *testing.T) {
 	t.Parallel()
 
