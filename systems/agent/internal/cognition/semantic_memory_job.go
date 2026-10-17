@@ -192,14 +192,15 @@ func (j semanticMemoryExtractionJob) Build(
 		transcriptStatus = renderSemanticExtractionTranscriptScope(semanticCheckpoint, window)
 	} else {
 		recentTurns := semanticMemoryRecentTurns * windowTurns / semanticMemoryWindowTurns
-		recentMessages, err = loader.LoadLatestMessages(ctx, recentTurns)
-		if err != nil {
-			return Spec{}, fmt.Errorf("load latest messages: %w", err)
+		window, loadErr := loadInitialTranscriptWindow(ctx, loader, recentTurns, loader.LoadLatestMessages)
+		if loadErr != nil {
+			return Spec{}, fmt.Errorf("load latest messages: %w", loadErr)
 		}
-		transcriptStatus = renderTranscriptScopeWithPolicy(
+		recentMessages, windowEndSeq = window.Messages, window.LastSeq
+		transcriptStatus = renderInitialTranscriptScope(
 			"selected by the initial semantic replay fallback window independent of the working-memory consolidation checkpoint",
 			recentTurns,
-			len(recentMessages),
+			window,
 		)
 	}
 

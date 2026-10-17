@@ -291,9 +291,9 @@ func (s *Store) LoadMessagesSinceSeq(
 	return s.loadMessagesSinceSeqLocked(afterSeq)
 }
 
-// LoadMessagesSinceSeqWindow loads at most maxTurns of the oldest turns after
-// the provided transcript sequence boundary and reports the sequence the
-// window reached.
+// LoadMessagesSinceSeqWindow loads complete oldest turns after the boundary,
+// bounded by maxTurns and the rendered cognition byte budget. LastSeq names
+// only turns actually included; an oversized first turn fails without skipping it.
 //
 // It is the bounded counterpart of LoadMessagesSinceSeq, which is only safe
 // while the backlog after the boundary stays small: a caller that keeps a
@@ -1285,32 +1285,7 @@ func (s *Store) loadMessagesSinceSeqWindowLocked(
 		return cognition.TurnWindow{}, nil
 	}
 
-	pending := entries[start:]
-	remaining := 0
-	if len(pending) > maxTurns {
-		remaining = len(pending) - maxTurns
-		pending = pending[:maxTurns]
-	}
-
-	records := make([]turnRecord, 0, len(pending))
-	for _, entry := range pending {
-		turn, err := s.readTurn(entry.Path)
-		if err != nil {
-			return cognition.TurnWindow{}, err
-		}
-		records = append(records, turn)
-	}
-
-	out := make([]conversation.Message, 0, len(records)*2)
-	for _, turn := range records {
-		out = append(out, promptVisibleMessages(turn.Messages)...)
-	}
-
-	return cognition.TurnWindow{
-		Messages:       out,
-		LastSeq:        pending[len(pending)-1].Seq,
-		RemainingTurns: remaining,
-	}, nil
+	return s.loadByteBoundedTranscriptWindowLocked(entries[start:], maxTurns)
 }
 
 func (s *Store) headStatePath() string {
