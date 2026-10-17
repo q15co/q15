@@ -110,7 +110,6 @@ func TestTypedRepairRejectsInvalidPlansBeforeWriting(t *testing.T) {
 	for _, response := range []string{
 		`{"decisions":[]}`,
 		`{"decisions":[{"outcome":"dropped","reason":"done"}]}`,
-		`{"decisions":[{"offset":0,"outcome":"dropped","reason":"done"},{"offset":0,"outcome":"dropped","reason":"done"}]}`,
 		`{"decisions":[{"offset":999,"outcome":"dropped","reason":"done"}]}`,
 		`{"decisions":[{"offset":0,"outcome":"dropped","reason":")"}]}`,
 		`{"decisions":[{"offset":0,"outcome":"dropped","reason":"done","description":"invented"}]}`,
@@ -289,5 +288,95 @@ func TestTypedRepairMakesStructureOnlyProgressWithoutRemovingCanonicalHeadings(t
 		!strings.Contains(post, "## Confirmed Facts\n") ||
 		!strings.HasSuffix(post, "\n## Grounded Inferences\n\n- None\n") {
 		t.Fatal("structure-only repair did not preserve required headings while shrinking")
+	}
+}
+
+func TestTypedRepairIgnoresDecisionsForLinesItDoesNotDrain(t *testing.T) {
+	loader, spec := typedRepairFixture(t, "# Heading\n\nSynthetic source.\n")
+	response := `{"decisions":[{"offset":0,"outcome":"dropped","reason":"Headings never leave."},` +
+		`{"offset":10,"outcome":"dropped","reason":"Blank lines never leave."},` +
+		`{"offset":11,"outcome":"dropped","reason":"Synthetic completed task."},` +
+		`{"offset":999,"outcome":"dropped","reason":"An offset past the chunk."}]}`
+	result, err := NewSemanticMemoryExtractionRegistration(
+		0,
+		0,
+	).NewJob().
+		ApplyResult(context.Background(), loader, JobOutput{Spec: spec, FinalText: response})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Metadata["chunk_lines_exited"] != "1" {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+	if remainder, exists := loader.files[repairNotesPath]; exists {
+		t.Fatalf("target outlived its last content line: %q", remainder)
+	}
+	entries, err := claims.ParseLedger(loader.files[workingLedgerRelativePath])
+	if err != nil || len(entries) != 2 {
+		t.Fatalf("unexpected ledger=%#v error=%v", entries, err)
+	}
+	var exits []claims.LedgerEntry
+	for _, entry := range entries {
+		if entry.Description == "Synthetic source." {
+			exits = append(exits, entry)
+		}
+	}
+	if len(exits) != 1 ||
+		exits[0].SourceSeq != fmt.Sprintf("mem:%s:%d", repairNotesPath, 11) {
+		t.Fatalf("blank and invented offsets reached the ledger: %#v", entries)
+	}
+}
+
+func TestTypedRepairKeepsTheLastDecisionForARepeatedOffset(t *testing.T) {
+	loader, spec := typedRepairFixture(t, "Synthetic source.\n")
+	response := `{"decisions":[{"offset":0,"outcome":"dropped","reason":"First thought."},` +
+		`{"offset":0,"outcome":"dropped","reason":"Second thought."}]}`
+	result, err := NewSemanticMemoryExtractionRegistration(
+		0,
+		0,
+	).NewJob().
+		ApplyResult(context.Background(), loader, JobOutput{Spec: spec, FinalText: response})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Metadata["chunk_lines_exited"] != "1" {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+	entries, err := claims.ParseLedger(loader.files[workingLedgerRelativePath])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var exits []claims.LedgerEntry
+	for _, entry := range entries {
+		if entry.SourceSeq == fmt.Sprintf("mem:%s:%d", repairNotesPath, 0) &&
+			entry.Description == "Synthetic source." {
+			exits = append(exits, entry)
+		}
+	}
+	if len(exits) != 1 || exits[0].Note != "Second thought." {
+		t.Fatalf("kept the wrong decision: %#v", exits)
+	}
+}
+
+func TestTypedRepairNamesTheContentLineWithoutADecision(t *testing.T) {
+	loader, spec := typedRepairFixture(t, "# Heading\n\nSynthetic source.\n")
+	before := string(loader.files[repairNotesPath])
+	_, err := NewSemanticMemoryExtractionRegistration(
+		0,
+		0,
+	).NewJob().
+		ApplyResult(
+			context.Background(),
+			loader,
+			JobOutput{
+				Spec:      spec,
+				FinalText: `{"decisions":[{"offset":0,"outcome":"dropped","reason":"Headings never leave."}]}`,
+			},
+		)
+	if err == nil || !strings.Contains(err.Error(), "offset 11 is missing") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(loader.files[repairNotesPath]) != before {
+		t.Fatal("refused plan changed the target")
 	}
 }
