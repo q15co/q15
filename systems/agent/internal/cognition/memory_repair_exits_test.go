@@ -43,7 +43,7 @@ func TestRepairRejectsUnledgeredTailRemoval(t *testing.T) {
 		"2026-10-16T05:00Z run=%s src=mem:%s:0 dropped %q (obsolete)\n",
 		semanticMemoryExtractionJobType, repairNotesPath, first,
 	))
-	result, err := job.ApplyResult(ctx, loader, JobOutput{
+	result, err := applyWrittenRepairForTest(ctx, loader, JobOutput{
 		Type: semanticMemoryExtractionJobType, Spec: spec,
 		Messages: repairRunMessages(memoryRuntimePrefix+repairNotesPath, workingLedgerRuntimePath),
 	})
@@ -92,10 +92,10 @@ func workingRepairSpec(t *testing.T) (*repairProbeLoader, Spec) {
 	return loader, spec
 }
 
-func TestWorkingRepairPermitsOpenLoopsDestination(t *testing.T) {
+func TestWorkingRepairReadsOpenLoopsDestination(t *testing.T) {
 	_, spec := workingRepairSpec(t)
 	err := spec.ToolCallPolicy.CheckToolCall(agent.ToolCall{
-		ID: "move-loop", Name: "write_file",
+		ID: "read-loop", Name: "read_file",
 		Arguments: fmt.Sprintf(`{"path":%q,"content":"loop"}`, openLoopsRuntimePath),
 	})
 	if err != nil {
@@ -118,18 +118,14 @@ func TestWorkingRepairAcceptsMovedIntention(t *testing.T) {
 		"2026-10-16T05:00Z run=%s src=mem:%s:%d moved %q → l-2026-0001 (working/OPEN_LOOPS.md)\n",
 		semanticMemoryExtractionJobType, workingMemoryRelativePath, offset, intention,
 	))
-	_, err := NewSemanticMemoryExtractionRegistration(
-		0,
-		0,
-	).NewJob().
-		ApplyResult(context.Background(), loader, JobOutput{
-			Type: semanticMemoryExtractionJobType, Spec: spec,
-			Messages: repairRunMessages(
-				workingMemoryRuntimePath,
-				openLoopsRuntimePath,
-				workingLedgerRuntimePath,
-			),
-		})
+	_, err := applyWrittenRepairForTest(context.Background(), loader, JobOutput{
+		Type: semanticMemoryExtractionJobType, Spec: spec,
+		Messages: repairRunMessages(
+			workingMemoryRuntimePath,
+			openLoopsRuntimePath,
+			workingLedgerRuntimePath,
+		),
+	})
 	if err != nil {
 		t.Fatalf("working repair rejected the only prospective-memory exit: %v", err)
 	}
@@ -179,7 +175,7 @@ func TestRepairRetainsDuplicateOutsideChunk(t *testing.T) {
 		"2026-10-16T05:00Z run=%s src=mem:%s:0 dropped %q (obsolete first occurrence)\n",
 		semanticMemoryExtractionJobType, repairNotesPath, line,
 	))
-	_, err = job.ApplyResult(ctx, loader, JobOutput{
+	_, err = applyWrittenRepairForTest(ctx, loader, JobOutput{
 		Type: semanticMemoryExtractionJobType, Spec: spec,
 		Messages: repairRunMessages(memoryRuntimePrefix+repairNotesPath, workingLedgerRuntimePath),
 	})
@@ -274,9 +270,12 @@ func TestWorkingRepairEnforcesConfiguredLoopBudget(t *testing.T) {
 	loader.files[workingLedgerRelativePath] = []byte(repairLedgerPre + fmt.Sprintf(
 		"2026-10-16T05:00Z run=%s src=mem:%s:%d moved %q → l-2026-0001 (working/OPEN_LOOPS.md)\n",
 		semanticMemoryExtractionJobType, workingMemoryRelativePath, offset, intention))
-	_, err := NewSemanticMemoryExtractionRegistration(0, len(loop)-1).NewJob().ApplyResult(
+	_, err := applyWrittenRepairForTest(
 		context.Background(), loader, JobOutput{Spec: spec, Messages: repairRunMessages(
-			workingMemoryRuntimePath, openLoopsRuntimePath, workingLedgerRuntimePath)})
+			workingMemoryRuntimePath,
+			openLoopsRuntimePath,
+			workingLedgerRuntimePath,
+		)}, memoryFileBudgets{openLoops: len(loop) - 1})
 	if err == nil || !strings.Contains(err.Error(), "open loops over byte budget") {
 		t.Fatalf("configured open-loop budget bypassed: error=%v", err)
 	}
@@ -362,7 +361,7 @@ func TestRepairRejectsResidualWritesFromFailedTools(t *testing.T) {
 			}
 			// Only the ordinary happy-path writes succeeded. The residual
 			// bytes still have to be checked regardless of the tool log.
-			_, err = job.ApplyResult(context.Background(), loader, JobOutput{
+			_, err = applyWrittenRepairForTest(context.Background(), loader, JobOutput{
 				Spec: spec, Messages: repairRunMessages(fixture.writes...),
 			})
 			if err == nil || !strings.Contains(err.Error(), want) {

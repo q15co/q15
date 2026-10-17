@@ -86,7 +86,7 @@ func TestRepairNamedStructureCanMakeBoundedProgress(t *testing.T) {
 	end := last.offset + len(last.text) + 1
 	post := prefix + pre[semanticFactsRelativePath][end:]
 	loader.files[semanticFactsRelativePath] = []byte(post)
-	_, err = job.ApplyResult(context.Background(), loader, JobOutput{
+	_, err = applyWrittenRepairForTest(context.Background(), loader, JobOutput{
 		Type: semanticMemoryExtractionJobType, Spec: spec,
 		Messages: repairRunMessages(semanticFactsRuntimePath),
 	})

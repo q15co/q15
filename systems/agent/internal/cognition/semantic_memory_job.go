@@ -39,9 +39,9 @@ var semanticMemoryAllowedTools = []string{
 	"embed_search",
 }
 
-// The conversion contract's grammar statements, kept as constants so the
-// memory-repair prompt reuses the exact same words instead of restating the
-// claim format and the ledger grammar in a second place that could drift.
+// Conversion and repair share claim semantics and storage constraints. Conversion
+// also gives model writers the ledger grammar; typed repair uses its runtime
+// formatter instead of asking the model to reproduce persisted records.
 const (
 	conversionClaimFormatRule    = "- Claim format: `- [c-YYYY-NNNN] <self-contained statement>` followed by an indented `{status: active|conflicted, kind: fact|inference|preference, confidence: confirmed|likely|uncertain, src: t<seq>[, t<seq>], rev: YYYY-MM-DD}` line. Claim IDs are globally unique and never reused, including IDs recorded in archived ledgers. Preserve existing source markers when revising an existing claim."
 	conversionClaimStorageRule   = "- Store durable claims only in the canonical semantic roots or direct `semantic/topics/<slug>.md` files. Other topic extensions are not indexed by semantic retrieval and fail claim validation."

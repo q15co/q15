@@ -98,7 +98,7 @@ func TestRepairDescriptionComparisonReportsNormalizedByteDifference(t *testing.T
 				len(head),
 				quoted,
 			))
-			result, err := job.ApplyResult(context.Background(), loader, JobOutput{
+			result, err := applyWrittenRepairForTest(context.Background(), loader, JobOutput{
 				Spec: spec, Messages: repairRunMessages(semanticFactsRuntimePath, workingLedgerRuntimePath),
 			})
 			if test.description == "" {

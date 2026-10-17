@@ -224,6 +224,19 @@ func (l *repairProbeLoader) ListMemoryFiles(context.Context) ([]MemoryFile, erro
 	return l.memoryFiles, nil
 }
 
+func (l *repairProbeLoader) LoadSemanticFileSizes(ctx context.Context) (map[string]int64, error) {
+	sizes, err := l.semanticMemoryJobLoader.LoadSemanticFileSizes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for relative, raw := range l.files {
+		if strings.HasPrefix(relative, "semantic/") {
+			sizes[relative] = int64(len(raw))
+		}
+	}
+	return sizes, nil
+}
+
 func (l *repairProbeLoader) LoadSemanticMemory(ctx context.Context) (agent.SemanticMemory, error) {
 	l.forbidden = append(l.forbidden, "LoadSemanticMemory")
 	return l.semanticMemoryJobLoader.LoadSemanticMemory(ctx)
@@ -338,7 +351,7 @@ func TestSemanticRepairBuildStaysSmallWithHugeRoots(t *testing.T) {
 	if strings.Contains(prompt, marker) {
 		t.Fatal("repair prompt contains target content below the first chunk")
 	}
-	for _, want := range []string{"offset=0 sha256=", "src=mem:" + semanticFactsRelativePath + ":", conversionClaimFormatRule, conversionLedgerFormatRule} {
+	for _, want := range []string{"offset=0 sha256=", "src=mem:" + semanticFactsRelativePath + ":", conversionClaimFormatRule, "Return exactly one JSON object"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("repair prompt does not carry %q", want)
 		}
@@ -357,24 +370,24 @@ func TestSemanticRepairBuildStaysSmallWithHugeRoots(t *testing.T) {
 		t.Fatal("repair spec carries no ledger snapshot for rollback")
 	}
 
-	// The write scope is exactly the target, the ledger and the claim files.
+	// Evidence reads include the target, ledger and claim files.
 	call := func(path string) error {
 		return spec.ToolCallPolicy.CheckToolCall(agent.ToolCall{
 			ID:        "probe",
-			Name:      "write_file",
+			Name:      "read_file",
 			Arguments: fmt.Sprintf(`{"path":%q,"content":"x"}`, path),
 		})
 	}
 	if err := call(semanticFactsRuntimePath); err != nil {
-		t.Fatalf("the target is not writable in a repair run: %v", err)
+		t.Fatalf("the target is not readable in a repair run: %v", err)
 	}
 	if err := call(workingLedgerRuntimePath); err != nil {
-		t.Fatalf("the ledger is not writable in a repair run: %v", err)
+		t.Fatalf("the ledger is not readable in a repair run: %v", err)
 	}
 	for _, path := range []string{workingMemoryRuntimePath, openLoopsRuntimePath} {
 		if err := call(path); err == nil {
 			t.Fatalf(
-				"repair policy permits writing %s; want the write scope limited to the target, the ledger and the claim files",
+				"repair policy permits reading unrelated working file %s",
 				path,
 			)
 		}
@@ -531,6 +544,27 @@ func repairRunMessages(writes ...string) []conversation.Message {
 	return messages
 }
 
+// applyWrittenRepairForTest exercises defensive validation of a prepared runtime
+// write set independently of decision decoding and plan construction.
+func applyWrittenRepairForTest(
+	ctx context.Context,
+	loader ContextLoader,
+	output JobOutput,
+	limits ...memoryFileBudgets,
+) (ParsedResult, error) {
+	var budgets memoryFileBudgets
+	if len(limits) > 0 {
+		budgets = limits[0]
+	}
+	return applyWrittenRepairResult(
+		ctx,
+		loader,
+		output,
+		budgets,
+		successfulWritePaths(output.Messages),
+	)
+}
+
 // repairApplyFixtures describes the post-run store state that ApplyResult
 // wakes up to after a repair run; a nil targetPost means the file is gone.
 type repairApplyFixture struct {
@@ -592,7 +626,7 @@ func runRepairApply(
 		loader.files[repairNotesPath] = []byte(*fixture.targetPost)
 	}
 
-	result, err := job.ApplyResult(context.Background(), loader, JobOutput{
+	result, err := applyWrittenRepairForTest(context.Background(), loader, JobOutput{
 		Type:      semanticMemoryExtractionJobType,
 		Spec:      spec,
 		FinalText: "Drained the stray notes chunk.",
@@ -651,7 +685,7 @@ func TestSemanticRepairAdoptsTargetWithNoContentLine(t *testing.T) {
 			}
 
 			// The model does nothing, because there is nothing to drain.
-			result, err := job.ApplyResult(context.Background(), loader, JobOutput{
+			result, err := applyWrittenRepairForTest(context.Background(), loader, JobOutput{
 				Type: semanticMemoryExtractionJobType,
 				Spec: spec,
 			})
@@ -778,7 +812,7 @@ func TestSemanticRepairRunDeletesNothingForNamedTarget(t *testing.T) {
 		strings.Replace(workingPre, "- Ship T9.\n", "", 1),
 	)
 
-	result, err := job.ApplyResult(context.Background(), loader, JobOutput{
+	result, err := applyWrittenRepairForTest(context.Background(), loader, JobOutput{
 		Type:      semanticMemoryExtractionJobType,
 		Spec:      spec,
 		FinalText: "Dropped the finished task.",
@@ -1075,7 +1109,7 @@ func TestSemanticRepairRunDrainsOutsizedFirstLine(t *testing.T) {
 	loader.files["working/LEDGER.md"] = []byte(repairLedgerPre + drop)
 	loader.files[repairNotesPath] = []byte("# Old notes\n" + repairAlphaLine + "\n")
 
-	result, err := job.ApplyResult(context.Background(), loader, JobOutput{
+	result, err := applyWrittenRepairForTest(context.Background(), loader, JobOutput{
 		Type:      semanticMemoryExtractionJobType,
 		Spec:      spec,
 		FinalText: "Dropped the cached bundle line.",
