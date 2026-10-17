@@ -158,11 +158,15 @@ func (j workingMemoryConsolidationJob) Build(
 	var recentMessages []conversation.Message
 	var transcriptStatus string
 	windowEndSeq := int64(0)
-	if consolidationCheckpoint.LastConsolidatedSeq > 0 {
-		window, loadErr := loader.LoadMessagesSinceSeqWindow(
+	var progress *transcriptProgress
+	if consolidationCheckpoint.LastConsolidatedSeq > 0 ||
+		consolidationCheckpoint.PartialTurn != nil {
+		window, loadErr := loadTranscriptWindow(
 			ctx,
+			loader,
 			consolidationCheckpoint.LastConsolidatedSeq,
 			windowTurns,
+			consolidationCheckpoint.PartialTurn,
 		)
 		if loadErr != nil {
 			return Spec{}, fmt.Errorf(
@@ -171,20 +175,23 @@ func (j workingMemoryConsolidationJob) Build(
 			)
 		}
 		recentMessages = window.Messages
-		windowEndSeq = window.LastSeq
-		transcriptStatus = renderWorkingMemoryTranscriptScope(
+		windowEndSeq = max(window.LastSeq, window.LastIncludedSeq)
+		progress = windowProgress(window)
+		transcriptStatus = renderPartialTranscriptScope(renderWorkingMemoryTranscriptScope(
 			consolidationCheckpoint,
 			window,
-		)
+		), window)
 	} else {
-		recentMessages, err = loader.LoadRecentMessages(ctx, windowTurns)
-		if err != nil {
-			return Spec{}, fmt.Errorf("load recent messages: %w", err)
+		window, loadErr := loadInitialTranscriptWindow(ctx, loader, windowTurns, loader.LoadRecentMessages)
+		if loadErr != nil {
+			return Spec{}, fmt.Errorf("load recent messages: %w", loadErr)
 		}
-		transcriptStatus = renderTranscriptScopeWithPolicy(
+		recentMessages, windowEndSeq = window.Messages, max(window.LastSeq, window.LastIncludedSeq)
+		progress = windowProgress(window)
+		transcriptStatus = renderInitialTranscriptScope(
 			"selected by the initial working-memory replay fallback window independent of the consolidation checkpoint",
 			windowTurns,
-			len(recentMessages),
+			window,
 		)
 	}
 
@@ -366,6 +373,7 @@ func (j workingMemoryConsolidationJob) Build(
 		ExposeTools:        true,
 		RequireToolCalling: true,
 		AllowedTools:       append([]string(nil), workingMemoryAllowedTools...),
+		transcriptProgress: progress,
 		CheckpointSeq:      windowEndSeq,
 		RunAt:              now,
 		Baseline:           baseline,

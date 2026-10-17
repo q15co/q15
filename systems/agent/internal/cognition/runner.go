@@ -92,9 +92,11 @@ type Artifact struct {
 // instead of assembling one prompt that grows until every model rejects it.
 type TurnWindow struct {
 	// Messages is the flattened prompt-visible message slice of the window.
-	Messages []conversation.Message
-	// LastSeq is the transcript sequence of the last turn included in the
-	// window, or zero when the window is empty.
+	Messages        []conversation.Message
+	LastIncludedSeq int64
+	PartialTurn     *TranscriptCursor
+	// LastSeq is the last completely covered turn. It stays zero while a
+	// PartialTurn cursor covers fragments of the first turn.
 	LastSeq int64
 	// RemainingTurns counts the turns after the window that stay unprocessed.
 	RemainingTurns int
@@ -159,9 +161,10 @@ type Result struct {
 	CheckpointSeq int64
 	// Repair marks a bounded memory-repair run of the semantic job; the
 	// controller uses it to skip the semantic extraction checkpoint store.
-	Repair       bool
-	repairTarget string
-	repairDigest string
+	Repair             bool
+	repairTarget       string
+	repairDigest       string
+	transcriptProgress *transcriptProgress
 }
 
 // Runner executes typed cognition jobs on the shared model/tool engine.
@@ -418,17 +421,18 @@ func (r *Runner) Run(
 	}
 
 	result := Result{
-		Type:          jobType,
-		Summary:       strings.TrimSpace(parsed.Summary),
-		Metadata:      cloneMetadata(parsed.Metadata),
-		FinalText:     runResult.FinalText,
-		Messages:      conversation.CloneMessages(runResult.Messages),
-		ModelRef:      runResult.ModelRef,
-		Turn:          runResult.Turn,
-		CheckpointSeq: parsed.CheckpointSeq,
-		Repair:        parsed.Repair,
-		repairTarget:  failureResult.repairTarget,
-		repairDigest:  failureResult.repairDigest,
+		Type:               jobType,
+		Summary:            strings.TrimSpace(parsed.Summary),
+		Metadata:           cloneMetadata(parsed.Metadata),
+		FinalText:          runResult.FinalText,
+		Messages:           conversation.CloneMessages(runResult.Messages),
+		ModelRef:           runResult.ModelRef,
+		Turn:               runResult.Turn,
+		CheckpointSeq:      parsed.CheckpointSeq,
+		Repair:             parsed.Repair,
+		repairTarget:       failureResult.repairTarget,
+		repairDigest:       failureResult.repairDigest,
+		transcriptProgress: spec.transcriptProgress,
 	}
 	notifyRunEvent(ctx, observer, agent.RunEvent{
 		Type:      agent.RunEventRunFinished,

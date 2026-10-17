@@ -175,11 +175,14 @@ func (j semanticMemoryExtractionJob) Build(
 	var recentMessages []conversation.Message
 	var transcriptStatus string
 	windowEndSeq := int64(0)
-	if semanticCheckpoint.LastExtractedSeq > 0 {
-		window, loadErr := loader.LoadMessagesSinceSeqWindow(
+	var progress *transcriptProgress
+	if semanticCheckpoint.LastExtractedSeq > 0 || semanticCheckpoint.PartialTurn != nil {
+		window, loadErr := loadTranscriptWindow(
 			ctx,
+			loader,
 			semanticCheckpoint.LastExtractedSeq,
 			windowTurns,
+			semanticCheckpoint.PartialTurn,
 		)
 		if loadErr != nil {
 			return Spec{}, fmt.Errorf(
@@ -188,18 +191,24 @@ func (j semanticMemoryExtractionJob) Build(
 			)
 		}
 		recentMessages = window.Messages
-		windowEndSeq = window.LastSeq
-		transcriptStatus = renderSemanticExtractionTranscriptScope(semanticCheckpoint, window)
+		windowEndSeq = max(window.LastSeq, window.LastIncludedSeq)
+		progress = windowProgress(window)
+		transcriptStatus = renderPartialTranscriptScope(
+			renderSemanticExtractionTranscriptScope(semanticCheckpoint, window),
+			window,
+		)
 	} else {
 		recentTurns := semanticMemoryRecentTurns * windowTurns / semanticMemoryWindowTurns
-		recentMessages, err = loader.LoadLatestMessages(ctx, recentTurns)
-		if err != nil {
-			return Spec{}, fmt.Errorf("load latest messages: %w", err)
+		window, loadErr := loadInitialTranscriptWindow(ctx, loader, recentTurns, loader.LoadLatestMessages)
+		if loadErr != nil {
+			return Spec{}, fmt.Errorf("load latest messages: %w", loadErr)
 		}
-		transcriptStatus = renderTranscriptScopeWithPolicy(
+		recentMessages, windowEndSeq = window.Messages, max(window.LastSeq, window.LastIncludedSeq)
+		progress = windowProgress(window)
+		transcriptStatus = renderInitialTranscriptScope(
 			"selected by the initial semantic replay fallback window independent of the working-memory consolidation checkpoint",
 			recentTurns,
-			len(recentMessages),
+			window,
 		)
 	}
 
@@ -440,6 +449,7 @@ func (j semanticMemoryExtractionJob) Build(
 		ExposeTools:         true,
 		RequireToolCalling:  true,
 		AllowedTools:        append([]string(nil), semanticMemoryAllowedTools...),
+		transcriptProgress:  progress,
 		CheckpointSeq:       windowEndSeq,
 		Baseline:            baseline,
 		ToolCallPolicy:      semanticConversionPolicy(),

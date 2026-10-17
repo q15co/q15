@@ -26,6 +26,7 @@ var _ agent.SemanticMemoryStore = (*runtimeStore)(nil)
 var _ agent.WorkingMemoryStore = (*runtimeStore)(nil)
 var _ agent.SkillCatalogStore = (*runtimeStore)(nil)
 var _ cognition.ContextLoader = (*runtimeStore)(nil)
+var _ cognition.InitialTranscriptWindowLoader = (*runtimeStore)(nil)
 var _ cognition.ControllerStore = (*runtimeStore)(nil)
 
 func (s *runtimeStore) LoadRecentMessages(
@@ -55,6 +56,22 @@ func (s *runtimeStore) LoadMessagesSinceSeqWindow(
 	maxTurns int,
 ) (cognition.TurnWindow, error) {
 	return s.memory.LoadMessagesSinceSeqWindow(ctx, afterSeq, maxTurns)
+}
+
+func (s *runtimeStore) LoadTranscriptWindow(
+	ctx context.Context,
+	afterSeq int64,
+	turns int,
+	cursor *cognition.TranscriptCursor,
+) (cognition.TurnWindow, error) {
+	return s.memory.LoadTranscriptWindow(ctx, afterSeq, turns, cursor)
+}
+
+func (s *runtimeStore) LoadLatestTranscriptWindow(
+	ctx context.Context,
+	maxTurns int,
+) (cognition.TurnWindow, error) {
+	return s.memory.LoadLatestTranscriptWindow(ctx, maxTurns)
 }
 
 func (s *runtimeStore) LoadLastUserTimestamp(

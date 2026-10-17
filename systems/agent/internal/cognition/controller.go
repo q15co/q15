@@ -83,23 +83,26 @@ type RunCause struct {
 // ConsolidationCheckpoint records the last episodic turn boundary that has
 // been consolidated into working memory.
 type ConsolidationCheckpoint struct {
-	LastConsolidatedTurnID string    `json:"last_consolidated_turn_id,omitempty"`
-	LastConsolidatedSeq    int64     `json:"last_consolidated_seq,omitempty"`
-	LastConsolidatedAt     time.Time `json:"last_consolidated_at,omitempty"`
-	UpdatedAt              time.Time `json:"updated_at,omitempty"`
+	PartialTurn            *TranscriptCursor `json:"partial_turn,omitempty"`
+	LastConsolidatedTurnID string            `json:"last_consolidated_turn_id,omitempty"`
+	LastConsolidatedSeq    int64             `json:"last_consolidated_seq,omitempty"`
+	LastConsolidatedAt     time.Time         `json:"last_consolidated_at,omitempty"`
+	UpdatedAt              time.Time         `json:"updated_at,omitempty"`
 }
 
 // SemanticExtractionCheckpoint records the last episodic turn boundary that has
 // been successfully processed by semantic-memory extraction.
 type SemanticExtractionCheckpoint struct {
-	LastExtractedTurnID string    `json:"last_extracted_turn_id,omitempty"`
-	LastExtractedSeq    int64     `json:"last_extracted_seq,omitempty"`
-	LastExtractedAt     time.Time `json:"last_extracted_at,omitempty"`
-	UpdatedAt           time.Time `json:"updated_at,omitempty"`
+	PartialTurn         *TranscriptCursor `json:"partial_turn,omitempty"`
+	LastExtractedTurnID string            `json:"last_extracted_turn_id,omitempty"`
+	LastExtractedSeq    int64             `json:"last_extracted_seq,omitempty"`
+	LastExtractedAt     time.Time         `json:"last_extracted_at,omitempty"`
+	UpdatedAt           time.Time         `json:"updated_at,omitempty"`
 }
 
 // JobState tracks persisted trigger/controller state for one job type.
 type JobState struct {
+	TranscriptPending   bool                 `json:"transcript_pending,omitempty"`
 	RepairPending       bool                 `json:"repair_pending,omitempty"`
 	RepairRetryAt       time.Time            `json:"repair_retry_at,omitempty"`
 	RepairFailures      int                  `json:"repair_failures,omitempty"`
@@ -462,6 +465,21 @@ func (c *Controller) nextPendingRun(
 			}
 		}
 
+		if includeState && state.TranscriptPending {
+			return pendingRun{
+				job:     job,
+				state:   state,
+				headSeq: headSeq,
+				headAt:  headAt,
+				cause: RunCause{
+					Kind:    RunCauseState,
+					RuleID:  "transcript_continuation",
+					FiredAt: now,
+					Reason:  "bounded transcript work remains",
+				},
+			}, true, nil
+		}
+
 		if includeStartup {
 			for _, rule := range job.startup {
 				shouldRun, reason, err := rule.Evaluate(ctx, snapshot, state)
@@ -558,6 +576,7 @@ func (c *Controller) runPending(ctx context.Context, pending pendingRun) error {
 	state.LastRunInputSeq = pending.headSeq
 	state.LastRunNoWork = false
 	state.MaintenancePending = false
+	state.TranscriptPending = false
 	state.WaitingForRepair = false
 	state.LastRunCause = pending.cause
 	if pending.cause.Kind == RunCauseSchedule {
@@ -586,6 +605,11 @@ func (c *Controller) runPending(ctx context.Context, pending pendingRun) error {
 	if result.Repair {
 		coveredSeq = result.CheckpointSeq
 	}
+	var partial *TranscriptCursor
+	if result.transcriptProgress != nil {
+		coveredSeq = result.transcriptProgress.CompletedSeq
+		partial = result.transcriptProgress.PartialTurn
+	}
 
 	var consolidationCheckpoint ConsolidationCheckpoint
 	if runErr == nil && !result.NoWork &&
@@ -594,6 +618,7 @@ func (c *Controller) runPending(ctx context.Context, pending pendingRun) error {
 			ctx,
 			ConsolidationCheckpoint{
 				LastConsolidatedSeq: coveredSeq,
+				PartialTurn:         partial,
 				LastConsolidatedAt:  pending.headAt,
 			},
 		)
@@ -614,6 +639,7 @@ func (c *Controller) runPending(ctx context.Context, pending pendingRun) error {
 			ctx,
 			SemanticExtractionCheckpoint{
 				LastExtractedSeq: coveredSeq,
+				PartialTurn:      partial,
 				LastExtractedAt:  pending.headAt,
 			},
 		)
@@ -647,6 +673,11 @@ func (c *Controller) runPending(ctx context.Context, pending pendingRun) error {
 			// state rules keep firing until the backlog drains.
 			state.LastRunInputSeq = coveredSeq
 		}
+	}
+	if result.Repair {
+		state.TranscriptPending = pending.state.TranscriptPending
+	} else if runErr == nil && result.transcriptProgress != nil {
+		state.TranscriptPending = partial != nil || result.transcriptProgress.RemainingTurns > 0
 	}
 	updateRepairSchedule(&state, result, runErr, finishedAt)
 	if err := c.store.StoreJobState(ctx, pending.job.jobType, state); err != nil {
@@ -757,7 +788,7 @@ func withConsolidationCheckpointMetadata(
 ) map[string]string {
 	if checkpoint.LastConsolidatedSeq == 0 &&
 		strings.TrimSpace(checkpoint.LastConsolidatedTurnID) == "" &&
-		checkpoint.LastConsolidatedAt.IsZero() {
+		checkpoint.LastConsolidatedAt.IsZero() && checkpoint.PartialTurn == nil {
 		return metadata
 	}
 	if metadata == nil {
@@ -775,7 +806,7 @@ func withConsolidationCheckpointMetadata(
 			time.RFC3339Nano,
 		)
 	}
-	return metadata
+	return withPartialTranscriptMetadata(metadata, checkpoint.PartialTurn)
 }
 
 func withSemanticExtractionCheckpointMetadata(
@@ -784,7 +815,7 @@ func withSemanticExtractionCheckpointMetadata(
 ) map[string]string {
 	if checkpoint.LastExtractedSeq == 0 &&
 		strings.TrimSpace(checkpoint.LastExtractedTurnID) == "" &&
-		checkpoint.LastExtractedAt.IsZero() {
+		checkpoint.LastExtractedAt.IsZero() && checkpoint.PartialTurn == nil {
 		return metadata
 	}
 	if metadata == nil {
@@ -802,7 +833,7 @@ func withSemanticExtractionCheckpointMetadata(
 			time.RFC3339Nano,
 		)
 	}
-	return metadata
+	return withPartialTranscriptMetadata(metadata, checkpoint.PartialTurn)
 }
 
 func (c *Controller) latestDue(
@@ -1036,4 +1067,17 @@ func resetTimer(timer *time.Timer, nextAt time.Time) {
 		}
 	}
 	timer.Reset(wait)
+}
+
+func withPartialTranscriptMetadata(
+	metadata map[string]string,
+	cursor *TranscriptCursor,
+) map[string]string {
+	if cursor != nil {
+		metadata["partial_transcript_turn_seq"] = fmt.Sprint(cursor.TurnSeq)
+		metadata["partial_transcript_byte_offset"] = fmt.Sprint(cursor.ByteOffset)
+		metadata["partial_transcript_message"] = fmt.Sprint(cursor.Message)
+		metadata["partial_transcript_part"] = fmt.Sprint(cursor.Part)
+	}
+	return metadata
 }

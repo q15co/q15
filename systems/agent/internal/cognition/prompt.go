@@ -22,9 +22,9 @@ type Spec struct {
 	RequireToolCalling bool
 	AllowedTools       []string
 	ToolCallPolicy     agent.ToolCallPolicy
-	// CheckpointSeq is the transcript sequence this run's input actually covered
-	// when the job processed a bounded window of the backlog. The zero value
-	// means the run covered everything up to the run head.
+	// CheckpointSeq bounds source citations by the last included turn. For a
+	// partial turn, transcriptProgress separately records the completed boundary
+	// and next unread byte. Without progress, zero means the run head.
 	CheckpointSeq int64
 	// RunAt is the authoritative maintenance instant used for date triggers.
 	RunAt time.Time
@@ -51,7 +51,8 @@ type Spec struct {
 	// sense once those inputs exist.
 	repair bool
 	// repairTarget names the memory-surface file a repair run drains.
-	repairTarget MemorySurfaceTarget
+	repairTarget       MemorySurfaceTarget
+	transcriptProgress *transcriptProgress
 }
 
 // NoWorkResult records a deliberate deferral or runtime-only maintenance step.
