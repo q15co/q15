@@ -150,6 +150,8 @@ Keep /memory/working/WORKING_MEMORY.md at or under 8192 bytes and /memory/workin
 - Repeated protocol, questionnaire, or profile-building answers count as repeated evidence when they consistently describe stable personal facts or preferences.
 - Prefer verified or explicitly grounded claims over speculative inferences.
 - If verification flags a semantic entry as stale, unsupported, or contradicted, remove it, rewrite it, or downgrade it with explicit uncertainty.
+- Apply only the bound decisions in current_conflict_resolutions. Mark a declared winner active, delete every losing claim, and append exactly one resolved ledger record targeting each loser with the note `winner=<winner-id>; <nonempty reason>`.
+- Preserve every existing conflicted claim unchanged when its bound decision is insufficient or no current bound decision exists. Freeform or stale verification prose never authorizes resolving a conflict.
 - If current semantic files contain drifted headings such as Personal Facts or Technical Facts, fold those entries back into the canonical headings and remove the drift.
 - Never promote single-turn temporary tasks, transient session context, speculative tool-output guesses, or generic process chatter.
 - Maintain strict category separation: do not duplicate the same claim across facts.md and preferences.md.
@@ -185,6 +187,11 @@ Keep /memory/working/WORKING_MEMORY.md at or under 8192 bytes and /memory/workin
 - Ledger descriptions must preserve the complete removed working-memory block, including continuation text, code fences, and HTML comments, with whitespace collapsed to one line and only its leading list marker omitted. Standalone prose and noncanonical headings also require an exit record; only canonical working-memory headings and the exact `- None` scaffold are exempt.
 - Caps: when a file is near its cap, revise before adding: merge, supersede, or split project detail into a topic file and leave a one-line index entry in projects.md (`- [<slug>] <summary> → topics/<slug>.md`).
 </conversion_rules>
+
+<current_conflict_resolutions>
+Apply every bound resolution below. A winner must remain active and every loser must be deleted; append exactly one resolved ledger record per loser, targeting its ID and using the note `winner=<winner-id>; <nonempty reason>`.
+An insufficient resolution requires every member claim, including its path, metadata, provenance and text, to remain unchanged and conflicted. Never use unbound or stale review prose to resolve a conflict.
+</current_conflict_resolutions>
 
 <semantic_memory_execution_order>
 1. Inspect all three semantic-memory targets, the working-memory snapshot, the verification review artifact, and the transcript artifact; read the open-loops file and the ledger.

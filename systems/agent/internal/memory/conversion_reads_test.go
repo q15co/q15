@@ -19,9 +19,6 @@ func TestStoreConversionReadsSeeSizesOpenLoopsAndLedger(t *testing.T) {
 	if err := os.WriteFile(topic, []byte("0123456789"), 0o644); err != nil {
 		t.Fatalf("WriteFile(topic) error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "semantic/topics/notes.txt"), []byte("plain"), 0o644); err != nil {
-		t.Fatal(err)
-	}
 	nested := filepath.Join(root, "semantic", "topics", "nested")
 	if err := os.MkdirAll(nested, 0o755); err != nil {
 		t.Fatalf("MkdirAll(nested) error = %v", err)
@@ -45,7 +42,7 @@ func TestStoreConversionReadsSeeSizesOpenLoopsAndLedger(t *testing.T) {
 	if _, ok := sizes["semantic/topics/nested/x.md"]; ok {
 		t.Fatalf("sizes include nested topic file: %v", sizes)
 	}
-	if got, want := len(sizes), 5; got != want {
+	if got, want := len(sizes), 4; got != want {
 		t.Fatalf("len(sizes) = %d, want %d (%v)", got, want, sizes)
 	}
 
@@ -66,6 +63,65 @@ func TestStoreConversionReadsSeeSizesOpenLoopsAndLedger(t *testing.T) {
 	}
 	if loops, err := store.LoadOpenLoops(ctx); err != nil || loops != "" {
 		t.Fatalf("LoadOpenLoops(missing) = %q, %v; want empty, nil", loops, err)
+	}
+}
+
+func TestStoreLoadSemanticTopicsReturnsTopicFilesByRelativePath(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "memory")
+	store := newTestStore(root, &fakeCommitter{})
+	ctx := context.Background()
+	if err := store.Init(ctx); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	// No topics directory yet: the reader must report empty content instead of
+	// an error, matching the other optional reads.
+	topics, err := store.LoadSemanticTopics(ctx)
+	if err != nil {
+		t.Fatalf("LoadSemanticTopics(no topics dir) error = %v", err)
+	}
+	if len(topics) != 0 {
+		t.Fatalf("LoadSemanticTopics(no topics dir) = %v, want empty", topics)
+	}
+
+	topicsDir := filepath.Join(root, "semantic", "topics")
+	if err := os.MkdirAll(topicsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(topics) error = %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(topicsDir, "q15.md"),
+		[]byte("\n- [c-2026-0001] The q15 repo carries the memory design.\n\n"),
+		0o644,
+	); err != nil {
+		t.Fatalf("WriteFile(topic q15) error = %v", err)
+	}
+	textTopic := "\n- [c-2026-0002] A contradictory deployment target.\n" +
+		"  {status: conflicted, kind: fact, confidence: likely, src: t12, rev: 2026-10-14}\n\n"
+	if err := os.WriteFile(filepath.Join(topicsDir, "notes.txt"), []byte(textTopic), 0o644); err != nil {
+		t.Fatalf("WriteFile(non-markdown) error = %v", err)
+	}
+	nested := filepath.Join(topicsDir, "nested")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatalf("MkdirAll(nested) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(nested, "x.md"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("WriteFile(nested) error = %v", err)
+	}
+
+	topics, err = store.LoadSemanticTopics(ctx)
+	if err != nil {
+		t.Fatalf("LoadSemanticTopics() error = %v", err)
+	}
+	if got, want := len(topics), 2; got != want {
+		t.Fatalf("len(LoadSemanticTopics()) = %d, want %d (%v)", got, want, topics)
+	}
+	got, want := topics["semantic/topics/q15.md"],
+		"\n- [c-2026-0001] The q15 repo carries the memory design.\n\n"
+	if got != want {
+		t.Fatalf("topics[semantic/topics/q15.md] = %q, want %q", got, want)
+	}
+	if got := topics["semantic/topics/notes.txt"]; got != textTopic {
+		t.Fatalf("non-markdown conflicted topic = %q, want exact content %q", got, textTopic)
 	}
 }
 
