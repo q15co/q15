@@ -243,3 +243,99 @@ func TestSemanticBuildPreservesStoreWriteBetweenPromptAndSnapshot(t *testing.T) 
 		t.Fatalf("fresh run adopted stale state: %q, %v", actual, err)
 	}
 }
+
+type changingWorkingBuildStore struct {
+	*runtimeStore
+	root    string
+	path    string
+	content string
+	changed bool
+}
+
+func (s *changingWorkingBuildStore) change(_ context.Context, path string) error {
+	if s.changed || path != s.path {
+		return nil
+	}
+	err := os.WriteFile(
+		filepath.Join(s.root, filepath.FromSlash(strings.TrimPrefix(path, "/memory/"))),
+		[]byte(s.content),
+		0o600,
+	)
+	if err == nil {
+		s.changed = true
+	}
+	return err
+}
+
+func (s *changingWorkingBuildStore) LoadWorkingMemory(
+	ctx context.Context,
+) (agent.WorkingMemory, error) {
+	working, err := s.runtimeStore.LoadWorkingMemory(ctx)
+	if err == nil {
+		err = s.change(ctx, "/memory/working/WORKING_MEMORY.md")
+	}
+	return working, err
+}
+
+func (s *changingWorkingBuildStore) LoadOpenLoops(ctx context.Context) (string, error) {
+	loops, err := s.runtimeStore.LoadOpenLoops(ctx)
+	if err == nil {
+		err = s.change(ctx, "/memory/working/OPEN_LOOPS.md")
+	}
+	return loops, err
+}
+
+func (s *changingWorkingBuildStore) LoadWorkingLedger(ctx context.Context) (string, error) {
+	ledger, err := s.runtimeStore.LoadWorkingLedger(ctx)
+	if err == nil {
+		err = s.change(ctx, "/memory/working/LEDGER.md")
+	}
+	return ledger, err
+}
+
+func TestWorkingBuildPreservesStoreWritesBetweenPromptAndSnapshot(t *testing.T) {
+	for _, test := range []struct{ name, path, content string }{
+		{name: "working", path: "/memory/working/WORKING_MEMORY.md", content: "# Working Memory\n\n- Foreground task arrived during Build.\n"},
+		{name: "open loops", path: "/memory/working/OPEN_LOOPS.md", content: "# Open Loops\n\n- [l-2026-0042] Check the foreground task.\n  {trigger: next-session, owner: agent, src: t42}\n"},
+		{name: "ledger", path: "/memory/working/LEDGER.md", content: "# Conversion Ledger\n\n2026-10-16T04:00Z run=working_memory.consolidate src=t42 dropped \"Previous task.\" (completed)\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root, store := newCognitionRecoveryStore(t)
+			loader := &changingWorkingBuildStore{
+				runtimeStore: store,
+				root:         root,
+				path:         test.path,
+				content:      test.content,
+			}
+			job := cognition.NewWorkingMemoryConsolidationRegistration(0, 0).NewJob()
+			if _, err := job.Build(context.Background(), loader); err == nil ||
+				!strings.Contains(err.Error(), "memory changed while building job evidence") {
+				t.Fatalf("Build accepted a stale %s read: %v", test.name, err)
+			}
+			if _, err := os.Stat(filepath.Join(root, ".git/q15-memory-recovery.json")); !os.IsNotExist(
+				err,
+			) {
+				t.Fatalf("incoherent Build created recovery journal: %v", err)
+			}
+			relative := strings.TrimPrefix(test.path, "/memory/")
+			actual, _, err := store.ReadFileBytes(context.Background(), relative)
+			if err != nil || string(actual) != test.content {
+				t.Fatalf("Build lost foreground write: %q, %v", actual, err)
+			}
+			spec, err := job.Build(context.Background(), store)
+			if err != nil {
+				t.Fatalf("fresh Build rejected current evidence: %v", err)
+			}
+			if spec.Baseline[test.path] != test.content {
+				t.Fatalf("fresh baseline = %q, want %q", spec.Baseline[test.path], test.content)
+			}
+			if err := store.RecoverMemory(context.Background(), spec.MemoryRecoveryID); err != nil {
+				t.Fatal(err)
+			}
+			actual, _, err = store.ReadFileBytes(context.Background(), relative)
+			if err != nil || string(actual) != test.content {
+				t.Fatalf("fresh run adopted stale state: %q, %v", actual, err)
+			}
+		})
+	}
+}

@@ -8,6 +8,7 @@ import (
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
+	"github.com/q15co/q15/systems/agent/internal/memory/claims"
 	"github.com/q15co/q15/systems/agent/internal/memory/memcheck"
 	filetools "github.com/q15co/q15/systems/agent/internal/tools/files"
 )
@@ -111,10 +112,6 @@ func (j workingMemoryConsolidationJob) Build(
 	if j.now != nil {
 		now = j.now().UTC()
 	}
-	loopsBefore, _, err := loader.ReadFileBytes(ctx, "working/OPEN_LOOPS.md")
-	if err != nil {
-		return Spec{}, fmt.Errorf("read pre-run open loops: %w", err)
-	}
 	working, err := loader.LoadWorkingMemory(ctx)
 	if err != nil {
 		return Spec{}, fmt.Errorf("load working memory: %w", err)
@@ -122,6 +119,10 @@ func (j workingMemoryConsolidationJob) Build(
 	openLoops, err := loader.LoadOpenLoops(ctx)
 	if err != nil {
 		return Spec{}, fmt.Errorf("load open loops: %w", err)
+	}
+	ledger, err := loader.LoadWorkingLedger(ctx)
+	if err != nil {
+		return Spec{}, fmt.Errorf("load working ledger: %w", err)
 	}
 	verificationArtifact, err := loader.LoadCognitionArtifact(
 		ctx,
@@ -200,6 +201,27 @@ func (j workingMemoryConsolidationJob) Build(
 
 	transcriptArtifact := renderTranscriptArtifact(recentMessages)
 
+	snapshots, err := snapshotWorkingMemoryFiles(ctx, loader)
+	if err != nil {
+		return Spec{}, fmt.Errorf("snapshot working-memory targets: %w", err)
+	}
+	baseline := map[string]string{
+		workingMemoryRuntimePath: string(snapshots[workingMemoryRuntimePath].Content),
+		workingLedgerRuntimePath: string(snapshots[workingLedgerRuntimePath].Content),
+		openLoopsRuntimePath:     string(snapshots[openLoopsRuntimePath].Content),
+	}
+	if err := validateMemoryBuildEvidence(snapshots, baseline, map[string]string{
+		workingMemoryRuntimePath: working.Content,
+		openLoopsRuntimePath:     openLoops,
+		workingLedgerRuntimePath: ledger,
+	}); err != nil {
+		return Spec{}, err
+	}
+	recoveryID, err := loader.BeginMemoryRecovery(ctx, snapshots, "")
+	if err != nil {
+		return Spec{}, fmt.Errorf("prepare working-memory recovery: %w", err)
+	}
+
 	return Spec{
 		Objective: renderPromptLines(
 			"This is a background maintenance job, not a user-facing reply.",
@@ -232,6 +254,11 @@ func (j workingMemoryConsolidationJob) Build(
 				openLoopsRuntimePath,
 				workingLedgerRuntimePath,
 			),
+			fmt.Sprintf(
+				"Every removed working-memory block requires exactly one converted, moved, or dropped ledger record in %s, including prose, comments, fenced text, and None-like content; only the canonical working-memory headings and exact `- None` placeholders are exempt. Every closed or promoted loop requires exactly one closed record whose description preserves the full old loop, including its ID and metadata, and whose reason explains the outcome.",
+				workingLedgerRuntimePath,
+			),
+			"Ledger format: YYYY-MM-DDTHH:MMZ run=working_memory.consolidate src=t<a>..t<b> <outcome> \"<full removed item without its bullet marker>\" → <claim-or-loop-id> (<file>). For dropped and closed records, omit the target and include an outcome reason in parentheses. Preserve all existing ledger bytes and append complete newline-terminated records.",
 			"A closed loop that produced durable knowledge also merits a claim in the semantic store; this job does not write semantic memory, so leave the claim to the conversion pass.",
 			"Apply supported verification corrections in the working-memory artifact; preserve explicit uncertainty when verification downgraded confidence.",
 			"Do not copy the verification review artifact verbatim into working memory.",
@@ -329,7 +356,9 @@ func (j workingMemoryConsolidationJob) Build(
 		AllowedTools:       append([]string(nil), workingMemoryAllowedTools...),
 		CheckpointSeq:      windowEndSeq,
 		RunAt:              now,
-		Baseline:           map[string]string{openLoopsRuntimePath: string(loopsBefore)},
+		Baseline:           baseline,
+		FileSnapshots:      snapshots,
+		MemoryRecoveryID:   recoveryID,
 		ToolCallPolicy: filetools.PathAccessPolicy{
 			ReadPaths: []string{
 				workingMemoryRuntimePath,
@@ -350,21 +379,43 @@ func (j workingMemoryConsolidationJob) ApplyResult(
 	loader ContextLoader,
 	output JobOutput,
 ) (ParsedResult, error) {
+
+	// Coverage is checked first, so it is also the first place a run can
+	// fail after its tool calls have already written to the store. It rolls
+	// back exactly like the ledger check below it: a run that ran out of
+	// turns mid-way is the most common failure this job has, and its
+	// half-finished edits would otherwise become the next run's baseline.
 	if !workingMemoryTargetUsed(output.Messages, workingMemoryRuntimePath) &&
 		!workingMemoryTargetUsed(output.Messages, openLoopsRuntimePath) {
-		return ParsedResult{}, fmt.Errorf(
-			"working-memory run must inspect %s or %s with a file tool (final_text=%q)",
-			workingMemoryRuntimePath,
-			openLoopsRuntimePath,
-			compactWorkingMemoryText(output.FinalText),
+		return ParsedResult{}, rollbackWorkingMemoryRun(
+			ctx,
+			loader,
+			output.Spec,
+			fmt.Errorf(
+				"working-memory run must inspect %s or %s with a file tool (final_text=%q)",
+				workingMemoryRuntimePath,
+				openLoopsRuntimePath,
+				compactWorkingMemoryText(output.FinalText),
+			),
+		)
+	}
+	if loader == nil {
+		return ParsedResult{}, fmt.Errorf("context loader is required")
+	}
+	if err := checkWorkingMemoryLedgerCompleteness(ctx, loader, output.Spec.Baseline); err != nil {
+		return ParsedResult{}, rollbackWorkingMemoryRun(
+			ctx,
+			loader,
+			output.Spec,
+			err,
 		)
 	}
 
 	if err := checkWorkingFileBudgets(ctx, loader, j.budgets); err != nil {
-		return ParsedResult{}, err
+		return ParsedResult{}, rollbackWorkingMemoryRun(ctx, loader, output.Spec, err)
 	}
 	if err := checkOpenLoopLifecycle(ctx, loader, output.Spec); err != nil {
-		return ParsedResult{}, err
+		return ParsedResult{}, rollbackWorkingMemoryRun(ctx, loader, output.Spec, err)
 	}
 
 	summary := summarizeWorkingMemoryNotes(output.FinalText)
@@ -376,6 +427,139 @@ func (j workingMemoryConsolidationJob) ApplyResult(
 		},
 		CheckpointSeq: output.Spec.CheckpointSeq,
 	}, nil
+}
+
+// Rollback returns the run's writable paths to the state Build snapshotted.
+// The runner calls it when a run fails before ApplyResult - an engine error,
+// a cancelled context, a turn budget that runs out - so a failure leaves no
+// partial writes behind and the next run's baseline is the store as it was.
+func (workingMemoryConsolidationJob) Rollback(
+	ctx context.Context,
+	loader ContextLoader,
+	spec Spec,
+) error {
+	if spec.MemoryRecoveryID != "" {
+		return loader.RecoverMemory(ctx, spec.MemoryRecoveryID)
+	}
+	return restoreSnapshotFiles(ctx, loader, spec.FileSnapshots)
+}
+
+// checkWorkingMemoryLedgerCompleteness matches every removed item and complete
+// loop against exactly one typed record, then checks its destination or reason.
+func checkWorkingMemoryLedgerCompleteness(
+	ctx context.Context,
+	loader ContextLoader,
+	baseline map[string]string,
+) error {
+	for _, runtimePath := range []string{workingMemoryRuntimePath, openLoopsRuntimePath, workingLedgerRuntimePath} {
+		if _, ok := baseline[runtimePath]; !ok {
+			return fmt.Errorf("spec baseline is missing pre-run %s", runtimePath)
+		}
+	}
+	working, _, err := loader.ReadFileBytes(ctx, workingMemoryRelativePath)
+	if err != nil {
+		return fmt.Errorf("load post-run working memory: %w", err)
+	}
+	afterLoops, _, err := loader.ReadFileBytes(ctx, relativeMemoryPath(openLoopsRuntimePath))
+	if err != nil {
+		return fmt.Errorf("load post-run open loops: %w", err)
+	}
+	beforeLoopItems, err := parseOpenLoops(baseline[openLoopsRuntimePath])
+	if err != nil {
+		return fmt.Errorf("invalid pre-run open loops: %w", err)
+	}
+	afterLoopItems, err := parseOpenLoops(string(afterLoops))
+	if err != nil {
+		return fmt.Errorf("invalid post-run open loops: %w", err)
+	}
+	entries, err := appendedWorkingLedgerEntries(ctx, loader, baseline, "working-memory run")
+	if err != nil {
+		return err
+	}
+	workingExits := unmatchedWorkingExits(baseline[workingMemoryRuntimePath], string(working))
+	loopExits := make(map[string]int)
+	for _, loop := range beforeLoopItems {
+		loopExits[workingItemDescription(loop.Item)]++
+	}
+	for _, loop := range afterLoopItems {
+		description := workingItemDescription(loop.Item)
+		if loopExits[description] > 0 {
+			loopExits[description]--
+		}
+	}
+	for _, entry := range entries {
+		if entry.Run != workingMemoryConsolidationJobType {
+			return fmt.Errorf("working-memory ledger entry has wrong run %q", entry.Run)
+		}
+		var unmatched map[string]int
+		switch entry.Outcome {
+		case claims.OutcomeConverted, claims.OutcomeMoved, claims.OutcomeDropped:
+			unmatched = workingExits
+		case claims.OutcomeClosed:
+			if entry.TargetID != "" || entry.TargetPath != "" ||
+				strings.TrimSpace(entry.Note) == "" {
+				return fmt.Errorf("closed loop ledger exit requires a reason and no target")
+			}
+			unmatched = loopExits
+		default:
+			return fmt.Errorf(
+				"working-memory ledger entry has unsupported outcome %q",
+				entry.Outcome,
+			)
+		}
+		description := normalizeExitDescription(entry.Description)
+		if unmatched[description] == 0 {
+			return fmt.Errorf(
+				"ledger exit does not match an unrecorded removed working-memory item or complete open loop: %q",
+				entry.Description,
+			)
+		}
+		unmatched[description]--
+	}
+	for _, unmatched := range []map[string]int{workingExits, loopExits} {
+		for description, count := range unmatched {
+			if count > 0 {
+				return fmt.Errorf(
+					"working-memory run removed item without a matching ledger exit in %s: %q",
+					workingLedgerRuntimePath,
+					description,
+				)
+			}
+		}
+	}
+	return validateExitTargets(ctx, loader, entries)
+}
+
+func unmatchedWorkingExits(before, after string) map[string]int {
+	unmatched := make(map[string]int)
+	for _, item := range removedWorkingItems(before, after) {
+		unmatched[workingItemDescription(item)]++
+	}
+	return unmatched
+}
+
+// snapshotWorkingMemoryFiles captures the pre-run on-disk bytes of the three
+// files a working-memory run may write, so a failed run can be rolled back
+// byte-for-byte. The keys are the runtime-path constants the tool policy and
+// coverage check already key on, never the loader-supplied relative path.
+func snapshotWorkingMemoryFiles(
+	ctx context.Context,
+	loader ContextLoader,
+) (map[string]FileSnapshot, error) {
+	paths := []string{
+		workingMemoryRuntimePath,
+		openLoopsRuntimePath,
+		workingLedgerRuntimePath,
+	}
+	snapshots := make(map[string]FileSnapshot, len(paths))
+	for _, runtimePath := range paths {
+		raw, existed, err := loader.ReadFileBytes(ctx, relativeMemoryPath(runtimePath))
+		if err != nil {
+			return nil, fmt.Errorf("snapshot %s: %w", runtimePath, err)
+		}
+		snapshots[runtimePath] = FileSnapshot{Existed: existed, Content: raw}
+	}
+	return snapshots, nil
 }
 
 func evaluateWorkingMemoryStartup(
@@ -544,4 +728,21 @@ func summarizeWorkingMemoryNotes(text string) string {
 
 func compactWorkingMemoryText(text string) string {
 	return compactCognitionText(text)
+}
+
+func rollbackWorkingMemoryRun(
+	ctx context.Context,
+	loader ContextLoader,
+	spec Spec,
+	validationErr error,
+) error {
+	if loader == nil {
+		return validationErr
+	}
+	cleanupCtx, cancel := memoryRecoveryContext(ctx)
+	defer cancel()
+	if err := (workingMemoryConsolidationJob{}).Rollback(cleanupCtx, loader, spec); err != nil {
+		return fmt.Errorf("%w (rollback also failed: %w)", validationErr, err)
+	}
+	return validationErr
 }

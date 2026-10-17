@@ -1,6 +1,7 @@
 package cognition
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -12,12 +13,15 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
 	"github.com/q15co/q15/systems/agent/internal/fileops"
+	"github.com/q15co/q15/systems/agent/internal/memory/claims"
 	"github.com/q15co/q15/systems/agent/internal/tools"
 )
 
 type workingMemoryJobLoader struct {
 	working                 agent.WorkingMemory
 	openLoops               string
+	ledger                  string
+	files                   map[string][]byte
 	artifacts               map[string]Artifact
 	recent                  []conversation.Message
 	checkpoint              ConsolidationCheckpoint
@@ -44,7 +48,11 @@ func (l *workingMemoryJobLoader) LoadSemanticTopics(context.Context) (map[string
 }
 
 func (l *workingMemoryJobLoader) LoadWorkingMemory(context.Context) (agent.WorkingMemory, error) {
-	return l.working, nil
+	working := l.working
+	if l.files != nil {
+		working.Content = string(l.files[workingMemoryRelativePath])
+	}
+	return working, nil
 }
 
 func (l *workingMemoryJobLoader) LoadSkillCatalog(context.Context) (agent.SkillCatalog, error) {
@@ -109,18 +117,52 @@ func (l *workingMemoryJobLoader) LoadSemanticFileSizes(context.Context) (map[str
 }
 
 func (l *workingMemoryJobLoader) LoadOpenLoops(context.Context) (string, error) {
+	if l.files != nil {
+		return string(l.files["working/OPEN_LOOPS.md"]), nil
+	}
 	return l.openLoops, nil
 }
 
 func (l *workingMemoryJobLoader) LoadWorkingLedger(context.Context) (string, error) {
-	return "", nil
+	if l.files != nil {
+		return string(l.files["working/LEDGER.md"]), nil
+	}
+	return l.ledger, nil
 }
 
-func (l *workingMemoryJobLoader) WriteFileBytes(context.Context, string, []byte) error {
+func (l *workingMemoryJobLoader) ReadFileBytes(
+	_ context.Context,
+	relativePath string,
+) ([]byte, bool, error) {
+	if l.files != nil {
+		content, ok := l.files[relativePath]
+		return append([]byte(nil), content...), ok, nil
+	}
+	switch relativePath {
+	case workingMemoryRelativePath:
+		return []byte(l.working.Content), true, nil
+	case "working/OPEN_LOOPS.md":
+		return []byte(l.openLoops), true, nil
+	case "working/LEDGER.md":
+		return []byte(l.ledger), true, nil
+	}
+	return nil, false, nil
+}
+
+func (l *workingMemoryJobLoader) WriteFileBytes(
+	_ context.Context,
+	relativePath string,
+	data []byte,
+) error {
+	if l.files == nil {
+		l.files = make(map[string][]byte)
+	}
+	l.files[relativePath] = append([]byte(nil), data...)
 	return nil
 }
 
-func (l *workingMemoryJobLoader) DeleteFile(context.Context, string) error {
+func (l *workingMemoryJobLoader) DeleteFile(_ context.Context, relativePath string) error {
+	delete(l.files, relativePath)
 	return nil
 }
 
@@ -596,6 +638,7 @@ func TestWorkingMemoryConsolidationParseResultAcceptsAnyNotesAfterTargetInspecti
 		JobOutput{
 			Type:      workingMemoryConsolidationJobType,
 			FinalText: "Updated working memory to reflect the latest active tasks.",
+			Spec:      Spec{Baseline: emptyWorkingMemoryBaseline()},
 			Messages: []conversation.Message{
 				conversation.AssistantMessage(
 					conversation.ToolCall(
@@ -632,6 +675,7 @@ func TestWorkingMemoryConsolidationParseResultTreatsFinalTextAsNotesOnly(t *test
 		JobOutput{
 			Type:      workingMemoryConsolidationJobType,
 			FinalText: "Left it unchanged.",
+			Spec:      Spec{Baseline: emptyWorkingMemoryBaseline()},
 			Messages: []conversation.Message{
 				conversation.AssistantMessage(
 					conversation.ToolCall(
@@ -667,6 +711,7 @@ func TestWorkingMemoryConsolidationParseResultUsesDefaultSummaryWhenNotesMissing
 		&workingMemoryJobLoader{},
 		JobOutput{
 			Type: workingMemoryConsolidationJobType,
+			Spec: Spec{Baseline: emptyWorkingMemoryBaseline()},
 			Messages: []conversation.Message{
 				conversation.AssistantMessage(
 					conversation.ToolCall(
@@ -1065,6 +1110,7 @@ func TestWorkingMemoryConsolidationParseResultAcceptsEitherTarget(t *testing.T) 
 			JobOutput{
 				Type:      workingMemoryConsolidationJobType,
 				FinalText: "Closed the due loop and recorded the outcome in the ledger.",
+				Spec:      Spec{Baseline: emptyWorkingMemoryBaseline()},
 				Messages: []conversation.Message{
 					conversation.AssistantMessage(
 						conversation.ToolCall(
@@ -1088,6 +1134,367 @@ func TestWorkingMemoryConsolidationParseResultAcceptsEitherTarget(t *testing.T) 
 			t.Fatalf("%s: result.Metadata[path] = %q, want %q", testCase.name, got, want)
 		}
 	}
+}
+
+// workingMemoryTargetToolCall returns the message pair of one successful file
+// tool call on a single path, the smallest transcript that satisfies the
+// job's coverage check when path is one of its two targets.
+func workingMemoryTargetToolCall(tool, path string) []conversation.Message {
+	return []conversation.Message{
+		conversation.AssistantMessage(
+			conversation.ToolCall("call-1", tool, fmt.Sprintf(`{"path":%q}`, path)),
+		),
+		conversation.ToolResultMessage("call-1", "Path: "+path, false),
+	}
+}
+
+// emptyWorkingMemoryBaseline is the Build baseline of a run whose three
+// targets were all empty before the run, so a run that changed nothing has
+// no exits to ledger and the completeness check passes vacuously.
+func emptyWorkingMemoryBaseline() map[string]string {
+	return map[string]string{
+		workingMemoryRuntimePath: "",
+		openLoopsRuntimePath:     "",
+		workingLedgerRuntimePath: "",
+	}
+}
+
+// buildWorkingMemorySpec builds the job's spec against loader, the same
+// pre-run state ApplyResult later diffs and rolls back to.
+func buildWorkingMemorySpec(t *testing.T, loader *workingMemoryJobLoader) Spec {
+	t.Helper()
+	spec, err := NewWorkingMemoryConsolidationRegistration(0, 0).NewJob().Build(
+		context.Background(),
+		loader,
+	)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	return spec
+}
+
+// assertFileBytesRestored checks that rollback left the memory file behind
+// runtimePath byte-identical to its pre-run bytes, or deleted when want is
+// nil (the file did not exist before the run).
+func assertFileBytesRestored(
+	t *testing.T,
+	loader *workingMemoryJobLoader,
+	runtimePath string,
+	want []byte,
+) {
+	t.Helper()
+	relative := relativeMemoryPath(runtimePath)
+	got, ok := loader.files[relative]
+	if want == nil {
+		if ok {
+			t.Fatalf("%s exists after rollback (%q), want deleted", runtimePath, string(got))
+		}
+		return
+	}
+	if !ok {
+		t.Fatalf("%s missing after rollback, want restored to %q", runtimePath, string(want))
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("%s = %q after rollback, want byte-identical restore of %q",
+			runtimePath, string(got), string(want))
+	}
+}
+
+func TestWorkingMemoryConsolidationApplyResultFailsWhenRemovedItemHasNoLedgerLine(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	workingBefore := "# Working Memory\n\n## Active Tasks\n\n" +
+		"- Ship the audit fix.\n- Keep the rollout green.\n"
+	ledgerBefore := "2026-10-11T04:00Z run=working_memory.consolidate dropped \"- Old item\" (stale)\n"
+	loader := &workingMemoryJobLoader{
+		working: agent.WorkingMemory{
+			RelativePath: workingMemoryRelativePath,
+			Content:      workingBefore,
+		},
+		ledger: ledgerBefore,
+		files: map[string][]byte{
+			relativeMemoryPath(workingMemoryRuntimePath): []byte(workingBefore + "\n"),
+			relativeMemoryPath(openLoopsRuntimePath):     []byte("# Open Loops\n"),
+			relativeMemoryPath(workingLedgerRuntimePath): []byte(ledgerBefore + "\n"),
+		},
+	}
+	job := NewWorkingMemoryConsolidationRegistration(0, 0).NewJob()
+	spec := buildWorkingMemorySpec(t, loader)
+
+	// The run removes one working-memory item and appends no ledger line.
+	workingAfter := "# Working Memory\n\n## Active Tasks\n\n- Keep the rollout green.\n"
+	loader.working.Content = workingAfter
+	loader.files[relativeMemoryPath(workingMemoryRuntimePath)] = []byte(workingAfter + "\n")
+
+	_, err := job.ApplyResult(context.Background(), loader, JobOutput{
+		Type:      workingMemoryConsolidationJobType,
+		Spec:      spec,
+		FinalText: "Removed the shipped item.",
+		Messages:  workingMemoryTargetToolCall("write_file", workingMemoryRuntimePath),
+	})
+	if err == nil {
+		t.Fatal("ApplyResult() error = nil, want unrecorded-exit failure")
+	}
+	if !contains(err.Error(), "without a matching ledger exit") {
+		t.Fatalf("ApplyResult() error = %v, want the missing ledger line named", err)
+	}
+	if !contains(err.Error(), "Ship the audit fix") {
+		t.Fatalf("ApplyResult() error = %v, want the unrecorded exit named", err)
+	}
+	assertFileBytesRestored(t, loader, workingMemoryRuntimePath, []byte(workingBefore+"\n"))
+	assertFileBytesRestored(t, loader, openLoopsRuntimePath, []byte("# Open Loops\n"))
+	assertFileBytesRestored(t, loader, workingLedgerRuntimePath, []byte(ledgerBefore+"\n"))
+}
+
+func TestWorkingMemoryConsolidationApplyResultFailsWhenClosedLoopHasNoLedgerLine(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	openLoopsBefore := "# Open Loops\n\n" +
+		"- [l-2026-0041] Follow up on the rollout once the report lands.\n" +
+		"  {trigger: date:2026-10-19, owner: agent, src: t4441}\n" +
+		"- [l-2026-0042] Ask the user how long the audit window stays open.\n" +
+		"  {trigger: next-session, owner: user, src: t4518}\n"
+	loader := &workingMemoryJobLoader{
+		working: agent.WorkingMemory{
+			RelativePath: workingMemoryRelativePath,
+			Content:      "# Working Memory\n\n## Active Tasks\n\n- Keep the rollout green.\n",
+		},
+		openLoops: openLoopsBefore,
+		files: map[string][]byte{
+			relativeMemoryPath(workingMemoryRuntimePath): []byte("# Working Memory\n"),
+			relativeMemoryPath(openLoopsRuntimePath):     []byte(openLoopsBefore + "\n"),
+			relativeMemoryPath(workingLedgerRuntimePath): []byte("# Ledger\n"),
+		},
+	}
+	job := NewWorkingMemoryConsolidationRegistration(0, 0).NewJob()
+	spec := buildWorkingMemorySpec(t, loader)
+
+	// The run closes l-2026-0042 without recording it in the ledger.
+	openLoopsAfter := "# Open Loops\n\n" +
+		"- [l-2026-0041] Follow up on the rollout once the report lands.\n" +
+		"  {trigger: date:2026-10-19, owner: agent, src: t4441}\n"
+	loader.openLoops = openLoopsAfter
+	loader.files[relativeMemoryPath(openLoopsRuntimePath)] = []byte(openLoopsAfter + "\n")
+
+	_, err := job.ApplyResult(context.Background(), loader, JobOutput{
+		Type:      workingMemoryConsolidationJobType,
+		Spec:      spec,
+		FinalText: "Closed the answered loop.",
+		Messages:  workingMemoryTargetToolCall("edit_file", openLoopsRuntimePath),
+	})
+	if err == nil {
+		t.Fatal("ApplyResult() error = nil, want unrecorded-exit failure")
+	}
+	if !contains(err.Error(), "l-2026-0042") {
+		t.Fatalf("ApplyResult() error = %v, want the closed loop named", err)
+	}
+	assertFileBytesRestored(t, loader, openLoopsRuntimePath, []byte(openLoopsBefore+"\n"))
+}
+
+func TestWorkingMemoryConsolidationApplyResultFailsWhenLedgerPrefixIsRewritten(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	ledgerBefore := "2026-10-01T05:02Z run=working_memory.consolidate dropped \"- Old item\" (stale)\n"
+	ledgerAfter := "2026-10-01T05:02Z run=working_memory.consolidate older line rewritten\n" +
+		"2026-10-12T04:00Z run=working_memory.consolidate dropped \"- Other\" (stale)\n"
+	loader := &workingMemoryJobLoader{
+		working: agent.WorkingMemory{
+			RelativePath: workingMemoryRelativePath,
+			Content:      "# Working Memory\n\n## Active Tasks\n\n- Keep the rollout green.\n",
+		},
+		ledger: ledgerBefore,
+		files: map[string][]byte{
+			relativeMemoryPath(workingMemoryRuntimePath): []byte("# Working Memory\n"),
+			relativeMemoryPath(workingLedgerRuntimePath): []byte(ledgerBefore),
+		},
+	}
+	job := NewWorkingMemoryConsolidationRegistration(0, 0).NewJob()
+	spec := buildWorkingMemorySpec(t, loader)
+
+	// The run rewrites an existing ledger line instead of only appending.
+	loader.ledger = ledgerAfter
+	loader.files[relativeMemoryPath(workingLedgerRuntimePath)] = []byte(ledgerAfter)
+
+	_, err := job.ApplyResult(context.Background(), loader, JobOutput{
+		Type:      workingMemoryConsolidationJobType,
+		Spec:      spec,
+		FinalText: "Rewrote a ledger line.",
+		Messages:  workingMemoryTargetToolCall("read_file", workingMemoryRuntimePath),
+	})
+	if err == nil {
+		t.Fatal("ApplyResult() error = nil, want append-only ledger failure")
+	}
+	if !contains(err.Error(), "append-only") {
+		t.Fatalf("ApplyResult() error = %v, want the append-only rule named", err)
+	}
+	assertFileBytesRestored(t, loader, workingLedgerRuntimePath, []byte(ledgerBefore))
+}
+
+func TestWorkingMemoryConsolidationApplyResultAcceptsRecordedExits(t *testing.T) {
+	t.Parallel()
+
+	workingBefore := "# Working Memory\n\n## Active Tasks\n\n" +
+		"- Keep the rollout green.\n- Finish the audit follow-up.\n"
+	openLoopsBefore := "# Open Loops\n\n" +
+		"- [l-2026-0041] Follow up on the rollout once the report lands.\n" +
+		"  {trigger: date:2026-10-19, owner: agent, src: t4441}\n" +
+		"- [l-2026-0042] Ask the user how long the audit window stays open.\n" +
+		"  {trigger: next-session, owner: user, src: t4518}\n"
+	ledgerBefore := "2026-10-01T05:02Z run=working_memory.consolidate dropped \"- Old item\" (stale)\n"
+	loader := &workingMemoryJobLoader{
+		working: agent.WorkingMemory{
+			RelativePath: workingMemoryRelativePath,
+			Content:      workingBefore,
+		},
+		openLoops: openLoopsBefore,
+		ledger:    ledgerBefore,
+		files: map[string][]byte{
+			relativeMemoryPath(workingMemoryRuntimePath): []byte(workingBefore),
+			relativeMemoryPath(openLoopsRuntimePath):     []byte(openLoopsBefore),
+			relativeMemoryPath(workingLedgerRuntimePath): []byte(ledgerBefore),
+		},
+	}
+	job := NewWorkingMemoryConsolidationRegistration(0, 0).NewJob()
+	spec := buildWorkingMemorySpec(t, loader)
+
+	// A healthy run: one item exits, one loop closes, and each exit gets
+	// exactly one appended ledger line.
+	workingAfter := "# Working Memory\n\n## Active Tasks\n\n- Keep the rollout green.\n"
+	openLoopsAfter := "# Open Loops\n\n" +
+		"- [l-2026-0041] Follow up on the rollout once the report lands.\n" +
+		"  {trigger: date:2026-10-19, owner: agent, src: t4441}\n"
+	ledgerAfter := ledgerBefore +
+		"2026-10-12T04:00Z run=working_memory.consolidate src=t4441..t4518 dropped \"Finish the audit follow-up.\" (done)\n" +
+		"2026-10-12T04:00Z run=working_memory.consolidate src=t4441..t4518 closed \"[l-2026-0042] Ask the user how long the audit window stays open. {trigger: next-session, owner: user, src: t4518}\" (answered)\n"
+	loader.working.Content = workingAfter
+	loader.openLoops = openLoopsAfter
+	loader.ledger = ledgerAfter
+	loader.files[relativeMemoryPath(workingMemoryRuntimePath)] = []byte(workingAfter)
+	loader.files[relativeMemoryPath(openLoopsRuntimePath)] = []byte(openLoopsAfter)
+	loader.files[relativeMemoryPath(workingLedgerRuntimePath)] = []byte(ledgerAfter)
+
+	result, err := job.ApplyResult(context.Background(), loader, JobOutput{
+		Type:      workingMemoryConsolidationJobType,
+		Spec:      spec,
+		FinalText: "Closed the answered loop and recorded both exits.",
+		Messages:  workingMemoryTargetToolCall("write_file", workingMemoryRuntimePath),
+	})
+	if err != nil {
+		t.Fatalf("ApplyResult() error = %v", err)
+	}
+	if got, want := result.Summary, "Closed the answered loop and recorded both exits."; got != want {
+		t.Fatalf("result.Summary = %q, want %q", got, want)
+	}
+	if len(result.Metadata) != 1 ||
+		result.Metadata["path"] != workingMemoryRuntimePath {
+		t.Fatalf(
+			"result.Metadata = %#v, want only path=%q",
+			result.Metadata,
+			workingMemoryRuntimePath,
+		)
+	}
+	// A passing run keeps its writes: nothing is rolled back.
+	assertFileBytesRestored(t, loader, workingMemoryRuntimePath, []byte(workingAfter))
+	assertFileBytesRestored(t, loader, openLoopsRuntimePath, []byte(openLoopsAfter))
+	assertFileBytesRestored(t, loader, workingLedgerRuntimePath, []byte(ledgerAfter))
+}
+
+func TestWorkingMemoryConsolidationRollbackRestoresSnapshottedFiles(t *testing.T) {
+	t.Parallel()
+
+	workingBytes := []byte("# Working Memory\n\n## Active Tasks\n\n- Keep the rollout green.\n\n")
+	openLoopsBytes := []byte("# Open Loops\n\n- [l-2026-0041] Follow up.\n")
+	ledgerBytes := []byte("2026-10-01T05:02Z run=working_memory.consolidate older\n\n")
+	loader := &workingMemoryJobLoader{
+		working: agent.WorkingMemory{
+			RelativePath: workingMemoryRelativePath,
+			Content:      string(workingBytes),
+		},
+		openLoops: string(openLoopsBytes),
+		ledger:    string(ledgerBytes),
+		files: map[string][]byte{
+			relativeMemoryPath(workingMemoryRuntimePath): workingBytes,
+			relativeMemoryPath(openLoopsRuntimePath):     openLoopsBytes,
+			relativeMemoryPath(workingLedgerRuntimePath): ledgerBytes,
+		},
+	}
+	job := NewWorkingMemoryConsolidationRegistration(0, 0).NewJob()
+	spec := buildWorkingMemorySpec(t, loader)
+
+	rollbacker, ok := job.(Rollbacker)
+	if !ok {
+		t.Fatal("working-memory job does not implement Rollbacker")
+	}
+
+	// The run rewrites all three files, then fails before ApplyResult.
+	loader.files[relativeMemoryPath(workingMemoryRuntimePath)] = []byte("clobbered working\n")
+	loader.files[relativeMemoryPath(openLoopsRuntimePath)] = []byte("clobbered loops\n")
+	loader.files[relativeMemoryPath(workingLedgerRuntimePath)] = []byte("clobbered ledger\n")
+	if err := rollbacker.Rollback(context.Background(), loader, spec); err != nil {
+		t.Fatalf("Rollback() error = %v", err)
+	}
+	assertFileBytesRestored(t, loader, workingMemoryRuntimePath, workingBytes)
+	assertFileBytesRestored(t, loader, openLoopsRuntimePath, openLoopsBytes)
+	assertFileBytesRestored(t, loader, workingLedgerRuntimePath, ledgerBytes)
+
+	// A file that did not exist before the run and the run created is
+	// deleted, not left behind.
+	loader = &workingMemoryJobLoader{
+		working: agent.WorkingMemory{
+			RelativePath: workingMemoryRelativePath,
+			Content:      string(workingBytes),
+		},
+		files: map[string][]byte{
+			relativeMemoryPath(workingMemoryRuntimePath): workingBytes,
+		},
+	}
+	spec = buildWorkingMemorySpec(t, loader)
+	loader.files[relativeMemoryPath(workingLedgerRuntimePath)] = []byte("created by the run\n")
+	if err := rollbacker.Rollback(context.Background(), loader, spec); err != nil {
+		t.Fatalf("Rollback() error = %v", err)
+	}
+	assertFileBytesRestored(t, loader, workingMemoryRuntimePath, workingBytes)
+	assertFileBytesRestored(t, loader, workingLedgerRuntimePath, nil)
+}
+
+func TestWorkingMemoryConsolidationApplyResultCoverageFailureRollsBack(t *testing.T) {
+	t.Parallel()
+
+	workingBytes := []byte("# Working Memory\n\n## Active Tasks\n\n- Keep the rollout green.\n")
+	loader := &workingMemoryJobLoader{
+		working: agent.WorkingMemory{
+			RelativePath: workingMemoryRelativePath,
+			Content:      string(workingBytes),
+		},
+		files: map[string][]byte{
+			relativeMemoryPath(workingMemoryRuntimePath): workingBytes,
+		},
+	}
+	job := NewWorkingMemoryConsolidationRegistration(0, 0).NewJob()
+	spec := buildWorkingMemorySpec(t, loader)
+
+	// The run never touched either target through a file tool, so its
+	// half-finished write must not stay.
+	loader.files[relativeMemoryPath(workingMemoryRuntimePath)] = []byte("partial write\n")
+	_, err := job.ApplyResult(context.Background(), loader, JobOutput{
+		Type:      workingMemoryConsolidationJobType,
+		Spec:      spec,
+		FinalText: "Everything looks current.",
+		Messages:  workingMemoryTargetToolCall("read_file", semanticFactsRuntimePath),
+	})
+	if err == nil {
+		t.Fatal("ApplyResult() error = nil, want coverage failure")
+	}
+	if !contains(err.Error(), "working-memory run must inspect") {
+		t.Fatalf("ApplyResult() error = %v, want missing target inspection", err)
+	}
+	assertFileBytesRestored(t, loader, workingMemoryRuntimePath, workingBytes)
 }
 
 func TestWorkingMemoryConsolidationPromptGolden(t *testing.T) {
@@ -1176,21 +1583,6 @@ func findPromptSection(
 	return agent.PromptSection{}, false
 }
 
-func (l *workingMemoryJobLoader) ReadFileBytes(
-	_ context.Context,
-	path string,
-) ([]byte, bool, error) {
-	switch path {
-	case workingMemoryRelativePath:
-		return []byte(l.working.Content), true, nil
-	case "working/OPEN_LOOPS.md":
-		return []byte(l.openLoops), true, nil
-	case "working/LEDGER.md":
-		return nil, true, nil
-	}
-	return nil, false, nil
-}
-
 func (l *workingMemoryJobLoader) LoadConversionLedgerHistory(context.Context) (string, error) {
 	return "", nil
 }
@@ -1216,3 +1608,209 @@ func (*workingMemoryJobLoader) BeginMemoryRecovery(
 func (*workingMemoryJobLoader) CompleteMemoryRecovery(context.Context, string) error { return nil }
 
 func (*workingMemoryJobLoader) RecoverMemory(context.Context, string) error { return nil }
+
+func workingExitRecord(
+	outcome claims.LedgerOutcome,
+	description, targetID, targetPath, note string,
+) string {
+	return claims.FormatLedgerEntry(claims.LedgerEntry{
+		Timestamp: time.Date(2026, time.October, 15, 4, 0, 0, 0, time.UTC),
+		Run:       workingMemoryConsolidationJobType, SourceSeq: "t42..t45",
+		Outcome: outcome, Description: description, TargetID: targetID,
+		TargetPath: targetPath, Note: note,
+	})
+}
+
+func TestWorkingMemoryConsolidationRejectsUntraceableExitsAndRestoresFixedFiles(t *testing.T) {
+	t.Parallel()
+	workingBefore := "# Working Memory\n\n- Finish the release.\n  Include its changelog.\n"
+	loopBefore := "- [l-2026-0001] Verify the release.\n  {trigger: next-session, owner: agent, src: t42}\n"
+	validDrop := workingExitRecord(
+		claims.OutcomeDropped,
+		"Finish the release. Include its changelog.",
+		"",
+		"",
+		"completed",
+	)
+	validClose := workingExitRecord(
+		claims.OutcomeClosed,
+		"[l-2026-0001] Verify the release. {trigger: next-session, owner: agent, src: t42}",
+		"",
+		"",
+		"verified at t45",
+	)
+	for _, test := range []struct {
+		name   string
+		ledger string
+	}{
+		{name: "arbitrary sentences", ledger: "finished release\nclosed loop\n"},
+		{name: "duplicate item", ledger: validDrop + validDrop + validClose},
+		{name: "unrelated description", ledger: workingExitRecord(claims.OutcomeDropped, "Different release.", "", "", "done") + validClose},
+		{name: "missing continuation", ledger: workingExitRecord(claims.OutcomeDropped, "Finish the release.", "", "", "done") + validClose},
+		{name: "loop ID alone", ledger: validDrop + workingExitRecord(claims.OutcomeClosed, "l-2026-0001", "", "", "done")},
+		{name: "missing loop metadata", ledger: validDrop + workingExitRecord(claims.OutcomeClosed, "[l-2026-0001] Verify the release.", "", "", "done")},
+		{name: "drop lacks reason", ledger: workingExitRecord(claims.OutcomeDropped, "Finish the release. Include its changelog.", "", "", "") + validClose},
+		{name: "close lacks reason", ledger: validDrop + workingExitRecord(claims.OutcomeClosed, "[l-2026-0001] Verify the release. {trigger: next-session, owner: agent, src: t42}", "", "", "")},
+		{name: "wrong run", ledger: strings.ReplaceAll(validDrop+validClose, workingMemoryConsolidationJobType, semanticMemoryExtractionJobType)},
+		{name: "wrong source syntax", ledger: strings.ReplaceAll(validDrop+validClose, "src=t42..t45", "src=t45..t42")},
+		{name: "unsupported outcome", ledger: workingExitRecord(claims.OutcomeRetracted, "Finish the release. Include its changelog.", "c-2026-0001", "", "invalid") + validClose},
+		{name: "missing moved target", ledger: workingExitRecord(claims.OutcomeMoved, "Finish the release. Include its changelog.", "l-2026-0002", "working/OPEN_LOOPS.md", "") + validClose},
+		{name: "missing converted target", ledger: workingExitRecord(claims.OutcomeConverted, "Finish the release. Include its changelog.", "c-2026-0002", "semantic/facts.md", "") + validClose},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			loader := &workingMemoryJobLoader{files: map[string][]byte{
+				workingMemoryRelativePath:     []byte(workingBefore),
+				"working/OPEN_LOOPS.md":       []byte(loopBefore),
+				"working/LEDGER.md":           []byte("# Ledger\n\n"),
+				"semantic/topics/existing.md": []byte("existing semantic topic\n"),
+			}}
+			spec := buildWorkingMemorySpec(t, loader)
+			loader.files[workingMemoryRelativePath] = []byte("# Working Memory\n")
+			loader.files["working/OPEN_LOOPS.md"] = []byte("# Open Loops\n")
+			loader.files["working/LEDGER.md"] = []byte("# Ledger\n\n" + test.ledger)
+			_, err := (workingMemoryConsolidationJob{}).ApplyResult(
+				context.Background(),
+				loader,
+				JobOutput{
+					Spec:     spec,
+					Messages: workingMemoryTargetToolCall("write_file", workingMemoryRuntimePath),
+				},
+			)
+			if err == nil {
+				t.Fatal("ApplyResult accepted an untraceable exit")
+			}
+			assertFileBytesRestored(t, loader, workingMemoryRuntimePath, []byte(workingBefore))
+			assertFileBytesRestored(t, loader, openLoopsRuntimePath, []byte(loopBefore))
+			assertFileBytesRestored(t, loader, workingLedgerRuntimePath, []byte("# Ledger\n\n"))
+			if got := string(loader.files["semantic/topics/existing.md"]); got != "existing semantic topic\n" {
+				t.Fatalf("unrelated topic = %q", got)
+			}
+		})
+	}
+}
+
+func TestWorkingMemoryConsolidationPreservesRawLedgerBaseline(t *testing.T) {
+	t.Parallel()
+	before := "# Ledger\n\n"
+	loader := &workingMemoryJobLoader{files: map[string][]byte{
+		workingMemoryRelativePath: []byte("# Working Memory\n"),
+		"working/OPEN_LOOPS.md":   []byte("# Open Loops\n"),
+		"working/LEDGER.md":       []byte(before),
+	}}
+	spec := buildWorkingMemorySpec(t, loader)
+	if spec.Baseline[workingLedgerRuntimePath] != before {
+		t.Fatal("Build trimmed raw ledger evidence")
+	}
+	loader.files["working/LEDGER.md"] = []byte(strings.TrimSpace(before) + "\n")
+	_, err := (workingMemoryConsolidationJob{}).ApplyResult(
+		context.Background(),
+		loader,
+		JobOutput{
+			Spec:     spec,
+			Messages: workingMemoryTargetToolCall("read_file", workingMemoryRuntimePath),
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "append-only") {
+		t.Fatalf("ApplyResult() = %v, want raw append-only failure", err)
+	}
+	assertFileBytesRestored(t, loader, workingLedgerRuntimePath, []byte(before))
+}
+
+func TestWorkingMemoryConsolidationAcceptsVerifiedExitTargets(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name    string
+		outcome claims.LedgerOutcome
+		id      string
+		path    string
+		content string
+	}{
+		{name: "converted", outcome: claims.OutcomeConverted, id: "c-2026-0001", path: "semantic/facts.md", content: "- [c-2026-0001] Release notes are required.\n  {status: active, kind: fact, confidence: confirmed, src: t42, rev: 2026-10-15}\n"},
+		{name: "moved", outcome: claims.OutcomeMoved, id: "l-2026-0001", path: "working/OPEN_LOOPS.md", content: "- [l-2026-0001] Prepare the release.\n  {trigger: next-session, owner: agent, src: t42}\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			loader := &workingMemoryJobLoader{files: map[string][]byte{
+				workingMemoryRelativePath: []byte("# Working Memory\n\n- Prepare the release.\n"),
+				"working/OPEN_LOOPS.md":   []byte("# Open Loops\n"),
+				"working/LEDGER.md":       []byte("# Ledger\n"),
+			}}
+			spec := buildWorkingMemorySpec(t, loader)
+			loader.files[workingMemoryRelativePath] = []byte("# Working Memory\n")
+			loader.files[test.path] = []byte(test.content)
+			ledger := "# Ledger\n" + workingExitRecord(
+				test.outcome,
+				"Prepare the release.",
+				test.id,
+				test.path,
+				"",
+			)
+			loader.files["working/LEDGER.md"] = []byte(ledger)
+			_, err := (workingMemoryConsolidationJob{}).ApplyResult(
+				context.Background(),
+				loader,
+				JobOutput{
+					Spec:     spec,
+					Messages: workingMemoryTargetToolCall("write_file", workingMemoryRuntimePath),
+				},
+			)
+			if err != nil {
+				t.Fatalf("ApplyResult rejected valid %s exit: %v", test.name, err)
+			}
+			assertFileBytesRestored(t, loader, workingLedgerRuntimePath, []byte(ledger))
+		})
+	}
+}
+
+func TestWorkingMemoryConsolidationAccountsForNonBulletExitBlocks(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct{ name, block, description string }{
+		{name: "prose", block: "Prepare the release.\nInclude its changelog.\n", description: "Prepare the release. Include its changelog."},
+		{name: "fence", block: "```text\nPrepare the release.\n```\n", description: "```text Prepare the release. ```"},
+		{name: "comment", block: "<!-- Prepare the release. -->\n", description: "<!-- Prepare the release. -->"},
+		{name: "numbered list", block: "1. Prepare the release.\n", description: "1. Prepare the release."},
+		{name: "custom heading", block: "## Release notes\nPrepare the release.\n", description: "## Release notes Prepare the release."},
+		{name: "None-like content", block: "- (None).\n", description: "(None)."},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			before := "# Working Memory\n\n" + test.block
+			loader := &workingMemoryJobLoader{files: map[string][]byte{
+				workingMemoryRelativePath: []byte(before),
+				"working/OPEN_LOOPS.md":   []byte("# Open Loops\n"),
+				"working/LEDGER.md":       []byte("# Ledger\n"),
+			}}
+			spec := buildWorkingMemorySpec(t, loader)
+			loader.files[workingMemoryRelativePath] = []byte("# Working Memory\n")
+			output := JobOutput{
+				Spec:     spec,
+				Messages: workingMemoryTargetToolCall("write_file", workingMemoryRuntimePath),
+			}
+			job := workingMemoryConsolidationJob{}
+			if _, err := job.ApplyResult(context.Background(), loader, output); err == nil {
+				t.Fatal("ApplyResult silently removed an unrecorded block")
+			}
+			assertFileBytesRestored(t, loader, workingMemoryRuntimePath, []byte(before))
+			loader.files[workingMemoryRelativePath] = []byte("# Working Memory\n")
+			loader.files["working/LEDGER.md"] = []byte(
+				"# Ledger\n" + workingExitRecord(
+					claims.OutcomeDropped,
+					test.description,
+					"",
+					"",
+					"completed",
+				),
+			)
+			if _, err := job.ApplyResult(context.Background(), loader, output); err != nil {
+				t.Fatalf("ApplyResult rejected complete exit evidence: %v", err)
+			}
+			assertFileBytesRestored(
+				t,
+				loader,
+				workingMemoryRuntimePath,
+				[]byte("# Working Memory\n"),
+			)
+		})
+	}
+}
