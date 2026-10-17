@@ -2,11 +2,15 @@ package embedtools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/q15co/q15/systems/agent/internal/agent"
+	"github.com/q15co/q15/systems/agent/internal/conversation"
 	"github.com/q15co/q15/systems/agent/internal/embed"
 )
 
@@ -646,4 +650,216 @@ func (f *fakeJobs) Cancel(id string) (embed.SyncJob, error) {
 		return embed.SyncJob{}, f.cancelErr
 	}
 	return f.cancelJob, nil
+}
+
+func TestSearchRunOutputByteLimit(t *testing.T) {
+	const outputLimit = 16 * 1024
+	result := embed.SearchResult{
+		Collection: embed.CollectionSemantic,
+		ID:         "synthetic-point",
+		Score:      1,
+		Payload:    map[string]any{"text": ""},
+	}
+	empty, err := json.MarshalIndent(
+		map[string]any{"results": []embed.SearchResult{result}},
+		"",
+		"  ",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	room := outputLimit - len(empty)
+	for _, tc := range []struct {
+		name, text string
+		wantBytes  int
+		wantError  bool
+	}{
+		{name: "below limit", text: strings.Repeat("x", room-1), wantBytes: outputLimit - 1},
+		{name: "exact limit", text: strings.Repeat("x", room), wantBytes: outputLimit},
+		{name: "over limit", text: strings.Repeat("x", room+1), wantBytes: outputLimit + 1, wantError: true},
+		{name: "JSON escaping exceeds limit", text: strings.Repeat("<", room/6+1), wantBytes: len(empty) + (room/6+1)*6, wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result.Payload = map[string]any{"text": tc.text}
+			results := []embed.SearchResult{result}
+			expected, err := json.MarshalIndent(map[string]any{"results": results}, "", "  ")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(expected) != tc.wantBytes {
+				t.Fatalf("fixture is %d bytes, want %d", len(expected), tc.wantBytes)
+			}
+			got, err := NewSearch(
+				&fakeService{results: results},
+			).Run(context.Background(), `{"query":"synthetic","collection":"semantic","limit":1}`)
+			if tc.wantError {
+				if err == nil || got != "" {
+					t.Fatalf("oversized search returned %d bytes with error %v", len(got), err)
+				}
+				if len(err.Error()) >= 256 || !strings.Contains(err.Error(), "reduce limit") ||
+					!strings.Contains(err.Error(), "read_file") {
+					t.Fatalf("oversized search error is not bounded and actionable: %q", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != string(expected) {
+				t.Fatal("within-limit result JSON changed")
+			}
+		})
+	}
+}
+
+type searchOutputVectorStore struct {
+	embed.VectorStore
+	results    []embed.SearchResult
+	collection string
+	request    embed.SearchRequest
+}
+
+func (v *searchOutputVectorStore) Search(
+	_ context.Context,
+	collection string,
+	request embed.SearchRequest,
+) ([]embed.SearchResult, error) {
+	v.collection = collection
+	v.request = request
+	return v.results, nil
+}
+
+func TestSearchRunWithinLimitPreservesResultsAndRequest(t *testing.T) {
+	vectors := &searchOutputVectorStore{results: []embed.SearchResult{
+		{
+			Collection: embed.CollectionSemantic,
+			ID:         "synthetic-first",
+			Score:      0.9,
+			Payload: map[string]any{
+				"text":      "A synthetic \"quoted\" note (draft) names `sample.md`.",
+				"file_path": "/memory/semantic/synthetic.md",
+				"section":   "Notes",
+			},
+		},
+		{
+			Collection: embed.CollectionSemantic,
+			ID:         "synthetic-second",
+			Score:      0.5,
+			Payload: map[string]any{
+				"text":     "Another synthetic note.",
+				"metadata": map[string]any{"active": true},
+			},
+		},
+	}}
+	service := embed.NewService(embed.Settings{}, nil, vectors, nil)
+	got, err := NewSearch(
+		service,
+	).Run(context.Background(), `{"query":"synthetic query","collection":"semantic","mode":"sparse","limit":2,"filter":{"source_id":"synthetic-source","section":"Notes"}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected, err := json.MarshalIndent(map[string]any{"results": vectors.results}, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != string(expected) {
+		t.Fatal("within-limit result JSON or payload metadata changed")
+	}
+	wantRequest := embed.SearchRequest{
+		SparseText: "synthetic query",
+		Filter:     map[string]any{"source_id": "synthetic-source", "section": "Notes"},
+		Mode:       embed.SearchModeSparse,
+		Limit:      2,
+	}
+	if vectors.collection != embed.CollectionSemantic ||
+		!reflect.DeepEqual(vectors.request, wantRequest) {
+		t.Fatalf(
+			"search request = %s %#v, want semantic %#v",
+			vectors.collection,
+			vectors.request,
+			wantRequest,
+		)
+	}
+}
+
+type searchOutputModel struct{ requests [][]conversation.Message }
+
+func (m *searchOutputModel) Complete(
+	_ context.Context,
+	_ string,
+	messages []conversation.Message,
+	_ []agent.ToolDefinition,
+) (agent.ModelClientResult, error) {
+	m.requests = append(m.requests, conversation.CloneMessages(messages))
+	if len(m.requests) == 1 {
+		return agent.ModelClientResult{
+			Messages: []conversation.Message{
+				conversation.AssistantMessage(
+					conversation.ToolCall(
+						"synthetic-search",
+						"embed_search",
+						`{"query":"synthetic","collection":"semantic","mode":"sparse","limit":1}`,
+					),
+				),
+			},
+		}, nil
+	}
+	return agent.ModelClientResult{
+		Messages: []conversation.Message{
+			conversation.AssistantMessage(conversation.Text("Search complete.", "")),
+		},
+	}, nil
+}
+
+func TestSearchRunOversizedResultStaysOutOfNextModelRequest(t *testing.T) {
+	const marker = "synthetic-oversized-hit:"
+	vectors := &searchOutputVectorStore{
+		results: []embed.SearchResult{
+			{
+				Collection: embed.CollectionSemantic,
+				ID:         "synthetic-point",
+				Score:      1,
+				Payload: map[string]any{
+					"text":      marker + strings.Repeat("x", 4*1024*1024),
+					"file_path": "/memory/semantic/synthetic.md",
+				},
+			},
+		},
+	}
+	service := embed.NewService(embed.Settings{}, nil, vectors, nil)
+	registry, err := agent.NewToolRegistry(NewSearch(service))
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := &searchOutputModel{}
+	_, err = agent.NewEngine(model, registry, []string{"synthetic"}).
+		Run(context.Background(), agent.EngineRequest{Messages: []conversation.Message{conversation.SystemMessage("Maintain synthetic memory.")}, UseTools: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(model.requests) != 2 {
+		t.Fatalf("model requests = %d, want 2", len(model.requests))
+	}
+	var toolResults []conversation.Part
+	for _, message := range model.requests[1] {
+		for _, part := range message.Parts {
+			if strings.Contains(part.Text+part.Content+part.Arguments, marker) {
+				t.Fatal("oversized search payload reached the next model request")
+			}
+			if part.Type == conversation.ToolResultPartType {
+				toolResults = append(toolResults, part)
+			}
+		}
+	}
+	if len(toolResults) != 1 {
+		t.Fatalf("tool results = %d, want 1", len(toolResults))
+	}
+	result := toolResults[0]
+	if !result.IsError || result.ToolCallID != "synthetic-search" || len(result.Content) >= 256 ||
+		!strings.Contains(result.Content, "read_file") {
+		t.Fatalf("tool error = %#v, want bounded error with lookup guidance", result)
+	}
+	if vectors.request.Limit != 1 {
+		t.Fatalf("search request limit = %d, want 1", vectors.request.Limit)
+	}
 }
