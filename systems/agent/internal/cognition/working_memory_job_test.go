@@ -47,6 +47,10 @@ func (l *workingMemoryJobLoader) LoadSemanticTopics(context.Context) (map[string
 	return nil, nil
 }
 
+func (l *workingMemoryJobLoader) ListMemoryFiles(context.Context) ([]MemoryFile, error) {
+	return nil, nil
+}
+
 func (l *workingMemoryJobLoader) LoadWorkingMemory(context.Context) (agent.WorkingMemory, error) {
 	working := l.working
 	if l.files != nil {

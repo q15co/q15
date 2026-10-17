@@ -58,6 +58,13 @@ type Status struct {
 	// order, semantic files sorted by path.
 	Files []FileSizeStatus
 
+	// Surface is the two content roots classified against the named schema:
+	// the repairable targets the semantic job's surface trigger fires on,
+	// built from the same stat-only listing. It measures on-disk bytes, so a
+	// working file's surface size counts the trailing newline its loaded
+	// content above does not.
+	Surface cognition.MemorySurface
+
 	// LedgerEntries counts valid exit records in the active and archived ledgers.
 	LedgerEntries int
 }
@@ -241,6 +248,16 @@ func CollectStatus(
 	}
 	status.LedgerEntries = lines + len(archived)
 
+	listing, err := s.ListMemoryFiles(ctx)
+	if err != nil {
+		return Status{}, fmt.Errorf("scan memory surface: %w", err)
+	}
+	status.Surface = cognition.ScanMemorySurface(
+		listing,
+		int(limits.WorkingMemoryBudgetBytes),
+		int(limits.OpenLoopsBudgetBytes),
+	)
+
 	return status, nil
 }
 
@@ -306,7 +323,36 @@ func renderStatus(status Status) string {
 		)
 	}
 	fmt.Fprintf(&out, "ledger entries %d\n", status.LedgerEntries)
+	writeMemorySurfaceStatus(&out, status.Surface)
 	return out.String()
+}
+
+// writeMemorySurfaceStatus renders the surface section: one line per
+// repairable target with its on-disk bytes and its disposition ("over cap N"
+// for a named file, "un-named" for one the schema does not own, meaning the
+// repair pass adopts it and then removes it), a total line while any target
+// stands, and a single line when the surface is clean.
+func writeMemorySurfaceStatus(w io.Writer, surface cognition.MemorySurface) {
+	if len(surface.Targets) == 0 {
+		_, _ = io.WriteString(w, "surface clean\n")
+		return
+	}
+	var total int64
+	for _, target := range surface.Targets {
+		total += target.Bytes
+		if target.Named {
+			fmt.Fprintf(
+				w,
+				"surface target %s %d bytes over cap %d\n",
+				target.Path,
+				target.Bytes,
+				target.Cap,
+			)
+		} else {
+			fmt.Fprintf(w, "surface target %s %d bytes un-named\n", target.Path, target.Bytes)
+		}
+	}
+	fmt.Fprintf(w, "surface repairable %d targets %d bytes\n", len(surface.Targets), total)
 }
 
 func writeCheckpointStatus(w io.Writer, name string, checkpoint CheckpointStatus) {

@@ -80,6 +80,23 @@ func NewSemanticMemoryExtractionRegistration(
 						)
 					},
 				},
+				{
+					ID: "memory_surface_repairable",
+					Evaluate: func(
+						ctx context.Context,
+						snapshot Snapshot,
+						_ JobState,
+					) (bool, string, error) {
+						return evaluateMemorySurfaceRepairable(
+							ctx,
+							snapshot,
+							memoryFileBudgets{
+								working:   workingMemoryBudgetBytes,
+								openLoops: openLoopsBudgetBytes,
+							},
+						)
+					},
+				},
 			},
 		},
 	}

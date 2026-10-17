@@ -28,10 +28,7 @@ func checkWorkingFileBudgets(
 		limit int
 	}{
 		{workingMemoryRuntimePath, effectiveWorkingMemoryBudget(budgets.working)},
-		{openLoopsRuntimePath, budgets.openLoops},
-	}
-	if limits[1].limit <= 0 {
-		limits[1].limit = defaultOpenLoopsBudgetBytes
+		{openLoopsRuntimePath, effectiveOpenLoopsBudget(budgets.openLoops)},
 	}
 	for _, file := range limits {
 		raw, _, err := loader.ReadFileBytes(ctx, strings.TrimPrefix(file.path, memoryRuntimePrefix))
@@ -51,10 +48,7 @@ func checkWorkingFileBudgets(
 }
 
 func memoryBudgetPromptSection(budgets memoryFileBudgets) agent.PromptSection {
-	loops := budgets.openLoops
-	if loops <= 0 {
-		loops = defaultOpenLoopsBudgetBytes
-	}
+	loops := effectiveOpenLoopsBudget(budgets.openLoops)
 	return agent.PromptSection{
 		Name: "memory_byte_budgets",
 		Body: fmt.Sprintf(

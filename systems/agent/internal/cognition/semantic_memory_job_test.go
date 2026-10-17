@@ -80,6 +80,10 @@ func (l *semanticMemoryJobLoader) LoadSemanticTopics(context.Context) (map[strin
 	return nil, nil
 }
 
+func (l *semanticMemoryJobLoader) ListMemoryFiles(context.Context) ([]MemoryFile, error) {
+	return nil, nil
+}
+
 func (l *semanticMemoryJobLoader) LoadOpenLoops(context.Context) (string, error) {
 	return l.openLoops, nil
 }
@@ -218,8 +222,17 @@ func TestSemanticMemoryExtractionRegistration(t *testing.T) {
 	if got, want := registration.Policy.Schedule[0].Spec, semanticMemoryScheduleSpec; got != want {
 		t.Fatalf("schedule spec = %q, want %q", got, want)
 	}
-	if len(registration.Policy.State) != 2 {
-		t.Fatalf("state rules = %d, want 2", len(registration.Policy.State))
+	stateRuleIDs := make([]string, 0, len(registration.Policy.State))
+	for _, rule := range registration.Policy.State {
+		stateRuleIDs = append(stateRuleIDs, rule.ID)
+	}
+	wantStateRuleIDs := []string{
+		"dirty_tail_threshold",
+		"working_memory_overbudget",
+		"memory_surface_repairable",
+	}
+	if !reflect.DeepEqual(stateRuleIDs, wantStateRuleIDs) {
+		t.Fatalf("state rules = %v, want %v", stateRuleIDs, wantStateRuleIDs)
 	}
 }
 

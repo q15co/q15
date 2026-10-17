@@ -27,7 +27,10 @@ func statusFixtureLimits() StatusLimits {
 // wantStatusReport is the golden report for the full fixture. It pins the
 // frozen-checkpoint lesson in one string: the semantic-extraction checkpoint
 // sits 83 turns behind a head that kept moving, its file line is marked over
-// budget and over cap, and one job has been failing twice in a row.
+// budget and over cap, one job has been failing twice in a row, and the
+// surface section names both repairable targets with the on-disk bytes the
+// trigger will judge - for working memory one byte more than the loaded
+// content the file line reports, because the file on disk ends in a newline.
 const wantStatusReport = `head seq 4183 at 2026-10-13T09:10:33Z
 checkpoint consolidation seq 4180 lag 3 age 4m33s at 2026-10-13T09:08:00Z
 checkpoint semantic-extraction seq 4100 lag 83 age 31h12m33s at 2026-10-12T02:00:00Z
@@ -41,11 +44,15 @@ file semantic/preferences.md 16384 of 16384 bytes
 file semantic/projects.md 4321 of 16384 bytes
 file semantic/topics/claims.md 40000 of 32768 bytes OVER CAP
 ledger entries 2
+surface target semantic/topics/claims.md 40000 bytes over cap 32768
+surface target working/WORKING_MEMORY.md 9217 bytes over cap 8192
+surface repairable 2 targets 49217 bytes
 `
 
 // wantBareHeadReport is the golden report for a root that only has a head: a
 // never-advanced checkpoint is lag with no age, a job that never ran reports
-// never, and a memory root with no files is not an error.
+// never, a memory root with no files is not an error, and a surface with no
+// repairable target says so in one line.
 const wantBareHeadReport = `head seq 12 at 2026-10-13T09:10:33Z
 checkpoint consolidation seq 0 lag 12 age never at never
 checkpoint semantic-extraction seq 0 lag 12 age never at never
@@ -55,6 +62,7 @@ job verification_review failures 0 last-run never last-success never last-failur
 file working/WORKING_MEMORY.md 0 of 8192 bytes
 file working/OPEN_LOOPS.md 0 of 4096 bytes
 ledger entries 0
+surface clean
 `
 
 // fixtureFile is one file written into a fixture memory root.
@@ -312,5 +320,42 @@ func TestCollectStatusCountsArchivedRecords(t *testing.T) {
 	}
 	if status.LedgerEntries != 3 {
 		t.Fatalf("ledger entries = %d, want 3", status.LedgerEntries)
+	}
+}
+
+// TestStatusRendersUnNamedSurfaceTarget pins the adopt disposition in the
+// report: a file under a content root that no schema entry owns renders with
+// no cap and the un-named mark, ordered after any named over-cap target.
+func TestStatusRendersUnNamedSurfaceTarget(t *testing.T) {
+	t.Parallel()
+
+	files := append(
+		fullStatusFixtureFiles(),
+		fixtureFile{relative: "semantic/state/head.json", content: `{"last_seq":1}`},
+	)
+	store, _ := statusFixtureStore(t, files)
+
+	status, err := CollectStatus(context.Background(), store, statusFixtureLimits(), statusNow)
+	if err != nil {
+		t.Fatalf("CollectStatus() error = %v", err)
+	}
+
+	var report bytes.Buffer
+	if err := RenderStatus(&report, status); err != nil {
+		t.Fatalf("RenderStatus() error = %v", err)
+	}
+	for _, want := range []string{
+		"surface target semantic/state/head.json 14 bytes un-named\n",
+		"surface repairable 3 targets ",
+	} {
+		if !strings.Contains(report.String(), want) {
+			t.Fatalf("status report missing %q:\n%s", want, report.String())
+		}
+	}
+	// The un-named file sorts after both named over-cap targets.
+	unnamed := strings.Index(report.String(), "surface target semantic/state/head.json")
+	claims := strings.Index(report.String(), "surface target semantic/topics/claims.md")
+	if unnamed < claims {
+		t.Fatalf("un-named target rendered before the migration group:\n%s", report.String())
 	}
 }
