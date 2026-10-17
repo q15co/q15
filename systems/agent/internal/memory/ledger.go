@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/q15co/q15/systems/agent/internal/atomicfile"
+	"github.com/q15co/q15/systems/agent/internal/cognition"
 )
 
 const (
@@ -38,28 +39,59 @@ func (s *Store) ledgerRotationTarget(now time.Time) string {
 	return filepath.Join(s.root(), ledgerDirPath, name)
 }
 
-// rotateWorkingLedger moves the current ledger aside when it has grown past
+// rotateWorkingLedger moves the current ledger aside when it has reached
 // the rotation threshold and starts a fresh file in its place.
-//
-// Threshold check only: the ledger survives an append-only commit discipline,
-// so a size test is all the trigger needs. The ledger keeps its header after a
-// rotation, so a rotated-and-recreated file is identical to a freshly
-// initialized one.
 func (s *Store) rotateWorkingLedger(now time.Time) error {
+	needed, err := s.workingLedgerNeedsRotation()
+	if err != nil || !needed {
+		return err
+	}
+	return s.rotateWorkingLedgerTo(s.ledgerRotationTarget(now))
+}
+
+func (s *Store) workingLedgerNeedsRotation() (bool, error) {
 	current := filepath.Join(s.root(), filepath.FromSlash(workingLedgerRelativePath))
 	info, err := os.Stat(current)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil
+			return false, nil
 		}
-		return fmt.Errorf("stat ledger file %q: %w", current, err)
+		return false, fmt.Errorf("stat ledger file %q: %w", current, err)
 	}
-	if info.Size() <= ledgerRotationThresholdByte {
-		return nil
-	}
+	return info.Size() >= ledgerRotationThresholdByte, nil
+}
 
+// Rotation waits for validation so the run's exact append-only prefix remains
+// readable until then. Journal the archive before changing either ledger file:
+// an interrupted rotation must not leave rolled-back exits in the history.
+func (s *Store) rotateValidatedLedger(journal *memoryRecovery, now time.Time) error {
+	if journal.LedgerArchivePath != "" {
+		return fmt.Errorf("ledger rotation is pending; recover the memory run before retrying")
+	}
+	needed, err := s.workingLedgerNeedsRotation()
+	if err != nil || !needed {
+		return err
+	}
 	target := s.ledgerRotationTarget(now)
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+	relative := ledgerDirPath + "/" + filepath.Base(target)
+	if err := s.validateRecoveryPathAliases(relative); err != nil {
+		return err
+	}
+	raw, err := os.ReadFile(target)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("snapshot ledger archive %q: %w", relative, err)
+	}
+	journal.LedgerArchivePath = relative
+	journal.Snapshots[relative] = cognition.FileSnapshot{Existed: err == nil, Content: raw}
+	if err := s.writeMemoryRecoveryLocked(*journal); err != nil {
+		return err
+	}
+	return s.rotateWorkingLedgerTo(target)
+}
+
+func (s *Store) rotateWorkingLedgerTo(target string) error {
+	current := filepath.Join(s.root(), filepath.FromSlash(workingLedgerRelativePath))
+	if err := atomicfile.EnsureDirectory(filepath.Dir(target), 0o755); err != nil {
 		return fmt.Errorf("create ledger archive dir: %w", err)
 	}
 
