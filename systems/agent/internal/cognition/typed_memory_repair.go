@@ -160,14 +160,47 @@ func buildRepairWritePlan(
 			content[uint64(line.offset)] = line
 		}
 	}
-	if len(response.Decisions) != len(content) {
-		return plan, nil, fmt.Errorf(
-			"repair decisions cover %d lines, want %d",
-			len(response.Decisions),
-			len(content),
-		)
+	// The model is asked for one decision per content line and nothing else,
+	// and it does not always comply: it may decide a heading or a blank line
+	// the runtime never drains, invent an offset, or repeat one while it
+	// changes its mind. All three are harmless - a decision for a line this
+	// chunk does not drain cannot be applied, and a repeat is the model's
+	// later word about the same line - so they are resolved here instead of
+	// refusing the run. Refusing them wedges the surface instead: a refusal
+	// repeats as long as the model answers the same way, and a chunk that
+	// cannot be applied makes no progress for the retry ladder to build on.
+	// A content line left without any decision still refuses, and now refuses
+	// by offset rather than by count.
+	chosen := make(map[uint64]repairDecision, len(response.Decisions))
+	for _, decision := range response.Decisions {
+		if decision.Offset == nil {
+			continue
+		}
+		if _, wanted := content[*decision.Offset]; !wanted {
+			continue
+		}
+		chosen[*decision.Offset] = decision
 	}
-	seen := make(map[uint64]bool)
+	decisions := make([]repairDecision, 0, len(content))
+	for _, line := range chunk {
+		offset := uint64(line.offset)
+		if !repairContentLine(line.text) {
+			continue
+		}
+		decision, present := chosen[offset]
+		if !present {
+			return plan, nil, fmt.Errorf(
+				"repair decision offset %d is missing for %q",
+				offset,
+				normalizeExitDescription(line.text),
+			)
+		}
+		decisions = append(decisions, decision)
+	}
+	seen := make(map[uint64]bool, len(content))
+	for offset := range content {
+		seen[offset] = true
+	}
 	definitions := make(map[string]repairClaim)
 	claimSources := make(map[string][]string)
 	var entries []claims.LedgerEntry
@@ -175,19 +208,9 @@ func buildRepairWritePlan(
 	if at.IsZero() {
 		at = time.Now().UTC()
 	}
-	for _, decision := range response.Decisions {
-		if decision.Offset == nil {
-			return plan, nil, fmt.Errorf("repair decision requires an offset")
-		}
+	for _, decision := range decisions {
 		offset := *decision.Offset
-		line, present := content[offset]
-		if !present || seen[offset] {
-			return plan, nil, fmt.Errorf(
-				"repair decision offset %d is unknown or duplicated",
-				offset,
-			)
-		}
-		seen[offset] = true
+		line := content[offset]
 		entry := claims.LedgerEntry{
 			Timestamp:   at,
 			Run:         semanticMemoryExtractionJobType,

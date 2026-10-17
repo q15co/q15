@@ -18,7 +18,7 @@ func renderTypedRepairContract(target MemorySurfaceTarget) string {
 			semanticTopicCapBytes,
 		),
 		"Dropped decision: {\"offset\":123,\"outcome\":\"dropped\",\"reason\":\"Why this transient or obsolete line should leave.\"}. Supply no claim or loop fields. The reason must be nonempty single-line text with balanced parentheses so the existing ledger grammar can represent it.",
-		"The runtime derives ledger descriptions from the original cut lines, appends records without changing history, removes only covered occurrences, preserves the uncovered suffix byte-for-byte, and retains canonical headings. It rejects missing, duplicate or unknown offsets and invalid claim, loop or ledger data before writing. A structure-only chunk requires an empty decisions array.",
+		"The runtime derives ledger descriptions from the original cut lines, appends records without changing history, removes only covered occurrences, preserves the uncovered suffix byte-for-byte, and retains canonical headings. It refuses a content line with no decision, naming its offset, and refuses invalid claim, loop or ledger data before writing; a decision for a line this chunk does not drain is ignored and a repeated offset keeps the later one. A structure-only chunk requires an empty decisions array.",
 	)
 	if target.Path == workingMemoryRelativePath {
 		contract += "\n" + renderPromptLines(
