@@ -11,6 +11,7 @@ import (
 
 	"github.com/q15co/q15/systems/agent/internal/cognition"
 	"github.com/q15co/q15/systems/agent/internal/memory/claims"
+	"github.com/q15co/q15/systems/agent/internal/memory/memcheck"
 )
 
 // The status report in this file is a read-only observation of a memory root:
@@ -254,15 +255,16 @@ func checkpointStatus(seq int64, updated time.Time, headSeq int64, now time.Time
 	return status
 }
 
-// fileSizeStatus derives the over mark, which is strict like the runtime
-// rules: exactly at the limit is within it.
+// fileSizeStatus derives the over mark with the shared size-against-limit
+// comparison, which is strict like the runtime rules: exactly at the limit is
+// within it.
 func fileSizeStatus(path string, bytes, limit int64, kind FileSizeKind) FileSizeStatus {
 	return FileSizeStatus{
 		Path:       path,
 		Bytes:      bytes,
 		LimitBytes: limit,
 		Kind:       kind,
-		Over:       bytes > limit,
+		Over:       memcheck.OverLimit(bytes, limit),
 	}
 }
 
