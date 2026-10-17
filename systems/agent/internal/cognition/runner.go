@@ -157,7 +157,9 @@ type Result struct {
 	CheckpointSeq int64
 	// Repair marks a bounded memory-repair run of the semantic job; the
 	// controller uses it to skip the semantic extraction checkpoint store.
-	Repair bool
+	Repair       bool
+	repairTarget string
+	repairDigest string
 }
 
 // Runner executes typed cognition jobs on the shared model/tool engine.
@@ -338,6 +340,7 @@ func (r *Runner) Run(
 		return result, nil
 	}
 
+	failureResult := repairFailureResult(jobType, spec)
 	engine, err := r.engineForJob(jobType)
 	if err != nil {
 		err = r.withRollbackError(ctx, job, spec, err)
@@ -345,7 +348,7 @@ func (r *Runner) Run(
 			Type: agent.RunEventRunFailed,
 			Err:  err,
 		})
-		return Result{}, fmt.Errorf("configure cognition engine for job %q: %w", jobType, err)
+		return failureResult, fmt.Errorf("configure cognition engine for job %q: %w", jobType, err)
 	}
 
 	systemPrompt, err := renderPrompt(jobType, spec)
@@ -355,7 +358,7 @@ func (r *Runner) Run(
 			Type: agent.RunEventRunFailed,
 			Err:  err,
 		})
-		return Result{}, fmt.Errorf("render cognition prompt for job %q: %w", jobType, err)
+		return failureResult, fmt.Errorf("render cognition prompt for job %q: %w", jobType, err)
 	}
 
 	inputMessages := make([]conversation.Message, 0, 1+len(spec.InputMessages))
@@ -383,7 +386,7 @@ func (r *Runner) Run(
 			FinalText: runResult.FinalText,
 			Err:       err,
 		})
-		return Result{}, err
+		return failureResult, err
 	}
 
 	output := JobOutput{
@@ -407,7 +410,7 @@ func (r *Runner) Run(
 			FinalText: runResult.FinalText,
 			Err:       err,
 		})
-		return Result{}, fmt.Errorf("apply cognition result for job %q: %w", jobType, err)
+		return failureResult, fmt.Errorf("apply cognition result for job %q: %w", jobType, err)
 	}
 
 	result := Result{
@@ -420,6 +423,8 @@ func (r *Runner) Run(
 		Turn:          runResult.Turn,
 		CheckpointSeq: parsed.CheckpointSeq,
 		Repair:        parsed.Repair,
+		repairTarget:  failureResult.repairTarget,
+		repairDigest:  failureResult.repairDigest,
 	}
 	notifyRunEvent(ctx, observer, agent.RunEvent{
 		Type:      agent.RunEventRunFinished,

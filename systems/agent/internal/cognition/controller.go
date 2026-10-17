@@ -100,6 +100,13 @@ type SemanticExtractionCheckpoint struct {
 
 // JobState tracks persisted trigger/controller state for one job type.
 type JobState struct {
+	RepairPending       bool                 `json:"repair_pending,omitempty"`
+	RepairRetryAt       time.Time            `json:"repair_retry_at,omitempty"`
+	RepairFailures      int                  `json:"repair_failures,omitempty"`
+	RepairStopped       bool                 `json:"repair_stopped,omitempty"`
+	RepairTarget        string               `json:"repair_target,omitempty"`
+	RepairDigest        string               `json:"repair_digest,omitempty"`
+	MaintenancePending  bool                 `json:"maintenance_pending,omitempty"`
 	WaitingForRepair    bool                 `json:"waiting_for_repair,omitempty"`
 	LastRunAt           time.Time            `json:"last_run_at,omitempty"`
 	LastSuccessAt       time.Time            `json:"last_success_at,omitempty"`
@@ -333,6 +340,9 @@ func (c *Controller) Run(ctx context.Context) error {
 	}
 
 	c.started = time.Now().UTC()
+	if err := c.bootstrapRepair(ctx); err != nil {
+		return err
+	}
 	if err := c.drain(ctx, true, true, true); err != nil {
 		return err
 	}
@@ -423,6 +433,34 @@ func (c *Controller) nextPendingRun(
 			HeadUpdatedAt: headAt,
 			Loader:        c.loader,
 		}
+		if includeState {
+			ready, blocked, changed, reason, err := c.repairEligibility(ctx, job, snapshot, &state)
+			if err != nil {
+				return pendingRun{}, false, err
+			}
+			if changed {
+				if err := c.store.StoreJobState(ctx, job.jobType, state); err != nil {
+					return pendingRun{}, false, err
+				}
+			}
+			if blocked {
+				continue
+			}
+			if ready {
+				return pendingRun{
+					job:     job,
+					state:   state,
+					headSeq: headSeq,
+					headAt:  headAt,
+					cause: RunCause{
+						Kind:    RunCauseState,
+						RuleID:  memorySurfaceRepairableRuleID,
+						FiredAt: now,
+						Reason:  reason,
+					},
+				}, true, nil
+			}
+		}
 
 		if includeStartup {
 			for _, rule := range job.startup {
@@ -473,7 +511,7 @@ func (c *Controller) nextPendingRun(
 		}
 
 		if includeState {
-			if !shouldEvaluateStateRules(state, headSeq) {
+			if !state.MaintenancePending && !shouldEvaluateStateRules(state, headSeq) {
 				continue
 			}
 			for _, rule := range job.state {
@@ -502,6 +540,12 @@ func (c *Controller) nextPendingRun(
 				}
 			}
 		}
+		if state.MaintenancePending {
+			state.MaintenancePending = false
+			if err := c.store.StoreJobState(ctx, job.jobType, state); err != nil {
+				return pendingRun{}, false, err
+			}
+		}
 	}
 
 	return pendingRun{}, false, nil
@@ -513,6 +557,7 @@ func (c *Controller) runPending(ctx context.Context, pending pendingRun) error {
 	state.LastRunAt = startedAt
 	state.LastRunInputSeq = pending.headSeq
 	state.LastRunNoWork = false
+	state.MaintenancePending = false
 	state.WaitingForRepair = false
 	state.LastRunCause = pending.cause
 	if pending.cause.Kind == RunCauseSchedule {
@@ -596,13 +641,14 @@ func (c *Controller) runPending(ctx context.Context, pending pendingRun) error {
 		state.LastSuccessInputSeq = coveredSeq
 		state.ConsecutiveFailures = 0
 		state = clearOrAdvanceDirtyState(state, coveredSeq, headSeq, headAt)
-		if coveredSeq < pending.headSeq {
+		if !result.Repair && coveredSeq < pending.headSeq {
 			// The run consumed a bounded window and left transcript turns
 			// unprocessed: keep the run-input marker behind the head so the
 			// state rules keep firing until the backlog drains.
 			state.LastRunInputSeq = coveredSeq
 		}
 	}
+	updateRepairSchedule(&state, result, runErr, finishedAt)
 	if err := c.store.StoreJobState(ctx, pending.job.jobType, state); err != nil {
 		return err
 	}
@@ -644,6 +690,16 @@ func (c *Controller) runPending(ctx context.Context, pending pendingRun) error {
 	}
 	if headSeq > pending.headSeq {
 		c.NotifyStateChange()
+	}
+	if result.WaitingForRepair {
+		if err := c.queueRepair(ctx); err != nil {
+			return err
+		}
+	}
+	if result.Repair && runErr == nil {
+		if err := c.notifyRepairProgress(ctx); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -781,6 +837,15 @@ func (c *Controller) nextScheduledAt(ctx context.Context, now time.Time) (time.T
 		if err != nil {
 			return time.Time{}, err
 		}
+		if state.RepairStopped {
+			continue
+		}
+		if !state.RepairRetryAt.IsZero() {
+			if nextAt.IsZero() || state.RepairRetryAt.Before(nextAt) {
+				nextAt = state.RepairRetryAt
+			}
+			continue
+		}
 		for _, rule := range job.schedule {
 			base, ok := state.LastScheduledFor[rule.id]
 			if !ok || base.IsZero() {
@@ -843,7 +908,7 @@ func (c *Controller) updateStallAlert(
 	if runErr == nil {
 		return c.clearStallAlert(ctx, jobType)
 	}
-	if state.ConsecutiveFailures < stallAlertFailures {
+	if !state.RepairStopped && state.ConsecutiveFailures < stallAlertFailures {
 		return nil
 	}
 	if err := c.loader.StoreCognitionArtifact(ctx, Artifact{
@@ -867,14 +932,18 @@ func renderStallAlert(jobType string, state JobState, runErr error) string {
 	if runErr != nil {
 		lastFailure = strings.ReplaceAll(strings.TrimSpace(runErr.Error()), "\n", " | ")
 	}
+	status := fmt.Sprintf(
+		"The checkpoint-advancing cognition job `%s` has failed %d consecutive runs and its next runs use a halved transcript input window.",
+		jobType,
+		state.ConsecutiveFailures,
+	)
+	if state.RepairStopped {
+		status = "Memory repair stopped after the initial attempt and retries after 1, 2 and 4 minutes failed. Automatic retries remain stopped until the repair target changes."
+	}
 	lines := []string{
 		fmt.Sprintf("# Cognition stall alert: %s", jobType),
 		"",
-		fmt.Sprintf(
-			"The checkpoint-advancing cognition job `%s` has failed %d consecutive runs and its next runs use a halved transcript input window.",
-			jobType,
-			state.ConsecutiveFailures,
-		),
+		status,
 		"This alert artifact is deleted automatically by the job's next successful run.",
 		"",
 		fmt.Sprintf("- job_type: %s", jobType),
