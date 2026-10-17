@@ -290,6 +290,8 @@ func renderRuntimeEnvironmentPrompt(
 				info.MemoryDir,
 				info.MemoryDir,
 			),
+			"- WORKING_MEMORY.md, OPEN_LOOPS.md, and LEDGER.md under the working layer are maintained only by cognition jobs. Read them for context; leave updates to those jobs.",
+			"- Use write_file, edit_file, or apply_patch for other memory mutations; exec sees the memory root read-only. If a cognition run reserves an editable target, retry that write after the run completes.",
 			"- When editing canonical semantic memory, preserve these exact H2 headings:",
 			"- facts.md: Confirmed Facts, Grounded Inferences",
 			"- preferences.md: User Preferences, Collaboration Preferences",

@@ -147,6 +147,10 @@ func (s *Store) Init(ctx context.Context) error {
 	release := s.repository.Acquire()
 	defer release()
 
+	if err := s.recoverMemoryLocked(ctx, ""); err != nil {
+		return fmt.Errorf("recover interrupted memory run: %w", err)
+	}
+
 	root := s.root()
 	dirs := []string{
 		filepath.Join(root, coreDirPath),

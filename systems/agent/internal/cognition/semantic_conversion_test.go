@@ -474,6 +474,264 @@ func TestSemanticConversionOverbudgetRuleDefaultsBudgetWhenUnconfigured(t *testi
 	}
 }
 
+// conversionPreRunFiles returns the pre-run on-disk bytes of every fixed
+// writable path the conversion pass snapshots, so a rollback test can snapshot
+// from it and then simulate the run mutating the same map.
+func conversionPreRunFiles() map[string][]byte {
+	return map[string][]byte{
+		workingMemoryRelativePath:       []byte(conversionWorkingBefore),
+		"working/LEDGER.md":             []byte(conversionLedgerBefore),
+		"working/OPEN_LOOPS.md":         []byte("# Open Loops\n\n- None\n"),
+		semanticFactsRelativePath:       []byte("# Semantic Facts\n"),
+		semanticPreferencesRelativePath: []byte("# Semantic Preferences\n"),
+		semanticProjectsRelativePath:    []byte("# Semantic Projects\n"),
+	}
+}
+
+// conversionSnapshots captures the pre-run snapshot from a loader whose files
+// map is already populated.
+func conversionSnapshots(
+	t *testing.T,
+	loader *semanticMemoryJobLoader,
+) map[string]FileSnapshot {
+	t.Helper()
+	snapshots, err := snapshotConversionFiles(context.Background(), loader)
+	if err != nil {
+		t.Fatalf("snapshotConversionFiles() error = %v", err)
+	}
+	return snapshots
+}
+
+func TestSemanticConversionRollsBackOnLedgerCompletenessFailure(t *testing.T) {
+	t.Parallel()
+
+	loader := &semanticMemoryJobLoader{
+		files: conversionPreRunFiles(),
+		// Post-run state the checks read: two items removed, no ledger append.
+		working: agent.WorkingMemory{
+			Content: "# Working Memory\n\n## Active Tasks\n\n- None\n",
+		},
+		ledger: conversionLedgerBefore,
+	}
+	snapshots := conversionSnapshots(t, loader)
+
+	// Simulate the run's on-disk writes: working memory shrunk on disk.
+	loader.files[workingMemoryRelativePath] = []byte(
+		"# Working Memory\n\n## Active Tasks\n\n- None\n",
+	)
+
+	_, err := NewSemanticMemoryExtractionRegistration(0, 0).NewJob().ApplyResult(
+		context.Background(),
+		loader,
+		JobOutput{
+			Type:      semanticMemoryExtractionJobType,
+			Spec:      Spec{Baseline: conversionBaseline(), FileSnapshots: snapshots},
+			FinalText: "Converted working memory.",
+			Messages:  conversionRunMessages(workingMemoryRuntimePath),
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "removed 2 working-memory items") {
+		t.Fatalf("ApplyResult() error = %v, want ledger-completeness failure", err)
+	}
+	if got := string(loader.files[workingMemoryRelativePath]); got != conversionWorkingBefore {
+		t.Fatalf("working memory not restored byte-for-byte:\n%s", got)
+	}
+	if got := string(loader.files["working/LEDGER.md"]); got != conversionLedgerBefore {
+		t.Fatalf("ledger not restored byte-for-byte:\n%s", got)
+	}
+}
+
+func TestSemanticConversionRollsBackOnOverCapFailure(t *testing.T) {
+	t.Parallel()
+
+	loader := &semanticMemoryJobLoader{
+		files:   conversionPreRunFiles(),
+		working: agent.WorkingMemory{Content: conversionWorkingBefore},
+		ledger:  conversionLedgerBefore,
+		semanticSizes: map[string]int64{
+			semanticProjectsRelativePath: semanticRootCapBytes + 1,
+		},
+	}
+	snapshots := conversionSnapshots(t, loader)
+
+	// Simulate the run blowing the projects root past its cap on disk.
+	loader.files[semanticProjectsRelativePath] = []byte(strings.Repeat("x", semanticRootCapBytes+1))
+
+	_, err := NewSemanticMemoryExtractionRegistration(0, 0).NewJob().ApplyResult(
+		context.Background(),
+		loader,
+		JobOutput{
+			Type:      semanticMemoryExtractionJobType,
+			Spec:      Spec{Baseline: conversionBaseline(), FileSnapshots: snapshots},
+			FinalText: "Updated semantic memory.",
+			Messages:  conversionRunMessages(semanticProjectsRuntimePath),
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "over cap") {
+		t.Fatalf("ApplyResult() error = %v, want over-cap failure", err)
+	}
+	if got := string(loader.files[semanticProjectsRelativePath]); got != "# Semantic Projects\n" {
+		t.Fatalf("projects root not restored byte-for-byte:\n%q", got)
+	}
+}
+
+func TestSemanticConversionRollsBackNewTopicFile(t *testing.T) {
+	t.Parallel()
+
+	loader := &semanticMemoryJobLoader{
+		files: conversionPreRunFiles(),
+		working: agent.WorkingMemory{
+			Content: "# Working Memory\n\n## Active Tasks\n\n- None\n",
+		},
+		ledger: conversionLedgerBefore,
+	}
+	snapshots := conversionSnapshots(t, loader)
+
+	// Simulate the run creating a new topic file while also removing working
+	// memory items without a matching ledger append.
+	newTopic := "semantic/topics/q15.md"
+	loader.files[workingMemoryRelativePath] = []byte(
+		"# Working Memory\n\n## Active Tasks\n\n- None\n",
+	)
+	loader.files[newTopic] = []byte(validConversionClaim)
+	loader.semanticSizes = map[string]int64{newTopic: int64(len(validConversionClaim))}
+
+	_, err := NewSemanticMemoryExtractionRegistration(0, 0).NewJob().ApplyResult(
+		context.Background(),
+		loader,
+		JobOutput{
+			Type:      semanticMemoryExtractionJobType,
+			Spec:      Spec{Baseline: conversionBaseline(), FileSnapshots: snapshots},
+			FinalText: "Converted working memory.",
+			Messages:  conversionRunMessages(workingMemoryRuntimePath),
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "removed 2 working-memory items") {
+		t.Fatalf("ApplyResult() error = %v, want ledger-completeness failure", err)
+	}
+	if _, ok := loader.files[newTopic]; ok {
+		t.Fatalf("run-created topic file %s was not deleted on rollback", newTopic)
+	}
+	if got := string(loader.files[workingMemoryRelativePath]); got != conversionWorkingBefore {
+		t.Fatalf("working memory not restored byte-for-byte:\n%s", got)
+	}
+}
+
+func TestSemanticConversionHappyPathKeepsWrites(t *testing.T) {
+	t.Parallel()
+
+	postRunWorking := "# Working Memory\n\n## Active Tasks\n\n- Ship T8.\n\n## Open Threads\n\n- None\n"
+	postRunLedger := conversionLedgerBefore +
+		"\n2026-10-14T05:00Z run=semantic_memory.extract src=t12 converted \"Deploy target switched after staging issue.\" → c-2026-0001 (semantic/topics/q15.md)\n"
+
+	loader := &semanticMemoryJobLoader{
+		files:   conversionPreRunFiles(),
+		working: agent.WorkingMemory{Content: postRunWorking},
+		ledger:  postRunLedger,
+	}
+	snapshots := conversionSnapshots(t, loader)
+
+	// Simulate the run's successful on-disk writes.
+	loader.files[workingMemoryRelativePath] = []byte(postRunWorking)
+	loader.files["working/LEDGER.md"] = []byte(postRunLedger)
+	loader.files["semantic/topics/q15.md"] = []byte(validConversionClaim)
+	loader.semanticSizes = map[string]int64{
+		"semantic/topics/q15.md": int64(len(validConversionClaim)),
+	}
+
+	result, err := NewSemanticMemoryExtractionRegistration(0, 0).NewJob().ApplyResult(
+		context.Background(),
+		loader,
+		JobOutput{
+			Type:      semanticMemoryExtractionJobType,
+			Spec:      Spec{Baseline: conversionBaseline(), FileSnapshots: snapshots},
+			FinalText: "Converted working memory.",
+			Messages:  conversionRunMessages(workingMemoryRuntimePath, workingLedgerRuntimePath),
+		},
+	)
+	if err != nil {
+		t.Fatalf("ApplyResult() error = %v, want success", err)
+	}
+	if got := result.Metadata["working_items_exited"]; got != "1" {
+		t.Fatalf("working_items_exited = %q, want 1", got)
+	}
+	// The successful run must keep its writes, not roll them back.
+	if got := string(loader.files[workingMemoryRelativePath]); got != postRunWorking {
+		t.Fatalf("working memory was rolled back on success:\n%s", got)
+	}
+	if got := string(loader.files["working/LEDGER.md"]); got != postRunLedger {
+		t.Fatalf("ledger was rolled back on success:\n%s", got)
+	}
+	if len(loader.deleted) != 0 {
+		t.Fatalf("successful run deleted files: %v", loader.deleted)
+	}
+}
+
+func TestSemanticConversionRestoreFailureNamesPathAndKeepsValidation(t *testing.T) {
+	t.Parallel()
+
+	loader := &semanticMemoryJobLoader{
+		files: conversionPreRunFiles(),
+		working: agent.WorkingMemory{
+			Content: "# Working Memory\n\n## Active Tasks\n\n- None\n",
+		},
+		ledger:        conversionLedgerBefore,
+		failWritePath: workingMemoryRelativePath,
+	}
+	snapshots := conversionSnapshots(t, loader)
+	loader.files[workingMemoryRelativePath] = []byte(
+		"# Working Memory\n\n## Active Tasks\n\n- None\n",
+	)
+
+	_, err := NewSemanticMemoryExtractionRegistration(0, 0).NewJob().ApplyResult(
+		context.Background(),
+		loader,
+		JobOutput{
+			Type:      semanticMemoryExtractionJobType,
+			Spec:      Spec{Baseline: conversionBaseline(), FileSnapshots: snapshots},
+			FinalText: "Converted working memory.",
+			Messages:  conversionRunMessages(workingMemoryRuntimePath),
+		},
+	)
+	if err == nil {
+		t.Fatal("ApplyResult() error = nil, want validation failure")
+	}
+	if !strings.Contains(err.Error(), "removed 2 working-memory items") {
+		t.Fatalf("ApplyResult() error lost the validation failure: %v", err)
+	}
+	if !strings.Contains(err.Error(), workingMemoryRuntimePath) {
+		t.Fatalf("ApplyResult() error did not name the un-restorable path: %v", err)
+	}
+}
+
+func TestSemanticConversionSnapshotCoversPolicyWritableSet(t *testing.T) {
+	t.Parallel()
+
+	topic := "semantic/topics/q15.md"
+	loader := &semanticMemoryJobLoader{
+		files: conversionPreRunFiles(),
+		semanticSizes: map[string]int64{
+			semanticFactsRelativePath:       5,
+			semanticPreferencesRelativePath: 5,
+			semanticProjectsRelativePath:    5,
+			topic:                           40,
+		},
+	}
+	loader.files[topic] = []byte("- [c-2026-0001] claim\n")
+
+	snapshots := conversionSnapshots(t, loader)
+
+	policy := semanticConversionPolicy()
+	for _, runtimePath := range policy.WritePaths {
+		if _, ok := snapshots[runtimePath]; !ok {
+			t.Fatalf("snapshot missing policy write path %s", runtimePath)
+		}
+	}
+	if _, ok := snapshots[semanticTopicsRuntimeDir+"/q15.md"]; !ok {
+		t.Fatal("snapshot missing topic file under the policy write dir")
+	}
+}
+
 // TestSemanticCapBytesMatchesTheConversionRule pins the exported cap lookup
 // against the same rule the conversion pass enforces after a run, so a report
 // built on it cannot drift from what a run is judged by.

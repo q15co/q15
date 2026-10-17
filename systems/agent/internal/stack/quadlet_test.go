@@ -211,6 +211,12 @@ func TestRenderedUnitsKeepTheComposeInvariants(t *testing.T) {
 	if webBridge != "q15_bridge:/run/q15:ro" {
 		t.Fatalf("web bridge mount = %q, want it read-only at /run/q15", webBridge)
 	}
+	if got := volumeMount(t, units["q15-exec.container"], "q15_memory"); got != "q15_memory:/memory:ro" {
+		t.Fatalf("exec memory mount = %q, want read-only", got)
+	}
+	if got := volumeMount(t, units["q15-agent.container"], "q15_memory"); got != "q15_memory:/memory" {
+		t.Fatalf("agent memory mount = %q, want writable", got)
+	}
 	agentBridge := volumeMount(t, units["q15-agent.container"], "q15_bridge")
 	if agentBridge != "q15_bridge:/run/q15" {
 		t.Fatalf("agent bridge mount = %q, want it writable at /run/q15", agentBridge)

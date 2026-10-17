@@ -53,6 +53,7 @@ services:
       - type: volume
         source: q15_memory
         target: /memory
+        read_only: true
       - type: volume
         source: q15_media
         target: /media

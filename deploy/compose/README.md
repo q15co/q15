@@ -227,15 +227,16 @@ routing metadata; browser-agent sealing hides chat content from passive carriers
 against an active origin or relay replacing JavaScript or key exchange messages; chat is not
 end-to-end encrypted from the edge. Do not enable edge caching of authenticated data.
 
-**Kubernetes is out of scope**: `deploy/kubernetes/base/` remains untouched. Its TCP model does not
-implement this Unix-socket bridge deployment or the new auth-state volume.
+**Kubernetes does not implement this browser deployment**: its TCP model does not implement the
+Unix-socket bridge or the browser auth-state volume.
 
 The new `q15_bridge` named volume mounts at `/run/q15` in exactly the agent and the web tier. The
 agent's `bridge.listen_target`, the web's `Q15_WEB_BRIDGE` and the agent's documented default all
 use `unix:///run/q15/bridge.sock`. The agent adds GID 1000; the socket is owned by that group with
 mode 0660. The web runs as UID 65532, GID 1000 with a read-only directory mount. Neither the
-executor nor any other service mounts the bridge volume. The existing memory volume mounts are
-unchanged.
+executor nor any other service mounts the bridge volume. The memory volume is writable in the agent
+and read-only in the executor. Use agent file tools for memory mutations so cognition can reserve
+its writable paths until validation or recovery completes.
 
 A named volume is used because it is shared between containers and easy to inspect. The agent's bind
 path unlinks stale sockets after a restart. Definitions stay explicit in each standalone Compose

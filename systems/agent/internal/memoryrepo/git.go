@@ -88,6 +88,20 @@ func (g *GitCommitter) CommitPaths(
 		return fmt.Errorf("nil Git committer")
 	}
 
+	changedPaths := make([]string, 0, len(paths))
+	for _, path := range paths {
+		status, err := g.run(ctx, repoDir, "status", "--porcelain", "--", path)
+		if err != nil {
+			return fmt.Errorf("git status memory path %q: %w", path, err)
+		}
+		if strings.TrimSpace(status) != "" {
+			changedPaths = append(changedPaths, path)
+		}
+	}
+	if len(changedPaths) == 0 {
+		return nil
+	}
+	paths = changedPaths
 	pathArgs := append([]string{"add", "-A", "--"}, paths...)
 	if _, err := g.run(ctx, repoDir, pathArgs...); err != nil {
 		return fmt.Errorf("git add memory changes: %w", err)

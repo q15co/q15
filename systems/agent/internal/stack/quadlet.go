@@ -165,7 +165,7 @@ func (p Profile) containers() []container {
 			},
 			volumes: []mount{
 				p.volume("workspace", "/workspace"),
-				p.volume("memory", "/memory"),
+				p.volume("memory", "/memory").readOnlyMount(),
 				p.volume("media", "/media"),
 				p.volume("skills", "/skills"),
 				p.volume("exec_nix_store", "/nix"),

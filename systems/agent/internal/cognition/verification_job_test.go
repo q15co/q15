@@ -110,6 +110,18 @@ func (l *verificationJobLoader) LoadWorkingLedger(context.Context) (string, erro
 	return "", nil
 }
 
+func (l *verificationJobLoader) ReadFileBytes(context.Context, string) ([]byte, bool, error) {
+	return nil, false, nil
+}
+
+func (l *verificationJobLoader) WriteFileBytes(context.Context, string, []byte) error {
+	return nil
+}
+
+func (l *verificationJobLoader) DeleteFile(context.Context, string) error {
+	return nil
+}
+
 func (l *verificationJobLoader) LoadJobState(context.Context, string) (JobState, error) {
 	return JobState{}, nil
 }
@@ -727,10 +739,18 @@ func TestRunnerRunsVerificationReviewAndStoresArtifactWithoutToolCalls(t *testin
 	}
 }
 
-func (l *verificationJobLoader) ReadFileBytes(context.Context, string) ([]byte, bool, error) {
-	return nil, false, nil
-}
-
 func (l *verificationJobLoader) LoadConversionLedgerHistory(context.Context) (string, error) {
 	return "", nil
 }
+
+func (*verificationJobLoader) BeginMemoryRecovery(
+	context.Context,
+	map[string]FileSnapshot,
+	string,
+) (string, error) {
+	return "", nil
+}
+
+func (*verificationJobLoader) CompleteMemoryRecovery(context.Context, string) error { return nil }
+
+func (*verificationJobLoader) RecoverMemory(context.Context, string) error { return nil }

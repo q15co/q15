@@ -58,6 +58,8 @@ the working layer under `/memory/working/` with the canonical prompt-visible act
 `/memory/working/WORKING_MEMORY.md`, cognition maintenance state under `/memory/cognition/`, and
 zettelkasten notebook folders under `/memory/notes/inbox/`, `/memory/notes/zettel/`, and
 `/memory/notes/maps/`. The notes tree remains auxiliary notebook space, not implicit working memory.
+The agent mounts this PVC writable and the executor mounts it read-only. Memory mutations use agent
+file tools, which serialize writes with cognition recovery and reject another run's reserved paths.
 
 `q15-agent-state` is private durable runtime state for `q15-agent`, mounted at `/var/lib/q15/agent`.
 Scheduled-job definitions and append-only run provenance live below `/var/lib/q15/agent/schedule/`;

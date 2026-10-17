@@ -52,6 +52,7 @@ spec:
               mountPath: /workspace
             - name: memory
               mountPath: /memory
+              readOnly: true
             - name: media
               mountPath: /media
             - name: skills

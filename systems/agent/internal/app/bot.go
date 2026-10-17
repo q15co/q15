@@ -123,8 +123,16 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 		modelClient = dump.NewModelClientDump(modelAdapter, dumpWriter)
 	}
 
+	memoryRepository := memoryrepo.New(rt.MemoryLocalDir, nil)
+	memoryStore := memory.NewStore(memoryRepository, rt.Name)
+	if err := memoryStore.Init(ctx); err != nil {
+		return fmt.Errorf("initialize memory store for agent %q: %w", rt.Name, err)
+	}
 	skillManager, fileSettings := buildSkillManager(rt, runtimeInfo)
-	fileExec := q15skills.NewFileExecutor(fileops.NewExecutor(fileSettings), skillManager)
+	fileExec := q15skills.NewFileExecutor(
+		fileops.NewGuardedExecutor(fileSettings, memoryStore),
+		skillManager,
+	)
 	embeddingService, err := newEmbeddingService(ctx, rt, fileSettings)
 	if err != nil {
 		return fmt.Errorf("configure embeddings for agent %q: %w", rt.Name, err)
@@ -149,11 +157,6 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 		return fmt.Errorf("build base tool registry for agent %q: %w", rt.Name, err)
 	}
 
-	memoryRepository := memoryrepo.New(rt.MemoryLocalDir, nil)
-	memoryStore := memory.NewStore(memoryRepository, rt.Name)
-	if err := memoryStore.Init(ctx); err != nil {
-		return fmt.Errorf("initialize memory store for agent %q: %w", rt.Name, err)
-	}
 	messageBus := bus.New(bus.DefaultBufferSize)
 	bridge, err := bridgeSettings{
 		listenTarget: rt.BridgeListenTarget,
