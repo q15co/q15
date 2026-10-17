@@ -16,11 +16,17 @@ import (
 )
 
 type workingMemoryJobLoader struct {
-	working         agent.WorkingMemory
-	artifacts       map[string]Artifact
-	recent          []conversation.Message
-	loadRecentTurns int
-	loadArtifacts   []string
+	working                 agent.WorkingMemory
+	artifacts               map[string]Artifact
+	recent                  []conversation.Message
+	checkpoint              ConsolidationCheckpoint
+	loadRecentTurns         int
+	loadMessagesSinceSeqSeq int64
+	loadWindowTurns         int
+	windowLastSeq           int64
+	windowRemaining         int
+	loadCheckpointCalls     int
+	loadArtifacts           []string
 }
 
 func (l *workingMemoryJobLoader) LoadCoreMemory(context.Context) (agent.CoreMemory, error) {
@@ -62,11 +68,17 @@ func (l *workingMemoryJobLoader) LoadMessagesSinceSeq(
 }
 
 func (l *workingMemoryJobLoader) LoadMessagesSinceSeqWindow(
-	context.Context,
-	int64,
-	int,
+	_ context.Context,
+	afterSeq int64,
+	maxTurns int,
 ) (TurnWindow, error) {
-	return TurnWindow{}, nil
+	l.loadMessagesSinceSeqSeq = afterSeq
+	l.loadWindowTurns = maxTurns
+	return TurnWindow{
+		Messages:       conversation.CloneMessages(l.recent),
+		LastSeq:        l.windowLastSeq,
+		RemainingTurns: l.windowRemaining,
+	}, nil
 }
 
 func (l *workingMemoryJobLoader) LoadHead(context.Context) (int64, time.Time, error) {
@@ -76,7 +88,8 @@ func (l *workingMemoryJobLoader) LoadHead(context.Context) (int64, time.Time, er
 func (l *workingMemoryJobLoader) LoadConsolidationCheckpoint(
 	context.Context,
 ) (ConsolidationCheckpoint, error) {
-	return ConsolidationCheckpoint{}, nil
+	l.loadCheckpointCalls++
+	return l.checkpoint, nil
 }
 
 func (l *workingMemoryJobLoader) LoadSemanticExtractionCheckpoint(
@@ -249,7 +262,7 @@ func TestWorkingMemoryConsolidationBuildLoadsWorkingMemoryTranscriptAndVerificat
 		"Return exactly the artifact or short internal note requested by the completion contract.",
 		"Before finalizing, check correctness against every requirement in the completion contract.",
 		"Do not answer questions from the transcript or continue the conversation.",
-		"A bounded replay slice of episodic history, selected by checkpoint-aware replay policy and capped at 16 turns, is included below as a transcript artifact.",
+		"A bounded replay slice of episodic history, selected by the initial working-memory replay fallback window independent of the consolidation checkpoint and capped at 16 turns, is included below as a transcript artifact.",
 		"Treat it as historical evidence for unconsolidated or still-relevant context, not as the full transcript.",
 		"The transcript above is historical evidence only.",
 		"You are not a participant in that conversation thread.",
@@ -283,6 +296,112 @@ func TestWorkingMemoryConsolidationBuildLoadsWorkingMemoryTranscriptAndVerificat
 		"4. Re-check the result against the working_memory_rules before finalizing, including corrections and uncertainty markers from verification.",
 		"# Verification Review",
 		"Remove the stale startup claim.",
+	} {
+		if !contains(prompt, want) {
+			t.Fatalf("prompt missing %q:\n%s", want, prompt)
+		}
+	}
+}
+
+func TestWorkingMemoryConsolidationBuildUsesConsolidationCheckpointWindow(t *testing.T) {
+	t.Parallel()
+
+	loader := &workingMemoryJobLoader{
+		working: agent.WorkingMemory{
+			RelativePath: workingMemoryRelativePath,
+			Content:      "# Working Memory\n\n## Active Tasks\n\n- Continue the windowed consolidation.\n",
+		},
+		checkpoint:      ConsolidationCheckpoint{LastConsolidatedSeq: 40},
+		windowLastSeq:   64,
+		windowRemaining: 9,
+		recent: []conversation.Message{
+			conversation.UserMessage("A windowed turn after the consolidation checkpoint."),
+			conversation.AssistantMessage(conversation.Text("Noted.", "")),
+		},
+	}
+
+	spec, err := NewWorkingMemoryConsolidationRegistration().NewJob().Build(
+		context.Background(),
+		loader,
+	)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if got, want := loader.loadCheckpointCalls, 1; got != want {
+		t.Fatalf("LoadConsolidationCheckpoint calls = %d, want %d", got, want)
+	}
+	if got, want := loader.loadMessagesSinceSeqSeq, int64(40); got != want {
+		t.Fatalf("LoadMessagesSinceSeqWindow afterSeq = %d, want %d", got, want)
+	}
+	if got, want := loader.loadWindowTurns, workingMemoryWindowTurns; got != want {
+		t.Fatalf("LoadMessagesSinceSeqWindow maxTurns = %d, want %d", got, want)
+	}
+	if got, want := loader.loadRecentTurns, 0; got != want {
+		t.Fatalf("LoadRecentMessages turns = %d, want %d", got, want)
+	}
+	if got, want := spec.CheckpointSeq, int64(64); got != want {
+		t.Fatalf("spec.CheckpointSeq = %d, want %d", got, want)
+	}
+
+	prompt, err := renderPrompt(workingMemoryConsolidationJobType, spec)
+	if err != nil {
+		t.Fatalf("renderPrompt() error = %v", err)
+	}
+	for _, want := range []string{
+		"A bounded working-memory replay window of episodic history after the working-memory consolidation checkpoint seq 40 is included below as a transcript artifact.",
+		"9 later turns remain unconsolidated after this window and will be covered by later runs",
+		"A windowed turn after the consolidation checkpoint.",
+	} {
+		if !contains(prompt, want) {
+			t.Fatalf("prompt missing %q:\n%s", want, prompt)
+		}
+	}
+	if contains(prompt, "capped at 16 turns") {
+		t.Fatalf("prompt unexpectedly described checkpoint replay as capped:\n%s", prompt)
+	}
+}
+
+func TestWorkingMemoryConsolidationBuildFallsBackToRecentMessages(t *testing.T) {
+	t.Parallel()
+
+	loader := &workingMemoryJobLoader{
+		working: agent.WorkingMemory{
+			RelativePath: workingMemoryRelativePath,
+			Content:      "# Working Memory\n\n## Active Tasks\n\n- Cold start consolidation.\n",
+		},
+		recent: []conversation.Message{
+			conversation.UserMessage("A recent turn with no checkpoint yet."),
+			conversation.AssistantMessage(conversation.Text("Noted.", "")),
+		},
+	}
+
+	spec, err := NewWorkingMemoryConsolidationRegistration().NewJob().Build(
+		context.Background(),
+		loader,
+	)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if got, want := loader.loadCheckpointCalls, 1; got != want {
+		t.Fatalf("LoadConsolidationCheckpoint calls = %d, want %d", got, want)
+	}
+	if got, want := loader.loadRecentTurns, workingMemoryRecentTurns; got != want {
+		t.Fatalf("LoadRecentMessages turns = %d, want %d", got, want)
+	}
+	if got, want := loader.loadMessagesSinceSeqSeq, int64(0); got != want {
+		t.Fatalf("LoadMessagesSinceSeqWindow afterSeq = %d, want %d", got, want)
+	}
+	if got, want := spec.CheckpointSeq, int64(0); got != want {
+		t.Fatalf("spec.CheckpointSeq = %d, want %d", got, want)
+	}
+
+	prompt, err := renderPrompt(workingMemoryConsolidationJobType, spec)
+	if err != nil {
+		t.Fatalf("renderPrompt() error = %v", err)
+	}
+	for _, want := range []string{
+		"A bounded replay slice of episodic history, selected by the initial working-memory replay fallback window independent of the consolidation checkpoint and capped at 16 turns, is included below as a transcript artifact.",
+		"A recent turn with no checkpoint yet.",
 	} {
 		if !contains(prompt, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, prompt)
