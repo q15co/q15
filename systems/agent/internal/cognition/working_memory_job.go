@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
@@ -33,6 +34,13 @@ var workingMemoryAllowedTools = []string{
 	"apply_patch",
 }
 
+// OpenLoopsLineFormat is the open-loop entry shape the working-memory prompt
+// shows, quoted verbatim from the format comment in the OPEN_LOOPS seed so the
+// prompt and the file the model edits cannot drift apart. The store's seed
+// tests fail if that comment and this constant ever disagree.
+const OpenLoopsLineFormat = `- [l-YYYY-NNNN] <what to do> once <condition>.
+  {trigger: date:YYYY-MM-DD | event:"<description>" | next-session, owner: agent|user, src: t<seq>}`
+
 // NewWorkingMemoryConsolidationRegistration returns the built-in working-memory
 // consolidation job registration used to exercise the background trigger
 // controller end to end.
@@ -57,15 +65,34 @@ func NewWorkingMemoryConsolidationRegistration(
 				ID:   "daily_refresh",
 				Spec: workingMemoryScheduleSpec,
 			}},
-			State: []StateRule{{
-				ID:       "dirty_tail_threshold",
-				Evaluate: evaluateWorkingMemoryState,
-			}},
+			State: []StateRule{
+				{
+					ID:       "dirty_tail_threshold",
+					Evaluate: evaluateWorkingMemoryState,
+				},
+				{
+					ID: "open_loops_overbudget",
+					Evaluate: func(
+						ctx context.Context,
+						snapshot Snapshot,
+						_ JobState,
+					) (bool, string, error) {
+						return evaluateOpenLoopsOverbudget(
+							ctx,
+							snapshot,
+							openLoopsBudgetBytes,
+						)
+					},
+				},
+			},
 		},
 	}
 }
 
-type workingMemoryConsolidationJob struct{ budgets memoryFileBudgets }
+type workingMemoryConsolidationJob struct {
+	budgets memoryFileBudgets
+	now     func() time.Time
+}
 
 func (workingMemoryConsolidationJob) Type() string {
 	return workingMemoryConsolidationJobType
@@ -79,9 +106,21 @@ func (j workingMemoryConsolidationJob) Build(
 		return Spec{}, fmt.Errorf("context loader is required")
 	}
 
+	now := time.Now().UTC()
+	if j.now != nil {
+		now = j.now().UTC()
+	}
+	loopsBefore, _, err := loader.ReadFileBytes(ctx, "working/OPEN_LOOPS.md")
+	if err != nil {
+		return Spec{}, fmt.Errorf("read pre-run open loops: %w", err)
+	}
 	working, err := loader.LoadWorkingMemory(ctx)
 	if err != nil {
 		return Spec{}, fmt.Errorf("load working memory: %w", err)
+	}
+	openLoops, err := loader.LoadOpenLoops(ctx)
+	if err != nil {
+		return Spec{}, fmt.Errorf("load open loops: %w", err)
 	}
 	verificationArtifact, err := loader.LoadCognitionArtifact(
 		ctx,
@@ -141,6 +180,14 @@ func (j workingMemoryConsolidationJob) Build(
 	if workingContent == "" {
 		workingContent = "# Working Memory\n\n(working memory is currently empty)\n"
 	}
+	openLoopsContent := strings.TrimSpace(openLoops)
+	openLoopsAttrs := map[string]string{"path": openLoopsRuntimePath}
+	if openLoopsContent == "" {
+		openLoopsAttrs["present"] = "false"
+		openLoopsContent = "(open loops file does not exist yet)"
+	} else {
+		openLoopsAttrs["present"] = "true"
+	}
 	verificationContent := strings.TrimSpace(verificationArtifact.Content)
 	verificationAttrs := map[string]string{"path": VerificationReviewRuntimePath}
 	if verificationContent == "" {
@@ -157,6 +204,10 @@ func (j workingMemoryConsolidationJob) Build(
 			"This is a background maintenance job, not a user-facing reply.",
 			"Consolidate bounded active state into the canonical working-memory artifact.",
 			fmt.Sprintf("The target file is %s.", runtimePath),
+			fmt.Sprintf(
+				"The open loops file is %s; run the open-loop lifecycle on it in the same pass.",
+				openLoopsRuntimePath,
+			),
 			"Do not answer questions from the transcript or continue the conversation.",
 			"Use the recent transcript, current working memory, and latest verification review artifact to keep active state compact, current, and actionable.",
 			"Treat verification notes as correction input for stale, unsupported, or inconsistent entries.",
@@ -171,6 +222,16 @@ func (j workingMemoryConsolidationJob) Build(
 			"Call read_file, write_file, edit_file, or apply_patch on the target before your final response. A response without a target-file tool call is invalid.",
 			"If the file needs changes, update it with write_file, edit_file, or apply_patch while preserving the existing section structure.",
 			"If no change is needed, call read_file on the target and leave the file unchanged.",
+			fmt.Sprintf(
+				"When a loop's date trigger has passed, move that loop into working memory Active Tasks or Pending Checks and delete its line from %s; a due loop moves, it is not copied.",
+				openLoopsRuntimePath,
+			),
+			fmt.Sprintf(
+				"Closing a loop means deleting its line from %s and appending one ledger line to %s naming the loop and the outcome.",
+				openLoopsRuntimePath,
+				workingLedgerRuntimePath,
+			),
+			"A closed loop that produced durable knowledge also merits a claim in the semantic store; this job does not write semantic memory, so leave the claim to the conversion pass.",
 			"Apply supported verification corrections in the working-memory artifact; preserve explicit uncertainty when verification downgraded confidence.",
 			"Do not copy the verification review artifact verbatim into working memory.",
 			"Do not answer the transcript directly in your final response.",
@@ -178,10 +239,16 @@ func (j workingMemoryConsolidationJob) Build(
 		),
 		PromptSections: []agent.PromptSection{
 			memoryBudgetPromptSection(j.budgets),
+			{Name: "maintenance_time", Body: now.Format(time.RFC3339)},
 			{
 				Name:       "working_memory_target",
 				Attributes: map[string]string{"path": runtimePath},
 				Body:       workingContent,
+			},
+			{
+				Name:       "open_loops_target",
+				Attributes: openLoopsAttrs,
+				Body:       openLoopsContent,
 			},
 			{
 				Name:       "verification_review_input",
@@ -217,13 +284,25 @@ func (j workingMemoryConsolidationJob) Build(
 				),
 			},
 			{
+				Name: "open_loops_rules",
+				Body: renderPromptLines(
+					"- Open loops are prospective memory: unfinished intentions with a trigger, a distinct level from live working-memory state and from durable semantic claims.",
+					fmt.Sprintf(
+						"- Loop line format, quoted from the open-loops seed so the two cannot drift:\n%s",
+						OpenLoopsLineFormat,
+					),
+					"- Date-trigger check: use maintenance_time as the current UTC time. A date trigger on or before its UTC date is due. Move each due loop into Active Tasks or Pending Checks, retaining its loop ID and full intention, then remove that ID from open loops. Applied results are checked mechanically.",
+				),
+			},
+			{
 				Name: "working_memory_execution_order",
 				Body: renderPromptLines(
 					"1. Compare the working-memory target against the transcript artifact, verification review artifact, and the latest unresolved user thread.",
 					"2. Identify stale items, resolved items, details that belong to durable memory instead of working memory, and any verification-driven corrections.",
 					"3. Use file tools on the target to inspect, edit, or confirm the canonical artifact.",
 					"4. Re-check the result against the working_memory_rules before finalizing, including corrections and uncertainty markers from verification.",
-					"5. Only then emit the short internal summary.",
+					"5. Check every open loop for a passed date trigger: promote due loops into working memory and close finished loops into the conversion ledger.",
+					"6. Only then emit the short internal summary.",
 				),
 			},
 			{
@@ -248,9 +327,19 @@ func (j workingMemoryConsolidationJob) Build(
 		RequireToolCalling: true,
 		AllowedTools:       append([]string(nil), workingMemoryAllowedTools...),
 		CheckpointSeq:      windowEndSeq,
+		RunAt:              now,
+		Baseline:           map[string]string{openLoopsRuntimePath: string(loopsBefore)},
 		ToolCallPolicy: filetools.PathAccessPolicy{
-			ReadPaths:  []string{workingMemoryRuntimePath},
-			WritePaths: []string{workingMemoryRuntimePath},
+			ReadPaths: []string{
+				workingMemoryRuntimePath,
+				openLoopsRuntimePath,
+				workingLedgerRuntimePath,
+			},
+			WritePaths: []string{
+				workingMemoryRuntimePath,
+				openLoopsRuntimePath,
+				workingLedgerRuntimePath,
+			},
 		},
 	}, nil
 }
@@ -260,15 +349,20 @@ func (j workingMemoryConsolidationJob) ApplyResult(
 	loader ContextLoader,
 	output JobOutput,
 ) (ParsedResult, error) {
-	if !workingMemoryTargetUsed(output.Messages, workingMemoryRuntimePath) {
+	if !workingMemoryTargetUsed(output.Messages, workingMemoryRuntimePath) &&
+		!workingMemoryTargetUsed(output.Messages, openLoopsRuntimePath) {
 		return ParsedResult{}, fmt.Errorf(
-			"working-memory run must inspect %s with a file tool (final_text=%q)",
+			"working-memory run must inspect %s or %s with a file tool (final_text=%q)",
 			workingMemoryRuntimePath,
+			openLoopsRuntimePath,
 			compactWorkingMemoryText(output.FinalText),
 		)
 	}
 
 	if err := checkWorkingFileBudgets(ctx, loader, j.budgets); err != nil {
+		return ParsedResult{}, err
+	}
+	if err := checkOpenLoopLifecycle(ctx, loader, output.Spec); err != nil {
 		return ParsedResult{}, err
 	}
 
@@ -320,6 +414,49 @@ func shouldRunWorkingMemoryConsolidation(
 		state.DirtySinceSeq,
 		snapshot.HeadLastSeq,
 	)
+}
+
+// evaluateOpenLoopsOverbudget fires a working-memory run when the open-loops
+// file exceeds its budget. Like the working-memory rule it mirrors, it is only
+// evaluated once head has advanced past the last run's input
+// (shouldEvaluateStateRules), so it fires on the next turn after the file goes
+// over budget, never on file size alone. The rule only reads: it never
+// truncates or rewrites the file, and the job it triggers owns the file that
+// shrinks it.
+func evaluateOpenLoopsOverbudget(
+	ctx context.Context,
+	snapshot Snapshot,
+	budget int,
+) (bool, string, error) {
+	if snapshot.Loader == nil {
+		return false, "", nil
+	}
+	effectiveBudget := effectiveOpenLoopsBudget(budget)
+	openLoops, err := snapshot.Loader.LoadOpenLoops(ctx)
+	if err != nil {
+		return false, "", fmt.Errorf("load open loops: %w", err)
+	}
+	size := len(openLoops)
+	if size <= effectiveBudget {
+		return false, "", nil
+	}
+	return true, fmt.Sprintf(
+		"open_loops_bytes=%d budget=%d",
+		size,
+		effectiveBudget,
+	), nil
+}
+
+// effectiveOpenLoopsBudget resolves the open-loops budget a rule enforces. A
+// non-positive value selects defaultOpenLoopsBudgetBytes, mirroring the
+// working-memory budget: zero is the shape of a registration built without a
+// budget, and a negative one is a configuration error caught at load, so
+// neither can silently turn the budget into one the rule always or never trips.
+func effectiveOpenLoopsBudget(budget int) int {
+	if budget <= 0 {
+		return defaultOpenLoopsBudgetBytes
+	}
+	return budget
 }
 
 func renderWorkingMemoryTranscriptScope(

@@ -3,6 +3,7 @@ package cognition
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
@@ -22,6 +23,8 @@ type Spec struct {
 	// when the job processed a bounded window of the backlog. The zero value
 	// means the run covered everything up to the run head.
 	CheckpointSeq int64
+	// RunAt is the authoritative maintenance instant used for date triggers.
+	RunAt time.Time
 	// Baseline carries pre-run file content captured during Build, keyed by
 	// runtime path, so ApplyResult can diff what the run changed. Content is
 	// preserved byte for byte, including whitespace and line endings.

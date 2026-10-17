@@ -17,6 +17,7 @@ import (
 
 type workingMemoryJobLoader struct {
 	working                 agent.WorkingMemory
+	openLoops               string
 	artifacts               map[string]Artifact
 	recent                  []conversation.Message
 	checkpoint              ConsolidationCheckpoint
@@ -104,7 +105,7 @@ func (l *workingMemoryJobLoader) LoadSemanticFileSizes(context.Context) (map[str
 }
 
 func (l *workingMemoryJobLoader) LoadOpenLoops(context.Context) (string, error) {
-	return "", nil
+	return l.openLoops, nil
 }
 
 func (l *workingMemoryJobLoader) LoadWorkingLedger(context.Context) (string, error) {
@@ -156,8 +157,14 @@ func TestWorkingMemoryConsolidationRegistration(t *testing.T) {
 	if len(registration.Policy.Startup) != 1 {
 		t.Fatalf("startup rules = %d, want 1", len(registration.Policy.Startup))
 	}
-	if len(registration.Policy.State) != 1 {
-		t.Fatalf("state rules = %d, want 1", len(registration.Policy.State))
+	if len(registration.Policy.State) != 2 {
+		t.Fatalf("state rules = %d, want 2", len(registration.Policy.State))
+	}
+	if got, want := registration.Policy.State[0].ID, "dirty_tail_threshold"; got != want {
+		t.Fatalf("state rule 0 = %q, want %q", got, want)
+	}
+	if got, want := registration.Policy.State[1].ID, "open_loops_overbudget"; got != want {
+		t.Fatalf("state rule 1 = %q, want %q", got, want)
 	}
 	if len(registration.Policy.Schedule) != 1 {
 		t.Fatalf("schedule rules = %d, want 1", len(registration.Policy.Schedule))
@@ -804,6 +811,343 @@ func TestWorkingMemoryConsolidationStateRuleUsesDirtyTailThreshold(t *testing.T)
 	}
 }
 
+func TestWorkingMemoryConsolidationOpenLoopsOverbudgetStateRule(t *testing.T) {
+	t.Parallel()
+
+	under := &workingMemoryJobLoader{
+		openLoops: strings.Repeat("x", defaultOpenLoopsBudgetBytes),
+	}
+	if run, _, err := evaluateOpenLoopsOverbudget(
+		context.Background(),
+		Snapshot{Loader: under},
+		defaultOpenLoopsBudgetBytes,
+	); err != nil || run {
+		t.Fatalf("at budget: run=%v err=%v, want false nil", run, err)
+	}
+	over := &workingMemoryJobLoader{
+		openLoops: strings.Repeat("x", defaultOpenLoopsBudgetBytes+1),
+	}
+	run, reason, err := evaluateOpenLoopsOverbudget(
+		context.Background(),
+		Snapshot{Loader: over},
+		defaultOpenLoopsBudgetBytes,
+	)
+	if err != nil || !run {
+		t.Fatalf("over budget: run=%v err=%v, want true nil", run, err)
+	}
+	if !contains(reason, fmt.Sprintf("open_loops_bytes=%d", defaultOpenLoopsBudgetBytes+1)) {
+		t.Fatalf("reason %q does not name the file size", reason)
+	}
+	if !contains(reason, fmt.Sprintf("budget=%d", defaultOpenLoopsBudgetBytes)) {
+		t.Fatalf("reason %q does not name the effective budget", reason)
+	}
+	if run, _, err := evaluateOpenLoopsOverbudget(
+		context.Background(),
+		Snapshot{},
+		defaultOpenLoopsBudgetBytes,
+	); err != nil || run {
+		t.Fatalf("nil loader: run=%v err=%v, want false nil", run, err)
+	}
+}
+
+func workingMemoryOpenLoopsOverbudgetRule(t *testing.T, registration JobRegistration) StateRule {
+	t.Helper()
+	for _, rule := range registration.Policy.State {
+		if rule.ID == "open_loops_overbudget" {
+			return rule
+		}
+	}
+	t.Fatal("registration has no open_loops_overbudget state rule")
+	return StateRule{}
+}
+
+func TestWorkingMemoryConsolidationOpenLoopsOverbudgetRuleUsesConfiguredBudget(t *testing.T) {
+	t.Parallel()
+
+	evaluate := workingMemoryOpenLoopsOverbudgetRule(
+		t,
+		NewWorkingMemoryConsolidationRegistration(0, 128),
+	).Evaluate
+
+	atBudget := &workingMemoryJobLoader{openLoops: strings.Repeat("x", 128)}
+	if run, _, err := evaluate(
+		context.Background(),
+		Snapshot{Loader: atBudget},
+		JobState{},
+	); err != nil || run {
+		t.Fatalf("at configured budget: run=%v err=%v, want false nil", run, err)
+	}
+
+	oneOver := &workingMemoryJobLoader{openLoops: strings.Repeat("x", 129)}
+	run, reason, err := evaluate(context.Background(), Snapshot{Loader: oneOver}, JobState{})
+	if err != nil || !run {
+		t.Fatalf("one byte over configured budget: run=%v err=%v, want true nil", run, err)
+	}
+	if !contains(reason, "budget=128") {
+		t.Fatalf("reason %q does not name the configured budget", reason)
+	}
+	if contains(reason, fmt.Sprintf("budget=%d", defaultOpenLoopsBudgetBytes)) {
+		t.Fatalf("reason %q names the built-in default, not the configured budget", reason)
+	}
+}
+
+func TestWorkingMemoryConsolidationOpenLoopsOverbudgetRuleDefaultsBudgetWhenUnconfigured(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	// A zero-value construction must keep the built-in threshold. Content one
+	// byte over the built-in default fires and names it; anything at or under
+	// it does not fire even though the configured value was zero.
+	evaluate := workingMemoryOpenLoopsOverbudgetRule(
+		t,
+		NewWorkingMemoryConsolidationRegistration(0, 0),
+	).Evaluate
+
+	atDefault := &workingMemoryJobLoader{
+		openLoops: strings.Repeat("x", defaultOpenLoopsBudgetBytes),
+	}
+	if run, _, err := evaluate(
+		context.Background(),
+		Snapshot{Loader: atDefault},
+		JobState{},
+	); err != nil || run {
+		t.Fatalf("at built-in default: run=%v err=%v, want false nil", run, err)
+	}
+
+	oneOver := &workingMemoryJobLoader{
+		openLoops: strings.Repeat("x", defaultOpenLoopsBudgetBytes+1),
+	}
+	run, reason, err := evaluate(context.Background(), Snapshot{Loader: oneOver}, JobState{})
+	if err != nil || !run {
+		t.Fatalf("one byte over built-in default: run=%v err=%v, want true nil", run, err)
+	}
+	if !contains(reason, fmt.Sprintf("budget=%d", defaultOpenLoopsBudgetBytes)) {
+		t.Fatalf("reason %q does not name the built-in default", reason)
+	}
+}
+
+func TestWorkingMemoryConsolidationBuildInjectsOpenLoopsTargetAndRules(t *testing.T) {
+	t.Parallel()
+
+	loader := &workingMemoryJobLoader{
+		working: agent.WorkingMemory{
+			RelativePath: workingMemoryRelativePath,
+			Content:      "# Working Memory\n\n## Active Tasks\n\n- None\n",
+		},
+		openLoops: "# Open Loops\n\n- [l-2026-0031] Follow up on the rollout once the report lands.\n" +
+			"  {trigger: date:2026-10-19, owner: agent, src: t4441}\n",
+		recent: []conversation.Message{
+			conversation.UserMessage("Please keep the rollout follow-up alive."),
+			conversation.AssistantMessage(conversation.Text("Tracked it as an open loop.", "")),
+		},
+	}
+
+	spec, err := NewWorkingMemoryConsolidationRegistration(0, 0).NewJob().Build(
+		context.Background(),
+		loader,
+	)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	section, ok := findPromptSection(spec.PromptSections, "open_loops_target")
+	if !ok {
+		t.Fatal("open_loops_target section missing")
+	}
+	if got, want := section.Attributes["path"], openLoopsRuntimePath; got != want {
+		t.Fatalf("section path = %q, want %q", got, want)
+	}
+	if got, want := section.Attributes["present"], "true"; got != want {
+		t.Fatalf("section present = %q, want %q", got, want)
+	}
+	if !contains(section.Body, "l-2026-0031") {
+		t.Fatalf("open loops body missing the loop line:\n%s", section.Body)
+	}
+
+	rules, ok := findPromptSection(spec.PromptSections, "open_loops_rules")
+	if !ok {
+		t.Fatal("open_loops_rules section missing")
+	}
+	for _, want := range []string{
+		OpenLoopsLineFormat,
+		"Open loops are prospective memory",
+		"Date-trigger check: use maintenance_time as the current UTC time.",
+	} {
+		if !contains(rules.Body, want) {
+			t.Fatalf("open loops rules missing %q:\n%s", want, rules.Body)
+		}
+	}
+
+	prompt, err := renderPrompt(workingMemoryConsolidationJobType, spec)
+	if err != nil {
+		t.Fatalf("renderPrompt() error = %v", err)
+	}
+	for _, want := range []string{
+		"deleting its line from " + openLoopsRuntimePath +
+			" and appending one ledger line to " + workingLedgerRuntimePath,
+		"A closed loop that produced durable knowledge",
+		"leave the claim to the conversion pass",
+	} {
+		if !contains(prompt, want) {
+			t.Fatalf("prompt missing %q:\n%s", want, prompt)
+		}
+	}
+}
+
+func TestWorkingMemoryConsolidationBuildScopesPolicyToWorkingFiles(t *testing.T) {
+	t.Parallel()
+
+	for _, path := range []string{
+		workingMemoryRuntimePath,
+		openLoopsRuntimePath,
+		workingLedgerRuntimePath,
+	} {
+		spec, err := NewWorkingMemoryConsolidationRegistration(0, 0).NewJob().Build(
+			context.Background(),
+			&workingMemoryJobLoader{},
+		)
+		if err != nil {
+			t.Fatalf("Build() error = %v", err)
+		}
+		if err := spec.ToolCallPolicy.CheckToolCall(agent.ToolCall{
+			ID:        "call-allowed",
+			Name:      "edit_file",
+			Arguments: fmt.Sprintf(`{"path":%q}`, path),
+		}); err != nil {
+			t.Fatalf("ToolCallPolicy edit %s error = %v", path, err)
+		}
+	}
+
+	spec, err := NewWorkingMemoryConsolidationRegistration(0, 0).NewJob().Build(
+		context.Background(),
+		&workingMemoryJobLoader{},
+	)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	beyond := openLoopsRuntimePath + ".bak"
+	if err := spec.ToolCallPolicy.CheckToolCall(agent.ToolCall{
+		ID:        "call-denied",
+		Name:      "write_file",
+		Arguments: fmt.Sprintf(`{"path":%q,"content":"x"}`, beyond),
+	}); err == nil || !contains(err.Error(), "outside allowed write paths") {
+		t.Fatalf("ToolCallPolicy write %s error = %v, want path policy rejection", beyond, err)
+	}
+}
+
+func TestWorkingMemoryConsolidationParseResultAcceptsEitherTarget(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		path string
+	}{
+		{name: "working memory target", path: workingMemoryRuntimePath},
+		{name: "open loops target", path: openLoopsRuntimePath},
+	}
+	for _, testCase := range cases {
+		result, err := NewWorkingMemoryConsolidationRegistration(0, 0).NewJob().ApplyResult(
+			context.Background(),
+			&workingMemoryJobLoader{},
+			JobOutput{
+				Type:      workingMemoryConsolidationJobType,
+				FinalText: "Closed the due loop and recorded the outcome in the ledger.",
+				Messages: []conversation.Message{
+					conversation.AssistantMessage(
+						conversation.ToolCall(
+							"call-1",
+							"edit_file",
+							fmt.Sprintf(`{"path":%q}`, testCase.path),
+						),
+					),
+					conversation.ToolResultMessage(
+						"call-1",
+						"Path: "+testCase.path+"\nFirst-Changed-Line: 5",
+						false,
+					),
+				},
+			},
+		)
+		if err != nil {
+			t.Fatalf("%s: ApplyResult() error = %v", testCase.name, err)
+		}
+		if got, want := result.Metadata["path"], workingMemoryRuntimePath; got != want {
+			t.Fatalf("%s: result.Metadata[path] = %q, want %q", testCase.name, got, want)
+		}
+	}
+}
+
+func TestWorkingMemoryConsolidationPromptGolden(t *testing.T) {
+	t.Parallel()
+
+	spec, err := workingMemoryConsolidationJob{
+		now: func() time.Time { return time.Date(2026, 10, 15, 4, 0, 0, 0, time.UTC) },
+	}.Build(
+		context.Background(),
+		goldenWorkingMemoryLoader(),
+	)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	prompt, err := renderPrompt(workingMemoryConsolidationJobType, spec)
+	if err != nil {
+		t.Fatalf("renderPrompt() error = %v", err)
+	}
+	golden := filepath.Join("testdata", "working_memory_prompt.golden")
+	if *updateGolden {
+		if err := os.MkdirAll("testdata", 0o755); err != nil {
+			t.Fatalf("MkdirAll(testdata) error = %v", err)
+		}
+		if err := os.WriteFile(golden, []byte(prompt+"\n"), 0o644); err != nil {
+			t.Fatalf("WriteFile(golden) error = %v", err)
+		}
+	}
+	want, err := os.ReadFile(golden)
+	if err != nil {
+		t.Fatalf("ReadFile(golden) error = %v (run with -update to create)", err)
+	}
+	if string(want) != prompt+"\n" {
+		t.Fatalf(
+			"prompt drifted from %s; rerun with -update and review the diff\n--- got ---\n%s",
+			golden,
+			prompt,
+		)
+	}
+}
+
+func goldenWorkingMemoryLoader() *workingMemoryJobLoader {
+	return &workingMemoryJobLoader{
+		checkpoint:      ConsolidationCheckpoint{LastConsolidatedSeq: 40},
+		windowLastSeq:   56,
+		windowRemaining: 4,
+		working: agent.WorkingMemory{
+			RelativePath: workingMemoryRelativePath,
+			Content: "# Working Memory\n\n## Active Tasks\n\n" +
+				"- Stabilize the rollout.\n\n## Pending Checks\n\n- None\n",
+		},
+		openLoops: "# Open Loops\n\n" +
+			"Prospective memory: unfinished intentions with a trigger. Every entry is actionable or waiting; a\n" +
+			"closed loop leaves this file and records a line in `working/LEDGER.md`.\n\n" +
+			"- [l-2026-0031] Follow up on the rollout once the report lands.\n" +
+			"  {trigger: date:2026-10-19, owner: agent, src: t4441}\n" +
+			"- [l-2026-0032] Ask the user how long the audit window stays open.\n" +
+			"  {trigger: event:\"the audit report is published\", owner: user, src: t4518}\n",
+		artifacts: map[string]Artifact{
+			VerificationReviewPath: {
+				RelativePath: VerificationReviewPath,
+				Content:      "# Verification Review\n\n## Issues Identified\n\n- None\n",
+			},
+		},
+		recent: []conversation.Message{
+			conversation.UserMessage("The rollout report lands this week."),
+			conversation.AssistantMessage(
+				conversation.Text("I will keep the follow-up as an open loop until then.", ""),
+			),
+		},
+	}
+}
+
 func contains(text, want string) bool {
 	return strings.Contains(text, want)
 }
@@ -820,7 +1164,18 @@ func findPromptSection(
 	return agent.PromptSection{}, false
 }
 
-func (l *workingMemoryJobLoader) ReadFileBytes(context.Context, string) ([]byte, bool, error) {
+func (l *workingMemoryJobLoader) ReadFileBytes(
+	_ context.Context,
+	path string,
+) ([]byte, bool, error) {
+	switch path {
+	case workingMemoryRelativePath:
+		return []byte(l.working.Content), true, nil
+	case "working/OPEN_LOOPS.md":
+		return []byte(l.openLoops), true, nil
+	case "working/LEDGER.md":
+		return nil, true, nil
+	}
 	return nil, false, nil
 }
 

@@ -2730,3 +2730,23 @@ hello`
 		}
 	})
 }
+
+// TestOpenLoopsSeedFormatMatchesOpenLoopsLineFormat guards the one-way copy
+// between the open-loops seed and the working-memory prompt: the prompt quotes
+// the seed's loop line shape verbatim, so the seed comment and the cognition
+// constant cannot drift apart silently.
+func TestOpenLoopsSeedFormatMatchesOpenLoopsLineFormat(t *testing.T) {
+	t.Parallel()
+
+	content, err := seedFS.ReadFile(openLoopsSeedPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%s) error = %v", openLoopsSeedPath, err)
+	}
+	if !strings.Contains(string(content), cognition.OpenLoopsLineFormat) {
+		t.Fatalf(
+			"open-loops seed no longer contains the loop line shape the working-memory prompt quotes from it (%q):\n%s",
+			cognition.OpenLoopsLineFormat,
+			content,
+		)
+	}
+}
