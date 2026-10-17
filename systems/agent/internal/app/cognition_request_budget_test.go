@@ -167,3 +167,47 @@ func TestBoundedRepairDrainsOversizedRootWithLargeUnrelatedEvidence(t *testing.T
 	}
 	assertCognitionRecoveryGitClean(t, root)
 }
+
+func TestRepairCommitsWholeLargeFirstLineWithJSONExpansion(t *testing.T) {
+	ctx := context.Background()
+	root, store := newCognitionRecoveryStore(t)
+	prefix := "# Semantic Facts\n\n## Confirmed Facts\n\n"
+	line := "- " + strings.Repeat("\x01", 64*1024-3) + "\n"
+	suffix := "- Keep this synthetic suffix.\n\n## Grounded Inferences\n\n- None\n"
+	if err := store.WriteFileBytes(ctx, "semantic/facts.md", []byte(prefix+line+suffix)); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	model := recoveryModelClient{complete: func(context.Context) (agent.ModelClientResult, error) {
+		calls++
+		response := fmt.Sprintf(
+			`{"decisions":[{"offset":%d,"outcome":"dropped","reason":"Synthetic obsolete data."}]}`,
+			len(prefix),
+		)
+		return agent.ModelClientResult{
+			Messages: []conversation.Message{
+				conversation.AssistantMessage(conversation.Text(response, "")),
+			},
+		}, nil
+	}}
+	result, err := cognition.NewRunner(model, nil, []string{"synthetic"}, store).
+		Run(ctx, cognition.NewSemanticMemoryExtractionRegistration(0, 0).NewJob(), nil)
+	if err != nil || calls != 1 || result.Metadata["chunk_lines_exited"] != "1" {
+		t.Fatalf(
+			"large first-line repair: calls=%d metadata=%v error=%v",
+			calls,
+			result.Metadata,
+			err,
+		)
+	}
+	got, _, err := store.ReadFileBytes(ctx, "semantic/facts.md")
+	if err != nil || string(got) != prefix+suffix {
+		t.Fatalf("repair changed the uncovered suffix: bytes=%d error=%v", len(got), err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".git/q15-memory-recovery.json")); !os.IsNotExist(
+		err,
+	) {
+		t.Fatalf("journal retained after committed repair: %v", err)
+	}
+	assertCognitionRecoveryGitClean(t, root)
+}

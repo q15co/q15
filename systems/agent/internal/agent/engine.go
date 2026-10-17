@@ -137,6 +137,7 @@ func (e *Engine) Run(ctx context.Context, req EngineRequest) (EngineResult, erro
 	for turn := 0; turn < e.maxTurns; turn++ {
 		requestMessages := copyMessages(messages)
 		requestMessages = applySystemTextSource(ctx, requestMessages, req.SystemTextSource)
+		requestStart := start + len(requestMessages) - len(messages)
 		if emptyAssistantRetries > 0 {
 			requestMessages = append(
 				requestMessages,
@@ -144,7 +145,7 @@ func (e *Engine) Run(ctx context.Context, req EngineRequest) (EngineResult, erro
 			)
 		}
 
-		size, err := checkRequestBudget(requestMessages, toolDefs, req.MaxRequestBytes)
+		size, err := fitRequestBudget(requestMessages, toolDefs, req.MaxRequestBytes, requestStart)
 		if err != nil {
 			return EngineResult{Messages: copyMessages(messages[start:]), Turn: turn}, err
 		}
@@ -206,7 +207,7 @@ func (e *Engine) Run(ctx context.Context, req EngineRequest) (EngineResult, erro
 			}, nil
 		}
 
-		if _, err := checkRequestBudget(messages, toolDefs, req.MaxRequestBytes); err != nil {
+		if _, err := fitRequestBudget(copyMessages(messages), toolDefs, req.MaxRequestBytes, start); err != nil {
 			return EngineResult{
 				Messages: copyMessages(messages[start:]),
 				ModelRef: modelRef,

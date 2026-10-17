@@ -44,6 +44,9 @@ func TestRequestBudgetIncludesDefinitionsReplayAndEscaping(t *testing.T) {
 			if !errors.As(err, &budget) || budget.Bytes <= 512 {
 				t.Fatalf("budget error=%v", err)
 			}
+			if budget.Bytes != budget.PromptBytes+budget.InputBytes+budget.PriorTurnBytes+budget.EvidenceBytes+budget.ToolDefinitionBytes+budget.FramingBytes {
+				t.Fatalf("component sizes do not sum to canonical size: %+v", budget)
+			}
 		})
 	}
 }
@@ -118,5 +121,62 @@ func TestRequestBudgetDisabledPreservesLargeInteractiveInput(t *testing.T) {
 	).Run(context.Background(), EngineRequest{Messages: []conversation.Message{conversation.UserMessage(strings.Repeat("x", 2*1024*1024))}})
 	if err != nil || result.FinalText != "finished" || len(model.callModels) != 1 {
 		t.Fatalf("unbounded caller changed: %v", err)
+	}
+}
+
+func TestRequestBudgetReducesEvidenceAfterAssistantReplayGrows(t *testing.T) {
+	registry, err := NewToolRegistry(&testTool{
+		def: ToolDefinition{Name: "read"},
+		run: func(context.Context, string) (string, error) { return strings.Repeat("e", 24*1024), nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	omitted := false
+	model := &fakeModelClient{
+		complete: func(_ context.Context, _ string, messages []conversation.Message, tools []ToolDefinition) (ModelClientResult, error) {
+			calls++
+			size, err := measureRequest(messages, tools)
+			if err != nil || size.total > 256*1024 {
+				t.Fatalf("provider received oversized request: %d, %v", size.total, err)
+			}
+			if conversation.TextValue(messages[0]) != "authoritative source" {
+				t.Fatal("source changed")
+			}
+			for _, message := range messages {
+				for _, part := range message.Parts {
+					omitted = omitted || strings.Contains(part.Content, "omitted")
+				}
+			}
+			if calls == 10 {
+				return assistantResult("finished"), nil
+			}
+			result := toolCallResult(fmt.Sprint(calls), "read", `{}`)
+			result.Messages[0].Parts = append(
+				result.Messages[0].Parts,
+				conversation.Text(strings.Repeat("a", 25*1024), ""),
+			)
+			return result, nil
+		},
+	}
+	result, err := NewEngine(
+		model,
+		registry,
+		[]string{"first"},
+	).Run(context.Background(), EngineRequest{
+		Messages: []conversation.Message{conversation.SystemMessage("authoritative source")},
+		UseTools: true, MaxRequestBytes: 256 * 1024,
+	})
+	if err != nil || result.FinalText != "finished" || !omitted {
+		t.Fatalf(
+			"replay did not reduce evidence: calls=%d omitted=%v error=%v",
+			calls,
+			omitted,
+			err,
+		)
+	}
+	if result.Messages[1].Parts[0].Content != strings.Repeat("e", 24*1024) {
+		t.Fatal("request reduction changed the recorded tool result")
 	}
 }

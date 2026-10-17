@@ -382,9 +382,10 @@ func (r *Runner) Run(
 		RequireToolCalling:     spec.RequireToolCalling,
 		Observer:               observer,
 		MaxFailedModelAttempts: defaultCognitionMaxFailedModelAttempts,
-		MaxRequestBytes:        defaultCognitionMaxRequestBytes,
+		MaxRequestBytes:        cognitionRequestLimit(spec, systemPrompt),
 	})
 	if err != nil {
+		err = describeRequestBudget(jobType, spec, systemPrompt, err)
 		err = r.withRollbackError(ctx, job, spec, err)
 		notifyRunEvent(ctx, observer, agent.RunEvent{
 			Type:      agent.RunEventRunFailed,
