@@ -100,6 +100,7 @@ type SemanticExtractionCheckpoint struct {
 
 // JobState tracks persisted trigger/controller state for one job type.
 type JobState struct {
+	WaitingForRepair    bool                 `json:"waiting_for_repair,omitempty"`
 	LastRunAt           time.Time            `json:"last_run_at,omitempty"`
 	LastSuccessAt       time.Time            `json:"last_success_at,omitempty"`
 	LastFailureAt       time.Time            `json:"last_failure_at,omitempty"`
@@ -512,6 +513,7 @@ func (c *Controller) runPending(ctx context.Context, pending pendingRun) error {
 	state.LastRunAt = startedAt
 	state.LastRunInputSeq = pending.headSeq
 	state.LastRunNoWork = false
+	state.WaitingForRepair = false
 	state.LastRunCause = pending.cause
 	if pending.cause.Kind == RunCauseSchedule {
 		if state.LastScheduledFor == nil {
@@ -587,6 +589,7 @@ func (c *Controller) runPending(ctx context.Context, pending pendingRun) error {
 		state = preserveDirtyState(state, pending.headSeq, headSeq, headAt)
 	} else if result.NoWork {
 		state.LastRunNoWork = true
+		state.WaitingForRepair = result.WaitingForRepair
 		state = preserveDirtyState(state, pending.headSeq, headSeq, headAt)
 	} else {
 		state.LastSuccessAt = finishedAt
