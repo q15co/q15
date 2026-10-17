@@ -466,7 +466,7 @@ func renderRepairContract(target MemorySurfaceTarget) string {
 	lines := []string{
 		"Every content line in the repair chunk leaves the target in this run: rewritten as a claim in a canonical claim file and recorded converted, or recorded dropped with a reason. Markdown headings, blank lines and the exact `- None` scaffold are structure and need no exit.",
 		fmt.Sprintf(
-			"Append exactly one ledger line per exit to %s: run=%s, src naming the drained line as src=mem:%s:<byte-offset> with the offset from the chunk listing, and the quoted description copying that line's entire text with whitespace collapsed.",
+			"Append exactly one ledger line per exit to %s: run=%s, src naming the drained line as src=mem:%s:<byte-offset> with the offset from the chunk listing. Copy that row's ledger_description literal into the description field exactly, including its surrounding quotes and escape characters; it decodes to the line's entire text with whitespace collapsed. The decoded literal is also the original source line unless the row supplies a separate raw_line literal preserving its original whitespace.",
 			workingLedgerRuntimePath,
 			semanticMemoryExtractionJobType,
 			target.Path,
@@ -538,12 +538,17 @@ func repairChunkSection(
 ) agent.PromptSection {
 	lines := make([]string, 0, len(chunk))
 	for _, line := range chunk {
-		lines = append(lines, fmt.Sprintf(
-			"offset=%d sha256=%x | %s",
+		description := normalizeExitDescription(line.text)
+		row := fmt.Sprintf(
+			"offset=%d sha256=%x ledger_description=%s",
 			line.offset,
 			line.sum,
-			line.text,
-		))
+			strconv.Quote(description),
+		)
+		if description != line.text {
+			row += " raw_line=" + strconv.Quote(line.text)
+		}
+		lines = append(lines, row)
 	}
 	if len(lines) == 0 {
 		lines = append(
@@ -571,6 +576,7 @@ func repairRulesSection(target MemorySurfaceTarget) agent.PromptSection {
 			conversionClaimFormatRule,
 			conversionClaimStorageRule,
 			conversionLedgerFormatRule,
+			ledgerDescriptionQuotingRule,
 			fmt.Sprintf(
 				"- Memory citation: a repair exit cites the line it drained as src=mem:%s:<byte-offset> with the offset from the chunk listing (the path is repository-relative, without the runtime prefix). Transcript markers (t<seq>, t<a>..t<b>) keep their meaning for the conversions that have them.",
 				target.Path,
