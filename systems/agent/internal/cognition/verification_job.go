@@ -87,6 +87,7 @@ func (verificationReviewJob) Build(
 	if err != nil {
 		return Spec{}, fmt.Errorf("collect conflicted semantic claims: %w", err)
 	}
+	conflicted, omittedConflictGroups := boundedVerificationConflicts(conflicted)
 	headSeq, headUpdatedAt, err := loader.LoadHead(ctx)
 	if err != nil {
 		return Spec{}, fmt.Errorf("load transcript head state: %w", err)
@@ -163,8 +164,17 @@ func (verificationReviewJob) Build(
 			Body: coreMemoryContent,
 		},
 	}
+	if len(conflicted) > 0 || omittedConflictGroups > 0 {
+		section := conflictedClaimsSection(conflicted)
+		if omittedConflictGroups > 0 {
+			section.Body += fmt.Sprintf(
+				"\n%d conflict groups omitted to fit the review byte budget. This is a partial inventory; resolve only the complete groups shown above.",
+				omittedConflictGroups,
+			)
+		}
+		sections = append(sections, section)
+	}
 	if len(conflicted) > 0 {
-		sections = append(sections, conflictedClaimsSection(conflicted))
 		contractLines = append(
 			contractLines,
 			"For each group in conflicted_claims, return exactly one standalone line: `resolution claims=c-YYYY-NNNN,c-YYYY-NNNN winner=c-YYYY-NNNN|insufficient reason=\"<nonempty reasoning>\"`. Copy every member ID into claims, choose a member as winner or use insufficient, and quote the single-line reason with JSON string escapes. Do not add a basis field; the framework binds each accepted decision to the exact input claims.",
@@ -218,6 +228,10 @@ func (verificationReviewJob) Build(
 		},
 	)
 
+	baseline := map[string]string{}
+	if priorArtifact.RelativePath != "" || strings.TrimSpace(priorArtifact.Content) != "" {
+		baseline[VerificationReviewRuntimePath] = strings.TrimSpace(priorArtifact.Content)
+	}
 	return Spec{
 		Objective: renderPromptLines(
 			"This is a background verification job, not a user-facing reply.",
@@ -227,11 +241,12 @@ func (verificationReviewJob) Build(
 			"Prefer clear confidence notes, corrections, and uncertainty markers over broad summaries.",
 		),
 		CompletionContract: renderPromptLines(contractLines...),
-		PromptSections:     sections,
+		PromptSections:     boundVerificationSections(sections),
 		ExposeTools:        true,
 		RequireToolCalling: false,
 		AllowedTools:       append([]string(nil), verificationReviewAllowedTools...),
 		conflictGroups:     groupConflictedClaims(conflicted),
+		Baseline:           baseline,
 	}, nil
 }
 
@@ -323,9 +338,9 @@ func renderConflictedClaims(entries []conflictedClaimEntry) string {
 		groupsText = append(groupsText, renderConflictedClaimGroup(group))
 	}
 	return renderPromptLines(
-		"The claims below are every claim currently marked conflicted in semantic memory; "+
+		"The claims below are the conflicted claims selected for this review; "+
 			"cross-referenced claims contradict each other and both stay unresolved until this run proposes a resolution.",
-		"Do not read the semantic root or topic files with read_file to find more: this section is the complete conflicted inventory, and whole semantic files can be far too large to load.",
+		"Do not read whole semantic root or topic files with read_file to find more: whole semantic files can be far too large to load. Resolve only the groups supplied here.",
 		strings.Join(groupsText, "\n\n"),
 	)
 }
@@ -559,6 +574,10 @@ func formatVerificationTime(value time.Time) string {
 }
 
 func verificationReviewBaseline(spec Spec) (string, bool) {
+	if spec.Baseline != nil {
+		content, present := spec.Baseline[VerificationReviewRuntimePath]
+		return content, present
+	}
 	for _, section := range spec.PromptSections {
 		if strings.TrimSpace(section.Name) != "verification_review_target" {
 			continue
