@@ -32,6 +32,8 @@ type syncJobs interface {
 }
 
 const (
+	maxSearchOutputBytes = 16 * 1024
+
 	// syncPollInterval is how often embed_sync polls the manager while
 	// waiting for a sync job to reach a terminal state.
 	syncPollInterval = 250 * time.Millisecond
@@ -549,7 +551,17 @@ func (s *Search) Run(ctx context.Context, arguments string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return jsonOutput(map[string]any{"results": results})
+	output, err := jsonOutput(map[string]any{"results": results})
+	if err != nil {
+		return "", err
+	}
+	if len(output) > maxSearchOutputBytes {
+		return "", fmt.Errorf(
+			"search results exceed %d byte output limit; narrow the query, reduce limit, or use paginated read_file",
+			maxSearchOutputBytes,
+		)
+	}
+	return output, nil
 }
 
 // Definition returns the embed_status tool schema.
