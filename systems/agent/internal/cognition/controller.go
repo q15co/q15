@@ -706,12 +706,18 @@ func (c *Controller) runPending(ctx context.Context, pending pendingRun) error {
 
 func attemptFailuresFromError(err error) []AttemptFailure {
 	var fallbackErr *agent.ModelFallbackError
-	if !errors.As(err, &fallbackErr) || fallbackErr == nil {
+	var limitErr *agent.ModelAttemptLimitError
+	var failures []agent.ModelAttemptFailure
+	switch {
+	case errors.As(err, &limitErr) && limitErr != nil:
+		failures = limitErr.AttemptFailures
+	case errors.As(err, &fallbackErr) && fallbackErr != nil:
+		failures = fallbackErr.AttemptFailures
+	default:
 		return nil
 	}
-
-	out := make([]AttemptFailure, 0, len(fallbackErr.AttemptFailures))
-	for _, failure := range fallbackErr.AttemptFailures {
+	out := make([]AttemptFailure, 0, len(failures))
+	for _, failure := range failures {
 		modelRef := strings.TrimSpace(failure.ModelRef)
 		if modelRef == "" || failure.Err == nil {
 			continue

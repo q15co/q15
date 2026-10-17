@@ -38,6 +38,30 @@ type ModelFallbackError struct {
 	AttemptFailures []ModelAttemptFailure
 }
 
+// ModelAttemptLimitError reports an exhausted run-wide failed-attempt budget.
+type ModelAttemptLimitError struct {
+	Limit           int
+	AttemptFailures []ModelAttemptFailure
+}
+
+func (e *ModelAttemptLimitError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return fmt.Sprintf(
+		"failed model attempt limit reached (%d): %s",
+		e.Limit,
+		formatModelAttemptFailures(e.AttemptFailures),
+	)
+}
+
+func (e *ModelAttemptLimitError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return lastModelAttemptError(e.AttemptFailures)
+}
+
 func (e *StopError) Error() string {
 	if e == nil {
 		return ""
@@ -53,8 +77,16 @@ func (e *ModelFallbackError) Error() string {
 		return ""
 	}
 
-	parts := make([]string, 0, len(e.AttemptFailures))
-	for _, failure := range e.AttemptFailures {
+	parts := formatModelAttemptFailures(e.AttemptFailures)
+	if parts == "" {
+		return fmt.Sprintf("all models failed (%v)", e.EligibleRefs)
+	}
+	return fmt.Sprintf("all models failed (%v): %s", e.EligibleRefs, parts)
+}
+
+func formatModelAttemptFailures(failures []ModelAttemptFailure) string {
+	parts := make([]string, 0, len(failures))
+	for _, failure := range failures {
 		modelRef := strings.TrimSpace(failure.ModelRef)
 		switch {
 		case modelRef != "" && failure.Err != nil:
@@ -65,23 +97,20 @@ func (e *ModelFallbackError) Error() string {
 			parts = append(parts, failure.Err.Error())
 		}
 	}
-	if len(parts) == 0 {
-		return fmt.Sprintf("all models failed (%v)", e.EligibleRefs)
-	}
-	return fmt.Sprintf(
-		"all models failed (%v): %s",
-		e.EligibleRefs,
-		strings.Join(parts, "; "),
-	)
+	return strings.Join(parts, "; ")
 }
 
 func (e *ModelFallbackError) Unwrap() error {
 	if e == nil {
 		return nil
 	}
-	for i := len(e.AttemptFailures) - 1; i >= 0; i-- {
-		if e.AttemptFailures[i].Err != nil {
-			return e.AttemptFailures[i].Err
+	return lastModelAttemptError(e.AttemptFailures)
+}
+
+func lastModelAttemptError(failures []ModelAttemptFailure) error {
+	for i := len(failures) - 1; i >= 0; i-- {
+		if failures[i].Err != nil {
+			return failures[i].Err
 		}
 	}
 	return nil

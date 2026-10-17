@@ -42,6 +42,8 @@ type EngineRequest struct {
 	RequireToolCalling bool
 	SystemTextSource   SystemTextSource
 	Observer           RunObserver
+	// MaxFailedModelAttempts bounds provider failures across all turns. Zero is unlimited.
+	MaxFailedModelAttempts int
 }
 
 // EngineResult captures the engine-produced messages and final outcome for one
@@ -128,6 +130,7 @@ func (e *Engine) Run(ctx context.Context, req EngineRequest) (EngineResult, erro
 
 	loopDetector := newToolLoopDetector()
 	emptyAssistantRetries := 0
+	failureBudget := modelFailureBudget{limit: req.MaxFailedModelAttempts}
 
 	for turn := 0; turn < e.maxTurns; turn++ {
 		requestMessages := copyMessages(messages)
@@ -146,6 +149,7 @@ func (e *Engine) Run(ctx context.Context, req EngineRequest) (EngineResult, erro
 			req.RequireToolCalling && len(toolDefs) > 0,
 			turn,
 			req.Observer,
+			&failureBudget,
 		)
 		if err != nil {
 			return EngineResult{
@@ -324,6 +328,11 @@ func (e *Engine) runTool(
 	return tools.Run(ctx, call)
 }
 
+type modelFailureBudget struct {
+	limit    int
+	failures []ModelAttemptFailure
+}
+
 func (e *Engine) completeWithObserver(
 	ctx context.Context,
 	messages []conversation.Message,
@@ -331,6 +340,7 @@ func (e *Engine) completeWithObserver(
 	requireToolCalling bool,
 	turn int,
 	observer RunObserver,
+	budget *modelFailureBudget,
 ) (string, ModelClientResult, error) {
 	modelRefs := normalizeModelRefs(e.modelRefSource())
 	if len(modelRefs) == 0 {
@@ -402,10 +412,17 @@ func (e *Engine) completeWithObserver(
 			len(plan.EligibleRefs),
 			err,
 		)
-		attemptFailures = append(attemptFailures, ModelAttemptFailure{
-			ModelRef: modelRef,
-			Err:      err,
-		})
+		failure := ModelAttemptFailure{ModelRef: modelRef, Err: err}
+		attemptFailures = append(attemptFailures, failure)
+		if budget.limit > 0 {
+			budget.failures = append(budget.failures, failure)
+			if len(budget.failures) >= budget.limit {
+				return modelRef, ModelClientResult{}, &ModelAttemptLimitError{
+					Limit:           budget.limit,
+					AttemptFailures: append([]ModelAttemptFailure(nil), budget.failures...),
+				}
+			}
+		}
 	}
 
 	if len(attemptFailures) == 0 {
