@@ -13,9 +13,70 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/conversation"
 	"github.com/q15co/q15/systems/agent/internal/fileops"
 	"github.com/q15co/q15/systems/agent/internal/memory"
+	"github.com/q15co/q15/systems/agent/internal/memory/claims"
 	"github.com/q15co/q15/systems/agent/internal/memoryrepo"
 	filetools "github.com/q15co/q15/systems/agent/internal/tools/files"
 )
+
+func TestRepairRunnerRotatesLedgerWithoutReopeningStore(t *testing.T) {
+	ctx := context.Background()
+	root, store := newCognitionRecoveryStore(t)
+	seed, _, err := store.ReadFileBytes(ctx, "working/LEDGER.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const threshold = 256 * 1024
+	baseline := string(seed) + "<!--" + strings.Repeat("x", threshold-len(seed)-200) + "-->\n"
+	if err := store.WriteFileBytes(ctx, "working/LEDGER.md", []byte(baseline)); err != nil {
+		t.Fatal(err)
+	}
+	model := recoveryModelClient{complete: func(context.Context) (agent.ModelClientResult, error) {
+		return agent.ModelClientResult{Messages: []conversation.Message{
+			conversation.AssistantMessage(conversation.Text(
+				`{"decisions":[{"offset":0,"outcome":"dropped","reason":"Obsolete content."}]}`,
+				"",
+			)),
+		}}, nil
+	}}
+	tools, err := agent.NewToolRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := cognition.NewRunner(model, tools, []string{"test"}, store)
+	for run := range 2 {
+		target := fmt.Sprintf("semantic/legacy-%d.md", run)
+		if err := store.WriteFileBytes(ctx, target, []byte(strings.Repeat("obsolete ", 128)+"\n")); err != nil {
+			t.Fatal(err)
+		}
+		result, err := runner.Run(
+			ctx,
+			cognition.NewSemanticMemoryExtractionRegistration(0, 0).NewJob(),
+			nil,
+		)
+		if err != nil || result.Metadata["chunk_lines_exited"] != "1" {
+			t.Fatalf("repair %d: metadata=%v error=%v", run, result.Metadata, err)
+		}
+		if _, exists, err := store.ReadFileBytes(ctx, target); err != nil || exists {
+			t.Fatalf("repair target survived: exists=%v error=%v", exists, err)
+		}
+		active, _, err := store.ReadFileBytes(ctx, "working/LEDGER.md")
+		if err != nil || len(active) >= threshold {
+			t.Fatalf("active ledger = %d bytes, error=%v", len(active), err)
+		}
+		history, err := store.LoadConversionLedgerHistory(ctx)
+		if err != nil || !strings.HasPrefix(history, baseline) {
+			t.Fatalf("ledger history lost its exact prefix: %v", err)
+		}
+		entries, err := claims.ParseLedger([]byte(history + "\n" + string(active)))
+		if err != nil || len(entries) != 2*(run+1) {
+			t.Fatalf("history and active ledger: entries=%d error=%v", len(entries), err)
+		}
+		if entries[2*run].SourceSeq != "mem:"+target+":0" {
+			t.Fatalf("ledger entries out of order: %#v", entries)
+		}
+		assertCognitionRecoveryGitClean(t, root)
+	}
+}
 
 func TestRepairRunnerCommitsTypedDecisionsWithoutModelWrites(t *testing.T) {
 	for _, moved := range []bool{false, true} {

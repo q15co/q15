@@ -11,8 +11,10 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/q15co/q15/systems/agent/internal/atomicfile"
 	"github.com/q15co/q15/systems/agent/internal/cognition"
@@ -20,12 +22,15 @@ import (
 
 const memoryRecoveryPath = ".git/q15-memory-recovery.json"
 
+var ledgerArchivePathPattern = regexp.MustCompile(`^working/ledger/[0-9]{4}-Q[1-4]\.md$`)
+
 type memoryRecovery struct {
-	Version      int                               `json:"version"`
-	ID           string                            `json:"id"`
-	Snapshots    map[string]cognition.FileSnapshot `json:"snapshots"`
-	TopicDir     string                            `json:"topic_dir,omitempty"`
-	RepairTarget string                            `json:"repair_target,omitempty"`
+	Version           int                               `json:"version"`
+	ID                string                            `json:"id"`
+	Snapshots         map[string]cognition.FileSnapshot `json:"snapshots"`
+	TopicDir          string                            `json:"topic_dir,omitempty"`
+	RepairTarget      string                            `json:"repair_target,omitempty"`
+	LedgerArchivePath string                            `json:"ledger_archive_path,omitempty"`
 }
 
 // BeginMemoryRecovery persists a rollback journal before tools can change the
@@ -96,6 +101,9 @@ func (s *Store) beginMemoryRecovery(
 // CompleteMemoryRecovery commits validated files before durably retiring their
 // rollback journal. A failure leaves the journal available for recovery.
 func (s *Store) CompleteMemoryRecovery(ctx context.Context, id string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	release := s.repository.Acquire()
 	defer release()
 
@@ -108,6 +116,9 @@ func (s *Store) CompleteMemoryRecovery(ctx context.Context, id string) error {
 	}
 	if journal.ID != id || id == "" {
 		return fmt.Errorf("memory recovery id does not match the pending journal")
+	}
+	if err := s.rotateValidatedLedger(&journal, time.Now().UTC()); err != nil {
+		return fmt.Errorf("rotate validated memory ledger: %w", err)
 	}
 	paths, err := s.memoryRecoveryPaths(journal)
 	if err != nil {
@@ -221,6 +232,15 @@ func (journal memoryRecovery) validate() error {
 		return fmt.Errorf("invalid memory repair recovery target %q", journal.RepairTarget)
 	}
 	required := []string{"working/WORKING_MEMORY.md", "working/OPEN_LOOPS.md", "working/LEDGER.md"}
+	if journal.LedgerArchivePath != "" {
+		if !ledgerArchivePathPattern.MatchString(journal.LedgerArchivePath) {
+			return fmt.Errorf(
+				"invalid memory recovery ledger archive %q",
+				journal.LedgerArchivePath,
+			)
+		}
+		required = append(required, journal.LedgerArchivePath)
+	}
 	if journal.RepairTarget != "" {
 		required = append(required, journal.RepairTarget)
 	}
@@ -256,7 +276,8 @@ func validRepairRecoveryTarget(relative string) bool {
 }
 
 func (journal memoryRecovery) ownsPath(relative string) bool {
-	return relative == journal.RepairTarget || recoverableMemoryPath(relative, journal.TopicDir)
+	return relative == journal.RepairTarget || relative == journal.LedgerArchivePath ||
+		recoverableMemoryPath(relative, journal.TopicDir)
 }
 
 func recoverableMemoryPath(relative, topicDir string) bool {
