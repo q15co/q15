@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"time"
 
@@ -109,6 +110,7 @@ type JobState struct {
 	RepairStopped       bool                 `json:"repair_stopped,omitempty"`
 	RepairTarget        string               `json:"repair_target,omitempty"`
 	RepairDigest        string               `json:"repair_digest,omitempty"`
+	RepairStops         map[string]string    `json:"repair_stops,omitempty"`
 	MaintenancePending  bool                 `json:"maintenance_pending,omitempty"`
 	WaitingForRepair    bool                 `json:"waiting_for_repair,omitempty"`
 	LastRunAt           time.Time            `json:"last_run_at,omitempty"`
@@ -1039,6 +1041,7 @@ func clearOrAdvanceDirtyState(
 
 func cloneJobState(state JobState) JobState {
 	out := state
+	out.RepairStops = maps.Clone(state.RepairStops)
 	if len(state.LastScheduledFor) > 0 {
 		out.LastScheduledFor = make(map[string]time.Time, len(state.LastScheduledFor))
 		for key, value := range state.LastScheduledFor {
