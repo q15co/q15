@@ -106,7 +106,7 @@ func TestClientSystemOneQuestionTypesAndBatch(t *testing.T) {
 				}),
 			)
 			defer server.Close()
-			client, err := NewClient(server.URL+"/v1/", "test-key", server.Client())
+			client, err := NewClient(server.URL+"/v1/", "test-key", "", server.Client())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -172,7 +172,7 @@ func TestClientErrorsNameEndpointWithoutPayload(t *testing.T) {
 				}),
 			)
 			defer server.Close()
-			client, err := NewClient(server.URL+"/v1", "private-key", server.Client())
+			client, err := NewClient(server.URL+"/v1", "private-key", "", server.Client())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -216,7 +216,7 @@ func TestClientVersionedBaseURLAndZeroValues(t *testing.T) {
 		_, _ = io.WriteString(w, `{"answers":{"zero":{"type":"noul","noul":0}}}`)
 	}))
 	defer server.Close()
-	client, err := NewClient(server.URL+"/gateway/v1/", "", server.Client())
+	client, err := NewClient(server.URL+"/gateway/v1/", "", "", server.Client())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -258,7 +258,7 @@ func TestClientRejectsMalformedNoulAndScore(t *testing.T) {
 				}),
 			)
 			defer server.Close()
-			client, err := NewClient(server.URL+"/v1", "", server.Client())
+			client, err := NewClient(server.URL+"/v1", "", "", server.Client())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -277,7 +277,7 @@ func TestClientRejectsInvalidRequests(t *testing.T) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer server.Close()
-	client, err := NewClient(server.URL+"/v1", "", server.Client())
+	client, err := NewClient(server.URL+"/v1", "", "", server.Client())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -302,5 +302,36 @@ func TestClientRejectsInvalidRequests(t *testing.T) {
 	}
 	if calls.Load() != 0 {
 		t.Fatalf("invalid requests reached the provider: %d calls", calls.Load())
+	}
+}
+
+func TestClientConfigurableDecisionPath(t *testing.T) {
+	for _, tc := range []struct{ path, want string }{{"", "/api/v2/systemone"}, {"decide", "/api/v2/decide"}, {"/custom/evaluate", "/custom/evaluate"}} {
+		t.Run(tc.path, func(t *testing.T) {
+			server := httptest.NewServer(
+				http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.URL.Path != tc.want {
+						t.Errorf("endpoint = %s, want %s", r.URL.Path, tc.want)
+					}
+					_, _ = io.WriteString(w, `{"answers":{"check":{"type":"noul","noul":0}}}`)
+				}),
+			)
+			defer server.Close()
+			client, err := NewClient(server.URL+"/api/v2", "", tc.path, server.Client())
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = client.Check(
+				context.Background(),
+				decision.Request{
+					Model:     "model",
+					State:     "state",
+					Questions: map[string]decision.Question{"check": decision.Noul("True?")},
+				},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }

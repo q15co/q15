@@ -105,6 +105,7 @@ func (r *routedDecisionAdapter) clientFor(model modelcatalog.Model) (decision.Cl
 		providerType: model.ProviderType,
 		baseURL:      model.ProviderBaseURL,
 		apiKey:       model.ProviderAPIKey,
+		decisionPath: model.ProviderDecisionPath,
 	}
 	if cached, ok := r.clients.Load(key); ok {
 		return cached.(decision.Client), nil
@@ -122,11 +123,26 @@ func (r *routedDecisionAdapter) clientFor(model modelcatalog.Model) (decision.Cl
 func defaultDecisionClientFactory(model modelcatalog.Model) (decision.Client, error) {
 	switch providertypes.NormalizeOrEmpty(model.ProviderType) {
 	case providertypes.Ollama:
-		return ollama.NewDecisionClient(model.ProviderBaseURL, model.ProviderAPIKey, nil)
+		return ollama.NewDecisionClient(
+			model.ProviderBaseURL,
+			model.ProviderAPIKey,
+			model.ProviderDecisionPath,
+			nil,
+		)
 	case providertypes.OpenAICompatible:
-		return openaicompatible.NewDecisionClient(model.ProviderBaseURL, model.ProviderAPIKey, nil)
+		return openaicompatible.NewDecisionClient(
+			model.ProviderBaseURL,
+			model.ProviderAPIKey,
+			model.ProviderDecisionPath,
+			nil,
+		)
 	case providertypes.SystemOneCompatible:
-		return systemone.NewClient(model.ProviderBaseURL, model.ProviderAPIKey, nil)
+		return systemone.NewClient(
+			model.ProviderBaseURL,
+			model.ProviderAPIKey,
+			model.ProviderDecisionPath,
+			nil,
+		)
 	default:
 		return nil, fmt.Errorf("unsupported decision provider type %q", model.ProviderType)
 	}

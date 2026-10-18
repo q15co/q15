@@ -216,8 +216,13 @@ Notes:
   `key_env: TYPESAFE_API_KEY`. Its `models` array or OpenAI-style `data` array supplies the live
   decision roster. The key is optional for local unauthenticated servers. As with
   `openai-compatible`, the documented API root supplies the path: q15 appends `models` or
-  `systemone` without inventing a version segment. Ollama's adapter uses its native root plus
-  `/v1/systemone`.
+  `systemone` without inventing a version segment. `decision_path`, alongside `base_url` and
+  `key_env`, overrides the decision endpoint per provider. Compatible roots default to the relative
+  `systemone`; Ollama defaults to its native `/v1/systemone`. Relative overrides extend the API
+  root; a leading slash replaces its path at the same origin. Full URLs, queries, and fragments are
+  refused. For example, `base_url: https://api.solar.example/v2` with `decision_path: /systemone`
+  calls `https://api.solar.example/systemone`. Discovery still uses the API root's `models`
+  endpoint.
 
 - `decision_check` takes `state` (text, object, or array), `question` (text), and `options` (2-26
   unique strings in preference order). It returns `choice`, `probabilities`, and `confidence`. Ties

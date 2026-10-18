@@ -24,11 +24,11 @@ func (r *RosterClient) Discover(
 	ctx context.Context,
 	provider modelcatalog.Provider,
 ) ([]modelcatalog.Model, error) {
-	client, err := NewClient(provider.BaseURL, provider.APIKey, r.http)
+	client, err := NewClient(provider.BaseURL, provider.APIKey, "", r.http)
 	if err != nil {
 		return nil, err
 	}
-	endpoint := strings.TrimSuffix(client.endpoint, "systemone") + "models"
+	endpoint := strings.TrimRight(strings.TrimSpace(provider.BaseURL), "/") + "/models"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("systemone /models: create request: %w", err)

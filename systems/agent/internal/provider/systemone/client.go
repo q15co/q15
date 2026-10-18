@@ -20,6 +20,7 @@ const maxResponseBytes = 8 << 20
 // Client calls a provider's /v1/systemone endpoint without logging request or response content.
 type Client struct {
 	endpoint string
+	path     string
 	apiKey   string
 	http     *http.Client
 }
@@ -28,19 +29,17 @@ var _ decision.Client = (*Client)(nil)
 
 // NewClient accepts the documented API root and an optional bearer key.
 // The relative path systemone is joined without guessing a version segment.
-func NewClient(baseURL, apiKey string, httpClient *http.Client) (*Client, error) {
-	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
-	u, err := url.Parse(base)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil ||
-		u.RawQuery != "" ||
-		u.Fragment != "" {
-		return nil, fmt.Errorf("decision /v1/systemone: invalid provider base URL")
+func NewClient(baseURL, apiKey, decisionPath string, httpClient *http.Client) (*Client, error) {
+	endpoint, err := Endpoint(baseURL, decisionPath)
+	if err != nil {
+		return nil, err
 	}
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 120 * time.Second}
 	}
 	return &Client{
-		endpoint: base + "/systemone",
+		endpoint: endpoint.String(),
+		path:     endpoint.EscapedPath(),
 		apiKey:   strings.TrimSpace(apiKey),
 		http:     httpClient,
 	}, nil
@@ -49,20 +48,20 @@ func NewClient(baseURL, apiKey string, httpClient *http.Client) (*Client, error)
 // Check validates a request and returns one typed answer for each named question.
 func (c *Client) Check(ctx context.Context, request decision.Request) (decision.Response, error) {
 	if strings.TrimSpace(request.Model) == "" {
-		return decision.Response{}, fmt.Errorf("decision /v1/systemone: model is required")
+		return decision.Response{}, fmt.Errorf("decision %s: model is required", c.path)
 	}
 	if err := request.Validate(); err != nil {
-		return decision.Response{}, fmt.Errorf("decision /v1/systemone: %w", err)
+		return decision.Response{}, fmt.Errorf("decision %s: %w", c.path, err)
 	}
 	data, err := json.Marshal(request)
 	if err != nil {
 		return decision.Response{}, fmt.Errorf(
-			"decision /v1/systemone: request is not JSON encodable",
+			"decision %s: request is not JSON encodable", c.path,
 		)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(data))
 	if err != nil {
-		return decision.Response{}, fmt.Errorf("decision /v1/systemone: create request: %w", err)
+		return decision.Response{}, fmt.Errorf("decision %s: create request: %w", c.path, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if c.apiKey != "" {
@@ -70,25 +69,25 @@ func (c *Client) Check(ctx context.Context, request decision.Request) (decision.
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return decision.Response{}, fmt.Errorf("decision /v1/systemone: request failed: %w", err)
+		return decision.Response{}, fmt.Errorf("decision %s: request failed: %w", c.path, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return decision.Response{}, fmt.Errorf("decision /v1/systemone: HTTP %d", resp.StatusCode)
+		return decision.Response{}, fmt.Errorf("decision %s: HTTP %d", c.path, resp.StatusCode)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 	if err != nil || len(body) > maxResponseBytes {
 		return decision.Response{}, fmt.Errorf(
-			"decision /v1/systemone: response unreadable or too large",
+			"decision %s: response unreadable or too large", c.path,
 		)
 	}
 	var result decision.Response
 	if err := json.Unmarshal(body, &result); err != nil {
-		return decision.Response{}, fmt.Errorf("decision /v1/systemone: malformed response JSON")
+		return decision.Response{}, fmt.Errorf("decision %s: malformed response JSON", c.path)
 	}
 	if err := result.Validate(request.Questions); err != nil {
 		return decision.Response{}, fmt.Errorf(
-			"decision /v1/systemone: malformed response: %w",
+			"decision %s: malformed response: %w", c.path,
 			err,
 		)
 	}
@@ -97,3 +96,28 @@ func (c *Client) Check(ctx context.Context, request decision.Request) (decision.
 
 // ContractVersion identifies the implemented decision port.
 func (c *Client) ContractVersion() string { return decision.ContractVersion }
+
+// Endpoint resolves an optional decision path against a documented compatible API root.
+// A relative path extends the root; a leading slash replaces its path at the same origin.
+func Endpoint(baseURL, decisionPath string) (*url.URL, error) {
+	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	u, err := url.Parse(base)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil ||
+		u.RawQuery != "" ||
+		u.Fragment != "" {
+		return nil, fmt.Errorf("decision /v1/systemone: invalid provider base URL")
+	}
+	path := strings.TrimSpace(decisionPath)
+	if path == "" {
+		path = "systemone"
+	}
+	ref, err := url.Parse(path)
+	if err != nil || ref.IsAbs() || ref.Host != "" || ref.User != nil || ref.RawQuery != "" ||
+		ref.Fragment != "" {
+		return nil, fmt.Errorf(
+			"decision /v1/systemone: decision_path must be a path without credentials, query, or fragment",
+		)
+	}
+	u.Path = strings.TrimRight(u.Path, "/") + "/"
+	return u.ResolveReference(ref), nil
+}

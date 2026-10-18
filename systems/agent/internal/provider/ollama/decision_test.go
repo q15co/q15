@@ -77,7 +77,7 @@ func TestOllamaDecisionSDKPreservesTypedBatch(t *testing.T) {
 			Encode(map[string]any{"model": "clef:27b", "answers": answers, "usage": map[string]int{"input_tokens": 120, "output_tokens": 64}})
 	}))
 	defer server.Close()
-	client, err := NewDecisionClient(server.URL, "", server.Client().Transport)
+	client, err := NewDecisionClient(server.URL, "", "", server.Client().Transport)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +133,7 @@ func TestOllamaDecisionSDKCloudUsesBearerKey(t *testing.T) {
 			),
 		}, nil
 	})
-	client, err := NewDecisionClient("https://ollama.com/prefix/api", "test-key", transport)
+	client, err := NewDecisionClient("https://ollama.com/prefix/api", "test-key", "", transport)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +175,12 @@ func TestOllamaDecisionSDKErrorsOmitPayload(t *testing.T) {
 				}),
 			)
 			defer server.Close()
-			client, err := NewDecisionClient(server.URL, "private-key", server.Client().Transport)
+			client, err := NewDecisionClient(
+				server.URL,
+				"private-key",
+				"",
+				server.Client().Transport,
+			)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -197,7 +202,7 @@ func TestOllamaDecisionSDKErrorsOmitPayload(t *testing.T) {
 }
 
 func TestOllamaDecisionSDKPreservesCancellation(t *testing.T) {
-	client, err := NewDecisionClient("http://unused.invalid", "", nil)
+	client, err := NewDecisionClient("http://unused.invalid", "", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +225,7 @@ func TestOllamaDecisionSDKPreservesCancellation(t *testing.T) {
 		cancel()
 		return nil, request.Context().Err()
 	})
-	client, err = NewDecisionClient("https://ollama.com", "test-key", transport)
+	client, err = NewDecisionClient("https://ollama.com", "test-key", "", transport)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,5 +239,41 @@ func TestOllamaDecisionSDKPreservesCancellation(t *testing.T) {
 	)
 	if !errors.Is(err, context.Canceled) || strings.Contains(err.Error(), "q15-ollama.invalid") {
 		t.Fatalf("in-flight cancellation = %v", err)
+	}
+}
+
+func TestOllamaDecisionConfigurablePath(t *testing.T) {
+	for _, tc := range []struct{ path, want string }{{"", "/prefix/v1/systemone"}, {"typed", "/prefix/typed"}, {"/custom/decide", "/custom/decide"}} {
+		t.Run(tc.path, func(t *testing.T) {
+			server := httptest.NewServer(
+				http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.URL.Path != tc.want || !strings.HasPrefix(r.UserAgent(), "ollama/") {
+						t.Errorf("SDK request = %s %s", r.URL.Path, r.UserAgent())
+					}
+					_, _ = io.WriteString(w, `{"answers":{"check":{"type":"noul","noul":0}}}`)
+				}),
+			)
+			defer server.Close()
+			client, err := NewDecisionClient(
+				server.URL+"/prefix/api",
+				"",
+				tc.path,
+				server.Client().Transport,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = client.Check(
+				context.Background(),
+				decision.Request{
+					Model:     "model",
+					State:     "state",
+					Questions: map[string]decision.Question{"check": decision.Noul("True?")},
+				},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }

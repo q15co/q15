@@ -138,6 +138,7 @@ func (r *Registry) discover(ctx context.Context, providers []Provider) rosterSna
 			models[i].ProviderType = p.Type
 			models[i].ProviderBaseURL = p.BaseURL
 			models[i].ProviderAPIKey = p.APIKey
+			models[i].ProviderDecisionPath = p.DecisionPath
 			models[i].Ref = deriveRef(models[i].ProviderModel)
 			for name, supported := range p.CapabilityOverrides[models[i].ProviderModel] {
 				models[i].Capabilities.Set(name, supported, "override")

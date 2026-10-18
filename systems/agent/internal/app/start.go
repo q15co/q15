@@ -112,6 +112,7 @@ func buildProviderDescriptors(configProviders []config.Provider) ([]modelcatalog
 			BaseURL:             strings.TrimSpace(p.BaseURL),
 			APIKey:              apiKey,
 			CapabilityOverrides: p.CapabilityOverrides,
+			DecisionPath:        strings.TrimSpace(p.DecisionPath),
 			Options: modelcatalog.Options{
 				ModelsDev:         p.Discovery.ModelsDev,
 				ModelsDevProvider: strings.TrimSpace(p.Discovery.ModelsDevProvider),

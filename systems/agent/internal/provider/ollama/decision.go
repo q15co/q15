@@ -12,15 +12,19 @@ import (
 
 	ollamaapi "github.com/ollama/ollama/api"
 	"github.com/q15co/q15/systems/agent/internal/decision"
+	"github.com/q15co/q15/systems/agent/internal/provider/systemone"
 )
 
-type decisionClient struct{ sdk *ollamaapi.Client }
+type decisionClient struct {
+	sdk  *ollamaapi.Client
+	path string
+}
 
 var _ decision.Client = (*decisionClient)(nil)
 
 // NewDecisionClient constructs Ollama's decision adapter with the native API root.
 func NewDecisionClient(
-	baseURL, apiKey string,
+	baseURL, apiKey, decisionPath string,
 	transport http.RoundTripper,
 ) (decision.Client, error) {
 	base, err := normalizeBaseURL(baseURL)
@@ -40,11 +44,27 @@ func NewDecisionClient(
 		// This internal authority lets the transport use the configured bearer key instead.
 		sdkBase.Host = "q15-ollama.invalid"
 	}
-	client := &http.Client{
-		Transport: decisionSDKTransport{target: base, apiKey: apiKey, next: transport},
-		Timeout:   120 * time.Second,
+	var endpoint *url.URL
+	if strings.TrimSpace(decisionPath) != "" {
+		endpoint, err = systemone.Endpoint(base.String(), decisionPath)
+		if err != nil {
+			return nil, err
+		}
 	}
-	return &decisionClient{sdk: ollamaapi.NewClient(sdkBase, client)}, nil
+	client := &http.Client{
+		Transport: decisionSDKTransport{
+			target:           base,
+			apiKey:           apiKey,
+			next:             transport,
+			decisionEndpoint: endpoint,
+		},
+		Timeout: 120 * time.Second,
+	}
+	path := "/" + strings.TrimLeft(base.JoinPath("/v1/systemone").EscapedPath(), "/")
+	if endpoint != nil {
+		path = endpoint.EscapedPath()
+	}
+	return &decisionClient{sdk: ollamaapi.NewClient(sdkBase, client), path: path}, nil
 }
 
 func (c *decisionClient) Check(
@@ -52,46 +72,47 @@ func (c *decisionClient) Check(
 	request decision.Request,
 ) (decision.Response, error) {
 	if err := ctx.Err(); err != nil {
-		return decision.Response{}, fmt.Errorf("ollama /v1/systemone: %w", err)
+		return decision.Response{}, fmt.Errorf("ollama %s: %w", c.path, err)
 	}
 	if strings.TrimSpace(request.Model) == "" {
-		return decision.Response{}, fmt.Errorf("ollama /v1/systemone: model is required")
+		return decision.Response{}, fmt.Errorf("ollama %s: model is required", c.path)
 	}
 	if err := request.Validate(); err != nil {
-		return decision.Response{}, fmt.Errorf("ollama /v1/systemone: %w", err)
+		return decision.Response{}, fmt.Errorf("ollama %s: %w", c.path, err)
 	}
 	data, err := json.Marshal(request)
 	if err != nil {
 		return decision.Response{}, fmt.Errorf(
-			"ollama /v1/systemone: request is not JSON encodable",
+			"ollama %s: request is not JSON encodable", c.path,
 		)
 	}
 	var native ollamaapi.SystemOneRequest
 	if err := json.Unmarshal(data, &native); err != nil {
-		return decision.Response{}, fmt.Errorf("ollama /v1/systemone: invalid SDK request")
+		return decision.Response{}, fmt.Errorf("ollama %s: invalid SDK request", c.path)
 	}
 	response, err := c.sdk.SystemOne(ctx, &native)
 	if err != nil {
-		return decision.Response{}, decisionSDKError(err)
+		return decision.Response{}, decisionSDKError(err, c.path)
 	}
 	data, err = json.Marshal(response)
 	if err != nil {
-		return decision.Response{}, fmt.Errorf("ollama /v1/systemone: malformed SDK response")
+		return decision.Response{}, fmt.Errorf("ollama %s: malformed SDK response", c.path)
 	}
 	var result decision.Response
 	if err := json.Unmarshal(data, &result); err != nil {
-		return decision.Response{}, fmt.Errorf("ollama /v1/systemone: malformed response JSON")
+		return decision.Response{}, fmt.Errorf("ollama %s: malformed response JSON", c.path)
 	}
 	if err := result.Validate(request.Questions); err != nil {
-		return decision.Response{}, fmt.Errorf("ollama /v1/systemone: malformed response: %w", err)
+		return decision.Response{}, fmt.Errorf("ollama %s: malformed response: %w", c.path, err)
 	}
 	return result, nil
 }
 
 type decisionSDKTransport struct {
-	target *url.URL
-	apiKey string
-	next   http.RoundTripper
+	target           *url.URL
+	apiKey           string
+	next             http.RoundTripper
+	decisionEndpoint *url.URL
 }
 
 func (t decisionSDKTransport) RoundTrip(request *http.Request) (*http.Response, error) {
@@ -101,6 +122,10 @@ func (t decisionSDKTransport) RoundTrip(request *http.Request) (*http.Response, 
 		forward.URL.Host = t.target.Host
 		forward.Host = t.target.Host
 		forward.Header.Set("Authorization", "Bearer "+t.apiKey)
+	}
+	if t.decisionEndpoint != nil && strings.HasSuffix(forward.URL.Path, "/v1/systemone") {
+		forward.URL.Path = t.decisionEndpoint.Path
+		forward.URL.RawPath = t.decisionEndpoint.RawPath
 	}
 	response, err := t.next.RoundTrip(forward)
 	if err != nil {
@@ -115,19 +140,19 @@ func (t decisionSDKTransport) RoundTrip(request *http.Request) (*http.Response, 
 	return response, nil
 }
 
-func decisionSDKError(err error) error {
+func decisionSDKError(err error, path string) error {
 	if errors.Is(err, context.Canceled) {
-		return fmt.Errorf("ollama /v1/systemone: %w", context.Canceled)
+		return fmt.Errorf("ollama %s: %w", path, context.Canceled)
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		return fmt.Errorf("ollama /v1/systemone: %w", context.DeadlineExceeded)
+		return fmt.Errorf("ollama %s: %w", path, context.DeadlineExceeded)
 	}
 	var status ollamaapi.StatusError
 	if errors.As(err, &status) {
-		return fmt.Errorf("ollama /v1/systemone: HTTP %d", status.StatusCode)
+		return fmt.Errorf("ollama %s: HTTP %d", path, status.StatusCode)
 	}
 	// SDK parse and upstream errors may include response content.
-	return fmt.Errorf("ollama /v1/systemone: SDK request or response failed")
+	return fmt.Errorf("ollama %s: SDK request or response failed", path)
 }
 
 // ContractVersion identifies the implemented decision port.

@@ -46,6 +46,8 @@ type Model struct {
 	ProviderBaseURL string
 	// ProviderAPIKey is the resolved API key for this provider.
 	ProviderAPIKey string
+	// ProviderDecisionPath overrides this provider's System One endpoint path.
+	ProviderDecisionPath string
 	// ProviderModel is the provider-side model identifier (e.g.
 	// "kimi-k2.7-code:cloud" for an Ollama model including its tag).
 	ProviderModel string
@@ -123,6 +125,8 @@ type Provider struct {
 	BaseURL string
 	APIKey  string
 	Options Options
+	// DecisionPath overrides the per-kind System One endpoint path.
+	DecisionPath string
 	// CapabilityOverrides correct provider claims per native model ID.
 	CapabilityOverrides map[string]map[string]bool
 }

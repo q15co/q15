@@ -10,12 +10,13 @@ import (
 
 // NewDecisionClient constructs a System One adapter at the configured provider API root.
 func NewDecisionClient(
-	baseURL, apiKey string,
+	baseURL, apiKey, decisionPath string,
 	transport http.RoundTripper,
 ) (decision.Client, error) {
 	return systemone.NewClient(
 		baseURL,
 		apiKey,
+		decisionPath,
 		&http.Client{Transport: transport, Timeout: 120 * time.Second},
 	)
 }

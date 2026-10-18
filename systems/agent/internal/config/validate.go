@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/q15co/q15/systems/agent/internal/embed"
+	"github.com/q15co/q15/systems/agent/internal/provider/systemone"
 	"github.com/q15co/q15/systems/agent/internal/providertypes"
 )
 
@@ -76,6 +77,15 @@ func (c Config) validate() error {
 				"providers[%d].key_env is required for Ollama Cloud providers",
 				i,
 			)
+		}
+		if strings.TrimSpace(provider.DecisionPath) != "" {
+			base := provider.BaseURL
+			if strings.TrimSpace(base) == "" && normalizedType == providertypes.Ollama {
+				base = "http://localhost:11434"
+			}
+			if _, err := systemone.Endpoint(base, provider.DecisionPath); err != nil {
+				return fmt.Errorf("providers[%d].decision_path: %w", i, err)
+			}
 		}
 		for model, capabilities := range provider.CapabilityOverrides {
 			if strings.TrimSpace(model) == "" {

@@ -62,6 +62,8 @@ type Provider struct {
 	Type    string `yaml:"type"`
 	BaseURL string `yaml:"base_url"`
 	KeyEnv  string `yaml:"key_env"`
+	// DecisionPath overrides the per-kind System One endpoint path.
+	DecisionPath string `yaml:"decision_path,omitempty"`
 	// CapabilityOverrides correct capabilities per native model ID.
 	CapabilityOverrides map[string]map[string]bool `yaml:"capability_overrides,omitempty"`
 	Discovery           ProviderDiscovery          `yaml:"discovery,omitempty"`

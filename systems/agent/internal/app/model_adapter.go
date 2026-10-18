@@ -41,6 +41,7 @@ type providerClientKey struct {
 	providerType string
 	baseURL      string
 	apiKey       string
+	decisionPath string
 }
 
 // modelClientFactory builds a provider client for one discovered model.
@@ -298,6 +299,7 @@ func (r *routedModelAdapter) clientFor(
 		providerType: m.ProviderType,
 		baseURL:      m.ProviderBaseURL,
 		apiKey:       m.ProviderAPIKey,
+		decisionPath: m.ProviderDecisionPath,
 	}
 	if cached, ok := r.clients.Load(key); ok {
 		return cached.(agent.ModelClient), nil

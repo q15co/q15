@@ -90,6 +90,16 @@ func TestDecisionRoutingUsesDiscoveredMetadataAndReloadedProvider(t *testing.T) 
 		built[1].ProviderAPIKey != "new-key" {
 		t.Fatalf("client reused stale connection: %+v", built)
 	}
+	if err := registry.ReplaceProviders(context.Background(), []modelcatalog.Provider{{Name: "gateway", Type: "openai-compatible", BaseURL: "https://new.example/custom/root", APIKey: "new-key", DecisionPath: "/typed"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tool.Run(context.Background(), args); err != nil {
+		t.Fatal(err)
+	}
+	if len(built) != 3 || built[2].ProviderDecisionPath != "/typed" {
+		t.Fatalf("client reused stale decision path: %+v", built)
+	}
+
 }
 
 func TestDecisionRoutingRejectsChatAndPropagatesCancellation(t *testing.T) {

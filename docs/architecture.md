@@ -133,8 +133,10 @@ reuse an obsolete connection.
 Ollama's decision adapter uses `SystemOne` from the Ollama Go SDK (`v0.40.6`). OpenAI-compatible
 providers with decision models and dedicated `systemone-compatible` providers use the shared System
 One HTTP adapter. API roots belong to the provider adapter: Ollama's SDK adds `/v1/systemone` to its
-native root; compatible providers append `systemone` to their documented API root. Both adapters
-preserve the typed request/response validation and option order.
+native root; compatible providers default to `systemone` relative to their documented API root.
+Provider `decision_path` overrides either path: relative paths extend the root, and leading slashes
+replace the path at the same origin. Discovery remains rooted independently at `models`. Both
+adapters preserve the typed request/response validation and option order.
 
 Ollama Cloud API keys are supplied by the SDK adapter's transport. The SDK otherwise attempts
 SSH-key authentication for `ollama.com` before calling the transport, so a bearer-authenticated SDK
