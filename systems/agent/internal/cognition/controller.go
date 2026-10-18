@@ -876,7 +876,10 @@ func (c *Controller) nextScheduledAt(ctx context.Context, now time.Time) (time.T
 		if err != nil {
 			return time.Time{}, err
 		}
-		if state.RepairStopped {
+		// Remaining repair targets run through state triggers. A recurring
+		// schedule cannot release an unchanged stop, but another target's
+		// active retry timer must still fire.
+		if state.RepairStopped || (len(state.RepairStops) > 0 && state.RepairRetryAt.IsZero()) {
 			continue
 		}
 		if !state.RepairRetryAt.IsZero() {

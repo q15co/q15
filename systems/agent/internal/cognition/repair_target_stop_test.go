@@ -21,6 +21,7 @@ func TestStoppedRepairTargetDoesNotParkOtherTargets(t *testing.T) {
 		RepairDigest: repairInputDigest(loader.files[repairNotesPath], true)}
 	store := newFakeControllerStore()
 	c := newControllerForTest(t, store, NewSemanticMemoryExtractionRegistration(0, 0))
+	c.started = time.Now().UTC()
 	c.loader = loader
 	job := c.jobs[0]
 	ready, blocked, _, _, err := c.repairEligibility(
@@ -52,9 +53,11 @@ func TestStoppedRepairTargetDoesNotParkOtherTargets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := json.Unmarshal(raw, &loader.jobState); err != nil {
+	var restored JobState
+	if err := json.Unmarshal(raw, &restored); err != nil {
 		t.Fatal(err)
 	}
+	loader.jobState = restored
 	for i, file := range loader.memoryFiles {
 		if file.Path == other {
 			loader.memoryFiles = append(loader.memoryFiles[:i], loader.memoryFiles[i+1:]...)
@@ -84,11 +87,44 @@ func TestStoppedRepairTargetDoesNotParkOtherTargets(t *testing.T) {
 			err,
 		)
 	}
+	if err := store.StoreJobState(ctx, semanticMemoryExtractionJobType, state); err != nil {
+		t.Fatal(err)
+	}
+	if next, err := c.nextScheduledAt(ctx, time.Now().UTC()); err != nil || !next.IsZero() {
+		t.Fatalf(
+			"fully stopped surface retained a recurring schedule timer: next=%v error=%v",
+			next,
+			err,
+		)
+	}
 	loader.files[repairNotesPath] = []byte("Synthetic replacement content.\n")
 	loader.jobState = state
 	spec, err = job.newJob().Build(ctx, loader)
 	if err != nil || !spec.repair || spec.repairTarget.Path != repairNotesPath {
 		t.Fatalf("changed target did not resume: target=%s error=%v", spec.repairTarget.Path, err)
+	}
+}
+
+func TestRepairRetryTimerSurvivesAnotherStoppedTarget(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC()
+	state := JobState{RepairStopped: true, RepairFailures: 4,
+		RepairTarget: "semantic/facts.md", RepairDigest: "facts-digest"}
+	updateRepairSchedule(&state, Result{Repair: true,
+		repairTarget: "semantic/preferences.md", repairDigest: "preferences-digest"},
+		errors.New("synthetic obstacle"), now)
+	store := newFakeControllerStore()
+	c := newControllerForTest(t, store, NewSemanticMemoryExtractionRegistration(0, 0))
+	if err := store.StoreJobState(ctx, semanticMemoryExtractionJobType, state); err != nil {
+		t.Fatal(err)
+	}
+	if next, err := c.nextScheduledAt(ctx, now); err != nil || !next.Equal(state.RepairRetryAt) {
+		t.Fatalf(
+			"another stopped target suppressed retry timer: next=%v want=%v error=%v",
+			next,
+			state.RepairRetryAt,
+			err,
+		)
 	}
 }
 
