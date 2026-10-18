@@ -156,6 +156,13 @@ Notes:
   `list_providers`.
 - `ollama` defaults to local `http://localhost:11434` when `base_url` is omitted; set
   `base_url: https://ollama.com` plus `key_env: OLLAMA_API_KEY` for direct Ollama Cloud API access
+- `decision_check` reuses that Ollama provider's `base_url` and resolved key to call
+  `POST /v1/systemone`. It uses a discovered `clef` model (including `clef:27b`) or falls back to
+  `clef-flash`; discovery filters must include the model. Its arguments are `state` (text, object,
+  or array), `question` (text), and `options` (2-26 unique strings in preference order). The answer
+  includes `choice`, `probabilities`, and `confidence`. Ties follow option order; confidence
+  measures concentration, not correctness. See the
+  [Ollama decision API](https://docs.ollama.com/capabilities/decision).
 - With `discovery.models_dev: true`, Providers are matched against the catalog's `api` URL first,
   then a unique provider domain from `api` or `doc`. Ambiguous matches leave metadata unknown. Set
   `discovery.models_dev_provider` to a models.dev provider ID (for example `deepinfra`) when using a

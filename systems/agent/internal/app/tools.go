@@ -47,6 +47,7 @@ func buildRuntimeTools(
 		baseToolList,
 		tools.NewListProviders(registry, selection),
 		tools.NewListModels(registry, selection),
+		tools.NewDecisionCheck(registry),
 		tools.NewSwitchModel(registry, selection, selectionStore),
 		tools.NewSwitchCognitionModel(registry, selectionStore, cognitionJobTypes),
 		subagent.NewSpawn(subAgentManager),
