@@ -317,6 +317,7 @@ func buildRepairSpec(
 		CompletionContract: renderTypedRepairContract(target),
 		PromptSections: []agent.PromptSection{
 			{Name: "claim_id_allocation", Body: claimIDs},
+			{Name: "repair_destination_sizes", Body: renderRepairDestinationSizes(snapshots)},
 			repairTargetSection(target),
 			repairChunkSection(target, chunk, repairChunkWindowBytes(raw)),
 			repairRulesSection(target),
