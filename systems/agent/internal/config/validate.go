@@ -120,9 +120,6 @@ func (c Config) validate() error {
 		}
 	}
 
-	if err := c.validateRoleShapes(); err != nil {
-		return err
-	}
 	if c.Agent == nil {
 		return nil
 	}

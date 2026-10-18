@@ -103,8 +103,11 @@ prompt-visible user message:
 
 The model boundary has three layers. Kind is the connection family in `providertypes`, the only
 provider enum; a task does not become a kind. A model is a provider-bound catalog row with
-normalized capabilities and per-capability provenance. A role is deployment config binding an
-explicit named provider/model pair: `primary`, ordered `fallbacks`, `decision`, or `embed`.
+normalized capabilities and per-capability provenance. A role is one of the runtime selection slots
+— `interactive`, ordered by the fallback chain, plus `decision` and `embed` — held on the registry
+and persisted under `/workspace/.q15/agent/selection.json`. Nothing in the config file assigns a
+model to a role; selections are made at runtime (startup auto-selection or `switch_model`) and
+re-checked against the live roster at boot and on every dispatch.
 
 Incoming provider and models.dev `type: decision` metadata normalizes into `Capabilities.Decision`.
 Operator `override` evidence wins over provider API or artifact `derived` evidence, which wins over
@@ -112,20 +115,18 @@ models.dev `declared` evidence. Enrichment fetches `api.json?type=all` and enric
 models. The boolean capability struct, loose flags, and existing embedding backend configuration
 remain until #375. `list_models` filters effective capabilities and reports their provenance.
 
-Startup validates every binding against the role table: primary and each fallback require `chat`,
-decision requires `decision`, and embed requires `embed`. Ports repeat that check at dispatch; a
-provider reload is refused if it invalidates a running binding. Roles are never filled by a
-capability query. Fallback references retain provider identity even when providers host the same
-model ID; a bound target removed from the roster is refused rather than silently replaced. A model
-with both chat and decision capabilities remains eligible for either role. An explicit decision
-binding overlapping a chat primary or fallback aborts unless the decision binding supplies
-`allow_dual_bind` with a reason and each overlapping role supplies independent rate and request-byte
-limits. The reason is logged at every startup and surfaced in `list_providers.role_bindings`;
-counters enforce the partitions before provider I/O.
+Boot resolves each slot: a persisted selection is reused when it is roster-valid with the role's
+effective capability, otherwise the first eligible roster model is selected and persisted
+(interactive prefers a Text+ToolCalling model and steps around the decision slot). Ports repeat the
+capability check at dispatch; a slot that has no roster candidate leaves its feature absent until
+`switch_model` selects one, and chat dispatch refuses the model currently selected as decision — the
+dual-role rule is a pure selection rule with no config opt-in. The chat fallback chain is the
+current model followed by the roster in discovery order, filtered to chat-capable models and
+excluding the decision selection.
 
 Decision calls use `decision.Client` at `decision/v1`. In-tree Go adapters are checked by the
 compiler; the version declaration reserves a check for any future adapters loaded at runtime, with
-no plugin loader introduced here. The application resolves only the configured decision binding,
+no plugin loader introduced here. The application resolves only the held decision selection,
 constructs its provider adapter, and injects that port into `decision_check`. The tool owns neither
 selection nor HTTP construction. Clients are keyed by provider connection facts so reloads cannot
 reuse an obsolete connection.

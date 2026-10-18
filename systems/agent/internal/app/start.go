@@ -81,10 +81,6 @@ func Start(ctx context.Context) error {
 		)
 	}
 
-	if err := configureModelRoles(cfg, registry); err != nil {
-		return err
-	}
-
 	// Background: keep the roster live, and apply an edited provider config
 	// without a restart.
 	watcher := newConfigWatcher(registry, ConfigPath, configData)

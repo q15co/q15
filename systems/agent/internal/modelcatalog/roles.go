@@ -3,117 +3,101 @@ package modelcatalog
 import (
 	"fmt"
 	"strings"
-	"time"
 )
 
-// RoleBinding is the validated runtime view of an explicit configuration binding.
-type RoleBinding struct {
-	Role                  string `json:"role"`
-	Provider              string `json:"provider"`
-	Model                 string `json:"model"`
-	AllowDualBind         string `json:"allow_dual_bind,omitempty"`
-	RequestsPerMinute     int    `json:"requests_per_minute,omitempty"`
-	RequestBytesPerMinute int    `json:"request_bytes_per_minute,omitempty"`
+// RoleSelection is the registry's runtime view of one held decision or embed
+// selection. Model is the agent-side ref; ProviderModel is the native model ID
+// when known. Selections are runtime state: nothing in the config file binds
+// them, and they are persisted by internal/selectionstore.
+type RoleSelection struct {
+	Provider      string `json:"provider"`
+	Model         string `json:"model"`
+	ProviderModel string `json:"provider_model,omitempty"`
 }
 
-type roleUsage struct {
-	since           time.Time
-	requests, bytes int
+// IsValid reports whether the selection names a provider and a model.
+func (s RoleSelection) IsValid() bool {
+	return strings.TrimSpace(s.Provider) != "" && strings.TrimSpace(s.Model) != ""
 }
 
-// SetRoleBindings publishes validated bindings and resets their independent quota windows.
-func (r *Registry) SetRoleBindings(bindings []RoleBinding) {
+// matches reports whether the selection refers to the roster model.
+func (s RoleSelection) matches(m Model) bool {
+	return s.Provider == m.ProviderName &&
+		(s.Model == m.Ref || s.Model == m.ProviderModel ||
+			(s.ProviderModel != "" && s.ProviderModel == m.ProviderModel))
+}
+
+// SetRoleSelections replaces the held decision and embed selections at boot.
+// An invalid (empty) selection clears its slot.
+func (r *Registry) SetRoleSelections(decision, embed RoleSelection) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.roles = append([]RoleBinding(nil), bindings...)
-	r.roleUsage = make(map[string]roleUsage)
+	r.decision = normalizeRoleSelection(decision)
+	r.embed = normalizeRoleSelection(embed)
 }
 
-// RoleBindings returns the explicit bindings surfaced alongside provider status.
-func (r *Registry) RoleBindings() []RoleBinding {
+// SetDecision replaces the held decision selection. An invalid selection
+// clears the slot.
+func (r *Registry) SetDecision(sel RoleSelection) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.decision = normalizeRoleSelection(sel)
+}
+
+// SetEmbed replaces the held embed selection. An invalid selection clears the
+// slot.
+func (r *Registry) SetEmbed(sel RoleSelection) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.embed = normalizeRoleSelection(sel)
+}
+
+// Decision returns the currently held decision selection, if any.
+func (r *Registry) Decision() (RoleSelection, bool) {
+	if r == nil {
+		return RoleSelection{}, false
+	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return append([]RoleBinding(nil), r.roles...)
-}
-
-// Binding returns the configured target for a role, without searching by capability.
-func (r *Registry) Binding(role string) (RoleBinding, bool) {
-	for _, b := range r.RoleBindings() {
-		if b.Role == role {
-			return b, true
-		}
+	if !r.decision.IsValid() {
+		return RoleSelection{}, false
 	}
-	return RoleBinding{}, false
+	return r.decision, true
 }
 
-// RequireChat checks effective capability and the decider binding for the supplied chat role.
+// Embed returns the currently held embed selection, if any.
+func (r *Registry) Embed() (RoleSelection, bool) {
+	if r == nil {
+		return RoleSelection{}, false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if !r.embed.IsValid() {
+		return RoleSelection{}, false
+	}
+	return r.embed, true
+}
+
+func normalizeRoleSelection(sel RoleSelection) RoleSelection {
+	return RoleSelection{
+		Provider:      strings.TrimSpace(sel.Provider),
+		Model:         strings.TrimSpace(sel.Model),
+		ProviderModel: strings.TrimSpace(sel.ProviderModel),
+	}
+}
+
+// RequireChat checks the effective chat capability and enforces the dual-role
+// rule: the model currently selected as the decider never serves chat.
 func (r *Registry) RequireChat(role string, m Model) error {
 	if !m.Capabilities.Chat {
 		return fmt.Errorf("role %s model %q: missing capability chat", role, m.ProviderModel)
 	}
-	decision, ok := r.Binding("decision")
-	if !ok || !r.matches(decision, m) {
-		return nil
-	}
-	if strings.TrimSpace(decision.AllowDualBind) == "" {
+	if decision, ok := r.Decision(); ok && decision.matches(m) {
 		return fmt.Errorf(
-			"role %s model %q: dual bind with decision requires allow_dual_bind",
+			"role %s model %q: selected as the decision model; pick another model or move the decision slot first (switch_model with slot decision)",
 			role,
 			m.ProviderModel,
 		)
-	}
-	for _, b := range r.RoleBindings() {
-		if (b.Role == "primary" || strings.HasPrefix(b.Role, "fallbacks[")) && r.matches(b, m) &&
-			b.RequestsPerMinute > 0 &&
-			b.RequestBytesPerMinute > 0 &&
-			decision.RequestsPerMinute > 0 &&
-			decision.RequestBytesPerMinute > 0 {
-			return nil
-		}
-	}
-	return fmt.Errorf(
-		"role %s model %q: dual bind requires separate role rate and budget limits",
-		role,
-		m.ProviderModel,
-	)
-}
-
-func (r *Registry) matches(b RoleBinding, m Model) bool {
-	return b.Provider == m.ProviderName && (b.Model == m.ProviderModel || b.Model == m.Ref)
-}
-
-// ReserveRole atomically charges a role's canonical request bytes and request rate before I/O.
-func (r *Registry) ReserveRole(role string, m Model, bytes int) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	for _, b := range r.roles {
-		matchesRole := b.Role == role ||
-			(role == "primary" && strings.HasPrefix(b.Role, "fallbacks["))
-		if !matchesRole || !r.matches(b, m) {
-			continue
-		}
-		now := time.Now()
-		usage := r.roleUsage[b.Role]
-		if now.Sub(usage.since) >= time.Minute {
-			usage = roleUsage{since: now}
-		}
-		if b.RequestsPerMinute > 0 && usage.requests >= b.RequestsPerMinute {
-			return fmt.Errorf("role %s model %q: request rate exhausted", b.Role, m.ProviderModel)
-		}
-		if b.RequestBytesPerMinute > 0 && bytes > b.RequestBytesPerMinute-usage.bytes {
-			return fmt.Errorf(
-				"role %s model %q: request byte budget exhausted",
-				b.Role,
-				m.ProviderModel,
-			)
-		}
-		usage.requests++
-		usage.bytes += bytes
-		if r.roleUsage == nil {
-			r.roleUsage = make(map[string]roleUsage)
-		}
-		r.roleUsage[b.Role] = usage
-		return nil
 	}
 	return nil
 }

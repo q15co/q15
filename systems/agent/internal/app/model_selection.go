@@ -35,7 +35,7 @@ func (r *routedModelAdapter) Plan(
 			})
 			continue
 		}
-		if err := r.registry.RequireChat(r.chatRole(ref, m), m); err != nil {
+		if err := r.registry.RequireChat("primary", m); err != nil {
 			plan.Skipped = append(plan.Skipped, modelselection.Skip{Ref: ref, Reason: err.Error()})
 			continue
 		}

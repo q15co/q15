@@ -48,12 +48,8 @@ type Config struct {
 	// validateSchemaVersion for what is refused, and why.
 	SchemaVersion int `yaml:"schema_version,omitempty"`
 
-	Primary   *ModelBinding  `yaml:"primary,omitempty"`
-	Fallbacks []ModelBinding `yaml:"fallbacks,omitempty"`
-	Decision  *ModelBinding  `yaml:"decision,omitempty"`
-	Embed     *ModelBinding  `yaml:"embed,omitempty"`
-	Providers []Provider     `yaml:"providers"`
-	Agent     *Agent         `yaml:"agent"`
+	Providers []Provider `yaml:"providers"`
+	Agent     *Agent     `yaml:"agent"`
 }
 
 // Provider defines a named model provider entry in config.yaml.
@@ -88,9 +84,9 @@ type ProviderDiscovery struct {
 
 // Agent defines one configured q15 agent instance.
 //
-// Model role bindings belong to the top-level Config. Explicit interactive
-// switches and per-job cognition overrides remain persisted runtime state
-// (see internal/selectionstore).
+// Config carries no model assignments at all: which model chats, decides, and
+// embeds is runtime state, persisted per slot by internal/selectionstore and
+// switched with the switch_model tool.
 type Agent struct {
 	Name              string `yaml:"name"`
 	MemoryRecentTurns int    `yaml:"memory_recent_turns"`

@@ -4,15 +4,18 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
+	"github.com/q15co/q15/systems/agent/internal/decision"
 	q15media "github.com/q15co/q15/systems/agent/internal/media"
 	"github.com/q15co/q15/systems/agent/internal/modelcatalog"
 	"github.com/q15co/q15/systems/agent/internal/modelselection"
 	"github.com/q15co/q15/systems/agent/internal/selectionstore"
+	modeltools "github.com/q15co/q15/systems/agent/internal/tools/models"
 )
 
 // --- shared model test doubles (reused by runtime_entrypoints_test.go) ---
@@ -575,18 +578,12 @@ func TestRoutedModelAdapterAdaptsMediaPerModelCapabilities(t *testing.T) {
 func TestBuildModelRefsCurrentFirst(t *testing.T) {
 	registry := testRegistry(t, map[string][]modelcatalog.Model{
 		"p": {
-			{ProviderModel: "alpha"},
-			{ProviderModel: "beta"},
-			{ProviderModel: "gamma"},
+			{ProviderModel: "alpha", Capabilities: modelcatalog.Capabilities{Chat: true}},
+			{ProviderModel: "beta", Capabilities: modelcatalog.Capabilities{Chat: true}},
+			{ProviderModel: "gamma", Capabilities: modelcatalog.Capabilities{Chat: true}},
 		},
 	})
 
-	registry.SetRoleBindings(
-		[]modelcatalog.RoleBinding{
-			{Role: "fallbacks[0]", Provider: "p", Model: "alpha"},
-			{Role: "fallbacks[1]", Provider: "p", Model: "gamma"},
-		},
-	)
 	refs := buildModelRefs("beta", registry)
 	if len(refs) != 3 {
 		t.Fatalf("refs = %v, want 3", refs)
@@ -594,23 +591,20 @@ func TestBuildModelRefsCurrentFirst(t *testing.T) {
 	if refs[0] != "beta" {
 		t.Fatalf("refs[0] = %q, want beta (current first)", refs[0])
 	}
+	if refs[1] != "alpha" || refs[2] != "gamma" {
+		t.Fatalf("refs = %v, want roster order after the current ref", refs)
+	}
 }
 
 func TestBuildModelRefsCurrentNotInSnapshot(t *testing.T) {
 	registry := testRegistry(t, map[string][]modelcatalog.Model{
 		"p": {
-			{ProviderModel: "alpha"},
-			{ProviderModel: "beta"},
+			{ProviderModel: "alpha", Capabilities: modelcatalog.Capabilities{Chat: true}},
+			{ProviderModel: "beta", Capabilities: modelcatalog.Capabilities{Chat: true}},
 		},
 	})
 
-	// Current model gone from roster → still first, rest follow.
-	registry.SetRoleBindings(
-		[]modelcatalog.RoleBinding{
-			{Role: "fallbacks[0]", Provider: "p", Model: "alpha"},
-			{Role: "fallbacks[1]", Provider: "p", Model: "beta"},
-		},
-	)
+	// Current model gone from roster → still first, chat-capable roster follows.
 	refs := buildModelRefs("gone", registry)
 	if len(refs) != 3 {
 		t.Fatalf("refs = %v, want 3 (gone + alpha + beta)", refs)
@@ -620,30 +614,200 @@ func TestBuildModelRefsCurrentNotInSnapshot(t *testing.T) {
 	}
 }
 
-// --- selection bootstrap tests ---
-
-func TestLoadInteractiveSelectionRequiresExplicitPrimary(t *testing.T) {
-	registry := testRegistry(
-		t,
-		map[string][]modelcatalog.Model{
-			"p": {
-				{
-					ProviderModel: "available",
-					Capabilities:  modelcatalog.Capabilities{Chat: true, Text: true},
-				},
+// The fallback chain is chat dispatch: the decision-selected model and models
+// without the chat capability never enter it, and Plan applies the same
+// exclusions through RequireChat.
+func TestFallbackChainSkipsDecisionAndNonChatModels(t *testing.T) {
+	registry := testRegistry(t, map[string][]modelcatalog.Model{
+		"p": {
+			{
+				ProviderModel: "chatty",
+				Capabilities:  modelcatalog.Capabilities{Chat: true, Text: true, ToolCalling: true},
+			},
+			{
+				ProviderModel: "decider",
+				Capabilities:  modelcatalog.Capabilities{Chat: true, Decision: true, Text: true},
+			},
+			{ProviderModel: "silent", Capabilities: modelcatalog.Capabilities{Text: true}},
+			{
+				ProviderModel: "helper",
+				Capabilities:  modelcatalog.Capabilities{Chat: true, Text: true},
 			},
 		},
+	})
+	registry.SetDecision(modelcatalog.RoleSelection{Provider: "p", Model: "decider"})
+
+	refs := buildModelRefs("chatty", registry)
+	if len(refs) != 2 || refs[0] != "chatty" || refs[1] != "helper" {
+		t.Fatalf("fallback refs = %v, want [chatty helper]", refs)
+	}
+
+	calls := 0
+	adapter, err := newModelAdapterWithFactory(
+		registry,
+		nil,
+		func(modelcatalog.Model, q15media.Store) (agent.ModelClient, error) {
+			calls++
+			return &fakeModelClient{}, nil
+		},
 	)
-	store, err := selectionstore.Open(filepath.Join(t.TempDir(), "selection.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := loadInteractiveSelection(registry, store); err == nil {
-		t.Fatal("primary selected by capability query")
+	plan, err := adapter.Plan(
+		[]string{"chatty", "decider", "silent", "helper"},
+		modelselection.Requirements{Text: true},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.EligibleRefs) != 2 ||
+		plan.EligibleRefs[0] != "chatty" || plan.EligibleRefs[1] != "helper" {
+		t.Fatalf("eligible = %#v", plan.EligibleRefs)
+	}
+	if len(plan.Skipped) != 2 {
+		t.Fatalf("skipped = %#v", plan.Skipped)
+	}
+	if !strings.Contains(plan.Skipped[0].Reason, "decision model") {
+		t.Fatalf("decision skip reason = %q", plan.Skipped[0].Reason)
+	}
+	if !strings.Contains(plan.Skipped[1].Reason, "missing capability chat") {
+		t.Fatalf("non-chat skip reason = %q", plan.Skipped[1].Reason)
+	}
+	if _, err := adapter.Complete(context.Background(), "decider", nil, nil); err == nil ||
+		!strings.Contains(err.Error(), "decision model") {
+		t.Fatalf("dispatch to the decision selection = %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("decision-selected model reached the provider: %d calls", calls)
 	}
 }
 
-func TestLoadInteractiveSelectionUsesConfiguredPrimaryAndPersistsOnFirstRun(t *testing.T) {
+// --- selection bootstrap tests ---
+
+// The interactive slot auto-selects the first roster model with Text and
+// ToolCalling ahead of a plainer chat model, and persists the choice.
+func TestAutoSelectPrefersTextAndToolCalling(t *testing.T) {
+	registry := testRegistry(t, map[string][]modelcatalog.Model{
+		"p": {
+			{ProviderModel: "plain", Capabilities: modelcatalog.Capabilities{Chat: true}},
+			{
+				ProviderModel: "equipped",
+				Capabilities:  modelcatalog.Capabilities{Chat: true, Text: true, ToolCalling: true},
+			},
+		},
+	})
+	store := openTestSelectionStore(t)
+	selection, err := loadRuntimeSelections(registry, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider, model := selection.Current(); provider != "p" || model != "equipped" {
+		t.Fatalf("Current() = %q/%q, want p/equipped", provider, model)
+	}
+	if got := store.Interactive(); got.Provider != "p" || got.Model != "equipped" {
+		t.Fatalf("persisted interactive = %+v, want p/equipped", got)
+	}
+}
+
+// The persisted decision selection resolves before interactive auto-selection
+// so the chat model never lands on the decider, even when the decider sorts
+// first in the roster.
+func TestAutoSelectSkipsDecisionSelection(t *testing.T) {
+	registry := testRegistry(t, map[string][]modelcatalog.Model{
+		"p": {
+			{
+				ProviderModel: "decider",
+				Capabilities: modelcatalog.Capabilities{
+					Chat: true, Decision: true, Text: true, ToolCalling: true,
+				},
+			},
+			{
+				ProviderModel: "chatter",
+				Capabilities:  modelcatalog.Capabilities{Chat: true, Text: true, ToolCalling: true},
+			},
+		},
+	})
+	store := openTestSelectionStore(t)
+	if err := store.SetDecision("p", "decider"); err != nil {
+		t.Fatal(err)
+	}
+	selection, err := loadRuntimeSelections(registry, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider, model := selection.Current(); provider != "p" || model != "chatter" {
+		t.Fatalf("Current() = %q/%q, want p/chatter", provider, model)
+	}
+	if refs := buildModelRefs(selection.CurrentModel(), registry); len(refs) != 1 {
+		t.Fatalf("fallback chain = %v, want only the interactive model", refs)
+	}
+	// Decision dispatch still routes to the decider.
+	adapter := newRoutedDecisionAdapter(
+		registry,
+		func(modelcatalog.Model) (decision.Client, error) { return &fakeDecisionClient{}, nil },
+	)
+	if _, err := adapter.Check(context.Background(), decision.Request{
+		State:     "context",
+		Questions: map[string]decision.Question{"check": decision.Noul("True?")},
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The decider may never equal the chat model, at boot and through the tool.
+func TestDecisionSelectionRefusesInteractiveModel(t *testing.T) {
+	t.Run("boot", func(t *testing.T) {
+		registry := testRegistry(t, map[string][]modelcatalog.Model{
+			"p": {{
+				ProviderModel: "both",
+				Capabilities:  modelcatalog.Capabilities{Chat: true, Decision: true, Text: true},
+			}},
+		})
+		store := openTestSelectionStore(t)
+		if err := store.SetInteractive("p", "both"); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.SetDecision("p", "both"); err != nil {
+			t.Fatal(err)
+		}
+		_, err := loadRuntimeSelections(registry, store)
+		if err == nil || !strings.Contains(err.Error(), "role decision") ||
+			!strings.Contains(err.Error(), "may not equal the chat model") ||
+			!strings.Contains(err.Error(), "slot decision") {
+			t.Fatalf("boot error = %v", err)
+		}
+	})
+	t.Run("switch", func(t *testing.T) {
+		registry := testRegistry(t, map[string][]modelcatalog.Model{
+			"p": {{
+				ProviderModel: "both",
+				Capabilities:  modelcatalog.Capabilities{Chat: true, Decision: true, Text: true},
+			}},
+		})
+		store := openTestSelectionStore(t)
+		selection, err := loadRuntimeSelections(registry, store)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if provider, model := selection.Current(); provider != "p" || model != "both" {
+			t.Fatalf("interactive = %q/%q, want p/both", provider, model)
+		}
+		_, err = modeltools.NewSwitchModel(registry, selection, store).Run(
+			context.Background(),
+			`{"provider":"p","model":"both","slot":"decision"}`,
+		)
+		if err == nil || !strings.Contains(err.Error(), "role decision") ||
+			!strings.Contains(err.Error(), "may not equal the interactive chat model") {
+			t.Fatalf("switch error = %v", err)
+		}
+		if got := store.Decision(); got.IsValid() {
+			t.Fatalf("refused switch persisted decision selection: %+v", got)
+		}
+	})
+}
+
+func TestLoadInteractiveSelectionRestoresPersistedSelection(t *testing.T) {
 	registry := testRegistry(t, map[string][]modelcatalog.Model{
 		"p": {
 			{
@@ -652,9 +816,6 @@ func TestLoadInteractiveSelectionUsesConfiguredPrimaryAndPersistsOnFirstRun(t *t
 			},
 		},
 	})
-	registry.SetRoleBindings(
-		[]modelcatalog.RoleBinding{{Role: "primary", Provider: "p", Model: "alpha"}},
-	)
 	storePath := filepath.Join(t.TempDir(), "selection.json")
 	store1, err := selectionstore.Open(storePath)
 	if err != nil {

@@ -65,7 +65,7 @@ ephemeral, and what must be provided as config/secret input.
 | `/var/lib/q15/proxy`                      | Persistent     | **Kubernetes:** required PVC (`q15-proxy-state`). **Compose:** required named volume or equivalent mount for durable proxy state. **Local development:** may be ephemeral only when proxy state durability is intentionally not needed.                                                                                                                                                                                                                                                               | `q15-proxy`                       | Proxy-owned durable state directory.                                                                                                                                                                                                                                                         |
 | `/var/lib/q15-web`                        | Persistent     | **Compose:** required `q15_web_state` volume, mounted only by `q15-web`; image-owned UID 65532/GID 1000, mode 0700. Preserve across updates. **Kubernetes:** not implemented.                                                                                                                                                                                                                                                                                                                         | `q15-web`                         | Owner WebAuthn public credentials, counters, hashed bounded sessions, session public keys and bounded proof-reuse records. Private admin Unix socket; never mount this state in the agent.                                                                                                   |
 | Qdrant storage                            | Persistent     | **Compose:** required named volume (`q15_qdrant_storage`) for embedding collections.                                                                                                                                                                                                                                                                                                                                                                                                                  | `q15-qdrant`                      | Dense Gemini vectors plus Qdrant BM25 sparse vectors for opt-in typed sources.                                                                                                                                                                                                               |
-| `/etc/q15/agent/config.yaml`              | Config         | **Kubernetes:** required via `ConfigMap/q15-agent-config`. **Compose:** required via compose `configs` or bind mount. **Local development:** required when running `q15-agent`.                                                                                                                                                                                                                                                                                                                       | `q15-agent`                       | Structured agent config (providers, models, Telegram policy).                                                                                                                                                                                                                                |
+| `/etc/q15/agent/config.yaml`              | Config         | **Kubernetes:** required via `ConfigMap/q15-agent-config`. **Compose:** required via compose `configs` or bind mount. **Local development:** required when running `q15-agent`.                                                                                                                                                                                                                                                                                                                       | `q15-agent`                       | Structured agent config (providers, Telegram policy).                                                                                                                                                                                                                                        |
 | `/etc/q15/proxy/policy.yaml`              | Config         | **Kubernetes:** required via `ConfigMap/q15-proxy-policy`. **Compose:** required via compose `configs` or bind mount. **Local development:** required when running `q15-proxy`.                                                                                                                                                                                                                                                                                                                       | `q15-proxy`                       | Structured proxy policy (rules, allowed secret aliases, request env mapping).                                                                                                                                                                                                                |
 | `/etc/q15/auth/auth.json`                 | Secret         | **Kubernetes:** required via `Secret/q15-agent-auth` (`auth.json` key). **Compose:** required writable directory mount at `/etc/q15/auth` containing `auth.json`; do not bind-mount only the file. **Local development:** may be omitted only when auth-dependent flows are intentionally not used.                                                                                                                                                                                                   | `q15-agent`                       | Auth bootstrap output from `q15 auth login`; consumed at runtime by the agent and updated when OpenAI OAuth refreshes rotate credentials.                                                                                                                                                    |
 | Provider/API key secrets (env or `_FILE`) | Secret         | **Kubernetes:** required secret keys in `q15-agent-env` and/or `q15-proxy-env` based on configured providers and policy aliases. **Compose:** required Docker secrets or env files for enabled integrations. **Local development:** optional only for integrations you are not using.                                                                                                                                                                                                                 | shared (`q15-agent`, `q15-proxy`) | Includes provider keys, Telegram token, Brave key (optional), Gemini key (optional), and proxy secret aliases resolved from env or `_FILE`.                                                                                                                                                  |
@@ -115,19 +115,6 @@ providers:
     discovery:
       models_dev: true
 
-primary:
-  provider: ollama-cloud
-  model: gpt-oss:120b
-fallbacks:
-  - provider: moonshot
-    model: kimi-k2.7
-decision:
-  provider: ollama-cloud
-  model: clef:27b
-embed:
-  provider: ollama-local
-  model: qwen3-embedding:0.6b
-
 agent:
   name: Q15
   memory_recent_turns: 6
@@ -173,54 +160,38 @@ Notes:
 - `ollama` defaults to local `http://localhost:11434` when `base_url` is omitted; set
   `base_url: https://ollama.com` plus `key_env: OLLAMA_API_KEY` for direct Ollama Cloud API access
 
-- TEI embedding servers use `type: openai-compatible` with their service root as `base_url` (for
-  example, `http://q15-tei:80`). When `/models` returns 404, discovery reads `/info` at that root
-  and derives the embedding capability from `model_type.embedding`. Bind `embed.model` to
-  `served_model_name`, or `model_id` when no served name is set. Keep the existing embedding backend
-  URL in `agent.tools.embeddings.base_url_env`; discovery does not change it. Authentication
-  failures and other `/models` errors do not trigger the TEI probe. Omit `key_env` for a local
-  unauthenticated endpoint (loopback, a private or link-local address, or a service name without a
-  dot); `key_env` stays required on a public host, so a misconfigured cloud provider is refused at
-  load rather than at the first request. When supplied, the named secret must resolve even for a
-  local service.
+- TEI embedding servers can serve `agent.tools.embeddings` with `provider: openai` and their service
+  root as `base_url_env` (for example, `http://q15-tei:80`). They are an embedding backend only: TEI
+  serves no `/models` roster, so it cannot appear under `providers`, and the embed model slot must
+  point at an embed-capable roster model from another provider (Ollama or Gemini; see "Runtime model
+  state" below). Omit `key_env` for a local unauthenticated endpoint (loopback, a private or
+  link-local address, or a service name without a dot); `key_env` stays required on a public host,
+  so a misconfigured cloud provider is refused at load rather than at the first request. When
+  supplied, the named secret must resolve even for a local service.
 
-- `primary`, ordered `fallbacks`, `decision`, and optional `embed` bind explicit `provider` and
-  `model` pairs. `model` accepts the native model ID or the catalog ref; it never selects by
-  capability. `primary` seeds the interactive selection on first run. An explicitly persisted
-  interactive selection survives restart and is checked again at startup. A configured agent must
-  supply `primary`; an enabled embedding service must supply `embed`. Role capability checks run
-  after initial discovery and before starting the runtime.
+- Model selection is runtime state; the config file carries no model assignments. q15 holds three
+  selection slots — `interactive` (chat), `decision`, and `embed` — persisted to
+  `/workspace/.q15/agent/selection.json` on every change. At startup a persisted, roster-valid
+  selection is restored; an empty or stale slot auto-selects from the live roster (interactive
+  prefers a Text+ToolCalling model) and persists the choice. The live selections are shown in
+  `list_providers` under `role_selections`.
 
-- Startup checks each binding against the effective catalog: primary and every fallback require
-  `chat`, decision requires `decision`, and embed requires `embed`. Missing support aborts with the
-  role, model, and required capability. Dispatch checks again after discovery refreshes. An enabled
-  embedding service requires an `embed` binding; the existing embedding backend config remains in
-  `agent.tools.embeddings` until #375. The embed binding selects the native model; its backend URL
-  and credentials still come from that embedding tool configuration.
+- The interactive model chats and falls back along the live roster in discovery order (current model
+  first), skipping models without the chat capability and the model selected as decision. Capability
+  checks repeat at dispatch, so a roster refresh never routes chat into a model that lost or lacks
+  the capability. The decision model never equals the interactive chat model: `decision_check` and
+  every chat dispatch enforce that selection rule.
 
-- `decision_check` uses only the `decision` binding. An absent binding leaves the tool unavailable.
-  Incoming `type: decision` metadata normalizes into the capability, with provenance. A model with
-  both `chat` and `decision` may serve either role; capability flags do not prohibit it from chat.
+- `decision_check` dispatches the decision slot only. With no decision selection the tool reports
+  "role decision: no model selected; use switch_model with slot decision"; the embedding tools
+  likewise require an embed selection. Incoming `type: decision` metadata normalizes into the
+  capability, with provenance. A model with both `chat` and `decision` may serve either role;
+  capability flags do not prohibit it from chat, only the selection rule does.
 
-- Binding the same provider/model as decider and chat primary or any fallback aborts unless
-  `decision.allow_dual_bind: "<reason>"` names the reason. Every overlapping chat binding and the
-  decision binding must have positive `limits.requests_per_minute` and
-  `limits.request_bytes_per_minute`. These are independent per-role windows, charged atomically
-  before I/O; request bytes are the serialized canonical request, not a token-price estimate. The
-  reason is logged at every startup, and `list_providers.role_bindings` reports it and the limits.
-  For example:
-
-  ```yaml
-  primary:
-    provider: local
-    model: shared-model
-    limits: {requests_per_minute: 30, request_bytes_per_minute: 1000000}
-  decision:
-    provider: local
-    model: shared-model
-    allow_dual_bind: "single-model deployment with separate request quotas"
-    limits: {requests_per_minute: 120, request_bytes_per_minute: 250000}
-  ```
+- `switch_model` takes an optional `slot` parameter: `interactive` (the default), `decision`, or
+  `embed`. Each switch validates the slot's capability (`chat`, `decision`, `embed`) against the
+  live roster, applies the dual-role rule (interactive refuses the decision-selected model and vice
+  versa), persists to `selection.json`, and takes effect on the next use without a restart.
 
 - A dedicated [System One compatible provider](https://docs.typesafe.ai/models) can use
   `type: systemone-compatible`, `base_url: https://api.typesafe.ai/v1`, and
@@ -267,8 +238,9 @@ Notes:
   `list_providers` reports why under `config_reload`. A rotated secret file on its own is not a
   change to this file, so it still needs a restart.
 
-- Only the `providers` section reloads; changes to role bindings or `agent` settings require a
-  restart. A provider edit that removes a required capability from a running binding is refused.
+- Only the `providers` section reloads; changes to `agent` settings require a restart. Model
+  selections are runtime state, so they survive a provider reload and are re-checked against the
+  live roster at dispatch.
 
 - For Ollama Cloud, create an API key from the Ollama account settings, expose it as
   `OLLAMA_API_KEY` or `OLLAMA_API_KEY_FILE`, and use native Ollama model names such as
@@ -338,9 +310,10 @@ Notes:
   capabilities
 
 - interactive model switches are explicit provider/model selections persisted under
-  `/workspace/.q15/agent/selection.json`. Use `list_providers`, `list_models`, `switch_model`, and
-  `switch_cognition_model`; switches are checked before persistence. Fallbacks come only from the
-  configured ordered list, including during an outage; roster eligibility never fills a role.
+  `/workspace/.q15/agent/selection.json`. Use `list_providers`, `list_models`, `switch_model`
+  (including its `decision` and `embed` slots), and `switch_cognition_model`; switches are checked
+  before persistence. The chat fallback chain is the live roster in discovery order with the current
+  model first, filtered to chat-capable models and excluding the decision-selected model.
 
 - background cognition jobs inherit the interactive model unless `switch_cognition_model` sets a
   per-job override

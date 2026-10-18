@@ -4,13 +4,16 @@
 # endpoint at startup (and refreshes periodically) to discover available models.
 # There is no hand-typed models: list — the provider roster IS the model config.
 #
-# agent.provider + agent.model seed the current interactive provider/model
-# pair. agent.model is the tag-stripped provider model id. The agent can list
-# and switch live models at runtime with list_providers/list_models/switch_model;
-# switches are persisted and survive restart. Background cognition jobs inherit
-# the interactive model unless switch_cognition_model targets a specific job.
-# Each path tries its configured model first, then falls through to other
-# roster models.
+# Which model chats, decides, and embeds is runtime state, not config: the
+# agent auto-selects an interactive model on first run (Text+ToolCalling
+# preferred), holds decision and embed slots the same way, and persists every
+# selection under /workspace/.q15/agent/selection.json. The agent can list and
+# switch live models at runtime with list_providers/list_models/switch_model
+# (slot "interactive" by default, also "decision" and "embed"); switches are
+# persisted and survive restart. Background cognition jobs inherit the
+# interactive model unless switch_cognition_model targets a specific job.
+# Each chat turn tries the current model first, then the other chat-capable
+# roster models in discovery order, skipping the decision-selected model.
 
 providers:
   - name: ollama-cloud

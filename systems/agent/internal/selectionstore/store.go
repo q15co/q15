@@ -1,7 +1,8 @@
 // Package selectionstore persists the session's runtime model selections
-// (interactive agent + per-job cognition overrides) so a switch survives a
-// service restart. It is the durable layer under the live modelcatalog
-// selection; the config file is consulted only as a one-time bootstrap seed.
+// (interactive agent, decision and embed slots, and per-job cognition
+// overrides) so a switch survives a service restart. It is the durable layer
+// under the live modelcatalog selection; the config file carries no model
+// choices at all — every model selection is runtime state.
 package selectionstore
 
 import (
@@ -39,17 +40,22 @@ func (s Selection) IsValid() bool {
 type document struct {
 	SchemaVersion int                  `json:"schema_version"`
 	Interactive   Selection            `json:"interactive"`
+	Decision      Selection            `json:"decision,omitempty"`
+	Embed         Selection            `json:"embed,omitempty"`
 	Cognition     map[string]Selection `json:"cognition,omitempty"`
 }
 
 // Store is the in-memory cached selection store. It loads once at startup,
 // serves cheap concurrent reads, and atomically persists on every write.
 type Store struct {
-	mu   sync.RWMutex
-	path string
-	now  func() time.Time
+	mu      sync.RWMutex
+	writeMu sync.Mutex // serializes stage-persist-commit of one write
+	path    string
+	now     func() time.Time
 
 	interactive Selection
+	decision    Selection
+	embed       Selection
 	cognition   map[string]Selection
 }
 
@@ -103,6 +109,8 @@ func (s *Store) load() error {
 
 	s.mu.Lock()
 	s.interactive = doc.Interactive
+	s.decision = doc.Decision
+	s.embed = doc.Embed
 	if doc.Cognition != nil {
 		s.cognition = cloneCognitionMap(doc.Cognition)
 	} else {
@@ -127,10 +135,48 @@ func (s *Store) HasInteractive() bool {
 	return s.Interactive().IsValid()
 }
 
+// Decision returns the persisted decision selection.
+func (s *Store) Decision() Selection {
+	if s == nil {
+		return Selection{}
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.decision
+}
+
+// Embed returns the persisted embed selection.
+func (s *Store) Embed() Selection {
+	if s == nil {
+		return Selection{}
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.embed
+}
+
 // SetInteractive persists the interactive selection. Persistence happens
 // before the in-memory state is committed, so a write failure leaves the
 // running selection unchanged.
 func (s *Store) SetInteractive(provider, model string) error {
+	return s.setSelection("interactive", provider, model)
+}
+
+// SetDecision persists the decision selection with the same durability rule
+// as SetInteractive.
+func (s *Store) SetDecision(provider, model string) error {
+	return s.setSelection("decision", provider, model)
+}
+
+// SetEmbed persists the embed selection with the same durability rule as
+// SetInteractive.
+func (s *Store) SetEmbed(provider, model string) error {
+	return s.setSelection("embed", provider, model)
+}
+
+// setSelection stages one slot's next value, persists the whole document
+// atomically, and only then commits the in-memory state.
+func (s *Store) setSelection(slot, provider, model string) error {
 	if s == nil {
 		return fmt.Errorf("selection store is not configured")
 	}
@@ -140,19 +186,37 @@ func (s *Store) SetInteractive(provider, model string) error {
 		UpdatedAt: s.now().UTC(),
 	}
 	if !selection.IsValid() {
-		return fmt.Errorf("interactive selection requires provider and model")
+		return fmt.Errorf("%s selection requires provider and model", slot)
 	}
 
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	s.mu.Lock()
-	nextInteractive := selection
-	nextCognition := s.cognition
+	next := s.documentLocked()
 	s.mu.Unlock()
-	if err := s.persist(nextInteractive, nextCognition); err != nil {
+	switch slot {
+	case "interactive":
+		next.Interactive = selection
+	case "decision":
+		next.Decision = selection
+	case "embed":
+		next.Embed = selection
+	default:
+		return fmt.Errorf("unknown selection slot %q", slot)
+	}
+	if err := s.persist(next); err != nil {
 		return err
 	}
 
 	s.mu.Lock()
-	s.interactive = nextInteractive
+	switch slot {
+	case "interactive":
+		s.interactive = selection
+	case "decision":
+		s.decision = selection
+	case "embed":
+		s.embed = selection
+	}
 	s.mu.Unlock()
 	return nil
 }
@@ -202,21 +266,21 @@ func (s *Store) SetCognition(jobType, provider, model string) error {
 		return fmt.Errorf("cognition selection requires provider and model")
 	}
 
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	s.mu.Lock()
-	nextInteractive := s.interactive
-	nextCognition := cloneCognitionMap(s.cognition)
+	next := s.documentLocked()
 	s.mu.Unlock()
-	if nextCognition == nil {
-		nextCognition = map[string]Selection{}
+	if next.Cognition == nil {
+		next.Cognition = map[string]Selection{}
 	}
-	nextCognition[jobType] = selection
-	if err := s.persist(nextInteractive, nextCognition); err != nil {
+	next.Cognition[jobType] = selection
+	if err := s.persist(next); err != nil {
 		return err
 	}
 
 	s.mu.Lock()
-	s.interactive = nextInteractive
-	s.cognition = nextCognition
+	s.cognition = next.Cognition
 	s.mu.Unlock()
 	return nil
 }
@@ -233,38 +297,47 @@ func (s *Store) ClearCognition(jobType string) error {
 		return fmt.Errorf("job_type is required")
 	}
 
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	s.mu.Lock()
-	nextInteractive := s.interactive
-	nextCognition := cloneCognitionMap(s.cognition)
+	next := s.documentLocked()
 	s.mu.Unlock()
-	if _, ok := nextCognition[jobType]; !ok {
+	if _, ok := next.Cognition[jobType]; !ok {
 		return nil
 	}
-	delete(nextCognition, jobType)
-	if err := s.persist(nextInteractive, nextCognition); err != nil {
+	delete(next.Cognition, jobType)
+	if err := s.persist(next); err != nil {
 		return err
 	}
 
 	s.mu.Lock()
-	s.interactive = nextInteractive
-	s.cognition = nextCognition
+	s.cognition = next.Cognition
 	s.mu.Unlock()
 	return nil
 }
 
-// persist writes a staged document (interactive + cognition) atomically. It is
-// the single on-disk write path; callers stage the desired next state and only
-// commit it to the Store fields after a successful return.
-func (s *Store) persist(interactive Selection, cognition map[string]Selection) error {
+// documentLocked snapshots the in-memory state as a staged document. The
+// caller holds no lock; it calls this under s.mu.
+func (s *Store) documentLocked() document {
+	return document{
+		SchemaVersion: SchemaVersion,
+		Interactive:   s.interactive,
+		Decision:      s.decision,
+		Embed:         s.embed,
+		Cognition:     cloneCognitionMap(s.cognition),
+	}
+}
+
+// persist writes a staged document atomically. It is the single on-disk write
+// path; callers stage the desired next state and only commit it to the Store
+// fields after a successful return.
+func (s *Store) persist(doc document) error {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
 		return fmt.Errorf("create selection store directory: %w", err)
 	}
 
-	doc := document{
-		SchemaVersion: SchemaVersion,
-		Interactive:   interactive,
-		Cognition:     cloneCognitionMap(cognition),
-	}
+	doc.SchemaVersion = SchemaVersion
+	doc.Cognition = cloneCognitionMap(doc.Cognition)
 	data, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode selection store: %w", err)

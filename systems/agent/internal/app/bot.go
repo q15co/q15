@@ -71,7 +71,7 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 	if err != nil {
 		return fmt.Errorf("open model selection store: %w", err)
 	}
-	selection, err := loadInteractiveSelection(registry, selectionStore)
+	selection, err := loadRuntimeSelections(registry, selectionStore)
 	if err != nil {
 		return err
 	}

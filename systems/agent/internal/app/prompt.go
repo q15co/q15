@@ -79,13 +79,37 @@ func renderCurrentModelPrompt(
 		"## Current model",
 		fmt.Sprintf("provider: %s", promptQuote(provider)),
 		modelLine,
+		renderRoleSelectionLine(registry, "decision"),
+		renderRoleSelectionLine(registry, "embed"),
 		renderCognitionOverrides(store),
 		"",
 		"## Changing models",
-		"You are not locked to this model. Use `list_providers` and `list_models` to see alternatives with live metadata, then `switch_model` to change the interactive model, or `switch_cognition_model` to set the model for a specific background cognition job. Switch only when you have a specific reason (capability needed, larger context, fresher model, cost). Otherwise stay.",
+		"You are not locked to this model. Use `list_providers` and `list_models` to see alternatives with live metadata, then `switch_model` to change the interactive model, `switch_model` with slot \"decision\" or \"embed\" to change the decision or embedding model, or `switch_cognition_model` to set the model for a specific background cognition job. The decision model never equals the interactive chat model. Switch only when you have a specific reason (capability needed, larger context, fresher model, cost). Otherwise stay.",
 	}, "\n")
 	body = strings.TrimSpace(body)
 	return agent.RenderPromptElement("current_model", nil, body)
+}
+
+// renderRoleSelectionLine renders one runtime role-selection slot for the
+// current-model prompt section, or "not selected" while the slot is empty.
+func renderRoleSelectionLine(registry *modelcatalog.Registry, slot string) string {
+	var selection modelcatalog.RoleSelection
+	var ok bool
+	switch slot {
+	case "decision":
+		selection, ok = registry.Decision()
+	case "embed":
+		selection, ok = registry.Embed()
+	}
+	if !ok {
+		return fmt.Sprintf("%s model: not selected", slot)
+	}
+	return fmt.Sprintf(
+		"%s model: %s (provider %s)",
+		slot,
+		promptQuote(selection.Model),
+		promptQuote(selection.Provider),
+	)
 }
 
 // buildInteractiveSystemTextHints returns the request-sensitive system prompt

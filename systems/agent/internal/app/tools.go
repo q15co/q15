@@ -119,9 +119,12 @@ func buildToolList(
 }
 
 // newEmbeddingService constructs the typed embedding service when configured.
-// The embedding backend is selected by the configured provider via
-// embed.NewEmbedder (gemini by default). It returns nil (no service, no tools)
-// when embeddings are disabled.
+// The embedding backend (transport and credentials) is selected by the
+// configured provider via embed.NewEmbedder (gemini by default); the embedded
+// model is the runtime embed slot, resolved live at dispatch. It returns nil
+// (no service, no tools) when embeddings are disabled; a configured service
+// with no embed selection fails at dispatch with the switch_model guidance
+// until a slot is selected.
 func newEmbeddingService(
 	ctx context.Context,
 	rt config.AgentRuntime,
@@ -132,18 +135,13 @@ func newEmbeddingService(
 	if !tool.Enabled {
 		return nil, nil
 	}
-	binding, bound := registry.Binding("embed")
-	if !bound {
-		return nil, fmt.Errorf(
-			"role embed model %q: explicit provider and model binding is required",
-			tool.Model,
-		)
+	// A boot-time embed selection names the model; embed calls still resolve
+	// the slot live, so a later switch takes effect without a restart.
+	if selection, ok := registry.Embed(); ok {
+		if m, found := registry.Lookup(selection.Provider, selection.Model); found {
+			tool.Model = m.ProviderModel
+		}
 	}
-	model, err := resolveEmbeddingRole(registry, binding)
-	if err != nil {
-		return nil, err
-	}
-	tool.Model = model.ProviderModel
 	settings := embed.Settings{
 		WorkspaceLocalDir: fileSettings.WorkspaceLocalDir,
 		MemoryLocalDir:    fileSettings.MemoryLocalDir,
@@ -166,17 +164,11 @@ func newEmbeddingService(
 		_ = state.Close()
 		return nil, err
 	}
-	embedder, err := embed.NewEmbedder(ctx, settings)
-	if err != nil {
-		_ = state.Close()
-		_ = vectors.Close()
-		return nil, err
-	}
 	return embed.NewService(
 		settings,
 		state,
 		vectors,
-		&guardedEmbedder{inner: embedder, registry: registry, binding: binding},
+		newSlotEmbedder(registry, settings),
 	), nil
 }
 

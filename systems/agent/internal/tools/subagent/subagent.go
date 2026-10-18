@@ -99,19 +99,6 @@ func (c *mediaAdaptiveClient) Complete(
 		if err := c.registry.RequireChat("primary", current); err != nil {
 			return agent.ModelClientResult{}, err
 		}
-		data, err := json.Marshal(struct {
-			Messages []conversation.Message
-			Tools    []agent.ToolDefinition
-		}{messages, tools})
-		if err != nil {
-			return agent.ModelClientResult{}, fmt.Errorf(
-				"role primary model %q: request is not JSON encodable",
-				current.ProviderModel,
-			)
-		}
-		if err := c.registry.ReserveRole("primary", current, len(data)); err != nil {
-			return agent.ModelClientResult{}, err
-		}
 	}
 	adapted := q15media.AdaptMediaToCapabilities(messages, c.support, c.store)
 	// Send the bound provider-facing model id (e.g. "gemma3:4b") to the inner

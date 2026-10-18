@@ -34,10 +34,9 @@ type Registry struct {
 	statusByProvider map[string]Status
 	// reload is the most recent attempt to apply an edited provider list, nil
 	// until one runs.
-	reload        *ReloadStatus
-	roles         []RoleBinding
-	roleUsage     map[string]roleUsage
-	roleValidator func([]Model) error
+	reload   *ReloadStatus
+	decision RoleSelection
+	embed    RoleSelection
 }
 
 // Status distinguishes discovery failures from successful empty rosters.
@@ -225,14 +224,6 @@ func (r *Registry) ReplaceProviders(ctx context.Context, providers []Provider) e
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	r.mu.RLock()
-	validator := r.roleValidator
-	r.mu.RUnlock()
-	if validator != nil {
-		if err := validator(roster.models); err != nil {
-			return err
-		}
-	}
 	r.publish(providers, roster)
 	return nil
 }
@@ -356,11 +347,4 @@ func deriveRef(providerModel string) string {
 	}
 	s = strings.ReplaceAll(s, "/", "-")
 	return strings.ReplaceAll(s, ":", "-")
-}
-
-// SetRoleValidator installs startup's validation for candidate provider reloads.
-func (r *Registry) SetRoleValidator(validate func([]Model) error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.roleValidator = validate
 }

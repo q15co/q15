@@ -56,10 +56,12 @@ func TestDecisionRoutingUsesDiscoveredMetadataAndReloadedProvider(t *testing.T) 
 		time.Second,
 	)
 	registry.Refresh(context.Background())
-	registry.SetRoleBindings(
-		[]modelcatalog.RoleBinding{
-			{Role: "decision", Provider: "gateway", Model: "vendor/unfamiliar-model"},
+	registry.SetRoleSelections(
+		modelcatalog.RoleSelection{
+			Provider: "gateway",
+			Model:    "vendor-unfamiliar-model",
 		},
+		modelcatalog.RoleSelection{},
 	)
 	client := &fakeDecisionClient{}
 	var built []modelcatalog.Model
@@ -111,8 +113,9 @@ func TestDecisionRoutingRejectsChatAndPropagatesCancellation(t *testing.T) {
 			Capabilities:  modelcatalog.Capabilities{Decision: true, Text: true},
 		},
 	}})
-	registry.SetRoleBindings(
-		[]modelcatalog.RoleBinding{{Role: "decision", Provider: "provider", Model: "decision"}},
+	registry.SetRoleSelections(
+		modelcatalog.RoleSelection{Provider: "provider", Model: "decision"},
+		modelcatalog.RoleSelection{},
 	)
 	client := &fakeDecisionClient{}
 	adapter := newRoutedDecisionAdapter(
@@ -160,10 +163,10 @@ func TestDecisionPortRefusesModelWithoutDecision(t *testing.T) {
 				Capabilities:  modelcatalog.Capabilities{Chat: true},
 			}}}
 			registry := testRegistry(t, models)
-			registry.SetRoleBindings([]modelcatalog.RoleBinding{{
-				Role: "decision", Provider: "api", Model: "native/model",
-				RequestsPerMinute: 2, RequestBytesPerMinute: 10000,
-			}})
+			registry.SetRoleSelections(
+				modelcatalog.RoleSelection{Provider: "api", Model: "native-model"},
+				modelcatalog.RoleSelection{},
+			)
 			client := &fakeDecisionClient{}
 			builds := 0
 			adapter := newRoutedDecisionAdapter(
@@ -210,7 +213,7 @@ func TestDecisionPortRefusesModelWithoutDecision(t *testing.T) {
 			models["api"][0].Capabilities.Decision = true
 			registry.Refresh(context.Background())
 			if _, err := adapter.Check(context.Background(), request); err != nil {
-				t.Fatalf("refused calls consumed the decision quota: %v", err)
+				t.Fatal(err)
 			}
 			if builds != 1 || len(client.requests) != 2 {
 				t.Fatalf("builds = %d, provider calls = %d", builds, len(client.requests))

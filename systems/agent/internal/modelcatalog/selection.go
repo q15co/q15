@@ -18,8 +18,8 @@ type Selection struct {
 }
 
 // NewSelection creates a session-scoped selection. The seed is intentionally
-// not validated here: the composition root validates startup bindings before
-// constructing a selection. Every runtime mutation via Set is checked against
+// not validated here: the composition root validates the startup selection
+// before constructing it. Every runtime mutation via Set is checked against
 // the current roster and the role policy.
 func NewSelection(registry *Registry, provider, model string) *Selection {
 	return &Selection{

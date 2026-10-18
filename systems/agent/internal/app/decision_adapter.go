@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -32,7 +31,9 @@ func newRoutedDecisionAdapter(
 	return &routedDecisionAdapter{registry: registry, factory: factory}
 }
 
-// Check dispatches only the explicit decision role and rechecks its effective capability.
+// Check dispatches the currently selected decision model and rechecks its
+// effective capability at the boundary, after resolution and before any client
+// construction.
 func (r *routedDecisionAdapter) Check(
 	ctx context.Context,
 	request decision.Request,
@@ -58,36 +59,33 @@ func (r *routedDecisionAdapter) Check(
 	if err != nil {
 		return decision.Response{}, err
 	}
-	data, err := json.Marshal(request)
-	if err != nil {
-		return decision.Response{}, fmt.Errorf("role decision: request is not JSON encodable")
-	}
-	if err := r.registry.ReserveRole("decision", model, len(data)); err != nil {
-		return decision.Response{}, err
-	}
 	return client.Check(ctx, request)
 }
 
+// resolve reads the decision slot fresh on every call: the selection is
+// runtime state, so a switch_model slot decision takes effect on the next
+// decision without a restart.
 func (r *routedDecisionAdapter) resolve(ref string) (modelcatalog.Model, error) {
 	if r == nil || r.registry == nil || r.factory == nil {
 		return modelcatalog.Model{}, fmt.Errorf(
 			"decision provider registry and client factory are required",
 		)
 	}
-	binding, ok := r.registry.Binding("decision")
+	selection, ok := r.registry.Decision()
 	if !ok {
 		return modelcatalog.Model{}, fmt.Errorf(
-			"role decision: explicit provider and model binding is required",
+			"role decision: no model selected; use switch_model with slot decision",
 		)
 	}
 	ref = strings.TrimSpace(ref)
 	for _, model := range r.registry.Snapshot() {
-		if model.ProviderName == binding.Provider &&
-			(binding.Model == model.ProviderModel || binding.Model == model.Ref) {
+		if model.ProviderName == selection.Provider &&
+			(selection.Model == model.Ref || selection.Model == model.ProviderModel) {
 			if ref != "" && ref != model.Ref && ref != model.ProviderModel {
 				return modelcatalog.Model{}, fmt.Errorf(
-					"role decision model %q: requested model differs from binding",
+					"role decision model %q: requested model differs from the selected decision model %q",
 					ref,
+					selection.Model,
 				)
 			}
 			return model, nil
@@ -95,7 +93,7 @@ func (r *routedDecisionAdapter) resolve(ref string) (modelcatalog.Model, error) 
 	}
 	return modelcatalog.Model{}, fmt.Errorf(
 		"role decision model %q: missing capability decision in the live catalog",
-		binding.Model,
+		selection.Model,
 	)
 }
 

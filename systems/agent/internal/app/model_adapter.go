@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -109,7 +108,7 @@ func (r *routedModelAdapter) CompleteStreamWithReasoning(
 			model,
 		)
 	}
-	return r.completeModel(ctx, m, r.chatRole(model, m), messages, tools, onDelta, onReasoning)
+	return r.completeModel(ctx, m, "primary", messages, tools, onDelta, onReasoning)
 }
 
 // BindProviderModel resolves an exact provider and agent-side model ref once.
@@ -210,20 +209,6 @@ func (r *routedModelAdapter) completeModel(
 	if err := r.registry.RequireChat(role, m); err != nil {
 		return agent.ModelClientResult{}, err
 	}
-	data, err := json.Marshal(struct {
-		Messages []conversation.Message
-		Tools    []agent.ToolDefinition
-	}{messages, tools})
-	if err != nil {
-		return agent.ModelClientResult{}, fmt.Errorf(
-			"role %s model %q: request is not JSON encodable",
-			role,
-			m.ProviderModel,
-		)
-	}
-	if err := r.registry.ReserveRole(role, m, len(data)); err != nil {
-		return agent.ModelClientResult{}, err
-	}
 	client, err := r.clientFor(m)
 	if err != nil {
 		return agent.ModelClientResult{}, err
@@ -254,50 +239,33 @@ func (r *routedModelAdapter) completeModel(
 	return client.Complete(ctx, m.ProviderModel, adapted, tools)
 }
 
-// chatRole identifies a configured fallback reference; explicit chat selections use primary.
-func (r *routedModelAdapter) chatRole(ref string, m modelcatalog.Model) string {
-	for _, binding := range r.registry.RoleBindings() {
-		if strings.HasPrefix(binding.Role, "fallbacks[") && binding.Provider == m.ProviderName &&
-			ref == binding.Provider+"/"+m.Ref && (binding.Model == m.Ref || binding.Model == m.ProviderModel) {
-			return binding.Role
-		}
-	}
-	return "primary"
-}
-
-// lookupModel resolves a ref to a live model, preferring the currently selected
-// provider/model pair when the ref matches the current model.
+// lookupModel resolves a ref to a live model. A provider-qualified ref
+// ("provider/model") keeps its provider identity; a bare ref prefers the
+// currently selected provider/model pair when it matches, and otherwise
+// resolves to the first roster entry for that ref.
 func (r *routedModelAdapter) lookupModel(ref string) (modelcatalog.Model, bool) {
 	ref = strings.TrimSpace(ref)
 	if r == nil || r.registry == nil || ref == "" {
 		return modelcatalog.Model{}, false
 	}
-	for _, binding := range r.registry.RoleBindings() {
-		if !strings.HasPrefix(binding.Role, "fallbacks[") {
-			continue
-		}
+	if strings.Contains(ref, "/") {
+		// Agent-side refs never contain "/" (the catalog normalizes it to
+		// "-"), so the longest provider prefix match is exact even for
+		// provider names that contain one.
 		for _, m := range r.registry.Snapshot() {
-			if m.ProviderName == binding.Provider && ref == binding.Provider+"/"+m.Ref &&
-				(m.Ref == binding.Model || m.ProviderModel == binding.Model) {
+			if ref == m.ProviderName+"/"+m.Ref {
 				return m, true
 			}
 		}
+		if provider, modelRef, ok := strings.Cut(ref, "/"); ok {
+			return r.registry.Lookup(provider, modelRef)
+		}
+		return modelcatalog.Model{}, false
 	}
 	if r.selection != nil {
 		provider, currentRef := r.selection.Current()
 		if provider != "" && ref == currentRef {
 			if m, ok := r.registry.Lookup(provider, ref); ok {
-				return m, true
-			}
-		}
-	}
-	for _, binding := range r.registry.RoleBindings() {
-		if !strings.HasPrefix(binding.Role, "fallbacks[") {
-			continue
-		}
-		for _, m := range r.registry.Snapshot() {
-			if m.ProviderName == binding.Provider && m.Ref == ref &&
-				(m.Ref == binding.Model || m.ProviderModel == binding.Model) {
 				return m, true
 			}
 		}
@@ -414,7 +382,9 @@ func openDumpWriter() (io.Writer, func()) {
 	}
 }
 
-// buildModelRefs keeps the explicit primary selection followed by configured fallbacks.
+// buildModelRefs returns the chat fallback chain: the current model first,
+// then the roster in discovery order, limited to chat-capable models and
+// excluding the model currently selected as decision (the dual-role rule).
 func buildModelRefs(currentRef string, registry *modelcatalog.Registry) []string {
 	refs := []string{}
 	seen := map[string]bool{}
@@ -426,22 +396,69 @@ func buildModelRefs(currentRef string, registry *modelcatalog.Registry) []string
 		}
 	}
 	add(currentRef)
-	for _, binding := range registry.RoleBindings() {
-		if !strings.HasPrefix(binding.Role, "fallbacks[") {
+	for _, m := range registry.Snapshot() {
+		if seen[m.Ref] {
 			continue
 		}
-		for _, m := range registry.Snapshot() {
-			if m.ProviderName == binding.Provider &&
-				(m.ProviderModel == binding.Model || m.Ref == binding.Model) {
-				add(binding.Provider + "/" + m.Ref)
-				break
-			}
+		if registry.RequireChat("primary", m) != nil {
+			continue
 		}
+		add(m.Ref)
 	}
 	return refs
 }
 
-// loadInteractiveSelection restores an explicit selection or seeds it from the configured primary.
+// loadRuntimeSelections resolves the interactive, decision, and embed model
+// slots at boot and returns the interactive selection. A persisted decision
+// selection resolves first so interactive auto-selection steps around it; an
+// empty decision slot resolves after the interactive model is known.
+// Auto-selected slots are persisted; a slot without any roster candidate
+// leaves its feature absent until switch_model selects one.
+func loadRuntimeSelections(
+	registry *modelcatalog.Registry,
+	store *selectionstore.Store,
+) (*modelcatalog.Selection, error) {
+	if registry == nil || store == nil {
+		return nil, errors.New("registry and selection store are required")
+	}
+	decision := store.Decision()
+	// A persisted decision selection that currently resolves registers before
+	// the interactive model, so interactive auto-selection steps around it. An
+	// empty or stale decision slot resolves after the interactive model is
+	// known, so its dual-role check compares against the resolved chat model.
+	persistedDecision := false
+	if decision.IsValid() {
+		if m, ok := registry.Lookup(decision.Provider, decision.Model); ok &&
+			m.Capabilities.Decision {
+			persistedDecision = true
+		}
+	}
+	if persistedDecision {
+		if err := resolveDecisionSelection(registry, store, decision, store.Interactive()); err != nil {
+			return nil, err
+		}
+	}
+	selection, err := loadInteractiveSelection(registry, store)
+	if err != nil {
+		return nil, err
+	}
+	if !persistedDecision {
+		provider, ref := selection.Current()
+		interactive := selectionstore.Selection{Provider: provider, Model: ref}
+		if err := resolveDecisionSelection(registry, store, decision, interactive); err != nil {
+			return nil, err
+		}
+	}
+	if err := resolveEmbedSelection(registry, store); err != nil {
+		return nil, err
+	}
+	return selection, nil
+}
+
+// loadInteractiveSelection restores the persisted interactive selection when
+// it is roster-valid and chat-capable, and otherwise auto-selects the first
+// eligible roster model — Text and ToolCalling preferred — skipping the model
+// selected as decision. An auto-selected model is persisted.
 func loadInteractiveSelection(
 	registry *modelcatalog.Registry,
 	store *selectionstore.Store,
@@ -451,38 +468,131 @@ func loadInteractiveSelection(
 	}
 	current := store.Interactive()
 	if current.IsValid() {
-		m, ok := registry.Lookup(current.Provider, current.Model)
-		if !ok {
-			return nil, fmt.Errorf(
-				"role primary model %q: missing capability chat in the live catalog",
-				current.Model,
-			)
+		if m, ok := registry.Lookup(current.Provider, current.Model); ok {
+			if err := registry.RequireChat("primary", m); err == nil {
+				return modelcatalog.NewSelection(registry, current.Provider, current.Model), nil
+			}
 		}
-		if err := registry.RequireChat("primary", m); err != nil {
-			return nil, err
-		}
-		return modelcatalog.NewSelection(registry, current.Provider, current.Model), nil
+		// The persisted selection is stale or no longer chat-capable: fall
+		// through and auto-select instead of aborting startup.
 	}
-	binding, ok := registry.Binding("primary")
-	if !ok {
-		return nil, errors.New("role primary: explicit provider and model binding is required")
+
+	var candidate *modelcatalog.Model
+	for _, m := range registry.Snapshot() {
+		if err := registry.RequireChat("primary", m); err != nil {
+			continue
+		}
+		if m.Capabilities.Text && m.Capabilities.ToolCalling {
+			candidate = &m
+			break
+		}
+		if candidate == nil {
+			first := m
+			candidate = &first
+		}
+	}
+	if candidate == nil {
+		return nil, errors.New(
+			"no chat-capable model in the live roster; check provider connectivity and API keys",
+		)
+	}
+	if err := store.SetInteractive(candidate.ProviderName, candidate.Ref); err != nil {
+		return nil, err
+	}
+	return modelcatalog.NewSelection(registry, candidate.ProviderName, candidate.Ref), nil
+}
+
+// resolveDecisionSelection publishes the decision slot on the registry. A
+// persisted selection must resolve in the roster with the effective decision
+// capability and must differ from the interactive model; a stale persisted
+// selection is re-auto-selected. interactive may be zero when the interactive
+// model is not yet resolved (a persisted decision resolves first).
+func resolveDecisionSelection(
+	registry *modelcatalog.Registry,
+	store *selectionstore.Store,
+	persisted selectionstore.Selection,
+	interactive selectionstore.Selection,
+) error {
+	sameAsInteractive := func(provider, model string) bool {
+		return interactive.IsValid() &&
+			interactive.Provider == provider &&
+			(interactive.Model == model)
+	}
+	if persisted.IsValid() {
+		if m, ok := registry.Lookup(persisted.Provider, persisted.Model); ok &&
+			m.Capabilities.Decision {
+			if sameAsInteractive(persisted.Provider, persisted.Model) {
+				return fmt.Errorf(
+					"role decision model %q equals the interactive chat model; the decider may not equal the chat model — pick another model with switch_model using slot decision",
+					persisted.Model,
+				)
+			}
+			registry.SetDecision(modelcatalog.RoleSelection{
+				Provider:      persisted.Provider,
+				Model:         persisted.Model,
+				ProviderModel: m.ProviderModel,
+			})
+			return nil
+		}
+		// Stale persisted selection: fall through to auto-select.
 	}
 	for _, m := range registry.Snapshot() {
-		if m.ProviderName == binding.Provider &&
-			(m.ProviderModel == binding.Model || m.Ref == binding.Model) {
-			if err := registry.RequireChat("primary", m); err != nil {
-				return nil, err
-			}
-			if err := store.SetInteractive(m.ProviderName, m.Ref); err != nil {
-				return nil, err
-			}
-			return modelcatalog.NewSelection(registry, m.ProviderName, m.Ref), nil
+		if !m.Capabilities.Decision {
+			continue
 		}
+		if sameAsInteractive(m.ProviderName, m.Ref) {
+			continue
+		}
+		if err := store.SetDecision(m.ProviderName, m.Ref); err != nil {
+			return err
+		}
+		registry.SetDecision(modelcatalog.RoleSelection{
+			Provider:      m.ProviderName,
+			Model:         m.Ref,
+			ProviderModel: m.ProviderModel,
+		})
+		return nil
 	}
-	return nil, fmt.Errorf(
-		"role primary model %q: missing capability chat in the live catalog",
-		binding.Model,
-	)
+	// No decision-capable roster candidate: the decision feature stays absent
+	// until switch_model selects one.
+	registry.SetDecision(modelcatalog.RoleSelection{})
+	return nil
+}
+
+// resolveEmbedSelection publishes the embed slot on the registry. A persisted
+// selection must resolve in the roster with the effective embed capability; a
+// stale one is re-auto-selected. With no embed-capable roster model the
+// embedding tools stay unavailable at dispatch until switch_model selects one.
+func resolveEmbedSelection(registry *modelcatalog.Registry, store *selectionstore.Store) error {
+	persisted := store.Embed()
+	if persisted.IsValid() {
+		if m, ok := registry.Lookup(persisted.Provider, persisted.Model); ok &&
+			m.Capabilities.Embed {
+			registry.SetEmbed(modelcatalog.RoleSelection{
+				Provider:      persisted.Provider,
+				Model:         persisted.Model,
+				ProviderModel: m.ProviderModel,
+			})
+			return nil
+		}
+		// Stale persisted selection: fall through to auto-select.
+	}
+	for _, m := range registry.Snapshot() {
+		if !m.Capabilities.Embed {
+			continue
+		}
+		if err := store.SetEmbed(m.ProviderName, m.Ref); err != nil {
+			return err
+		}
+		registry.SetEmbed(modelcatalog.RoleSelection{
+			Provider:      m.ProviderName,
+			Model:         m.Ref,
+			ProviderModel: m.ProviderModel,
+		})
+		return nil
+	}
+	registry.SetEmbed(modelcatalog.RoleSelection{})
+	return nil
 }
 
 // newCognitionRefResolver returns a per-job model ref resolver for the
