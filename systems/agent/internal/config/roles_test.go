@@ -2,12 +2,70 @@ package config
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/q15co/q15/systems/agent/internal/discovery"
 	"github.com/q15co/q15/systems/agent/internal/modelcatalog"
 )
+
+func TestTEIDiscoverySatisfiesEmbeddingRole(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/chat/models":
+			_, _ = w.Write([]byte(`{"data":[{"id":"chat"}]}`))
+		case "/tei/info":
+			_, _ = w.Write(
+				[]byte(
+					`{"model_id":"Qwen/Qwen3-Embedding-0.6B","served_model_name":"qwen3-embedding-0.6b","model_type":{"embedding":{"pooling":"last_token"}}}`,
+				),
+			)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	registry := modelcatalog.New([]modelcatalog.Provider{
+		{Name: "chat", Type: "openai-compatible", BaseURL: server.URL + "/chat"},
+		{Name: "tei", Type: "openai-compatible", BaseURL: server.URL + "/tei"},
+	}, discovery.NewCatalog(server.Client()), time.Hour, time.Second)
+	registry.Refresh(context.Background())
+	cfg := Config{
+		Providers: []Provider{
+			{Name: "chat", Type: "openai-compatible", BaseURL: server.URL + "/chat"},
+			{Name: "tei", Type: "openai-compatible", BaseURL: server.URL + "/tei"},
+		},
+		Primary: &ModelBinding{Provider: "chat", Model: "chat"},
+		Embed:   &ModelBinding{Provider: "tei", Model: "qwen3-embedding-0.6b"},
+		Agent: &Agent{
+			Name: "q15",
+			Tools: Tools{Embeddings: EmbeddingsTool{
+				Provider: "openai", Model: "qwen3-embedding-0.6b", Dimensions: 1024,
+				QdrantURLEnv: "Q15_QDRANT_URL", BaseURLEnv: "Q15_EMBEDDINGS_BASE_URL",
+			}},
+		},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("TEI config validation: %v", err)
+	}
+	key, err := ResolveProviderAPIKey(cfg.Providers[1], "openai-compatible")
+	if err != nil || key != "" {
+		t.Fatalf("TEI key resolution = %q, %v", key, err)
+	}
+	bindings, err := cfg.ValidateRoles(registry)
+	if err != nil || len(bindings) != 2 {
+		t.Fatalf("TEI role validation = %+v, %v", bindings, err)
+	}
+	cfg.Primary = cfg.Embed
+	if _, err := cfg.ValidateRoles(registry); err == nil ||
+		!strings.Contains(err.Error(), "role primary") ||
+		!strings.Contains(err.Error(), "missing capability chat") {
+		t.Fatalf("TEI accepted as chat primary: %v", err)
+	}
+}
 
 type roleCatalog []modelcatalog.Model
 

@@ -67,10 +67,6 @@ func (c Config) validate() error {
 				)
 			}
 		}
-		if normalizedType == providertypes.OpenAICompatible &&
-			strings.TrimSpace(provider.KeyEnv) == "" {
-			return fmt.Errorf("providers[%d].key_env is required", i)
-		}
 		if normalizedType == providertypes.Ollama && strings.TrimSpace(provider.KeyEnv) == "" &&
 			isOllamaCloudBaseURL(provider.BaseURL) {
 			return fmt.Errorf(

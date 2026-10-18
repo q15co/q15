@@ -217,15 +217,26 @@ func TestValidateRejectsUnsupportedProviderType(t *testing.T) {
 	}
 }
 
-func TestValidateRequiresKeyEnvForOpenAICompatible(t *testing.T) {
+func TestValidateAcceptsOpenAICompatibleWithoutKeyEnv(t *testing.T) {
 	cfg := Config{
 		Providers: []Provider{
 			{Name: "p", Type: "openai-compatible", BaseURL: "https://x.example/v1"},
 		},
 		Agent: testAgent("a"),
 	}
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("expected error for missing key_env")
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("unauthenticated provider config: %v", err)
+	}
+	key, err := ResolveProviderAPIKey(cfg.Providers[0], "openai-compatible")
+	if err != nil || key != "" {
+		t.Fatalf("unauthenticated provider key = %q, %v", key, err)
+	}
+	t.Setenv("Q15_TEST_MISSING_PROVIDER_KEY", "")
+	t.Setenv("Q15_TEST_MISSING_PROVIDER_KEY_FILE", "")
+	cfg.Providers[0].KeyEnv = "Q15_TEST_MISSING_PROVIDER_KEY"
+	if _, err := ResolveProviderAPIKey(cfg.Providers[0], "openai-compatible"); err == nil ||
+		!strings.Contains(err.Error(), "Q15_TEST_MISSING_PROVIDER_KEY") {
+		t.Fatalf("explicit missing provider secret = %v", err)
 	}
 }
 

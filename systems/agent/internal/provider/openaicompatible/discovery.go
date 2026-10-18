@@ -15,7 +15,8 @@ import (
 // RosterClient discovers models from an OpenAI-compatible provider by asking
 // its API root for the model list (GET {base_url}/models). The list endpoint
 // does not report capabilities, so every model starts Text-only; enrichment
-// comes from models.dev.
+// comes from models.dev. TEI roots without /models expose their embedding model
+// and capability through /info instead.
 type RosterClient struct {
 	http rosterHTTPDoer
 }
@@ -71,6 +72,10 @@ func (c *RosterClient) Discover(
 		return nil, fmt.Errorf("openai models: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		_ = resp.Body.Close()
+		return c.discoverTEI(ctx, p, base)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf(
 			"openai models: unexpected status %s at %s; check base_url against the provider's documented API root (including its path)",

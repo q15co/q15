@@ -173,6 +173,15 @@ Notes:
 - `ollama` defaults to local `http://localhost:11434` when `base_url` is omitted; set
   `base_url: https://ollama.com` plus `key_env: OLLAMA_API_KEY` for direct Ollama Cloud API access
 
+- TEI embedding servers use `type: openai-compatible` with their service root as `base_url` (for
+  example, `http://q15-tei:80`). When `/models` returns 404, discovery reads `/info` at that root
+  and derives the embedding capability from `model_type.embedding`. Bind `embed.model` to
+  `served_model_name`, or `model_id` when no served name is set. Keep the existing embedding backend
+  URL in `agent.tools.embeddings.base_url_env`; discovery does not change it. Authentication
+  failures and other `/models` errors do not trigger the TEI probe. Omit `key_env` for an
+  unauthenticated compatible endpoint. When supplied, the named secret must resolve even for a local
+  service.
+
 - `primary`, ordered `fallbacks`, `decision`, and optional `embed` bind explicit `provider` and
   `model` pairs. `model` accepts the native model ID or the catalog ref; it never selects by
   capability. `primary` seeds the interactive selection on first run. An explicitly persisted
