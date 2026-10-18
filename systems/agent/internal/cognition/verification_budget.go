@@ -34,19 +34,34 @@ func boundVerificationSection(section agent.PromptSection, limit int) agent.Prom
 }
 
 func boundedVerificationConflicts(entries []conflictedClaimEntry) ([]conflictedClaimEntry, int) {
-	groups := groupConflictedClaims(entries)
+	groups, omitted := boundVerificationConflicts(
+		groupConflictedClaims(entries), verificationConflictBytes,
+		encodedTextBytes(renderConflictedClaims(nil)), renderConflictedClaimGroup,
+	)
 	var selected []conflictedClaimEntry
+	for _, group := range groups {
+		selected = append(selected, group...)
+	}
+	return selected, omitted
+}
+
+func boundVerificationConflicts(
+	groups [][]conflictedClaimEntry,
+	limit, overhead int,
+	renderGroup func([]conflictedClaimEntry) string,
+) ([][]conflictedClaimEntry, int) {
+	var selected [][]conflictedClaimEntry
 	omitted := 0
-	used := encodedTextBytes(renderConflictedClaims(nil))
+	used := overhead
 	for _, group := range groups {
 		// Leave room to disclose excluded groups without splitting a claim or
 		// requiring a resolution for evidence the model did not receive.
-		size := encodedTextBytes(renderConflictedClaimGroup(group)) + 2
-		if used+size > verificationConflictBytes-1024 {
+		size := encodedTextBytes(renderGroup(group)) + 2
+		if used+size > limit-1024 {
 			omitted++
 			continue
 		}
-		selected = append(selected, group...)
+		selected = append(selected, group)
 		used += size
 	}
 	return selected, omitted

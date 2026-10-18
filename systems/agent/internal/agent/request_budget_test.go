@@ -124,6 +124,61 @@ func TestRequestBudgetDisabledPreservesLargeInteractiveInput(t *testing.T) {
 	}
 }
 
+func TestRequestBudgetRejectsAccumulatedToolCallsBeforeNextProviderTurn(t *testing.T) {
+	initial := conversation.SystemMessage("Synthetic conversion source.")
+	first := toolCallResult("call-1", "read", `{"query":"`+strings.Repeat("a", 24*1024)+`"}`)
+	second := toolCallResult("call-2", "read", `{"query":"`+strings.Repeat("b", 24*1024)+`"}`)
+	omitted := toolResultMessage(
+		"call-1",
+		ToolResult{Output: "tool error: " + omittedToolEvidence},
+		true,
+	)
+	beforeLastEvidence := append([]conversation.Message{initial}, first.Messages...)
+	beforeLastEvidence = append(beforeLastEvidence, omitted)
+	beforeLastEvidence = append(beforeLastEvidence, second.Messages...)
+	toolRuns := 0
+	registry, err := NewToolRegistry(&testTool{
+		def: ToolDefinition{Name: "read"},
+		run: func(context.Context, string) (string, error) {
+			toolRuns++
+			return strings.Repeat("e", 64*1024), nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	size, err := measureRequest(beforeLastEvidence, registry.Definitions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	limit := size.total + 16
+	model := &fakeModelClient{results: []ModelClientResult{first, second}}
+	result, err := NewEngine(
+		model,
+		registry,
+		[]string{"first", "fallback"},
+	).Run(context.Background(), EngineRequest{
+		Messages: []conversation.Message{initial}, UseTools: true, MaxRequestBytes: limit,
+	})
+	var budget *RequestBudgetError
+	if !errors.As(err, &budget) || budget.Bytes <= limit || result.Turn != 2 {
+		t.Fatalf("later preflight result: turn=%d error=%v", result.Turn, err)
+	}
+	if len(model.callModels) != 2 || toolRuns != 2 || budget.PriorTurnBytes <= limit/8 {
+		t.Fatalf(
+			"oversized next turn reached provider: calls=%v tool_runs=%d budget=%+v",
+			model.callModels,
+			toolRuns,
+			budget,
+		)
+	}
+	if len(result.Messages) != 4 ||
+		result.Messages[0].Parts[0].Arguments != first.Messages[0].Parts[0].Arguments ||
+		result.Messages[2].Parts[0].Arguments != second.Messages[0].Parts[0].Arguments {
+		t.Fatal("budget enforcement discarded recorded assistant tool-call arguments")
+	}
+}
+
 func TestRequestBudgetReducesEvidenceAfterAssistantReplayGrows(t *testing.T) {
 	registry, err := NewToolRegistry(&testTool{
 		def: ToolDefinition{Name: "read"},

@@ -258,6 +258,14 @@ func (j semanticMemoryExtractionJob) Build(
 	if err != nil {
 		return Spec{}, fmt.Errorf("read verification conflict resolutions: %w", err)
 	}
+	resolutions, omittedConflictGroups := boundedConflictResolutions(resolutions)
+	resolutionContent := renderConflictResolutions(resolutions)
+	if omittedConflictGroups > 0 {
+		resolutionContent += fmt.Sprintf(
+			"\n%d conflict groups omitted to fit the conversion byte budget. This is a partial inventory; apply only the complete resolutions shown above and leave every omitted group unchanged and conflicted.",
+			omittedConflictGroups,
+		)
+	}
 	transcriptArtifact := renderTranscriptArtifact(recentMessages)
 
 	snapshots, err := snapshotConversionFiles(ctx, loader)
@@ -273,16 +281,7 @@ func (j semanticMemoryExtractionJob) Build(
 	}); err != nil {
 		return Spec{}, err
 	}
-	recoveryID, err := loader.BeginMemoryRecovery(
-		ctx,
-		snapshots,
-		relativeMemoryPath(semanticTopicsRuntimeDir),
-	)
-	if err != nil {
-		return Spec{}, fmt.Errorf("prepare conversion recovery: %w", err)
-	}
-
-	return Spec{
+	spec := Spec{
 		Objective: renderPromptLines(
 			"This is a background maintenance job, not a user-facing reply.",
 			"Run the conversion pass from working memory to semantic memory: every item that leaves working memory is converted into a semantic claim, moved to open loops, or dropped, and every exit is recorded in the conversion ledger.",
@@ -354,11 +353,11 @@ func (j semanticMemoryExtractionJob) Build(
 				Attributes: map[string]string{"path": workingMemoryPath(working)},
 				Body:       workingContent,
 			},
-			{
+			boundVerificationSection(agent.PromptSection{
 				Name:       "verification_review_input",
 				Attributes: verificationAttrs,
 				Body:       verificationContent,
-			},
+			}, verificationSnapshotBytes),
 			{
 				Name: "semantic_memory_rules",
 				Body: renderPromptLines(
@@ -414,7 +413,7 @@ func (j semanticMemoryExtractionJob) Build(
 			},
 			{
 				Name: "current_conflict_resolutions",
-				Body: renderConflictResolutions(resolutions),
+				Body: resolutionContent,
 			},
 			{
 				Name: "semantic_memory_execution_order",
@@ -457,8 +456,19 @@ func (j semanticMemoryExtractionJob) Build(
 		conflictGroups:      conflictGroups,
 		conflictResolutions: resolutions,
 		FileSnapshots:       snapshots,
-		MemoryRecoveryID:    recoveryID,
-	}, nil
+	}
+	if err := checkConversionPromptBudget(spec); err != nil {
+		return Spec{}, err
+	}
+	spec.MemoryRecoveryID, err = loader.BeginMemoryRecovery(
+		ctx,
+		snapshots,
+		relativeMemoryPath(semanticTopicsRuntimeDir),
+	)
+	if err != nil {
+		return Spec{}, fmt.Errorf("prepare conversion recovery: %w", err)
+	}
+	return spec, nil
 }
 
 func (j semanticMemoryExtractionJob) ApplyResult(
