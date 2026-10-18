@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"path"
 	"strconv"
@@ -57,6 +58,13 @@ func (c Config) validate() error {
 			if err := validateOpenAICompatibleBaseURL(provider.BaseURL); err != nil {
 				return fmt.Errorf("providers[%d].base_url: %w", i, err)
 			}
+		}
+		if normalizedType == providertypes.OpenAICompatible &&
+			strings.TrimSpace(provider.KeyEnv) == "" && !isLocalBaseURL(provider.BaseURL) {
+			return fmt.Errorf(
+				"providers[%d].key_env is required for openai-compatible providers on a public host; set key_env or point base_url at a local endpoint",
+				i,
+			)
 		}
 		if normalizedType == providertypes.SystemOneCompatible {
 			base, err := url.Parse(strings.TrimSpace(provider.BaseURL))
@@ -344,6 +352,34 @@ func isOllamaCloudBaseURL(raw string) bool {
 		return false
 	}
 	return strings.EqualFold(base.Hostname(), "ollama.com")
+}
+
+// isLocalBaseURL reports whether the URL points at a loopback, private, or
+// link-local address, or a single-label Docker service or machine name, which
+// is how unauthenticated local inference and embedding servers appear in
+// Compose files and on developer machines. A host with a dot and a host that
+// parses as a public IP are reported as public. A URL with no parseable host
+// is reported as public too, so requiring a key on a public host fails closed.
+func isLocalBaseURL(raw string) bool {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return false
+	}
+	base, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(base.Hostname())
+	if host == "" {
+		return false
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
+	}
+	if host == "localhost" {
+		return true
+	}
+	return !strings.Contains(host, ".")
 }
 
 // validateOpenAICompatibleBaseURL checks URL syntax. The provider's documented

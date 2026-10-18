@@ -178,9 +178,11 @@ Notes:
   and derives the embedding capability from `model_type.embedding`. Bind `embed.model` to
   `served_model_name`, or `model_id` when no served name is set. Keep the existing embedding backend
   URL in `agent.tools.embeddings.base_url_env`; discovery does not change it. Authentication
-  failures and other `/models` errors do not trigger the TEI probe. Omit `key_env` for an
-  unauthenticated compatible endpoint. When supplied, the named secret must resolve even for a local
-  service.
+  failures and other `/models` errors do not trigger the TEI probe. Omit `key_env` for a local
+  unauthenticated endpoint (loopback, a private or link-local address, or a service name without a
+  dot); `key_env` stays required on a public host, so a misconfigured cloud provider is refused at
+  load rather than at the first request. When supplied, the named secret must resolve even for a
+  local service.
 
 - `primary`, ordered `fallbacks`, `decision`, and optional `embed` bind explicit `provider` and
   `model` pairs. `model` accepts the native model ID or the catalog ref; it never selects by
