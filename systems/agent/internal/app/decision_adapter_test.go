@@ -38,8 +38,7 @@ func TestDecisionRoutingUsesDiscoveredMetadataAndReloadedProvider(t *testing.T) 
 		{ProviderModel: "chat", Capabilities: modelcatalog.Capabilities{Text: true}},
 		{
 			ProviderModel: "vendor/unfamiliar-model",
-			Type:          modelcatalog.ModelTypeDecision,
-			Capabilities:  modelcatalog.Capabilities{Text: true},
+			Capabilities:  modelcatalog.Capabilities{Decision: true, Text: true},
 		},
 	}}}
 	registry := modelcatalog.New(
@@ -93,8 +92,7 @@ func TestDecisionRoutingRejectsChatAndPropagatesCancellation(t *testing.T) {
 		{ProviderModel: "chat", Capabilities: modelcatalog.Capabilities{Text: true}},
 		{
 			ProviderModel: "decision",
-			Type:          modelcatalog.ModelTypeDecision,
-			Capabilities:  modelcatalog.Capabilities{Text: true},
+			Capabilities:  modelcatalog.Capabilities{Decision: true, Text: true},
 		},
 	}})
 	client := &fakeDecisionClient{}

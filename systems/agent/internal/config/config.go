@@ -54,11 +54,13 @@ type Config struct {
 
 // Provider defines a named model provider entry in config.yaml.
 type Provider struct {
-	Name      string            `yaml:"name"`
-	Type      string            `yaml:"type"`
-	BaseURL   string            `yaml:"base_url"`
-	KeyEnv    string            `yaml:"key_env"`
-	Discovery ProviderDiscovery `yaml:"discovery,omitempty"`
+	Name    string `yaml:"name"`
+	Type    string `yaml:"type"`
+	BaseURL string `yaml:"base_url"`
+	KeyEnv  string `yaml:"key_env"`
+	// CapabilityOverrides correct capabilities per native model ID.
+	CapabilityOverrides map[string]map[string]bool `yaml:"capability_overrides,omitempty"`
+	Discovery           ProviderDiscovery          `yaml:"discovery,omitempty"`
 }
 
 // ProviderDiscovery configures model-roster discovery for one provider.

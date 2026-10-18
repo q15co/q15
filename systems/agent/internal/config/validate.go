@@ -77,6 +77,30 @@ func (c Config) validate() error {
 				i,
 			)
 		}
+		for model, capabilities := range provider.CapabilityOverrides {
+			if strings.TrimSpace(model) == "" {
+				return fmt.Errorf("providers[%d].capability_overrides requires a model ID", i)
+			}
+			for capability := range capabilities {
+				switch capability {
+				case "chat",
+					"embed",
+					"decision",
+					"text",
+					"image_input",
+					"audio_input",
+					"tool_calling",
+					"reasoning":
+				default:
+					return fmt.Errorf(
+						"providers[%d].capability_overrides model %q: unsupported capability %q",
+						i,
+						model,
+						capability,
+					)
+				}
+			}
+		}
 		if err := validateDiscoveryGlobs(i, provider.Discovery); err != nil {
 			return err
 		}

@@ -14,8 +14,7 @@ func TestDecisionModelsAreExcludedFromChatSelectionAndCompletion(t *testing.T) {
 	registry := testRegistry(t, map[string][]modelcatalog.Model{"provider": {
 		{
 			ProviderModel: "a-decision",
-			Type:          modelcatalog.ModelTypeDecision,
-			Capabilities:  modelcatalog.Capabilities{Text: true, ToolCalling: true},
+			Capabilities:  modelcatalog.Capabilities{Decision: true, Text: true, ToolCalling: true},
 		},
 		{ProviderModel: "chat", Capabilities: modelcatalog.Capabilities{Text: true}},
 	}})

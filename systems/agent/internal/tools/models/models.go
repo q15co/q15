@@ -67,26 +67,26 @@ type configReloadInfo struct {
 }
 
 type modelInfo struct {
-	Type              string             `json:"type,omitempty"`
-	Provider          string             `json:"provider"`
-	ProviderType      string             `json:"provider_type"`
-	ProviderModel     string             `json:"provider_model"`
-	Ref               string             `json:"ref"`
-	Name              string             `json:"name,omitempty"`
-	Current           bool               `json:"current,omitempty"`
-	Modalities        []string           `json:"modalities"`
-	Capabilities      []string           `json:"capabilities"`
-	CapabilitiesKnown bool               `json:"capabilities_known"`
-	StructuredOutput  *bool              `json:"structured_output"`
-	Params            int64              `json:"params,omitempty"`
-	Context           int                `json:"context,omitempty"`
-	Output            int                `json:"output,omitempty"`
-	ReleaseDate       string             `json:"release_date,omitempty"`
-	CostTier          string             `json:"cost_tier,omitempty"`
-	CostPerMTokIn     *float64           `json:"cost_per_mtok_in,omitempty"`
-	CostPerMTokOut    *float64           `json:"cost_per_mtok_out,omitempty"`
-	Benchmarks        map[string]float64 `json:"benchmarks,omitempty"`
-	Source            string             `json:"source,omitempty"`
+	Provider             string             `json:"provider"`
+	ProviderType         string             `json:"provider_type"`
+	ProviderModel        string             `json:"provider_model"`
+	Ref                  string             `json:"ref"`
+	Name                 string             `json:"name,omitempty"`
+	Current              bool               `json:"current,omitempty"`
+	Modalities           []string           `json:"modalities"`
+	Capabilities         []string           `json:"capabilities"`
+	CapabilityProvenance map[string]string  `json:"capability_provenance"`
+	CapabilitiesKnown    bool               `json:"capabilities_known"`
+	StructuredOutput     *bool              `json:"structured_output"`
+	Params               int64              `json:"params,omitempty"`
+	Context              int                `json:"context,omitempty"`
+	Output               int                `json:"output,omitempty"`
+	ReleaseDate          string             `json:"release_date,omitempty"`
+	CostTier             string             `json:"cost_tier,omitempty"`
+	CostPerMTokIn        *float64           `json:"cost_per_mtok_in,omitempty"`
+	CostPerMTokOut       *float64           `json:"cost_per_mtok_out,omitempty"`
+	Benchmarks           map[string]float64 `json:"benchmarks,omitempty"`
+	Source               string             `json:"source,omitempty"`
 }
 
 // NewListProviders constructs the list_providers tool.
@@ -509,22 +509,22 @@ func (t *SwitchCognitionModel) Run(_ context.Context, arguments string) (string,
 
 func describeModel(m modelcatalog.Model, current bool) modelInfo {
 	info := modelInfo{
-		Type:              m.Type,
-		Provider:          m.ProviderName,
-		ProviderType:      m.ProviderType,
-		ProviderModel:     m.ProviderModel,
-		Ref:               m.Ref,
-		Name:              m.Name,
-		Current:           current,
-		Modalities:        modelModalities(m),
-		Capabilities:      modelCapabilities(m),
-		CapabilitiesKnown: m.Capabilities.Known,
-		Params:            m.ParameterCount,
-		Context:           m.MaxContextTokens,
-		Output:            m.MaxOutputTokens,
-		CostTier:          m.CostTier,
-		Benchmarks:        m.BenchmarkScores,
-		Source:            m.Source,
+		Provider:             m.ProviderName,
+		ProviderType:         m.ProviderType,
+		ProviderModel:        m.ProviderModel,
+		Ref:                  m.Ref,
+		Name:                 m.Name,
+		Current:              current,
+		Modalities:           modelModalities(m),
+		Capabilities:         modelCapabilities(m),
+		CapabilitiesKnown:    m.Capabilities.Known,
+		CapabilityProvenance: m.Capabilities.Provenance,
+		Params:               m.ParameterCount,
+		Context:              m.MaxContextTokens,
+		Output:               m.MaxOutputTokens,
+		CostTier:             m.CostTier,
+		Benchmarks:           m.BenchmarkScores,
+		Source:               m.Source,
 	}
 	if m.StructuredOutputKnown || m.StructuredOutput {
 		value := m.StructuredOutput
@@ -562,8 +562,14 @@ func modelModalities(m modelcatalog.Model) []string {
 }
 
 func modelCapabilities(m modelcatalog.Model) []string {
-	capabilities := make([]string, 0, 3)
-	if m.IsDecision() {
+	capabilities := make([]string, 0, 5)
+	if m.Capabilities.Chat {
+		capabilities = append(capabilities, "chat")
+	}
+	if m.Capabilities.Embed {
+		capabilities = append(capabilities, "embed")
+	}
+	if m.Capabilities.Decision {
 		capabilities = append(capabilities, "decision")
 	}
 	if m.Capabilities.ToolCalling {
@@ -584,8 +590,8 @@ func normalizeCapability(capability string) string {
 		return ""
 	case "text":
 		return "text"
-	case "decision":
-		return "decision"
+	case "chat", "embed", "decision":
+		return strings.ToLower(strings.TrimSpace(capability))
 	case "tool", "tools", "tool_calling":
 		return "tool_calling"
 	case "reasoning":
@@ -605,8 +611,10 @@ func normalizeCapability(capability string) string {
 
 func modelHasCapability(m modelcatalog.Model, capability string) bool {
 	switch capability {
+	case "chat", "embed":
+		return m.Capabilities.Has(capability)
 	case "decision":
-		return m.IsDecision()
+		return m.Capabilities.Decision
 	case "text":
 		return m.Capabilities.Text
 	case "tool_calling":

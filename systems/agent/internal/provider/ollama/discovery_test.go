@@ -167,6 +167,7 @@ func TestCapabilitiesFromOllamaShow(t *testing.T) {
 		{"all", []string{"completion", "tools", "vision", "thinking", "audio"},
 			modelcatalog.Capabilities{
 				Known:       true,
+				Chat:        true,
 				Text:        true,
 				ToolCalling: true,
 				ImageInput:  true,
@@ -174,14 +175,14 @@ func TestCapabilitiesFromOllamaShow(t *testing.T) {
 				AudioInput:  true,
 			}},
 		{"unknown-ignored", []string{"completion", "embeddings", "unknown-cap"},
-			modelcatalog.Capabilities{Known: true, Text: true}},
+			modelcatalog.Capabilities{Known: true, Chat: true, Text: true}},
 		{"reported empty", []string{}, modelcatalog.Capabilities{Known: true, Text: true}},
 		{"empty", nil, modelcatalog.Capabilities{Text: true}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			got := capabilitiesFromOllamaShow(tc.caps)
-			if !reflect.DeepEqual(got, tc.want) {
+			if !reflect.DeepEqual(got, tc.want.WithProvenance("derived")) {
 				t.Errorf("got %+v, want %+v", got, tc.want)
 			}
 		})

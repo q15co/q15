@@ -13,14 +13,16 @@ const (
 	SourceSystemOne = "systemone"
 )
 
-// ModelTypeDecision identifies a model that evaluates typed questions rather than chat turns.
-const ModelTypeDecision = "decision"
-
 // Capabilities is the normalized capability set discovered for one model.
 type Capabilities struct {
 	// Known distinguishes reported capability metadata from a text-only
 	// fallback when discovery could not obtain it.
-	Known       bool
+	Known    bool
+	Chat     bool
+	Embed    bool
+	Decision bool
+	// Provenance records the winning source per capability, including explicit denials.
+	Provenance  map[string]string
 	Text        bool
 	ImageInput  bool
 	AudioInput  bool
@@ -36,8 +38,6 @@ type Capabilities struct {
 // Zero-valued numeric/string fields mean "unknown" — the model is still usable,
 // it is just unscored for selection purposes.
 type Model struct {
-	// Type is the provider or models.dev model type. Empty preserves unclassified legacy models.
-	Type string
 	// ProviderName identifies which provider hosts this model.
 	ProviderName string
 	// ProviderType is the canonical provider type (providertypes.Ollama, etc.).
@@ -98,7 +98,7 @@ type Model struct {
 
 // IsDecision reports whether discovery positively identified a decision model.
 func (m Model) IsDecision() bool {
-	return m.Type == ModelTypeDecision
+	return m.Capabilities.Decision
 }
 
 // Options controls discovery behavior for one provider.
@@ -123,6 +123,8 @@ type Provider struct {
 	BaseURL string
 	APIKey  string
 	Options Options
+	// CapabilityOverrides correct provider claims per native model ID.
+	CapabilityOverrides map[string]map[string]bool
 }
 
 // Catalog discovers the live model roster for one provider.

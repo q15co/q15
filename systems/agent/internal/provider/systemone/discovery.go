@@ -72,10 +72,14 @@ func (r *RosterClient) Discover(
 			modelcatalog.Model{
 				ProviderModel: id,
 				Name:          id,
-				Type:          modelcatalog.ModelTypeDecision,
-				Capabilities:  modelcatalog.Capabilities{Text: true},
-				ReleaseDate:   released,
-				Source:        modelcatalog.SourceSystemOne,
+				Capabilities: modelcatalog.Capabilities{
+					Text:     true,
+					Decision: true,
+				}.WithProvenance(
+					"derived",
+				),
+				ReleaseDate: released,
+				Source:      modelcatalog.SourceSystemOne,
 			},
 		)
 	}
@@ -89,9 +93,13 @@ func (r *RosterClient) Discover(
 			modelcatalog.Model{
 				ProviderModel: id,
 				Name:          id,
-				Type:          modelcatalog.ModelTypeDecision,
-				Capabilities:  modelcatalog.Capabilities{Text: true},
-				Source:        modelcatalog.SourceSystemOne,
+				Capabilities: modelcatalog.Capabilities{
+					Text:     true,
+					Decision: true,
+				}.WithProvenance(
+					"derived",
+				),
+				Source: modelcatalog.SourceSystemOne,
 			},
 		)
 	}

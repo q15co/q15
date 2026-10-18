@@ -179,6 +179,10 @@ Notes:
 - Enrichment requests `https://models.dev/api.json?type=all`: the default models.dev response
   excludes decision models. The catalog only enriches models returned by the configured provider; it
   does not add unavailable models or other providers. Missing metadata remains unknown.
+- Provider `capability_overrides` maps native model IDs to capability names and booleans, for
+  example `capability_overrides: {model-id: {decision: true, chat: false}}`. Overrides win over
+  provider-derived and models.dev-declared evidence, including explicit `false` values.
+  `list_models` reports the effective capabilities and their `capability_provenance`.
 - `list_models` reports `capabilities_known: false` when capability metadata is unavailable; an
   empty capability list then makes no claim about tool support. `structured_output: null` means that
   support is unknown. Capability filters include confirmed matches only.

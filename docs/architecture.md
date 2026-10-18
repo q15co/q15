@@ -107,11 +107,13 @@ adapter through a factory. The `decision_check` tool receives that interface; it
 provider selection nor HTTP construction. Provider clients are cached by provider identity, API
 root, and key, so a provider reload cannot reuse an obsolete connection.
 
-Ollama's native `decision` capability and models.dev's `type: decision` identify decision models.
-Enrichment fetches `api.json?type=all` because models.dev omits specialized models by default. It
-only classifies and enriches models already returned by the configured provider. Unknown metadata
-does not establish decision support. Confirmed decision models remain visible through `list_models`
-but cannot be selected or called as chat models.
+Incoming provider and models.dev `type: decision` metadata normalizes to the catalog's `decision`
+capability. Capabilities record provenance per name: operator `override` wins over provider API or
+artifact `derived`, which wins over models.dev `declared`. The existing boolean capability shape
+remains until #375. Enrichment fetches `api.json?type=all` because models.dev omits specialized
+models by default. It only classifies and enriches models already returned by the configured
+provider. Unknown metadata does not establish decision support. Confirmed decision models remain
+visible through `list_models` but cannot be selected or called as chat models.
 
 Ollama's decision adapter uses `SystemOne` from the Ollama Go SDK (`v0.40.6`). OpenAI-compatible
 providers with decision models and dedicated `systemone-compatible` providers use the shared System

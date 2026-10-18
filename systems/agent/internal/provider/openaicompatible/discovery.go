@@ -96,11 +96,16 @@ func (c *RosterClient) Discover(
 			continue
 		}
 		models = append(models, modelcatalog.Model{
-			Type:          strings.TrimSpace(entry.Type),
 			ProviderModel: id,
 			Name:          id,
-			Capabilities:  modelcatalog.Capabilities{Text: true},
-			Source:        modelcatalog.SourceOpenAI,
+			Capabilities: modelcatalog.Capabilities{
+				Text:     true,
+				Chat:     entry.Type != "decision",
+				Decision: entry.Type == "decision",
+			}.WithProvenance(
+				"derived",
+			),
+			Source: modelcatalog.SourceOpenAI,
 		})
 	}
 	return models, nil

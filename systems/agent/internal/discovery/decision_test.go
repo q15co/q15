@@ -56,7 +56,7 @@ func TestCatalogDiscoversDecisionModelsFromModelsDev(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out, `"provider_model": "vendor/new-model"`) ||
-		!strings.Contains(out, `"type": "decision"`) ||
+		!strings.Contains(out, `"decision": "declared"`) ||
 		!strings.Contains(out, `"context": 65536`) ||
 		strings.Contains(out, "not-in-live-roster") ||
 		strings.Contains(out, `"provider_model": "chat"`) {
@@ -89,7 +89,7 @@ func TestCatalogDiscoversNativeDecisionCapabilityWithoutModelNames(t *testing.T)
 		t.Fatal(err)
 	}
 	if !strings.Contains(out, `"provider_model": "a-new-model:7b"`) ||
-		!strings.Contains(out, `"type": "decision"`) {
+		!strings.Contains(out, `"decision": "derived"`) {
 		t.Fatalf("native decision roster = %s", out)
 	}
 }

@@ -283,7 +283,12 @@ func parseModelsDevFile(data []byte) (modelsDevFile, error) {
 // bool) → StructuredOutput. Cost comes from the cost block (already USD per
 // million tokens). models.dev publishes no benchmarks.
 func modelFromModelsDev(id string, md modelsDevModel) Model {
-	caps := Capabilities{Known: true}
+	caps := Capabilities{
+		Known:    true,
+		Decision: md.Type == "decision",
+		Embed:    md.Type == "embedding",
+		Chat:     md.Type == "" || md.Type == "language" || md.Type == "text-generation",
+	}
 	for _, modality := range md.Modalities.Input {
 		switch strings.ToLower(strings.TrimSpace(modality)) {
 		case "text":
@@ -338,10 +343,9 @@ func modelFromModelsDev(id string, md modelsDevModel) Model {
 	}
 
 	return Model{
-		Type:                  strings.TrimSpace(md.Type),
 		ProviderModel:         id,
 		Name:                  name,
-		Capabilities:          caps,
+		Capabilities:          caps.WithProvenance("declared"),
 		CostTier:              deriveCostTier(costIn, costOut),
 		CostPerMTokIn:         costIn,
 		CostPerMTokOut:        costOut,

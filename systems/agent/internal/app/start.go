@@ -103,10 +103,11 @@ func buildProviderDescriptors(configProviders []config.Provider) ([]modelcatalog
 			return nil, fmt.Errorf("provider %q: %w", p.Name, err)
 		}
 		out = append(out, modelcatalog.Provider{
-			Name:    strings.TrimSpace(p.Name),
-			Type:    providerType,
-			BaseURL: strings.TrimSpace(p.BaseURL),
-			APIKey:  apiKey,
+			Name:                strings.TrimSpace(p.Name),
+			Type:                providerType,
+			BaseURL:             strings.TrimSpace(p.BaseURL),
+			APIKey:              apiKey,
+			CapabilityOverrides: p.CapabilityOverrides,
 			Options: modelcatalog.Options{
 				ModelsDev:         p.Discovery.ModelsDev,
 				ModelsDevProvider: strings.TrimSpace(p.Discovery.ModelsDevProvider),

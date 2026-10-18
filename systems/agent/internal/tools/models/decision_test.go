@@ -15,7 +15,10 @@ func TestDecisionModelSwitchesDoNotPersist(t *testing.T) {
 			models: map[string][]modelcatalog.Model{
 				"provider": {
 					{ProviderModel: "chat"},
-					{ProviderModel: "decision", Type: modelcatalog.ModelTypeDecision},
+					{
+						ProviderModel: "decision",
+						Capabilities:  modelcatalog.Capabilities{Decision: true},
+					},
 				},
 			},
 		},
