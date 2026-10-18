@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -31,7 +32,7 @@ func newRoutedDecisionAdapter(
 	return &routedDecisionAdapter{registry: registry, factory: factory}
 }
 
-// Check resolves an optional agent-side model ref or auto-selects the first discovered decision model.
+// Check dispatches only the explicit decision role and rechecks its effective capability.
 func (r *routedDecisionAdapter) Check(
 	ctx context.Context,
 	request decision.Request,
@@ -51,6 +52,13 @@ func (r *routedDecisionAdapter) Check(
 	if err != nil {
 		return decision.Response{}, err
 	}
+	data, err := json.Marshal(request)
+	if err != nil {
+		return decision.Response{}, fmt.Errorf("role decision: request is not JSON encodable")
+	}
+	if err := r.registry.ReserveRole("decision", model, len(data)); err != nil {
+		return decision.Response{}, err
+	}
 	return client.Check(ctx, request)
 }
 
@@ -60,14 +68,34 @@ func (r *routedDecisionAdapter) resolve(ref string) (modelcatalog.Model, error) 
 			"decision provider registry and client factory are required",
 		)
 	}
+	binding, ok := r.registry.Binding("decision")
+	if !ok {
+		return modelcatalog.Model{}, fmt.Errorf(
+			"role decision: explicit provider and model binding is required",
+		)
+	}
 	ref = strings.TrimSpace(ref)
 	for _, model := range r.registry.Snapshot() {
-		if model.IsDecision() && (ref == "" || ref == model.Ref) {
+		if model.ProviderName == binding.Provider &&
+			(binding.Model == model.ProviderModel || binding.Model == model.Ref) {
+			if ref != "" && ref != model.Ref && ref != model.ProviderModel {
+				return modelcatalog.Model{}, fmt.Errorf(
+					"role decision model %q: requested model differs from binding",
+					ref,
+				)
+			}
+			if !model.Capabilities.Decision {
+				return modelcatalog.Model{}, fmt.Errorf(
+					"role decision model %q: missing capability decision",
+					binding.Model,
+				)
+			}
 			return model, nil
 		}
 	}
 	return modelcatalog.Model{}, fmt.Errorf(
-		"no matching decision model in the live roster; check list_models with capability decision",
+		"role decision model %q: missing capability decision in the live catalog",
+		binding.Model,
 	)
 }
 

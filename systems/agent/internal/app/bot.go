@@ -133,7 +133,7 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 		fileops.NewGuardedExecutor(fileSettings, memoryStore),
 		skillManager,
 	)
-	embeddingService, err := newEmbeddingService(ctx, rt, fileSettings)
+	embeddingService, err := newEmbeddingService(ctx, rt, fileSettings, registry)
 	if err != nil {
 		return fmt.Errorf("configure embeddings for agent %q: %w", rt.Name, err)
 	}

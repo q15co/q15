@@ -224,7 +224,10 @@ func TestMediaAdaptiveClientFallsBackToEngineModelWhenUnbound(t *testing.T) {
 func TestManagerStartSendsTaggedProviderModelToClient(t *testing.T) {
 	model := &recordingModel{}
 	manager := newTestManagerWithModels(t, model, []modelcatalog.Model{
-		{ProviderModel: "gemma3:4b", Capabilities: modelcatalog.Capabilities{Text: true}},
+		{
+			ProviderModel: "gemma3:4b",
+			Capabilities:  modelcatalog.Capabilities{Chat: true, Text: true},
+		},
 	})
 
 	// deriveRef("gemma3:4b") == "gemma3-4b", preserving the version tag.
@@ -535,7 +538,7 @@ func (m *fakeCatalog) Discover(
 func newTestManager(t *testing.T, model agent.ModelClient) *Manager {
 	t.Helper()
 	return newTestManagerWithModels(t, model, []modelcatalog.Model{
-		{ProviderModel: "child", Capabilities: modelcatalog.Capabilities{Text: true}},
+		{ProviderModel: "child", Capabilities: modelcatalog.Capabilities{Chat: true, Text: true}},
 	})
 }
 
@@ -691,7 +694,12 @@ func newTestManagerWithResolver(
 		t.Fatalf("NewToolRegistry() error = %v", err)
 	}
 	cat := &fakeCatalog{models: map[string][]modelcatalog.Model{
-		"p": {{ProviderModel: "child", Capabilities: modelcatalog.Capabilities{Text: true}}},
+		"p": {
+			{
+				ProviderModel: "child",
+				Capabilities:  modelcatalog.Capabilities{Chat: true, Text: true},
+			},
+		},
 	}}
 	reg := modelcatalog.New(
 		[]modelcatalog.Provider{{Name: "p", Type: "ollama"}},
@@ -956,5 +964,37 @@ func TestUnionAllowedToolsOrderStableAndDeduped(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestSubagentDispatchRechecksChatCapability(t *testing.T) {
+	models := map[string][]modelcatalog.Model{
+		"api": {{ProviderModel: "chat", Capabilities: modelcatalog.Capabilities{Chat: true}}},
+	}
+	registry := modelcatalog.New(
+		[]modelcatalog.Provider{{Name: "api"}},
+		&fakeCatalog{models: models},
+		time.Hour,
+		time.Second,
+	)
+	registry.Refresh(context.Background())
+	bound, _ := registry.Lookup("api", "chat")
+	inner := &recordingModel{}
+	client := &mediaAdaptiveClient{
+		inner:         inner,
+		registry:      registry,
+		boundModel:    bound,
+		providerModel: "chat",
+	}
+	if _, err := client.Complete(context.Background(), "chat", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	models["api"][0].Capabilities.Chat = false
+	registry.Refresh(context.Background())
+	if _, err := client.Complete(context.Background(), "chat", nil, nil); err == nil {
+		t.Fatal("subagent bypassed live capability guard")
+	}
+	if len(inner.snapshotCalls()) != 1 {
+		t.Fatal("provider called after capability was removed")
 	}
 }

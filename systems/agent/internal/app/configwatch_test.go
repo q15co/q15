@@ -60,8 +60,18 @@ func reloadFixture(t *testing.T) (*configWatcher, *modelcatalog.Registry, *baseU
 	writeConfigFile(t, path, first)
 
 	catalog := &baseURLCatalog{models: map[string][]modelcatalog.Model{
-		first:                   {{ProviderModel: "first"}},
-		"http://two.test:11434": {{ProviderModel: "second"}},
+		first: {
+			{
+				ProviderModel: "first",
+				Capabilities:  modelcatalog.Capabilities{Chat: true, Text: true},
+			},
+		},
+		"http://two.test:11434": {
+			{
+				ProviderModel: "second",
+				Capabilities:  modelcatalog.Capabilities{Chat: true, Text: true},
+			},
+		},
 	}}
 	providers := []modelcatalog.Provider{{Name: "local", Type: "ollama", BaseURL: first}}
 	registry := modelcatalog.New(providers, catalog, time.Hour, time.Second)
@@ -218,7 +228,12 @@ func TestConfigWatcher_SeesEditsDuringStartupDiscovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	catalog := &baseURLCatalog{models: map[string][]modelcatalog.Model{
-		first: {{ProviderModel: "first"}}, second: {{ProviderModel: "second"}},
+		first: {
+			{
+				ProviderModel: "first",
+				Capabilities:  modelcatalog.Capabilities{Chat: true, Text: true},
+			},
+		}, second: {{ProviderModel: "second", Capabilities: modelcatalog.Capabilities{Chat: true, Text: true}}},
 	}, onDiscover: func(baseURL string) {
 		if baseURL == first {
 			writeConfigFile(t, path, second)

@@ -18,9 +18,9 @@ type Selection struct {
 }
 
 // NewSelection creates a session-scoped selection. The seed is intentionally
-// not validated against the live roster: a configured or auto-selected model
-// can disappear without preventing startup, and every runtime mutation via Set
-// is validated against the current roster.
+// not validated here: the composition root validates startup bindings before
+// constructing a selection. Every runtime mutation via Set is checked against
+// the current roster and the role policy.
 func NewSelection(registry *Registry, provider, model string) *Selection {
 	return &Selection{
 		registry: registry,
@@ -85,8 +85,8 @@ func (s *Selection) Set(provider, model string) error {
 			provider,
 		)
 	}
-	if resolved.IsDecision() {
-		return fmt.Errorf("decision models cannot be selected for chat")
+	if err := s.registry.RequireChat(resolved); err != nil {
+		return err
 	}
 
 	s.mu.Lock()

@@ -204,6 +204,7 @@ func (t *ListProviders) Run(_ context.Context, _ string) (string, error) {
 		}
 	}
 
+	payload["role_bindings"] = t.registry.RoleBindings()
 	return jsonOutput(payload)
 }
 
@@ -365,8 +366,8 @@ func (t *SwitchModel) Run(_ context.Context, arguments string) (string, error) {
 			provider,
 		)
 	}
-	if model.IsDecision() {
-		return "", fmt.Errorf("decision models cannot be selected for chat")
+	if err := t.registry.RequireChat(model); err != nil {
+		return "", err
 	}
 	// Persist before mutating the live selection so a persistence failure leaves
 	// the running agent unchanged rather than switching without durability.
@@ -486,8 +487,8 @@ func (t *SwitchCognitionModel) Run(_ context.Context, arguments string) (string,
 			provider,
 		)
 	}
-	if model.IsDecision() {
-		return "", fmt.Errorf("decision models cannot be selected for cognition chat jobs")
+	if err := t.registry.RequireChat(model); err != nil {
+		return "", err
 	}
 	if err := t.store.SetCognition(jobType, provider, modelRef); err != nil {
 		return "", fmt.Errorf("persist cognition selection: %w", err)

@@ -35,11 +35,8 @@ func (r *routedModelAdapter) Plan(
 			})
 			continue
 		}
-		if m.IsDecision() {
-			plan.Skipped = append(
-				plan.Skipped,
-				modelselection.Skip{Ref: ref, Reason: "decision models cannot complete chat turns"},
-			)
+		if err := r.registry.RequireChat(m); err != nil {
+			plan.Skipped = append(plan.Skipped, modelselection.Skip{Ref: ref, Reason: err.Error()})
 			continue
 		}
 		caps := modelselection.Capabilities{

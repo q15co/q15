@@ -123,11 +123,24 @@ func newEmbeddingService(
 	ctx context.Context,
 	rt config.AgentRuntime,
 	fileSettings fileops.Settings,
+	registry *modelcatalog.Registry,
 ) (*embed.Service, error) {
 	tool := rt.Tools.Embeddings
 	if !tool.Enabled {
 		return nil, nil
 	}
+	binding, bound := registry.Binding("embed")
+	if !bound {
+		return nil, fmt.Errorf(
+			"role embed model %q: explicit provider and model binding is required",
+			tool.Model,
+		)
+	}
+	model, err := resolveEmbeddingRole(registry, binding)
+	if err != nil {
+		return nil, err
+	}
+	tool.Model = model.ProviderModel
 	settings := embed.Settings{
 		WorkspaceLocalDir: fileSettings.WorkspaceLocalDir,
 		MemoryLocalDir:    fileSettings.MemoryLocalDir,
@@ -156,7 +169,12 @@ func newEmbeddingService(
 		_ = vectors.Close()
 		return nil, err
 	}
-	return embed.NewService(settings, state, vectors, embedder), nil
+	return embed.NewService(
+		settings,
+		state,
+		vectors,
+		&guardedEmbedder{inner: embedder, registry: registry, binding: binding},
+	), nil
 }
 
 // subagentSkillResolver adapts the skills.Manager to the subagent package's

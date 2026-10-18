@@ -171,8 +171,12 @@ func TestNewChatBridgeSurfacesConfiguredBindFailure(t *testing.T) {
 // the current-model section rendered into the next turn's system prompt.
 func TestSwitchModelUpdatesNextModelTurnPrompt(t *testing.T) {
 	registry := testRegistry(t, map[string][]modelcatalog.Model{
-		"p": {{ProviderModel: "old", Capabilities: modelcatalog.Capabilities{Text: true}}},
-		"q": {{ProviderModel: "new", Capabilities: modelcatalog.Capabilities{Text: true}}},
+		"p": {
+			{ProviderModel: "old", Capabilities: modelcatalog.Capabilities{Chat: true, Text: true}},
+		},
+		"q": {
+			{ProviderModel: "new", Capabilities: modelcatalog.Capabilities{Chat: true, Text: true}},
+		},
 	})
 	selection := modelcatalog.NewSelection(registry, "p", "old")
 	store := openTestSelectionStore(t)

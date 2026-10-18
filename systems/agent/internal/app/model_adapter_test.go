@@ -130,8 +130,8 @@ func TestRoutedModelAdapterUsesReloadedProviderSettings(t *testing.T) {
 			created,
 		)
 	}
-	if _, err := bound.Complete(ctx, "first", nil, nil); err != nil {
-		t.Fatal(err)
+	if _, err := bound.Complete(ctx, "first", nil, nil); err == nil {
+		t.Fatal("bound target removed by reload was still dispatched")
 	}
 	if len(created) != 2 {
 		t.Fatalf("bound client recreated: %d factories, want 2", len(created))
@@ -144,16 +144,19 @@ func TestRoutedModelAdapterRoutesModelsAndSuppressesTools(t *testing.T) {
 
 	registry := testRegistry(t, map[string][]modelcatalog.Model{
 		"moonshot": {
-			{ProviderModel: "kimi-k2.5", Capabilities: modelcatalog.Capabilities{Text: true}},
+			{
+				ProviderModel: "kimi-k2.5",
+				Capabilities:  modelcatalog.Capabilities{Chat: true, Text: true},
+			},
 			{
 				ProviderModel: "kimi-k2",
-				Capabilities:  modelcatalog.Capabilities{Text: true, ToolCalling: true},
+				Capabilities:  modelcatalog.Capabilities{Chat: true, Text: true, ToolCalling: true},
 			},
 		},
 		"openai-sub": {
 			{
 				ProviderModel: "gpt-5-codex",
-				Capabilities:  modelcatalog.Capabilities{Text: true, ToolCalling: true},
+				Capabilities:  modelcatalog.Capabilities{Chat: true, Text: true, ToolCalling: true},
 			},
 		},
 	})
@@ -212,11 +215,20 @@ func TestRoutedModelAdapterUsesSelectionToDisambiguateCurrentRef(t *testing.T) {
 	registry := modelcatalog.New(
 		[]modelcatalog.Provider{{Name: "p1", Type: "ollama"}, {Name: "p2", Type: "ollama"}},
 		&mockCatalog{models: map[string][]modelcatalog.Model{
-			"p1": {{ProviderModel: "shared", Capabilities: modelcatalog.Capabilities{Text: true}}},
+			"p1": {
+				{
+					ProviderModel: "shared",
+					Capabilities:  modelcatalog.Capabilities{Chat: true, Text: true},
+				},
+			},
 			"p2": {
 				{
 					ProviderModel: "shared",
-					Capabilities:  modelcatalog.Capabilities{Text: true, ToolCalling: true},
+					Capabilities: modelcatalog.Capabilities{
+						Chat:        true,
+						Text:        true,
+						ToolCalling: true,
+					},
 				},
 			},
 		}},
@@ -263,12 +275,19 @@ func TestRoutedModelAdapterBindProviderModelUsesExactProvider(t *testing.T) {
 		[]modelcatalog.Provider{{Name: "p1", Type: "ollama"}, {Name: "p2", Type: "ollama"}},
 		&mockCatalog{models: map[string][]modelcatalog.Model{
 			"p1": {
-				{ProviderModel: "shared", Capabilities: modelcatalog.Capabilities{Text: true}},
+				{
+					ProviderModel: "shared",
+					Capabilities:  modelcatalog.Capabilities{Chat: true, Text: true},
+				},
 			},
 			"p2": {
 				{
 					ProviderModel: "shared:cloud",
-					Capabilities:  modelcatalog.Capabilities{Text: true, ToolCalling: true},
+					Capabilities: modelcatalog.Capabilities{
+						Chat:        true,
+						Text:        true,
+						ToolCalling: true,
+					},
 				},
 			},
 		}},
@@ -325,10 +344,16 @@ func TestRoutedModelAdapterBindProviderModelUsesExactProvider(t *testing.T) {
 func TestRoutedModelAdapterBindProviderModelRejectsMissingExactTarget(t *testing.T) {
 	registry := testRegistry(t, map[string][]modelcatalog.Model{
 		"p1": {
-			{ProviderModel: "shared", Capabilities: modelcatalog.Capabilities{Text: true}},
+			{
+				ProviderModel: "shared",
+				Capabilities:  modelcatalog.Capabilities{Chat: true, Text: true},
+			},
 		},
 		"p2": {
-			{ProviderModel: "other", Capabilities: modelcatalog.Capabilities{Text: true}},
+			{
+				ProviderModel: "other",
+				Capabilities:  modelcatalog.Capabilities{Chat: true, Text: true},
+			},
 		},
 	})
 	factoryCalls := 0
@@ -356,13 +381,19 @@ func TestRoutedModelAdapterBindProviderModelRejectsMissingExactTarget(t *testing
 	}
 }
 
-func TestBoundProviderModelSurvivesRosterRefreshWithoutFallback(t *testing.T) {
+func TestBoundProviderModelRefusesRemovedTargetWithoutFallback(t *testing.T) {
 	catalog := &mockCatalog{models: map[string][]modelcatalog.Model{
 		"p1": {
-			{ProviderModel: "shared", Capabilities: modelcatalog.Capabilities{Text: true}},
+			{
+				ProviderModel: "shared",
+				Capabilities:  modelcatalog.Capabilities{Chat: true, Text: true},
+			},
 		},
 		"p2": {
-			{ProviderModel: "shared:cloud", Capabilities: modelcatalog.Capabilities{Text: true}},
+			{
+				ProviderModel: "shared:cloud",
+				Capabilities:  modelcatalog.Capabilities{Chat: true, Text: true},
+			},
 		},
 	}}
 	registry := modelcatalog.New(
@@ -393,11 +424,11 @@ func TestBoundProviderModelSurvivesRosterRefreshWithoutFallback(t *testing.T) {
 	catalog.models["p2"] = nil
 	registry.Refresh(context.Background())
 
-	if _, err := bound.Complete(context.Background(), "shared", nil, nil); err != nil {
-		t.Fatalf("bound Complete() after refresh error = %v", err)
+	if _, err := bound.Complete(context.Background(), "shared", nil, nil); err == nil {
+		t.Fatal("bound completion accepted a removed target")
 	}
-	if routedProvider != "p2" {
-		t.Fatalf("bound completion provider = %q, want p2", routedProvider)
+	if routedProvider != "" {
+		t.Fatalf("bound completion reached provider %q", routedProvider)
 	}
 	if _, err := adapter.BindProviderModel("p2", "shared"); !errors.Is(
 		err,
@@ -410,10 +441,13 @@ func TestBoundProviderModelSurvivesRosterRefreshWithoutFallback(t *testing.T) {
 func TestRoutedModelAdapterPlanFiltersByCapabilities(t *testing.T) {
 	registry := testRegistry(t, map[string][]modelcatalog.Model{
 		"p": {
-			{ProviderModel: "text-only", Capabilities: modelcatalog.Capabilities{Text: true}},
+			{
+				ProviderModel: "text-only",
+				Capabilities:  modelcatalog.Capabilities{Chat: true, Text: true},
+			},
 			{
 				ProviderModel: "tools",
-				Capabilities:  modelcatalog.Capabilities{Text: true, ToolCalling: true},
+				Capabilities:  modelcatalog.Capabilities{Chat: true, Text: true, ToolCalling: true},
 			},
 		},
 	})
@@ -444,7 +478,10 @@ func TestRoutedModelAdapterPlanFiltersByCapabilities(t *testing.T) {
 func TestRoutedModelAdapterPlanSkipsMissingFromRoster(t *testing.T) {
 	registry := testRegistry(t, map[string][]modelcatalog.Model{
 		"p": {
-			{ProviderModel: "real-model", Capabilities: modelcatalog.Capabilities{Text: true}},
+			{
+				ProviderModel: "real-model",
+				Capabilities:  modelcatalog.Capabilities{Chat: true, Text: true},
+			},
 		},
 	})
 
@@ -477,7 +514,10 @@ func TestRoutedModelAdapterPlanSkipsMissingFromRoster(t *testing.T) {
 func TestRoutedModelAdapterCompleteRejectsMissingModel(t *testing.T) {
 	registry := testRegistry(t, map[string][]modelcatalog.Model{
 		"p": {
-			{ProviderModel: "real-model", Capabilities: modelcatalog.Capabilities{Text: true}},
+			{
+				ProviderModel: "real-model",
+				Capabilities:  modelcatalog.Capabilities{Chat: true, Text: true},
+			},
 		},
 	})
 
@@ -501,10 +541,13 @@ func TestRoutedModelAdapterAdaptsMediaPerModelCapabilities(t *testing.T) {
 	store := q15media.Store(nil)
 	registry := testRegistry(t, map[string][]modelcatalog.Model{
 		"p": {
-			{ProviderModel: "text-only", Capabilities: modelcatalog.Capabilities{Text: true}},
+			{
+				ProviderModel: "text-only",
+				Capabilities:  modelcatalog.Capabilities{Chat: true, Text: true},
+			},
 			{
 				ProviderModel: "vision",
-				Capabilities:  modelcatalog.Capabilities{Text: true, ImageInput: true},
+				Capabilities:  modelcatalog.Capabilities{Chat: true, Text: true, ImageInput: true},
 			},
 		},
 	})
@@ -538,6 +581,12 @@ func TestBuildModelRefsCurrentFirst(t *testing.T) {
 		},
 	})
 
+	registry.SetRoleBindings(
+		[]modelcatalog.RoleBinding{
+			{Role: "fallbacks[0]", Provider: "p", Model: "alpha"},
+			{Role: "fallbacks[1]", Provider: "p", Model: "gamma"},
+		},
+	)
 	refs := buildModelRefs("beta", registry)
 	if len(refs) != 3 {
 		t.Fatalf("refs = %v, want 3", refs)
@@ -556,6 +605,12 @@ func TestBuildModelRefsCurrentNotInSnapshot(t *testing.T) {
 	})
 
 	// Current model gone from roster → still first, rest follow.
+	registry.SetRoleBindings(
+		[]modelcatalog.RoleBinding{
+			{Role: "fallbacks[0]", Provider: "p", Model: "alpha"},
+			{Role: "fallbacks[1]", Provider: "p", Model: "beta"},
+		},
+	)
 	refs := buildModelRefs("gone", registry)
 	if len(refs) != 3 {
 		t.Fatalf("refs = %v, want 3 (gone + alpha + beta)", refs)
@@ -567,35 +622,39 @@ func TestBuildModelRefsCurrentNotInSnapshot(t *testing.T) {
 
 // --- selection bootstrap tests ---
 
-func TestAutoSelectModelPrefersToolCallingThenText(t *testing.T) {
-	registry := testRegistry(t, map[string][]modelcatalog.Model{
-		"p": {{
-			ProviderModel: "text-only",
-			Capabilities:  modelcatalog.Capabilities{Text: true},
-		}},
-		"q": {{
-			ProviderModel: "tools",
-			Capabilities:  modelcatalog.Capabilities{Text: true, ToolCalling: true},
-		}},
-	})
-	provider, model, ok := autoSelectModel(registry)
-	if !ok {
-		t.Fatal("autoSelectModel() ok=false, want true")
+func TestLoadInteractiveSelectionRequiresExplicitPrimary(t *testing.T) {
+	registry := testRegistry(
+		t,
+		map[string][]modelcatalog.Model{
+			"p": {
+				{
+					ProviderModel: "available",
+					Capabilities:  modelcatalog.Capabilities{Chat: true, Text: true},
+				},
+			},
+		},
+	)
+	store, err := selectionstore.Open(filepath.Join(t.TempDir(), "selection.json"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if provider != "q" || model != "tools" {
-		t.Fatalf("autoSelectModel() = %q/%q, want q/tools", provider, model)
+	if _, err := loadInteractiveSelection(registry, store); err == nil {
+		t.Fatal("primary selected by capability query")
 	}
 }
 
-func TestLoadInteractiveSelectionAutoSelectsAndPersistsOnFirstRun(t *testing.T) {
+func TestLoadInteractiveSelectionUsesConfiguredPrimaryAndPersistsOnFirstRun(t *testing.T) {
 	registry := testRegistry(t, map[string][]modelcatalog.Model{
 		"p": {
 			{
 				ProviderModel: "alpha",
-				Capabilities:  modelcatalog.Capabilities{Text: true, ToolCalling: true},
+				Capabilities:  modelcatalog.Capabilities{Chat: true, Text: true, ToolCalling: true},
 			},
 		},
 	})
+	registry.SetRoleBindings(
+		[]modelcatalog.RoleBinding{{Role: "primary", Provider: "p", Model: "alpha"}},
+	)
 	storePath := filepath.Join(t.TempDir(), "selection.json")
 	store1, err := selectionstore.Open(storePath)
 	if err != nil {
@@ -624,8 +683,18 @@ func TestLoadInteractiveSelectionAutoSelectsAndPersistsOnFirstRun(t *testing.T) 
 
 func TestSwitchCognitionModelPersistsAndResolverFallsBack(t *testing.T) {
 	registry := testRegistry(t, map[string][]modelcatalog.Model{
-		"p": {{ProviderModel: "alpha", Capabilities: modelcatalog.Capabilities{Text: true}}},
-		"q": {{ProviderModel: "beta", Capabilities: modelcatalog.Capabilities{Text: true}}},
+		"p": {
+			{
+				ProviderModel: "alpha",
+				Capabilities:  modelcatalog.Capabilities{Chat: true, Text: true},
+			},
+		},
+		"q": {
+			{
+				ProviderModel: "beta",
+				Capabilities:  modelcatalog.Capabilities{Chat: true, Text: true},
+			},
+		},
 	})
 	selection := modelcatalog.NewSelection(registry, "p", "alpha")
 	store := openTestSelectionStore(t)

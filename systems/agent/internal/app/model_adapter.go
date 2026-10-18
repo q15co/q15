@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -194,8 +195,29 @@ func (r *routedModelAdapter) completeModel(
 	onDelta func(string),
 	onReasoning func(string),
 ) (agent.ModelClientResult, error) {
-	if m.IsDecision() {
-		return agent.ModelClientResult{}, errors.New("decision models cannot complete chat turns")
+	current, exists := r.registry.Lookup(m.ProviderName, m.Ref)
+	if !exists || current.ProviderModel != m.ProviderModel {
+		return agent.ModelClientResult{}, fmt.Errorf(
+			"role primary model %q: missing capability chat in the live catalog",
+			m.ProviderModel,
+		)
+	}
+	m.Capabilities = current.Capabilities
+	if err := r.registry.RequireChat(m); err != nil {
+		return agent.ModelClientResult{}, err
+	}
+	data, err := json.Marshal(struct {
+		Messages []conversation.Message
+		Tools    []agent.ToolDefinition
+	}{messages, tools})
+	if err != nil {
+		return agent.ModelClientResult{}, fmt.Errorf(
+			"role primary model %q: request is not JSON encodable",
+			m.ProviderModel,
+		)
+	}
+	if err := r.registry.ReserveRole("primary", m, len(data)); err != nil {
+		return agent.ModelClientResult{}, err
 	}
 	client, err := r.clientFor(m)
 	if err != nil {
@@ -234,10 +256,32 @@ func (r *routedModelAdapter) lookupModel(ref string) (modelcatalog.Model, bool) 
 	if r == nil || r.registry == nil || ref == "" {
 		return modelcatalog.Model{}, false
 	}
+	for _, binding := range r.registry.RoleBindings() {
+		if !strings.HasPrefix(binding.Role, "fallbacks[") {
+			continue
+		}
+		for _, m := range r.registry.Snapshot() {
+			if m.ProviderName == binding.Provider && ref == binding.Provider+"/"+m.Ref &&
+				(m.Ref == binding.Model || m.ProviderModel == binding.Model) {
+				return m, true
+			}
+		}
+	}
 	if r.selection != nil {
 		provider, currentRef := r.selection.Current()
 		if provider != "" && ref == currentRef {
 			if m, ok := r.registry.Lookup(provider, ref); ok {
+				return m, true
+			}
+		}
+	}
+	for _, binding := range r.registry.RoleBindings() {
+		if !strings.HasPrefix(binding.Role, "fallbacks[") {
+			continue
+		}
+		for _, m := range r.registry.Snapshot() {
+			if m.ProviderName == binding.Provider && m.Ref == ref &&
+				(m.Ref == binding.Model || m.ProviderModel == binding.Model) {
 				return m, true
 			}
 		}
@@ -311,8 +355,11 @@ func defaultModelClientFactory(
 // factory uses default HTTP transports.
 func makeDumpAwareFactory(rt http.RoundTripper) modelClientFactory {
 	return func(m modelcatalog.Model, mediaStore q15media.Store) (agent.ModelClient, error) {
-		if m.IsDecision() {
-			return nil, errors.New("decision models cannot complete chat turns")
+		if !m.Capabilities.Chat {
+			return nil, fmt.Errorf(
+				"role primary model %q: missing capability chat",
+				m.ProviderModel,
+			)
 		}
 		switch providertypes.NormalizeOrEmpty(m.ProviderType) {
 		case providertypes.Ollama:
@@ -351,38 +398,34 @@ func openDumpWriter() (io.Writer, func()) {
 	}
 }
 
-// buildModelRefs returns the engine's eligible model-ref list: the current
-// model first, then the remaining roster snapshot refs (deduped). This is the
-// honest, live fallback — if the current model is gone, the engine falls
-// through to other roster models.
+// buildModelRefs keeps the explicit primary selection followed by configured fallbacks.
 func buildModelRefs(currentRef string, registry *modelcatalog.Registry) []string {
-	currentRef = strings.TrimSpace(currentRef)
-	snapshot := registry.Snapshot()
-
-	refs := make([]string, 0, len(snapshot)+1)
-	seen := make(map[string]struct{}, len(snapshot)+1)
-
-	currentModel, exists := registry.LookupByRef(currentRef)
-	if currentRef != "" && (!exists || !currentModel.IsDecision()) {
-		refs = append(refs, currentRef)
-		seen[currentRef] = struct{}{}
+	refs := []string{}
+	seen := map[string]bool{}
+	add := func(ref string) {
+		ref = strings.TrimSpace(ref)
+		if ref != "" && !seen[ref] {
+			refs = append(refs, ref)
+			seen[ref] = true
+		}
 	}
-	for _, m := range snapshot {
-		if m.IsDecision() {
+	add(currentRef)
+	for _, binding := range registry.RoleBindings() {
+		if !strings.HasPrefix(binding.Role, "fallbacks[") {
 			continue
 		}
-		if _, ok := seen[m.Ref]; ok {
-			continue
+		for _, m := range registry.Snapshot() {
+			if m.ProviderName == binding.Provider &&
+				(m.ProviderModel == binding.Model || m.Ref == binding.Model) {
+				add(binding.Provider + "/" + m.Ref)
+				break
+			}
 		}
-		refs = append(refs, m.Ref)
-		seen[m.Ref] = struct{}{}
 	}
 	return refs
 }
 
-// loadInteractiveSelection materializes the in-memory interactive model
-// selection from the persisted selection store, auto-selecting and persisting
-// a first-eligible roster model on first run.
+// loadInteractiveSelection restores an explicit selection or seeds it from the configured primary.
 func loadInteractiveSelection(
 	registry *modelcatalog.Registry,
 	store *selectionstore.Store,
@@ -390,51 +433,40 @@ func loadInteractiveSelection(
 	if registry == nil || store == nil {
 		return nil, errors.New("registry and selection store are required")
 	}
-
-	if current := store.Interactive(); current.IsValid() {
-		model, exists := registry.Lookup(current.Provider, current.Model)
-		if !exists || !model.IsDecision() {
-			return modelcatalog.NewSelection(registry, current.Provider, current.Model), nil
+	current := store.Interactive()
+	if current.IsValid() {
+		m, ok := registry.Lookup(current.Provider, current.Model)
+		if !ok {
+			return nil, fmt.Errorf(
+				"role primary model %q: missing capability chat in the live catalog",
+				current.Model,
+			)
 		}
+		if err := registry.RequireChat(m); err != nil {
+			return nil, err
+		}
+		return modelcatalog.NewSelection(registry, current.Provider, current.Model), nil
 	}
-
-	provider, model, ok := autoSelectModel(registry)
+	binding, ok := registry.Binding("primary")
 	if !ok {
-		return nil, errors.New(
-			"no models available in the live roster — cannot bootstrap model selection",
-		)
+		return nil, errors.New("role primary: explicit provider and model binding is required")
 	}
-	if err := store.SetInteractive(provider, model); err != nil {
-		return nil, fmt.Errorf("persist auto-selected model: %w", err)
-	}
-	return modelcatalog.NewSelection(registry, provider, model), nil
-}
-
-// autoSelectModel picks the first-eligible roster model for bootstrap. It
-// prefers a text+tool-calling model (so the agent keeps its tools), then falls
-// back to any text-capable model. Returns false when the roster is empty.
-func autoSelectModel(registry *modelcatalog.Registry) (string, string, bool) {
-	if registry == nil {
-		return "", "", false
-	}
-	snapshot := registry.Snapshot()
-	var textFallback *modelcatalog.Model
-	for i := range snapshot {
-		m := &snapshot[i]
-		if !m.Capabilities.Text || m.IsDecision() {
-			continue
-		}
-		if m.Capabilities.ToolCalling {
-			return m.ProviderName, m.Ref, true
-		}
-		if textFallback == nil {
-			textFallback = m
+	for _, m := range registry.Snapshot() {
+		if m.ProviderName == binding.Provider &&
+			(m.ProviderModel == binding.Model || m.Ref == binding.Model) {
+			if err := registry.RequireChat(m); err != nil {
+				return nil, err
+			}
+			if err := store.SetInteractive(m.ProviderName, m.Ref); err != nil {
+				return nil, err
+			}
+			return modelcatalog.NewSelection(registry, m.ProviderName, m.Ref), nil
 		}
 	}
-	if textFallback != nil {
-		return textFallback.ProviderName, textFallback.Ref, true
-	}
-	return "", "", false
+	return nil, fmt.Errorf(
+		"role primary model %q: missing capability chat in the live catalog",
+		binding.Model,
+	)
 }
 
 // newCognitionRefResolver returns a per-job model ref resolver for the

@@ -74,6 +74,15 @@ func TestDecisionCheckThroughOllamaRoster(t *testing.T) {
 				time.Second,
 			)
 			registry.Refresh(context.Background())
+			registry.SetRoleBindings(
+				[]modelcatalog.RoleBinding{
+					{
+						Role:     "decision",
+						Provider: registry.Snapshot()[0].ProviderName,
+						Model:    registry.Snapshot()[0].ProviderModel,
+					},
+				},
+			)
 			roster, err := modeltools.NewListModels(registry, nil).
 				Run(context.Background(), `{"provider":"ollama-cloud"}`)
 			if err != nil || !strings.Contains(roster, `"provider_model": "`+model+`"`) {
@@ -182,6 +191,15 @@ func TestDecisionCheckThroughCompatibleProviders(t *testing.T) {
 				time.Second,
 			)
 			registry.Refresh(context.Background())
+			registry.SetRoleBindings(
+				[]modelcatalog.RoleBinding{
+					{
+						Role:     "decision",
+						Provider: registry.Snapshot()[0].ProviderName,
+						Model:    registry.Snapshot()[0].ProviderModel,
+					},
+				},
+			)
 			tool := decisiontools.NewCheck(
 				newRoutedDecisionAdapter(registry, defaultDecisionClientFactory),
 			)

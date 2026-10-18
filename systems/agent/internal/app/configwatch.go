@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"reflect"
 	"time"
 
 	"github.com/q15co/q15/systems/agent/internal/config"
@@ -18,8 +19,9 @@ type configWatcher struct {
 	registry *modelcatalog.Registry
 	path     string
 
-	appliedHash  [sha256.Size]byte
-	rejectedHash *[sha256.Size]byte
+	appliedHash   [sha256.Size]byte
+	rejectedHash  *[sha256.Size]byte
+	initialConfig config.Config
 }
 
 // newConfigWatcher tracks the bytes startup actually loaded, so an edit made
@@ -30,7 +32,8 @@ func newConfigWatcher(
 	initialData []byte,
 ) *configWatcher {
 	hash := sha256.Sum256(initialData)
-	return &configWatcher{registry: registry, path: path, appliedHash: hash}
+	cfg, _ := config.Parse(initialData)
+	return &configWatcher{registry: registry, path: path, appliedHash: hash, initialConfig: cfg}
 }
 
 func (w *configWatcher) run(ctx context.Context, interval time.Duration) {
@@ -81,6 +84,13 @@ func (w *configWatcher) apply(
 	cfg, err := config.Parse(data)
 	if err != nil {
 		w.refuse(hash, checkedAt, err)
+		return false
+	}
+	if !reflect.DeepEqual(cfg.Primary, w.initialConfig.Primary) ||
+		!reflect.DeepEqual(cfg.Fallbacks, w.initialConfig.Fallbacks) ||
+		!reflect.DeepEqual(cfg.Decision, w.initialConfig.Decision) ||
+		!reflect.DeepEqual(cfg.Embed, w.initialConfig.Embed) {
+		w.refuse(hash, checkedAt, fmt.Errorf("role binding changes require a restart"))
 		return false
 	}
 	providers, err := buildProviderDescriptors(cfg.Providers)

@@ -99,21 +99,36 @@ prompt-visible user message:
 - The shipped `q15-agent` and `q15-exec` images also include timezone data so shell tools can
   resolve named zones such as `Europe/Berlin` correctly.
 
-## Decision Providers
+## Model Providers And Roles
 
-Decision calls use the separate `decision.Client` interface and typed request/response models. The
-application resolves a decision model from the shared live registry and constructs its provider
-adapter through a factory. The `decision_check` tool receives that interface; it owns neither
-provider selection nor HTTP construction. Provider clients are cached by provider identity, API
-root, and key, so a provider reload cannot reuse an obsolete connection.
+The model boundary has three layers. Kind is the connection family in `providertypes`, the only
+provider enum; a task does not become a kind. A model is a provider-bound catalog row with
+normalized capabilities and per-capability provenance. A role is deployment config binding an
+explicit named provider/model pair: `primary`, ordered `fallbacks`, `decision`, or `embed`.
 
-Incoming provider and models.dev `type: decision` metadata normalizes to the catalog's `decision`
-capability. Capabilities record provenance per name: operator `override` wins over provider API or
-artifact `derived`, which wins over models.dev `declared`. The existing boolean capability shape
-remains until #375. Enrichment fetches `api.json?type=all` because models.dev omits specialized
-models by default. It only classifies and enriches models already returned by the configured
-provider. Unknown metadata does not establish decision support. Confirmed decision models remain
-visible through `list_models` but cannot be selected or called as chat models.
+Incoming provider and models.dev `type: decision` metadata normalizes into `Capabilities.Decision`.
+Operator `override` evidence wins over provider API or artifact `derived` evidence, which wins over
+models.dev `declared` evidence. Enrichment fetches `api.json?type=all` and enriches only live
+models. The boolean capability struct, loose flags, and existing embedding backend configuration
+remain until #375. `list_models` filters effective capabilities and reports their provenance.
+
+Startup validates every binding against the role table: primary and each fallback require `chat`,
+decision requires `decision`, and embed requires `embed`. Ports repeat that check at dispatch; a
+provider reload is refused if it invalidates a running binding. Roles are never filled by a
+capability query. Fallback references retain provider identity even when providers host the same
+model ID; a bound target removed from the roster is refused rather than silently replaced. A model
+with both chat and decision capabilities remains eligible for either role. An explicit decision
+binding overlapping a chat primary or fallback aborts unless the decision binding supplies
+`allow_dual_bind` with a reason and each overlapping role supplies independent rate and request-byte
+limits. The reason is logged at every startup and surfaced in `list_providers.role_bindings`;
+counters enforce the partitions before provider I/O.
+
+Decision calls use `decision.Client` at `decision/v1`. In-tree Go adapters are checked by the
+compiler; the version declaration reserves a check for any future adapters loaded at runtime, with
+no plugin loader introduced here. The application resolves only the configured decision binding,
+constructs its provider adapter, and injects that port into `decision_check`. The tool owns neither
+selection nor HTTP construction. Clients are keyed by provider connection facts so reloads cannot
+reuse an obsolete connection.
 
 Ollama's decision adapter uses `SystemOne` from the Ollama Go SDK (`v0.40.6`). OpenAI-compatible
 providers with decision models and dedicated `systemone-compatible` providers use the shared System

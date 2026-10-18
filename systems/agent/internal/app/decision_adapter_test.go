@@ -35,7 +35,7 @@ func (c *fakeDecisionClient) Check(
 
 func TestDecisionRoutingUsesDiscoveredMetadataAndReloadedProvider(t *testing.T) {
 	catalog := &mockCatalog{models: map[string][]modelcatalog.Model{"gateway": {
-		{ProviderModel: "chat", Capabilities: modelcatalog.Capabilities{Text: true}},
+		{ProviderModel: "chat", Capabilities: modelcatalog.Capabilities{Chat: true, Text: true}},
 		{
 			ProviderModel: "vendor/unfamiliar-model",
 			Capabilities:  modelcatalog.Capabilities{Decision: true, Text: true},
@@ -55,6 +55,11 @@ func TestDecisionRoutingUsesDiscoveredMetadataAndReloadedProvider(t *testing.T) 
 		time.Second,
 	)
 	registry.Refresh(context.Background())
+	registry.SetRoleBindings(
+		[]modelcatalog.RoleBinding{
+			{Role: "decision", Provider: "gateway", Model: "vendor/unfamiliar-model"},
+		},
+	)
 	client := &fakeDecisionClient{}
 	var built []modelcatalog.Model
 	adapter := newRoutedDecisionAdapter(
@@ -89,12 +94,15 @@ func TestDecisionRoutingUsesDiscoveredMetadataAndReloadedProvider(t *testing.T) 
 
 func TestDecisionRoutingRejectsChatAndPropagatesCancellation(t *testing.T) {
 	registry := testRegistry(t, map[string][]modelcatalog.Model{"provider": {
-		{ProviderModel: "chat", Capabilities: modelcatalog.Capabilities{Text: true}},
+		{ProviderModel: "chat", Capabilities: modelcatalog.Capabilities{Chat: true, Text: true}},
 		{
 			ProviderModel: "decision",
 			Capabilities:  modelcatalog.Capabilities{Decision: true, Text: true},
 		},
 	}})
+	registry.SetRoleBindings(
+		[]modelcatalog.RoleBinding{{Role: "decision", Provider: "provider", Model: "decision"}},
+	)
 	client := &fakeDecisionClient{}
 	adapter := newRoutedDecisionAdapter(
 		registry,

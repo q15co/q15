@@ -74,7 +74,7 @@ func TestProviderStreamsThroughRuntimeRoutingAndPayloadCapture(t *testing.T) {
 					{
 						ProviderModel: "model",
 						ProviderType:  providerType,
-						Capabilities:  modelcatalog.Capabilities{Text: true},
+						Capabilities:  modelcatalog.Capabilities{Chat: true, Text: true},
 					},
 				},
 			})

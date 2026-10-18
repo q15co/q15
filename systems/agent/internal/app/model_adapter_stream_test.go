@@ -62,7 +62,7 @@ func TestModelAdapterForwardsReasoningThroughRoutedAndBoundClients(t *testing.T)
 				"provider": {
 					{
 						ProviderModel: "model:cloud",
-						Capabilities:  modelcatalog.Capabilities{Text: true},
+						Capabilities:  modelcatalog.Capabilities{Chat: true, Text: true},
 					},
 				},
 			})
@@ -170,7 +170,7 @@ func TestModelAdapterStreamsThroughRoutingAndCapabilityAdaptation(t *testing.T) 
 				"provider": {
 					{
 						ProviderModel: "model:cloud",
-						Capabilities:  modelcatalog.Capabilities{Text: true},
+						Capabilities:  modelcatalog.Capabilities{Chat: true, Text: true},
 					},
 				},
 			})
@@ -258,7 +258,7 @@ func TestModelAdapterStreamingFallsBackToBatchProvider(t *testing.T) {
 		"provider": {
 			{
 				ProviderModel: "model",
-				Capabilities:  modelcatalog.Capabilities{Text: true, ToolCalling: true},
+				Capabilities:  modelcatalog.Capabilities{Chat: true, Text: true, ToolCalling: true},
 			},
 		},
 	})
