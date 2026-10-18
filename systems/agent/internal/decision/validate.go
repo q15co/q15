@@ -15,15 +15,8 @@ func (request Request) Validate() error {
 		return fmt.Errorf("requires 1-64 named questions")
 	}
 	for name, question := range request.Questions {
-		if len(name) == 0 || len(name) > 100 {
-			return fmt.Errorf(
-				"question names require 1-100 ASCII letters, digits, underscores, dots, or hyphens",
-			)
-		}
-		for _, r := range name {
-			if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '.' || r == '-') {
-				return fmt.Errorf("invalid question name")
-			}
+		if err := validateName(name); err != nil {
+			return err
 		}
 		if err := question.validate(); err != nil {
 			return err
@@ -110,4 +103,27 @@ func validateDistribution(answer Answer, keys []string) error {
 
 func probability(p *float64) bool {
 	return p != nil && !math.IsNaN(*p) && !math.IsInf(*p, 0) && *p >= 0 && *p <= 1
+}
+
+func validateName(name string) error {
+	const required = "require 1-100 ASCII letters, digits, underscores, dots, or hyphens"
+	if name == "" {
+		return fmt.Errorf("question name: end of name at byte offset 0; %s", required)
+	}
+	for offset, character := range name {
+		valid := character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' ||
+			character >= '0' && character <= '9' ||
+			character == '_' ||
+			character == '.' ||
+			character == '-'
+		if offset >= 100 || !valid {
+			return fmt.Errorf(
+				"question name: invalid character %q at byte offset %d; %s",
+				character,
+				offset,
+				required,
+			)
+		}
+	}
+	return nil
 }
