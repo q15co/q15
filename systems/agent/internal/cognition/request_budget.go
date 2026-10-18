@@ -15,6 +15,35 @@ func encodedTextBytes(text string) int {
 	return len(encoded)
 }
 
+func checkConversionPromptBudget(spec Spec) error {
+	prompt, err := renderPrompt(semanticMemoryExtractionJobType, spec)
+	if err != nil {
+		return err
+	}
+	// Conversion carries several independently bounded sources. Leave room for
+	// tool definitions and accumulated decisions before opening its journal.
+	const reserve = 64 * 1024
+	limit := cognitionRequestLimit(spec, prompt) - reserve
+	size := encodedTextBytes(prompt)
+	if size <= limit {
+		return nil
+	}
+	largest, largestBytes := "", 0
+	for _, section := range spec.PromptSections {
+		if bytes := encodedTextBytes(agent.ComposePromptSections(section)); bytes > largestBytes {
+			largest, largestBytes = section.Name, bytes
+		}
+	}
+	return fmt.Errorf(
+		"conversion prompt exceeds build byte budget (%d>%d): largest_section=%s largest_section_bytes=%d reserve_bytes=%d",
+		size,
+		limit,
+		largest,
+		largestBytes,
+		reserve,
+	)
+}
+
 func cognitionRequestLimit(spec Spec, prompt string) int {
 	if !spec.repair {
 		return defaultCognitionMaxRequestBytes

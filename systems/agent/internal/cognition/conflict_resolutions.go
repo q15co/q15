@@ -14,6 +14,7 @@ import (
 )
 
 const insufficientConflictEvidence = "insufficient"
+const conversionConflictBytes = 32 * 1024
 
 var conflictResolutionPattern = regexp.MustCompile(
 	`^resolution claims=([^ ]+) winner=([^ ]+) reason=("(?:[^"\\]|\\.)*")(?: basis=([a-f0-9]{64}))?$`,
@@ -198,13 +199,39 @@ func currentConflictResolutions(
 	return selected, nil
 }
 
+func boundedConflictResolutions(records []conflictResolution) ([]conflictResolution, int) {
+	groups := make([][]conflictedClaimEntry, 0, len(records))
+	byGroup := make(map[string]conflictResolution, len(records))
+	for _, record := range records {
+		groups = append(groups, record.group)
+		byGroup[record.key()] = record
+	}
+	groups, omitted := boundVerificationConflicts(
+		groups,
+		conversionConflictBytes,
+		encodedTextBytes(renderConflictResolutions(nil)),
+		func(group []conflictedClaimEntry) string {
+			return renderConflictResolution(byGroup[conflictGroupKey(group)])
+		},
+	)
+	selected := make([]conflictResolution, 0, len(groups))
+	for _, group := range groups {
+		selected = append(selected, byGroup[conflictGroupKey(group)])
+	}
+	return selected, omitted
+}
+
+func renderConflictResolution(record conflictResolution) string {
+	return record.line() + "\n" + renderConflictedClaimGroup(record.group)
+}
+
 func renderConflictResolutions(records []conflictResolution) string {
 	lines := []string{
 		"Apply every bound resolution below. A winner must remain active and every loser must be deleted; append exactly one resolved ledger record per loser, targeting its ID and using the note `winner=<winner-id>; <nonempty reason>`.",
 		"An insufficient resolution requires every member claim, including its path, metadata, provenance and text, to remain unchanged and conflicted. Never use unbound or stale review prose to resolve a conflict.",
 	}
 	for _, record := range records {
-		lines = append(lines, record.line(), renderConflictedClaimGroup(record.group))
+		lines = append(lines, renderConflictResolution(record))
 	}
 	return strings.Join(lines, "\n")
 }
