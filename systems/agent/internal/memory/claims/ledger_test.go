@@ -486,6 +486,7 @@ func TestParseLedgerEntryRefusesMalformedMemoryCitations(t *testing.T) {
 		"mem:semantic/state/notes.md:-1",
 		"mem:semantic/state/notes.md:abc",
 		"mem:semantic/state/notes.md:4..t9",
+		"mem:working/WORKING_MEMORY.md:1..115",
 		"mem:semantic/state/no es.md:4",
 	} {
 		t.Run(src, func(t *testing.T) {
