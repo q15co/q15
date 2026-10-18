@@ -33,6 +33,7 @@ type routedModelAdapter struct {
 	selection  *modelcatalog.Selection
 	mediaStore q15media.Store
 	factory    modelClientFactory
+	clientMu   sync.Mutex
 	clients    sync.Map // providerClientKey → agent.ModelClient
 }
 
@@ -294,6 +295,8 @@ func (r *routedModelAdapter) lookupModel(ref string) (modelcatalog.Model, bool) 
 func (r *routedModelAdapter) clientFor(
 	m modelcatalog.Model,
 ) (agent.ModelClient, error) {
+	r.clientMu.Lock()
+	defer r.clientMu.Unlock()
 	key := providerClientKey{
 		name:         m.ProviderName,
 		providerType: m.ProviderType,
@@ -343,15 +346,6 @@ func newModelAdapterWithSelectionAndFactory(
 	}, nil
 }
 
-// defaultModelClientFactory builds the provider client for a discovered model
-// based on its canonical provider type.
-func defaultModelClientFactory(
-	m modelcatalog.Model,
-	mediaStore q15media.Store,
-) (agent.ModelClient, error) {
-	return makeDumpAwareFactory(nil)(m, mediaStore)
-}
-
 // makeDumpAwareFactory returns a modelClientFactory that threads an optional
 // dump transport through to each provider's NewClient. When rt is nil the
 // factory uses default HTTP transports.
@@ -365,7 +359,13 @@ func makeDumpAwareFactory(rt http.RoundTripper) modelClientFactory {
 		}
 		switch providertypes.NormalizeOrEmpty(m.ProviderType) {
 		case providertypes.Ollama:
-			return ollama.NewClient(m.ProviderBaseURL, m.ProviderAPIKey, mediaStore, rt)
+			return ollama.NewClient(
+				m.ProviderBaseURL,
+				m.ProviderAPIKey,
+				mediaStore,
+				rt,
+				m.ProviderDecisionPath,
+			)
 		case providertypes.OpenAICompatible:
 			return openaicompatible.NewClient(m.ProviderBaseURL, m.ProviderAPIKey, mediaStore, rt)
 		case providertypes.OpenAICodex:

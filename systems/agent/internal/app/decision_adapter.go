@@ -123,11 +123,12 @@ func (r *routedDecisionAdapter) clientFor(model modelcatalog.Model) (decision.Cl
 func defaultDecisionClientFactory(model modelcatalog.Model) (decision.Client, error) {
 	switch providertypes.NormalizeOrEmpty(model.ProviderType) {
 	case providertypes.Ollama:
-		return ollama.NewDecisionClient(
+		return ollama.NewClient(
 			model.ProviderBaseURL,
 			model.ProviderAPIKey,
-			model.ProviderDecisionPath,
 			nil,
+			nil,
+			model.ProviderDecisionPath,
 		)
 	case providertypes.OpenAICompatible:
 		return openaicompatible.NewDecisionClient(
@@ -150,3 +151,22 @@ func defaultDecisionClientFactory(model modelcatalog.Model) (decision.Client, er
 
 // ContractVersion identifies the implemented decision port.
 func (r *routedDecisionAdapter) ContractVersion() string { return decision.ContractVersion }
+
+// decisionClientFor reuses the provider instance already owned by the chat router.
+func (r *routedModelAdapter) decisionClientFor(model modelcatalog.Model) (decision.Client, error) {
+	if providertypes.NormalizeOrEmpty(model.ProviderType) != providertypes.Ollama {
+		return defaultDecisionClientFactory(model)
+	}
+	client, err := r.clientFor(model)
+	if err != nil {
+		return nil, err
+	}
+	port, ok := client.(decision.Client)
+	if !ok {
+		return nil, fmt.Errorf(
+			"role decision provider %q: client lacks the decision port",
+			model.ProviderName,
+		)
+	}
+	return port, nil
+}

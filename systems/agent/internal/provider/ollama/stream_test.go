@@ -99,7 +99,7 @@ func TestCompleteStreamMatchesCompleteForNativeAndBearerClients(t *testing.T) {
 				}),
 			)
 			defer server.Close()
-			client, err := NewClient(server.URL, apiKey, nil, server.Client().Transport)
+			client, err := NewClient(server.URL, apiKey, nil, server.Client().Transport, "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -188,7 +188,7 @@ func TestCompleteStreamWithReasoningEmitsBeforeResponseFinishes(t *testing.T) {
 				}),
 			)
 			defer server.Close()
-			client, err := NewClient(server.URL, apiKey, nil, server.Client().Transport)
+			client, err := NewClient(server.URL, apiKey, nil, server.Client().Transport, "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -245,7 +245,7 @@ func TestCompleteStreamRejectsFailedAndTruncatedResponses(t *testing.T) {
 					}),
 				)
 				defer server.Close()
-				client, err := NewClient(server.URL, apiKey, nil, server.Client().Transport)
+				client, err := NewClient(server.URL, apiKey, nil, server.Client().Transport, "")
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -281,7 +281,7 @@ func TestCompleteStreamCancellationStopsCallbacks(t *testing.T) {
 				}),
 			)
 			defer server.Close()
-			client, err := NewClient(server.URL, apiKey, nil, server.Client().Transport)
+			client, err := NewClient(server.URL, apiKey, nil, server.Client().Transport, "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -319,7 +319,7 @@ func TestCompleteStreamWithReasoningCancellationStopsBothCallbacks(t *testing.T)
 					}),
 				)
 				defer server.Close()
-				client, err := NewClient(server.URL, apiKey, nil, server.Client().Transport)
+				client, err := NewClient(server.URL, apiKey, nil, server.Client().Transport, "")
 				if err != nil {
 					t.Fatal(err)
 				}

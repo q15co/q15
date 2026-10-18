@@ -130,13 +130,16 @@ constructs its provider adapter, and injects that port into `decision_check`. Th
 selection nor HTTP construction. Clients are keyed by provider connection facts so reloads cannot
 reuse an obsolete connection.
 
-Ollama's decision adapter uses `SystemOne` from the Ollama Go SDK (`v0.40.6`). OpenAI-compatible
-providers with decision models and dedicated `systemone-compatible` providers use the shared System
-One HTTP adapter. API roots belong to the provider adapter: Ollama's SDK adds `/v1/systemone` to its
-native root; compatible providers default to `systemone` relative to their documented API root.
-Provider `decision_path` overrides either path: relative paths extend the root, and leading slashes
-replace the path at the same origin. Discovery remains rooted independently at `models`. Both
-adapters preserve the typed request/response validation and option order.
+One Ollama client implements the chat, streaming, reasoning-streaming, and decision ports. Its
+connection value builds the normalized root, trimmed key, bearer transport, HTTP client, and SDK
+client once. The decision method uses `SystemOne` from the Ollama Go SDK (`v0.40.6`), with a
+120-second call-context deadline; the shared HTTP client imposes no timeout on chat streams.
+OpenAI-compatible providers with decision models and dedicated `systemone-compatible` providers use
+the shared System One HTTP adapter. API roots belong to the provider adapter: Ollama's SDK adds
+`/v1/systemone` to its native root; compatible providers default to `systemone` relative to their
+documented API root. Provider `decision_path` overrides either path: relative paths extend the root,
+and leading slashes replace the path at the same origin. Discovery remains rooted independently at
+`models`. Both adapters preserve the typed request/response validation and option order.
 
 Ollama Cloud API keys are supplied by the SDK adapter's transport. The SDK otherwise attempts
 SSH-key authentication for `ollama.com` before calling the transport, so a bearer-authenticated SDK

@@ -33,6 +33,7 @@ const (
 
 // Client adapts Ollama's native API to the agent model interface.
 type Client struct {
+	connection connection
 	chat       chatAPI
 	mediaStore q15media.Store
 }
@@ -60,34 +61,26 @@ func (c nativeChatClient) Chat(
 // NewClient constructs an Ollama model client. Empty baseURL defaults to the
 // local Ollama daemon. apiKey is optional and enables direct Ollama Cloud API
 // access through Bearer authentication. rt overrides the HTTP transport; nil
-// uses http.DefaultTransport.
+// uses http.DefaultTransport. decisionPath overrides the native System One path.
 func NewClient(
 	baseURL string,
 	apiKey string,
 	mediaStore q15media.Store,
 	rt http.RoundTripper,
+	decisionPath string,
 ) (*Client, error) {
-	base, err := normalizeBaseURL(baseURL)
+	conn, err := newConnection(baseURL, apiKey, decisionPath, rt)
 	if err != nil {
 		return nil, err
 	}
-
-	httpClient := http.DefaultClient
-	if rt != nil {
-		httpClient = &http.Client{Transport: rt}
-	}
-
 	var chat chatAPI
-	apiKey = strings.TrimSpace(apiKey)
-	if apiKey == "" {
-		chat = nativeChatClient{
-			client: ollamaapi.NewClient(base, httpClient),
-		}
+	if conn.apiKey == "" {
+		chat = nativeChatClient{client: conn.sdk}
 	} else {
-		chat = newBearerChatClient(base, apiKey, httpClient)
+		chat = newBearerChatClient(conn)
 	}
-
 	return &Client{
+		connection: conn,
 		chat:       chat,
 		mediaStore: mediaStore,
 	}, nil
@@ -698,19 +691,11 @@ func parseAssistantMessage(message ollamaapi.Message) ([]conversation.Message, e
 
 type bearerChatClient struct {
 	base       *url.URL
-	apiKey     string
 	httpClient *http.Client
 }
 
-func newBearerChatClient(base *url.URL, apiKey string, httpClient *http.Client) *bearerChatClient {
-	if httpClient == nil {
-		httpClient = http.DefaultClient
-	}
-	return &bearerChatClient{
-		base:       cloneURL(base),
-		apiKey:     strings.TrimSpace(apiKey),
-		httpClient: httpClient,
-	}
+func newBearerChatClient(conn connection) *bearerChatClient {
+	return &bearerChatClient{base: conn.base, httpClient: conn.http}
 }
 
 func (c *bearerChatClient) Chat(
@@ -720,9 +705,6 @@ func (c *bearerChatClient) Chat(
 ) error {
 	if c == nil || c.base == nil {
 		return fmt.Errorf("ollama bearer client base url is required")
-	}
-	if strings.TrimSpace(c.apiKey) == "" {
-		return fmt.Errorf("ollama bearer client api key is required")
 	}
 	if fn == nil {
 		return fmt.Errorf("ollama chat response callback is required")
@@ -739,7 +721,6 @@ func (c *bearerChatClient) Chat(
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/x-ndjson")
-	request.Header.Set("Authorization", "Bearer "+c.apiKey)
 	request.Header.Set("User-Agent", "q15-ollama-provider")
 
 	response, err := c.httpClient.Do(request)

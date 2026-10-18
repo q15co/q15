@@ -77,7 +77,7 @@ func TestOllamaDecisionSDKPreservesTypedBatch(t *testing.T) {
 			Encode(map[string]any{"model": "clef:27b", "answers": answers, "usage": map[string]int{"input_tokens": 120, "output_tokens": 64}})
 	}))
 	defer server.Close()
-	client, err := NewDecisionClient(server.URL, "", "", server.Client().Transport)
+	client, err := NewClient(server.URL, "", nil, server.Client().Transport, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +133,7 @@ func TestOllamaDecisionSDKCloudUsesBearerKey(t *testing.T) {
 			),
 		}, nil
 	})
-	client, err := NewDecisionClient("https://ollama.com/prefix/api", "test-key", "", transport)
+	client, err := NewClient("https://ollama.com/prefix/api", "test-key", nil, transport, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,11 +175,12 @@ func TestOllamaDecisionSDKErrorsOmitPayload(t *testing.T) {
 				}),
 			)
 			defer server.Close()
-			client, err := NewDecisionClient(
+			client, err := NewClient(
 				server.URL,
 				"private-key",
-				"",
+				nil,
 				server.Client().Transport,
+				"",
 			)
 			if err != nil {
 				t.Fatal(err)
@@ -202,7 +203,7 @@ func TestOllamaDecisionSDKErrorsOmitPayload(t *testing.T) {
 }
 
 func TestOllamaDecisionSDKPreservesCancellation(t *testing.T) {
-	client, err := NewDecisionClient("http://unused.invalid", "", "", nil)
+	client, err := NewClient("http://unused.invalid", "", nil, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,7 +226,7 @@ func TestOllamaDecisionSDKPreservesCancellation(t *testing.T) {
 		cancel()
 		return nil, request.Context().Err()
 	})
-	client, err = NewDecisionClient("https://ollama.com", "test-key", "", transport)
+	client, err = NewClient("https://ollama.com", "test-key", nil, transport, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,11 +255,12 @@ func TestOllamaDecisionConfigurablePath(t *testing.T) {
 				}),
 			)
 			defer server.Close()
-			client, err := NewDecisionClient(
+			client, err := NewClient(
 				server.URL+"/prefix/api",
 				"",
-				tc.path,
+				nil,
 				server.Client().Transport,
+				tc.path,
 			)
 			if err != nil {
 				t.Fatal(err)
@@ -275,5 +277,39 @@ func TestOllamaDecisionConfigurablePath(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+func TestOllamaClientSharesDecisionTransportWithoutChatDeadline(t *testing.T) {
+	var deadlines []bool
+	transport := sdkDecisionRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		_, deadline := r.Context().Deadline()
+		deadlines = append(deadlines, deadline)
+		if r.Header.Get("Authorization") != "Bearer key" {
+			t.Error("missing shared bearer key")
+		}
+		body := `{"message":{"role":"assistant","content":"ok"},"done":true}`
+		if strings.HasSuffix(r.URL.Path, "/v1/systemone") {
+			body = `{"answers":{"check":{"type":"noul","noul":0}}}`
+		}
+		return &http.Response{
+			StatusCode: 200,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(body)),
+		}, nil
+	})
+	client, err := NewClient("https://ollama.com", " key ", nil, transport, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var port decision.Client = client
+	if _, err = port.Check(context.Background(), decision.Request{Model: "both", State: "context", Questions: map[string]decision.Question{"check": decision.Noul("True?")}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = client.Complete(context.Background(), "both", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(deadlines) != 2 || !deadlines[0] || deadlines[1] {
+		t.Fatalf("decision/chat deadlines = %v", deadlines)
 	}
 }

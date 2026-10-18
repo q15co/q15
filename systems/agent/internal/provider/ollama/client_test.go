@@ -313,12 +313,9 @@ func TestBearerChatClientSendsAPIKeyAndParsesStreamingResponse(t *testing.T) {
 	}))
 	defer server.Close()
 
-	base, err := normalizeBaseURL(server.URL)
+	client, err := NewClient(server.URL, "ollama-key", nil, server.Client().Transport, "")
 	if err != nil {
-		t.Fatalf("normalizeBaseURL() error = %v", err)
-	}
-	client := &Client{
-		chat: newBearerChatClient(base, "ollama-key", server.Client()),
+		t.Fatal(err)
 	}
 
 	result, err := client.Complete(
@@ -409,7 +406,7 @@ func TestOllamaLocalIntegration(t *testing.T) {
 		os.Getenv("Q15_OLLAMA_INTEGRATION_BASE_URL"),
 		os.Getenv("OLLAMA_API_KEY"),
 		nil,
-		nil,
+		nil, "",
 	)
 	if err != nil {
 		t.Fatalf("NewClient() error = %v", err)
