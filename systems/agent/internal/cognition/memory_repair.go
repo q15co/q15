@@ -192,6 +192,14 @@ func repairSpec(
 	if len(surface.Targets) == 0 {
 		return Spec{}, false, nil
 	}
+	state, err := loader.LoadJobState(ctx, semanticMemoryExtractionJobType)
+	if err != nil {
+		return Spec{}, false, fmt.Errorf("load repair scheduling state: %w", err)
+	}
+	surface.Targets, err = withoutStoppedRepairTargets(ctx, loader, surface.Targets, state)
+	if err != nil {
+		return Spec{}, false, err
+	}
 	// The refusal set is loaded only on a dirty surface, so the ordinary
 	// build pays nothing for it, and it is applied by the callers - the
 	// state rule and this loop - never inside the stat-only scan. Pruning

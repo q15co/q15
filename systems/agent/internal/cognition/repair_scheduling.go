@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
+	"maps"
 	"time"
 )
 
@@ -30,14 +32,19 @@ func repairFailureResult(jobType string, spec Spec) Result {
 }
 
 func updateRepairSchedule(state *JobState, result Result, runErr error, finished time.Time) {
+	state.RepairStops = stoppedRepairDigests(*state)
 	state.RepairPending = false
 	state.RepairRetryAt = time.Time{}
 	if !result.Repair {
 		state.RepairFailures, state.RepairStopped = 0, false
 		return
 	}
+	if state.RepairTarget != result.repairTarget || state.RepairDigest != result.repairDigest {
+		state.RepairFailures, state.RepairStopped = 0, false
+	}
 	state.RepairTarget, state.RepairDigest = result.repairTarget, result.repairDigest
 	if runErr == nil {
+		delete(state.RepairStops, result.repairTarget)
 		state.RepairFailures, state.RepairStopped = 0, false
 		state.RepairPending = true
 		return
@@ -47,7 +54,45 @@ func updateRepairSchedule(state *JobState, result Result, runErr error, finished
 		state.RepairRetryAt = finished.Add(repairRetryDelays[state.RepairFailures-1])
 	} else {
 		state.RepairStopped = true
+		state.RepairStops[state.RepairTarget] = state.RepairDigest
 	}
+}
+
+func stoppedRepairDigests(state JobState) map[string]string {
+	stops := maps.Clone(state.RepairStops)
+	if stops == nil {
+		stops = make(map[string]string)
+	}
+	if state.RepairStopped && state.RepairTarget != "" && state.RepairDigest != "" {
+		stops[state.RepairTarget] = state.RepairDigest
+	}
+	return stops
+}
+
+func withoutStoppedRepairTargets(
+	ctx context.Context,
+	loader ContextLoader,
+	targets []MemorySurfaceTarget,
+	state JobState,
+) ([]MemorySurfaceTarget, error) {
+	stops := stoppedRepairDigests(state)
+	if len(stops) == 0 {
+		return targets, nil
+	}
+	available := make([]MemorySurfaceTarget, 0, len(targets))
+	for _, target := range targets {
+		if digest, stopped := stops[target.Path]; stopped {
+			raw, existed, err := loader.ReadFileBytes(ctx, target.Path)
+			if err != nil {
+				return nil, fmt.Errorf("read stopped repair target %s: %w", target.Path, err)
+			}
+			if repairInputDigest(raw, existed) == digest {
+				continue
+			}
+		}
+		available = append(available, target)
+	}
+	return available, nil
 }
 
 func (c *Controller) repairEligibility(
@@ -57,8 +102,23 @@ func (c *Controller) repairEligibility(
 	state *JobState,
 ) (ready, blocked, changed bool, reason string, err error) {
 	if job.jobType != semanticMemoryExtractionJobType ||
-		(!state.RepairPending && state.RepairRetryAt.IsZero() && !state.RepairStopped) {
+		(!state.RepairPending && state.RepairRetryAt.IsZero() && !state.RepairStopped && len(state.RepairStops) == 0) {
 		return
+	}
+	if state.RepairTarget != "" && state.RepairDigest != "" {
+		var raw []byte
+		var existed bool
+		raw, existed, err = c.loader.ReadFileBytes(ctx, state.RepairTarget)
+		if err != nil {
+			return
+		}
+		if repairInputDigest(raw, existed) != state.RepairDigest {
+			delete(state.RepairStops, state.RepairTarget)
+			state.RepairFailures, state.RepairStopped = 0, false
+			state.RepairRetryAt = time.Time{}
+			state.RepairPending = true
+			changed = true
+		}
 	}
 	var repairable bool
 	for _, rule := range job.state {
@@ -72,29 +132,31 @@ func (c *Controller) repairEligibility(
 		break
 	}
 	if !repairable {
+		unstopped := *state
+		unstopped.RepairStopped, unstopped.RepairStops = false, nil
+		for _, rule := range job.state {
+			if rule.ID != memorySurfaceRepairableRuleID {
+				continue
+			}
+			repairable, _, err = rule.Evaluate(ctx, snapshot, unstopped)
+			if err != nil {
+				return
+			}
+			break
+		}
+		if repairable {
+			blocked = true
+			return
+		}
 		state.RepairPending, state.RepairStopped = false, false
+		state.RepairStops = nil
 		state.RepairRetryAt = time.Time{}
 		state.RepairFailures = 0
 		state.MaintenancePending = true
 		changed = true
 		return
 	}
-	if state.RepairTarget != "" && state.RepairDigest != "" {
-		var raw []byte
-		var existed bool
-		raw, existed, err = c.loader.ReadFileBytes(ctx, state.RepairTarget)
-		if err != nil {
-			return
-		}
-		if repairInputDigest(raw, existed) != state.RepairDigest {
-			state.RepairFailures, state.RepairStopped = 0, false
-			state.RepairRetryAt = time.Time{}
-			state.RepairPending = true
-			changed = true
-		}
-	}
-	if state.RepairStopped ||
-		(!state.RepairRetryAt.IsZero() && snapshot.NowUTC.Before(state.RepairRetryAt)) {
+	if !state.RepairRetryAt.IsZero() && snapshot.NowUTC.Before(state.RepairRetryAt) {
 		blocked = true
 		return
 	}

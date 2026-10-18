@@ -96,15 +96,16 @@ func NewSemanticMemoryExtractionRegistration(
 					Evaluate: func(
 						ctx context.Context,
 						snapshot Snapshot,
-						_ JobState,
+						state JobState,
 					) (bool, string, error) {
-						return evaluateMemorySurfaceRepairable(
+						return evaluateMemorySurfaceRepairableState(
 							ctx,
 							snapshot,
 							memoryFileBudgets{
 								working:   workingMemoryBudgetBytes,
 								openLoops: openLoopsBudgetBytes,
 							},
+							state,
 						)
 					},
 				},

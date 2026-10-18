@@ -35,8 +35,8 @@ func repairContinuationController(
 					return ParsedResult{Repair: true, CheckpointSeq: 12}, nil
 				},
 			}
-		}, Policy: TriggerPolicy{State: []StateRule{{ID: "memory_surface_repairable", Evaluate: func(context.Context, Snapshot, JobState) (bool, string, error) {
-			return *repairable, "synthetic surface", nil
+		}, Policy: TriggerPolicy{State: []StateRule{{ID: "memory_surface_repairable", Evaluate: func(_ context.Context, _ Snapshot, state JobState) (bool, string, error) {
+			return *repairable && !state.RepairStopped, "synthetic surface", nil
 		}}}},
 	})
 	loader := &stallProbeLoader{spyLoader: &spyLoader{}, store: store}
