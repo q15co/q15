@@ -9,18 +9,16 @@ import (
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/decision"
-	"github.com/q15co/q15/systems/agent/internal/modelcatalog"
-	"github.com/q15co/q15/systems/agent/internal/providertypes"
 )
 
-// Check asks a discovered Clef model one choice question.
+// Check asks the configured decision client one choice question.
 type Check struct {
-	registry *modelcatalog.Registry
+	client decision.Client
 }
 
-// NewCheck constructs decision_check using the current provider roster.
-func NewCheck(registry *modelcatalog.Registry) *Check {
-	return &Check{registry: registry}
+// NewCheck constructs decision_check with the application's decision client.
+func NewCheck(client decision.Client) *Check {
+	return &Check{client: client}
 }
 
 // Definition returns the fixed decision_check argument schema.
@@ -60,6 +58,9 @@ func (t *Check) Definition() agent.ToolDefinition {
 
 // Run evaluates one choice without changing the interactive or cognition model selection.
 func (t *Check) Run(ctx context.Context, arguments string) (string, error) {
+	if t == nil || t.client == nil {
+		return "", fmt.Errorf("decision_check: decision client is not configured")
+	}
 	var args struct {
 		State    json.RawMessage `json:"state"`
 		Question string          `json:"question"`
@@ -71,27 +72,18 @@ func (t *Check) Run(ctx context.Context, arguments string) (string, error) {
 	if strings.TrimSpace(args.Question) == "" {
 		return "", fmt.Errorf("decision_check: question is required")
 	}
-	model, err := t.model()
-	if err != nil {
-		return "", err
-	}
-	base := model.ProviderBaseURL
-	if base == "" {
-		base = "http://localhost:11434"
-	}
-	client, err := decision.NewClient(base, model.ProviderAPIKey, nil)
-	if err != nil {
-		return "", err
-	}
 	options := make([]decision.Option, len(args.Options))
 	for i, name := range args.Options {
 		options[i] = decision.Option{Name: name}
 	}
-	result, err := client.Check(ctx, decision.Request{
-		Model:     model.ProviderModel,
+	request := decision.Request{
 		State:     args.State,
 		Questions: map[string]decision.Question{"check": decision.Choice(args.Question, options)},
-	})
+	}
+	if err := request.Validate(); err != nil {
+		return "", fmt.Errorf("decision_check: %w", err)
+	}
+	result, err := t.client.Check(ctx, request)
 	if err != nil {
 		return "", err
 	}
@@ -100,34 +92,4 @@ func (t *Check) Run(ctx context.Context, arguments string) (string, error) {
 		return "", fmt.Errorf("decision_check: encode answer: %w", err)
 	}
 	return string(data), nil
-}
-
-func (t *Check) model() (modelcatalog.Model, error) {
-	if t == nil || t.registry == nil {
-		return modelcatalog.Model{}, fmt.Errorf("decision_check: model registry is not configured")
-	}
-	var selected modelcatalog.Model
-	best := 3
-	for _, model := range t.registry.Snapshot() {
-		if model.ProviderType != providertypes.Ollama {
-			continue
-		}
-		rank := 3
-		switch strings.SplitN(model.ProviderModel, ":", 2)[0] {
-		case "clef":
-			rank = 0
-		case "clef-flash":
-			rank = 1
-		}
-		if rank < best {
-			selected = model
-			best = rank
-		}
-	}
-	if best == 3 {
-		return modelcatalog.Model{}, fmt.Errorf(
-			"decision_check: no Clef decision model in the live Ollama roster; check list_models and provider discovery filters",
-		)
-	}
-	return selected, nil
 }

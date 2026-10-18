@@ -10,7 +10,11 @@ const (
 	SourceOllama    = "ollama"
 	SourceOpenAI    = "openai"
 	SourceModelsDev = "models-dev"
+	SourceSystemOne = "systemone"
 )
+
+// ModelTypeDecision identifies a model that evaluates typed questions rather than chat turns.
+const ModelTypeDecision = "decision"
 
 // Capabilities is the normalized capability set discovered for one model.
 type Capabilities struct {
@@ -32,6 +36,8 @@ type Capabilities struct {
 // Zero-valued numeric/string fields mean "unknown" — the model is still usable,
 // it is just unscored for selection purposes.
 type Model struct {
+	// Type is the provider or models.dev model type. Empty preserves unclassified legacy models.
+	Type string
 	// ProviderName identifies which provider hosts this model.
 	ProviderName string
 	// ProviderType is the canonical provider type (providertypes.Ollama, etc.).
@@ -88,6 +94,11 @@ type Model struct {
 	StructuredOutput bool
 	// StructuredOutputKnown distinguishes absent metadata from a reported false.
 	StructuredOutputKnown bool
+}
+
+// IsDecision reports whether discovery positively identified a decision model.
+func (m Model) IsDecision() bool {
+	return m.Type == ModelTypeDecision
 }
 
 // Options controls discovery behavior for one provider.

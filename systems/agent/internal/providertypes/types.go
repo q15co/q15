@@ -10,6 +10,8 @@ const (
 	OpenAICompatible = "openai-compatible"
 	// OpenAICodex is the canonical provider type for the OpenAI Codex adapter.
 	OpenAICodex = "openai-codex"
+	// SystemOneCompatible is the canonical provider type for dedicated decision APIs.
+	SystemOneCompatible = "systemone-compatible"
 )
 
 // Normalize returns the canonical provider type string and whether it is supported.
@@ -21,6 +23,8 @@ func Normalize(providerType string) (string, bool) {
 		return OpenAICompatible, true
 	case OpenAICodex, "openai_codex":
 		return OpenAICodex, true
+	case SystemOneCompatible:
+		return SystemOneCompatible, true
 	default:
 		return "", false
 	}

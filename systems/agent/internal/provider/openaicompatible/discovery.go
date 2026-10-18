@@ -39,6 +39,7 @@ type openaiModelsResponse struct {
 
 type openaiModelsEntry struct {
 	ID       string `json:"id"`
+	Type     string `json:"type"`
 	Metadata struct {
 		Tags []string `json:"tags"`
 	} `json:"metadata"`
@@ -95,6 +96,7 @@ func (c *RosterClient) Discover(
 			continue
 		}
 		models = append(models, modelcatalog.Model{
+			Type:          strings.TrimSpace(entry.Type),
 			ProviderModel: id,
 			Name:          id,
 			Capabilities:  modelcatalog.Capabilities{Text: true},

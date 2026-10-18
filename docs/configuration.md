@@ -156,17 +156,29 @@ Notes:
   `list_providers`.
 - `ollama` defaults to local `http://localhost:11434` when `base_url` is omitted; set
   `base_url: https://ollama.com` plus `key_env: OLLAMA_API_KEY` for direct Ollama Cloud API access
-- `decision_check` reuses that Ollama provider's `base_url` and resolved key to call
-  `POST /v1/systemone`. It uses a discovered `clef` model (including `clef:27b`) or falls back to
-  `clef-flash`; discovery filters must include the model. Its arguments are `state` (text, object,
-  or array), `question` (text), and `options` (2-26 unique strings in preference order). The answer
-  includes `choice`, `probabilities`, and `confidence`. Ties follow option order; confidence
-  measures concentration, not correctness. See the
+- `decision_check` auto-selects the first confirmed decision model in the live registry's order.
+  Ollama reports this through its native `decision` capability; OpenAI-compatible providers can
+  report `type: decision` in their roster or obtain it through models.dev enrichment. Model names
+  are not used to infer support. `list_models` accepts `capability: decision` and reports the model
+  `type`. Confirmed decision models are excluded from chat selection, fallback, and completion.
+- A dedicated [System One compatible provider](https://docs.typesafe.ai/models) can use
+  `type: systemone-compatible`, `base_url: https://api.typesafe.ai/v1`, and
+  `key_env: TYPESAFE_API_KEY`. Its `models` array or OpenAI-style `data` array supplies the live
+  decision roster. The key is optional for local unauthenticated servers. As with
+  `openai-compatible`, the documented API root supplies the path: q15 appends `models` or
+  `systemone` without inventing a version segment. Ollama's adapter uses its native root plus
+  `/v1/systemone`.
+- `decision_check` takes `state` (text, object, or array), `question` (text), and `options` (2-26
+  unique strings in preference order). It returns `choice`, `probabilities`, and `confidence`. Ties
+  follow option order; confidence measures concentration, not correctness. See the
   [Ollama decision API](https://docs.ollama.com/capabilities/decision).
 - With `discovery.models_dev: true`, Providers are matched against the catalog's `api` URL first,
   then a unique provider domain from `api` or `doc`. Ambiguous matches leave metadata unknown. Set
   `discovery.models_dev_provider` to a models.dev provider ID (for example `deepinfra`) when using a
   proxy or an ambiguous endpoint.
+- Enrichment requests `https://models.dev/api.json?type=all`: the default models.dev response
+  excludes decision models. The catalog only enriches models returned by the configured provider; it
+  does not add unavailable models or other providers. Missing metadata remains unknown.
 - `list_models` reports `capabilities_known: false` when capability metadata is unavailable; an
   empty capability list then makes no claim about tool support. `structured_output: null` means that
   support is unknown. Capability filters include confirmed matches only.

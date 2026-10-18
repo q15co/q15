@@ -44,16 +44,26 @@ func (c Config) validate() error {
 		if normalizedType == "" {
 			return fmt.Errorf("providers[%d].type %q is not supported", i, provider.Type)
 		}
-		if normalizedType == providertypes.OpenAICompatible &&
+		if (normalizedType == providertypes.OpenAICompatible || normalizedType == providertypes.SystemOneCompatible) &&
 			strings.TrimSpace(provider.BaseURL) == "" {
 			return fmt.Errorf(
-				"providers[%d].base_url is required for openai-compatible providers",
-				i,
+				"providers[%d].base_url is required for %s providers",
+				i, normalizedType,
 			)
 		}
-		if normalizedType == providertypes.OpenAICompatible {
+		if normalizedType == providertypes.OpenAICompatible ||
+			normalizedType == providertypes.SystemOneCompatible {
 			if err := validateOpenAICompatibleBaseURL(provider.BaseURL); err != nil {
 				return fmt.Errorf("providers[%d].base_url: %w", i, err)
+			}
+		}
+		if normalizedType == providertypes.SystemOneCompatible {
+			base, err := url.Parse(strings.TrimSpace(provider.BaseURL))
+			if err != nil || base.User != nil || base.RawQuery != "" || base.Fragment != "" {
+				return fmt.Errorf(
+					"providers[%d].base_url must not include credentials, a query, or a fragment",
+					i,
+				)
 			}
 		}
 		if normalizedType == providertypes.OpenAICompatible &&

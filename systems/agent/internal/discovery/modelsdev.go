@@ -22,9 +22,9 @@ import (
 
 const (
 	// modelsDevAPIURL is the default source for the models.dev catalog.
-	modelsDevAPIURL = "https://models.dev/api.json"
+	modelsDevAPIURL = "https://models.dev/api.json?type=all"
 	// modelsDevCacheFileName is the cache file name within the cache directory.
-	modelsDevCacheFileName = "models-dev.json"
+	modelsDevCacheFileName = "models-dev-all.json"
 	// modelsDevCacheSubDir is the default cache directory under the OS temp
 	// dir when Q15_DISCOVERY_CACHE_DIR is unset.
 	modelsDevCacheSubDir = "q15-discovery"
@@ -68,6 +68,12 @@ func newModelsDevClientWithSource(httpClient *http.Client, sourceURL string) *mo
 	if strings.TrimSpace(sourceURL) == "" {
 		sourceURL = modelsDevAPIURL
 	}
+	if source, err := url.Parse(sourceURL); err == nil {
+		query := source.Query()
+		query.Set("type", "all")
+		source.RawQuery = query.Encode()
+		sourceURL = source.String()
+	}
 	return &modelsDevClient{
 		http:      httpClient,
 		sourceURL: sourceURL,
@@ -90,6 +96,7 @@ type modelsDevEntry struct {
 }
 
 type modelsDevModel struct {
+	Type             string              `json:"type"`
 	Name             string              `json:"name"`
 	ReleaseDate      string              `json:"release_date"`
 	Limit            modelsDevLimit      `json:"limit"`
@@ -331,6 +338,7 @@ func modelFromModelsDev(id string, md modelsDevModel) Model {
 	}
 
 	return Model{
+		Type:                  strings.TrimSpace(md.Type),
 		ProviderModel:         id,
 		Name:                  name,
 		Capabilities:          caps,

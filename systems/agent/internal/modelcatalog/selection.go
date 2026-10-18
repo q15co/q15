@@ -77,12 +77,16 @@ func (s *Selection) Set(provider, model string) error {
 	if model == "" {
 		return fmt.Errorf("model is required")
 	}
-	if _, ok := s.registry.Lookup(provider, model); !ok {
+	resolved, ok := s.registry.Lookup(provider, model)
+	if !ok {
 		return fmt.Errorf(
 			"model %q for provider %q is not in the current live roster",
 			model,
 			provider,
 		)
+	}
+	if resolved.IsDecision() {
+		return fmt.Errorf("decision models cannot be selected for chat")
 	}
 
 	s.mu.Lock()

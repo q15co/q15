@@ -46,6 +46,9 @@ func Merge(base, enriched []Model) []Model {
 
 // mergeModel overlays enriched fields onto base where base is zero-valued.
 func mergeModel(base, enriched Model) Model {
+	if base.Type == "" {
+		base.Type = enriched.Type
+	}
 	if enriched.Name != "" && base.Name == base.ProviderModel {
 		base.Name = enriched.Name
 	}

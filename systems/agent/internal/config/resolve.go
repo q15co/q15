@@ -82,7 +82,7 @@ func (c Config) ResolveAgentRuntime() (*AgentRuntime, error) {
 // ResolveProviderAPIKey resolves the API key for one provider based on its type.
 func ResolveProviderAPIKey(provider Provider, providerType string) (string, error) {
 	switch providerType {
-	case providertypes.Ollama:
+	case providertypes.Ollama, providertypes.SystemOneCompatible:
 		if strings.TrimSpace(provider.KeyEnv) != "" {
 			return resolveSecretEnvValue(provider.KeyEnv)
 		}

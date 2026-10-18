@@ -194,6 +194,9 @@ func (r *routedModelAdapter) completeModel(
 	onDelta func(string),
 	onReasoning func(string),
 ) (agent.ModelClientResult, error) {
+	if m.IsDecision() {
+		return agent.ModelClientResult{}, errors.New("decision models cannot complete chat turns")
+	}
 	client, err := r.clientFor(m)
 	if err != nil {
 		return agent.ModelClientResult{}, err
@@ -308,6 +311,9 @@ func defaultModelClientFactory(
 // factory uses default HTTP transports.
 func makeDumpAwareFactory(rt http.RoundTripper) modelClientFactory {
 	return func(m modelcatalog.Model, mediaStore q15media.Store) (agent.ModelClient, error) {
+		if m.IsDecision() {
+			return nil, errors.New("decision models cannot complete chat turns")
+		}
 		switch providertypes.NormalizeOrEmpty(m.ProviderType) {
 		case providertypes.Ollama:
 			return ollama.NewClient(m.ProviderBaseURL, m.ProviderAPIKey, mediaStore, rt)
@@ -356,11 +362,15 @@ func buildModelRefs(currentRef string, registry *modelcatalog.Registry) []string
 	refs := make([]string, 0, len(snapshot)+1)
 	seen := make(map[string]struct{}, len(snapshot)+1)
 
-	if currentRef != "" {
+	currentModel, exists := registry.LookupByRef(currentRef)
+	if currentRef != "" && (!exists || !currentModel.IsDecision()) {
 		refs = append(refs, currentRef)
 		seen[currentRef] = struct{}{}
 	}
 	for _, m := range snapshot {
+		if m.IsDecision() {
+			continue
+		}
 		if _, ok := seen[m.Ref]; ok {
 			continue
 		}
@@ -382,7 +392,10 @@ func loadInteractiveSelection(
 	}
 
 	if current := store.Interactive(); current.IsValid() {
-		return modelcatalog.NewSelection(registry, current.Provider, current.Model), nil
+		model, exists := registry.Lookup(current.Provider, current.Model)
+		if !exists || !model.IsDecision() {
+			return modelcatalog.NewSelection(registry, current.Provider, current.Model), nil
+		}
 	}
 
 	provider, model, ok := autoSelectModel(registry)
@@ -408,7 +421,7 @@ func autoSelectModel(registry *modelcatalog.Registry) (string, string, bool) {
 	var textFallback *modelcatalog.Model
 	for i := range snapshot {
 		m := &snapshot[i]
-		if !m.Capabilities.Text {
+		if !m.Capabilities.Text || m.IsDecision() {
 			continue
 		}
 		if m.Capabilities.ToolCalling {

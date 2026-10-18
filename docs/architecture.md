@@ -99,6 +99,31 @@ prompt-visible user message:
 - The shipped `q15-agent` and `q15-exec` images also include timezone data so shell tools can
   resolve named zones such as `Europe/Berlin` correctly.
 
+## Decision Providers
+
+Decision calls use the separate `decision.Client` interface and typed request/response models. The
+application resolves a decision model from the shared live registry and constructs its provider
+adapter through a factory. The `decision_check` tool receives that interface; it owns neither
+provider selection nor HTTP construction. Provider clients are cached by provider identity, API
+root, and key, so a provider reload cannot reuse an obsolete connection.
+
+Ollama's native `decision` capability and models.dev's `type: decision` identify decision models.
+Enrichment fetches `api.json?type=all` because models.dev omits specialized models by default. It
+only classifies and enriches models already returned by the configured provider. Unknown metadata
+does not establish decision support. Confirmed decision models remain visible through `list_models`
+but cannot be selected or called as chat models.
+
+The System One HTTP adapter is shared by Ollama, OpenAI-compatible providers with decision models,
+and dedicated `systemone-compatible` providers. API roots belong to the provider adapter: Ollama
+adds `/v1/systemone` to its native root; compatible providers append `systemone` to their documented
+API root. The pinned Ollama Go SDK (`v0.22.1`) lacks `SystemOne`, so its decision adapter uses the
+shared HTTP implementation. Upgrading that SDK can replace this adapter without changing the tool or
+routing interface.
+
+Upstream contracts: [models.dev catalog filtering](https://github.com/anomalyco/models.dev#api),
+[Ollama decision API](https://docs.ollama.com/capabilities/decision), and
+[TypeSafe model discovery](https://docs.typesafe.ai/models#listing-models).
+
 ## Telegram Replies And Progress
 
 In private chats, Ollama and OpenAI-compatible providers can show a growing reply draft while the

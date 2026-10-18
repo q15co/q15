@@ -3,10 +3,17 @@ package decision
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
 )
+
+// Client evaluates typed questions independently of provider transport and model selection.
+// Implementations return a validated answer for every named question.
+type Client interface {
+	Check(context.Context, Request) (Response, error)
+}
 
 // Option is one ordered Choice criterion. A nil description uses the name itself.
 type Option struct {
@@ -129,6 +136,7 @@ func isState(value any) bool {
 
 // Request asks 1-64 named questions about a shared state.
 type Request struct {
+	// Model may be empty for application routing; a provider adapter requires its native ID.
 	Model     string              `json:"model"`
 	State     any                 `json:"state"`
 	Questions map[string]Question `json:"questions"`

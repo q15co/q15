@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/q15co/q15/systems/agent/internal/modelcatalog"
@@ -68,6 +69,7 @@ func (c *RosterClient) Discover(
 		}
 		show := c.fetchShow(ctx, base, p.APIKey, id)
 		models = append(models, modelcatalog.Model{
+			Type:           show.modelType,
 			ProviderModel:  id,
 			Name:           id,
 			Capabilities:   show.capabilities,
@@ -107,6 +109,7 @@ func (c *RosterClient) fetchTags(
 
 // showResult bundles the non-fatal data extracted from a single /api/show call.
 type showResult struct {
+	modelType      string
 	capabilities   modelcatalog.Capabilities
 	parameterCount int64
 }
@@ -154,7 +157,12 @@ func (c *RosterClient) fetchShow(
 	if v, ok := body.ModelInfo["general.parameter_count"]; ok {
 		params = int64(v)
 	}
+	modelType := ""
+	if slices.Contains(body.Capabilities, "decision") {
+		modelType = modelcatalog.ModelTypeDecision
+	}
 	return showResult{
+		modelType:      modelType,
 		capabilities:   capabilitiesFromOllamaShow(body.Capabilities),
 		parameterCount: params,
 	}

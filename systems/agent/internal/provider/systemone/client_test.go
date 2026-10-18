@@ -1,4 +1,4 @@
-package decision
+package systemone
 
 import (
 	"bytes"
@@ -12,21 +12,26 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/q15co/q15/systems/agent/internal/decision"
 )
 
 func TestClientSystemOneQuestionTypesAndBatch(t *testing.T) {
 	for _, state := range []any{"original state", map[string]any{"ticket": "original state"}, []any{"one", "two"}} {
 		t.Run(fmt.Sprintf("%T", state), func(t *testing.T) {
-			questions := map[string]Question{
-				"route": Choice(
+			questions := map[string]decision.Question{
+				"route": decision.Choice(
 					"Route?",
-					[]Option{{Name: "z-first"}, {Name: "a-second", Description: "Fallback"}},
+					[]decision.Option{
+						{Name: "z-first"},
+						{Name: "a-second", Description: "Fallback"},
+					},
 				),
-				"refund":  Noul("Refund?"),
-				"urgency": Score("Urgency?", []string{"Routine", "Soon", "Immediate"}),
+				"refund":  decision.Noul("Refund?"),
+				"urgency": decision.Score("Urgency?", []string{"Routine", "Soon", "Immediate"}),
 			}
 			for i := 3; i < 64; i++ {
-				questions[fmt.Sprintf("q%02d", i)] = Noul("True?")
+				questions[fmt.Sprintf("q%02d", i)] = decision.Noul("True?")
 			}
 			server := httptest.NewServer(
 				http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -101,13 +106,13 @@ func TestClientSystemOneQuestionTypesAndBatch(t *testing.T) {
 				}),
 			)
 			defer server.Close()
-			client, err := NewClient(server.URL+"/", "test-key", server.Client())
+			client, err := NewClient(server.URL+"/v1/", "test-key", server.Client())
 			if err != nil {
 				t.Fatal(err)
 			}
 			result, err := client.Check(
 				context.Background(),
-				Request{
+				decision.Request{
 					Model:     "clef:27b",
 					State:     state,
 					Questions: questions,
@@ -167,17 +172,20 @@ func TestClientErrorsNameEndpointWithoutPayload(t *testing.T) {
 				}),
 			)
 			defer server.Close()
-			client, err := NewClient(server.URL, "private-key", server.Client())
+			client, err := NewClient(server.URL+"/v1", "private-key", server.Client())
 			if err != nil {
 				t.Fatal(err)
 			}
 			_, err = client.Check(
 				context.Background(),
-				Request{
+				decision.Request{
 					Model: "clef:27b",
 					State: "private-state",
-					Questions: map[string]Question{
-						"check": Choice("Choose?", []Option{{Name: "yes"}, {Name: "no"}}),
+					Questions: map[string]decision.Question{
+						"check": decision.Choice(
+							"Choose?",
+							[]decision.Option{{Name: "yes"}, {Name: "no"}},
+						),
 					},
 				},
 			)
@@ -212,11 +220,16 @@ func TestClientVersionedBaseURLAndZeroValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	q := Noul("Present?")
-	q.NoulCriteria = &NoulCriteria{True: "Present", False: "Absent"}
+	q := decision.Noul("Present?")
+	q.NoulCriteria = &decision.NoulCriteria{True: "Present", False: "Absent"}
 	result, err := client.Check(
 		context.Background(),
-		Request{Model: "clef", State: "", Questions: map[string]Question{"zero": q}, KeepAlive: 0},
+		decision.Request{
+			Model:     "clef",
+			State:     "",
+			Questions: map[string]decision.Question{"zero": q},
+			KeepAlive: 0,
+		},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -229,14 +242,14 @@ func TestClientVersionedBaseURLAndZeroValues(t *testing.T) {
 func TestClientRejectsMalformedNoulAndScore(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
-		question Question
+		question decision.Question
 		answer   string
 	}{
-		{"noul-missing", Noul("True?"), `{"type":"noul"}`},
-		{"noul-out-of-range", Noul("True?"), `{"type":"noul","noul":2}`},
-		{"score-missing", Score("Rank?", []string{"low", "high"}), `{"type":"score","probabilities":{"0":0.5,"1":0.5},"confidence":0,"legend":{"0":"low","1":"high"}}`},
-		{"score-out-of-range", Score("Rank?", []string{"low", "high"}), `{"type":"score","score":2,"probabilities":{"0":0.5,"1":0.5},"confidence":0,"legend":{"0":"low","1":"high"}}`},
-		{"score-wrong-legend", Score("Rank?", []string{"low", "high"}), `{"type":"score","score":0.5,"probabilities":{"0":0.5,"1":0.5},"confidence":0,"legend":{"0":"high","1":"low"}}`},
+		{"noul-missing", decision.Noul("True?"), `{"type":"noul"}`},
+		{"noul-out-of-range", decision.Noul("True?"), `{"type":"noul","noul":2}`},
+		{"score-missing", decision.Score("Rank?", []string{"low", "high"}), `{"type":"score","probabilities":{"0":0.5,"1":0.5},"confidence":0,"legend":{"0":"low","1":"high"}}`},
+		{"score-out-of-range", decision.Score("Rank?", []string{"low", "high"}), `{"type":"score","score":2,"probabilities":{"0":0.5,"1":0.5},"confidence":0,"legend":{"0":"low","1":"high"}}`},
+		{"score-wrong-legend", decision.Score("Rank?", []string{"low", "high"}), `{"type":"score","score":0.5,"probabilities":{"0":0.5,"1":0.5},"confidence":0,"legend":{"0":"high","1":"low"}}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			server := httptest.NewServer(
@@ -245,11 +258,11 @@ func TestClientRejectsMalformedNoulAndScore(t *testing.T) {
 				}),
 			)
 			defer server.Close()
-			client, err := NewClient(server.URL, "", server.Client())
+			client, err := NewClient(server.URL+"/v1", "", server.Client())
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := client.Check(context.Background(), Request{Model: "clef", State: "state", Questions: map[string]Question{"check": tc.question}}); err == nil ||
+			if _, err := client.Check(context.Background(), decision.Request{Model: "clef", State: "state", Questions: map[string]decision.Question{"check": tc.question}}); err == nil ||
 				!strings.Contains(err.Error(), "/v1/systemone") {
 				t.Fatalf("error = %v", err)
 			}
@@ -264,23 +277,23 @@ func TestClientRejectsInvalidRequests(t *testing.T) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer server.Close()
-	client, err := NewClient(server.URL, "", server.Client())
+	client, err := NewClient(server.URL+"/v1", "", server.Client())
 	if err != nil {
 		t.Fatal(err)
 	}
-	many := map[string]Question{}
+	many := map[string]decision.Question{}
 	for i := 0; i < 65; i++ {
-		many[fmt.Sprint(i)] = Noul("True?")
+		many[fmt.Sprint(i)] = decision.Noul("True?")
 	}
-	for _, req := range []Request{
-		{State: "state", Questions: map[string]Question{"q": Noul("True?")}},
-		{Model: "clef", Questions: map[string]Question{"q": Noul("True?")}},
-		{Model: "clef", State: true, Questions: map[string]Question{"q": Noul("True?")}},
+	for _, req := range []decision.Request{
+		{State: "state", Questions: map[string]decision.Question{"q": decision.Noul("True?")}},
+		{Model: "clef", Questions: map[string]decision.Question{"q": decision.Noul("True?")}},
+		{Model: "clef", State: true, Questions: map[string]decision.Question{"q": decision.Noul("True?")}},
 		{Model: "clef", State: "state"},
 		{Model: "clef", State: "state", Questions: many},
-		{Model: "clef", State: "state", Questions: map[string]Question{"q": Choice("Pick?", []Option{{Name: "one"}})}},
-		{Model: "clef", State: "state", Questions: map[string]Question{"q": Choice("Pick?", []Option{{Name: "one"}, {Name: "one"}})}},
-		{Model: "clef", State: "state", Questions: map[string]Question{"q": Score("Rank?", []string{"only"})}},
+		{Model: "clef", State: "state", Questions: map[string]decision.Question{"q": decision.Choice("Pick?", []decision.Option{{Name: "one"}})}},
+		{Model: "clef", State: "state", Questions: map[string]decision.Question{"q": decision.Choice("Pick?", []decision.Option{{Name: "one"}, {Name: "one"}})}},
+		{Model: "clef", State: "state", Questions: map[string]decision.Question{"q": decision.Score("Rank?", []string{"only"})}},
 	} {
 		if _, err := client.Check(context.Background(), req); err == nil ||
 			!strings.Contains(err.Error(), "/v1/systemone") {

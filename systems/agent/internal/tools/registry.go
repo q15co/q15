@@ -9,6 +9,7 @@ import (
 	"io"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
+	"github.com/q15co/q15/systems/agent/internal/decision"
 	"github.com/q15co/q15/systems/agent/internal/embed"
 	"github.com/q15co/q15/systems/agent/internal/execution"
 	"github.com/q15co/q15/systems/agent/internal/fileops"
@@ -30,8 +31,8 @@ import (
 )
 
 // NewDecisionCheck delegates to decision.NewCheck.
-func NewDecisionCheck(registry *modelcatalog.Registry) *decisiontools.Check {
-	return decisiontools.NewCheck(registry)
+func NewDecisionCheck(client decision.Client) *decisiontools.Check {
+	return decisiontools.NewCheck(client)
 }
 
 // FileToolExecutor performs rooted file operations inside the runtime-visible roots.

@@ -67,6 +67,7 @@ type configReloadInfo struct {
 }
 
 type modelInfo struct {
+	Type              string             `json:"type,omitempty"`
 	Provider          string             `json:"provider"`
 	ProviderType      string             `json:"provider_type"`
 	ProviderModel     string             `json:"provider_model"`
@@ -226,7 +227,7 @@ func (t *ListModels) Definition() agent.ToolDefinition {
 				},
 				"capability": map[string]any{
 					"type":        "string",
-					"description": "Optional capability filter: text, tool_calling/tools, reasoning, image_input/vision, audio_input/audio, video_input/video, structured_output/json.",
+					"description": "Optional capability filter: decision, text, tool_calling/tools, reasoning, image_input/vision, audio_input/audio, video_input/video, structured_output/json.",
 				},
 				"min_context": map[string]any{
 					"type":        "integer",
@@ -364,6 +365,9 @@ func (t *SwitchModel) Run(_ context.Context, arguments string) (string, error) {
 			provider,
 		)
 	}
+	if model.IsDecision() {
+		return "", fmt.Errorf("decision models cannot be selected for chat")
+	}
 	// Persist before mutating the live selection so a persistence failure leaves
 	// the running agent unchanged rather than switching without durability.
 	if t.store != nil {
@@ -482,6 +486,9 @@ func (t *SwitchCognitionModel) Run(_ context.Context, arguments string) (string,
 			provider,
 		)
 	}
+	if model.IsDecision() {
+		return "", fmt.Errorf("decision models cannot be selected for cognition chat jobs")
+	}
 	if err := t.store.SetCognition(jobType, provider, modelRef); err != nil {
 		return "", fmt.Errorf("persist cognition selection: %w", err)
 	}
@@ -502,6 +509,7 @@ func (t *SwitchCognitionModel) Run(_ context.Context, arguments string) (string,
 
 func describeModel(m modelcatalog.Model, current bool) modelInfo {
 	info := modelInfo{
+		Type:              m.Type,
 		Provider:          m.ProviderName,
 		ProviderType:      m.ProviderType,
 		ProviderModel:     m.ProviderModel,
@@ -555,6 +563,9 @@ func modelModalities(m modelcatalog.Model) []string {
 
 func modelCapabilities(m modelcatalog.Model) []string {
 	capabilities := make([]string, 0, 3)
+	if m.IsDecision() {
+		capabilities = append(capabilities, "decision")
+	}
 	if m.Capabilities.ToolCalling {
 		capabilities = append(capabilities, "tool_calling")
 	}
@@ -573,6 +584,8 @@ func normalizeCapability(capability string) string {
 		return ""
 	case "text":
 		return "text"
+	case "decision":
+		return "decision"
 	case "tool", "tools", "tool_calling":
 		return "tool_calling"
 	case "reasoning":
@@ -592,6 +605,8 @@ func normalizeCapability(capability string) string {
 
 func modelHasCapability(m modelcatalog.Model, capability string) bool {
 	switch capability {
+	case "decision":
+		return m.IsDecision()
 	case "text":
 		return m.Capabilities.Text
 	case "tool_calling":
