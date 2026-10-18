@@ -366,7 +366,7 @@ func (t *SwitchModel) Run(_ context.Context, arguments string) (string, error) {
 			provider,
 		)
 	}
-	if err := t.registry.RequireChat(model); err != nil {
+	if err := t.registry.RequireChat("primary", model); err != nil {
 		return "", err
 	}
 	// Persist before mutating the live selection so a persistence failure leaves
@@ -487,7 +487,7 @@ func (t *SwitchCognitionModel) Run(_ context.Context, arguments string) (string,
 			provider,
 		)
 	}
-	if err := t.registry.RequireChat(model); err != nil {
+	if err := t.registry.RequireChat("primary", model); err != nil {
 		return "", err
 	}
 	if err := t.store.SetCognition(jobType, provider, modelRef); err != nil {

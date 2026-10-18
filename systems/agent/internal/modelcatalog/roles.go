@@ -46,10 +46,10 @@ func (r *Registry) Binding(role string) (RoleBinding, bool) {
 	return RoleBinding{}, false
 }
 
-// RequireChat checks effective capability and the decider binding on every chat dispatch or switch.
-func (r *Registry) RequireChat(m Model) error {
+// RequireChat checks effective capability and the decider binding for the supplied chat role.
+func (r *Registry) RequireChat(role string, m Model) error {
 	if !m.Capabilities.Chat {
-		return fmt.Errorf("role primary model %q: missing capability chat", m.ProviderModel)
+		return fmt.Errorf("role %s model %q: missing capability chat", role, m.ProviderModel)
 	}
 	decision, ok := r.Binding("decision")
 	if !ok || !r.matches(decision, m) {
@@ -57,7 +57,8 @@ func (r *Registry) RequireChat(m Model) error {
 	}
 	if strings.TrimSpace(decision.AllowDualBind) == "" {
 		return fmt.Errorf(
-			"role primary model %q: dual bind with decision requires allow_dual_bind",
+			"role %s model %q: dual bind with decision requires allow_dual_bind",
+			role,
 			m.ProviderModel,
 		)
 	}
@@ -71,7 +72,8 @@ func (r *Registry) RequireChat(m Model) error {
 		}
 	}
 	return fmt.Errorf(
-		"role primary model %q: dual bind requires separate role rate and budget limits",
+		"role %s model %q: dual bind requires separate role rate and budget limits",
+		role,
 		m.ProviderModel,
 	)
 }

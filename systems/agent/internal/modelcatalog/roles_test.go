@@ -27,7 +27,7 @@ func TestDualBindPartitionsRateAndBudget(t *testing.T) {
 			RequestBytesPerMinute: 10,
 		},
 	})
-	if err := r.RequireChat(m); err != nil {
+	if err := r.RequireChat("primary", m); err != nil {
 		t.Fatal(err)
 	}
 	if err := r.ReserveRole("primary", m, 90); err != nil {
@@ -49,11 +49,11 @@ func TestDualBindPartitionsRateAndBudget(t *testing.T) {
 
 func TestDecisionCapabilityDoesNotExcludeChat(t *testing.T) {
 	r := New(nil, nil, 0, 0)
-	if err := r.RequireChat(Model{ProviderModel: "both", Capabilities: Capabilities{Chat: true, Decision: true}}); err != nil {
+	if err := r.RequireChat("primary", Model{ProviderModel: "both", Capabilities: Capabilities{Chat: true, Decision: true}}); err != nil {
 		t.Fatal(err)
 	}
 	r.SetRoleBindings([]RoleBinding{{Role: "decision", Provider: "api", Model: "both"}})
-	if err := r.RequireChat(Model{ProviderName: "api", ProviderModel: "both", Capabilities: Capabilities{Chat: true, Decision: true}}); err == nil {
+	if err := r.RequireChat("primary", Model{ProviderName: "api", ProviderModel: "both", Capabilities: Capabilities{Chat: true, Decision: true}}); err == nil {
 		t.Fatal("explicit decision binding was ignored")
 	}
 }

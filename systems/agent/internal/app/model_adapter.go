@@ -109,7 +109,7 @@ func (r *routedModelAdapter) CompleteStreamWithReasoning(
 			model,
 		)
 	}
-	return r.completeModel(ctx, m, messages, tools, onDelta, onReasoning)
+	return r.completeModel(ctx, m, r.chatRole(model, m), messages, tools, onDelta, onReasoning)
 }
 
 // BindProviderModel resolves an exact provider and agent-side model ref once.
@@ -184,7 +184,7 @@ func (c boundProviderModelClient) CompleteStreamWithReasoning(
 			modelRef,
 		)
 	}
-	return c.adapter.completeModel(ctx, c.model, messages, tools, onDelta, onReasoning)
+	return c.adapter.completeModel(ctx, c.model, "primary", messages, tools, onDelta, onReasoning)
 }
 
 // completeModel applies the provider client, capability, and media adaptation
@@ -192,6 +192,7 @@ func (c boundProviderModelClient) CompleteStreamWithReasoning(
 func (r *routedModelAdapter) completeModel(
 	ctx context.Context,
 	m modelcatalog.Model,
+	role string,
 	messages []conversation.Message,
 	tools []agent.ToolDefinition,
 	onDelta func(string),
@@ -200,12 +201,13 @@ func (r *routedModelAdapter) completeModel(
 	current, exists := r.registry.Lookup(m.ProviderName, m.Ref)
 	if !exists || current.ProviderModel != m.ProviderModel {
 		return agent.ModelClientResult{}, fmt.Errorf(
-			"role primary model %q: missing capability chat in the live catalog",
+			"role %s model %q: missing capability chat in the live catalog",
+			role,
 			m.ProviderModel,
 		)
 	}
 	m.Capabilities = current.Capabilities
-	if err := r.registry.RequireChat(m); err != nil {
+	if err := r.registry.RequireChat(role, m); err != nil {
 		return agent.ModelClientResult{}, err
 	}
 	data, err := json.Marshal(struct {
@@ -214,11 +216,12 @@ func (r *routedModelAdapter) completeModel(
 	}{messages, tools})
 	if err != nil {
 		return agent.ModelClientResult{}, fmt.Errorf(
-			"role primary model %q: request is not JSON encodable",
+			"role %s model %q: request is not JSON encodable",
+			role,
 			m.ProviderModel,
 		)
 	}
-	if err := r.registry.ReserveRole("primary", m, len(data)); err != nil {
+	if err := r.registry.ReserveRole(role, m, len(data)); err != nil {
 		return agent.ModelClientResult{}, err
 	}
 	client, err := r.clientFor(m)
@@ -249,6 +252,17 @@ func (r *routedModelAdapter) completeModel(
 		return streaming.CompleteStream(ctx, m.ProviderModel, adapted, tools, onDelta)
 	}
 	return client.Complete(ctx, m.ProviderModel, adapted, tools)
+}
+
+// chatRole identifies a configured fallback reference; explicit chat selections use primary.
+func (r *routedModelAdapter) chatRole(ref string, m modelcatalog.Model) string {
+	for _, binding := range r.registry.RoleBindings() {
+		if strings.HasPrefix(binding.Role, "fallbacks[") && binding.Provider == m.ProviderName &&
+			ref == binding.Provider+"/"+m.Ref && (binding.Model == m.Ref || binding.Model == m.ProviderModel) {
+			return binding.Role
+		}
+	}
+	return "primary"
 }
 
 // lookupModel resolves a ref to a live model, preferring the currently selected
@@ -444,7 +458,7 @@ func loadInteractiveSelection(
 				current.Model,
 			)
 		}
-		if err := registry.RequireChat(m); err != nil {
+		if err := registry.RequireChat("primary", m); err != nil {
 			return nil, err
 		}
 		return modelcatalog.NewSelection(registry, current.Provider, current.Model), nil
@@ -456,7 +470,7 @@ func loadInteractiveSelection(
 	for _, m := range registry.Snapshot() {
 		if m.ProviderName == binding.Provider &&
 			(m.ProviderModel == binding.Model || m.Ref == binding.Model) {
-			if err := registry.RequireChat(m); err != nil {
+			if err := registry.RequireChat("primary", m); err != nil {
 				return nil, err
 			}
 			if err := store.SetInteractive(m.ProviderName, m.Ref); err != nil {

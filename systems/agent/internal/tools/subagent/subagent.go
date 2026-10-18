@@ -96,7 +96,7 @@ func (c *mediaAdaptiveClient) Complete(
 				c.boundModel.ProviderModel,
 			)
 		}
-		if err := c.registry.RequireChat(current); err != nil {
+		if err := c.registry.RequireChat("primary", current); err != nil {
 			return agent.ModelClientResult{}, err
 		}
 		data, err := json.Marshal(struct {
@@ -203,7 +203,7 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) (*Session, error)
 	if err := m.validateSkillToolsAvailable(skills); err != nil {
 		return nil, err
 	}
-	if err := m.registry.RequireChat(modelCfg); err != nil {
+	if err := m.registry.RequireChat("primary", modelCfg); err != nil {
 		return nil, err
 	}
 	client, err := m.factory(modelCfg, m.media)

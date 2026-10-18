@@ -85,7 +85,7 @@ func (s *Selection) Set(provider, model string) error {
 			provider,
 		)
 	}
-	if err := s.registry.RequireChat(resolved); err != nil {
+	if err := s.registry.RequireChat("primary", resolved); err != nil {
 		return err
 	}
 
