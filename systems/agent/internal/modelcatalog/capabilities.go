@@ -37,6 +37,7 @@ var capabilityNames = []string{
 }
 
 // Set applies evidence only when its source has at least the existing precedence.
+// Unknown names are ignored by the temporary boolean representation pending #375.
 func (c *Capabilities) Set(name string, supported bool, provenance string) {
 	if provenanceRank(provenance) < provenanceRank(c.Provenance[name]) {
 		return
