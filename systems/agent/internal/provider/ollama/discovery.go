@@ -40,8 +40,8 @@ type ollamaTagsModel struct {
 
 // ollamaShowResponse is the subset of POST /api/show that discovery uses.
 type ollamaShowResponse struct {
-	Capabilities []string           `json:"capabilities"`
-	ModelInfo    map[string]float64 `json:"model_info"`
+	Capabilities []string                   `json:"capabilities"`
+	ModelInfo    map[string]json.RawMessage `json:"model_info"`
 }
 
 // Discover lists models from /api/tags, then queries /api/show per model for
@@ -152,7 +152,7 @@ func (c *RosterClient) fetchShow(
 
 	var params int64
 	if v, ok := body.ModelInfo["general.parameter_count"]; ok {
-		params = int64(v)
+		_ = json.Unmarshal(v, &params)
 	}
 	return showResult{
 		capabilities:   capabilitiesFromOllamaShow(body.Capabilities),

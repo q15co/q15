@@ -11,6 +11,52 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/modelcatalog"
 )
 
+func TestOllamaDiscoveryPreservesCapabilitiesWithMixedModelInfo(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		count any
+		want  int64
+	}{
+		{"numeric parameter count", int64(27000000000), 27000000000},
+		{"invalid parameter count", "unknown", 0},
+		{"absent parameter count", nil, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(
+				http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.URL.Path == "/api/tags" {
+						_, _ = w.Write([]byte(`{"models":[{"name":"clef:27b"}]}`))
+						return
+					}
+					info := map[string]any{
+						"general.architecture":  "qwen35",
+						"tokenizer.ggml.tokens": []string{"example"},
+						"vendor.flags":          map[string]bool{"enabled": true},
+					}
+					if tc.count != nil {
+						info["general.parameter_count"] = tc.count
+					}
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"capabilities": []string{"decision", "vision"}, "model_info": info,
+					})
+				}),
+			)
+			defer server.Close()
+			models, err := NewRosterClient(
+				server.Client(),
+			).Discover(context.Background(), modelcatalog.Provider{BaseURL: server.URL})
+			if err != nil || len(models) != 1 {
+				t.Fatalf("roster = %+v, %v", models, err)
+			}
+			m := models[0]
+			if !m.Capabilities.Known || !m.Capabilities.Decision || !m.Capabilities.ImageInput ||
+				m.Capabilities.Chat || m.Capabilities.Provenance["decision"] != "derived" || m.ParameterCount != tc.want {
+				t.Fatalf("mixed /api/show metadata lost capabilities or parameter count: %+v", m)
+			}
+		})
+	}
+}
+
 func TestOllamaClient_DiscoverSuccess(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/tags", func(w http.ResponseWriter, r *http.Request) {
