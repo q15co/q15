@@ -109,6 +109,9 @@ func TestControllerPartialTranscriptDoesNotAdvancePastFailedFragment(t *testing.
 			if seq, cursor := checkpoint(); seq != 0 || cursor == nil || cursor.ByteOffset != 123 {
 				t.Fatalf("partial turn marked complete: seq=%d cursor=%v", seq, cursor)
 			}
+			if state := store.state(jobType); state.LastRunInputSeq != 0 {
+				t.Fatalf("partial turn advanced input beyond covered work: %#v", state)
+			}
 			next, ok, err := c.nextPendingRun(ctx, false, false, true)
 			if err != nil || !ok {
 				t.Fatalf("partial continuation waited for a new turn: %v %v", ok, err)
@@ -123,12 +126,12 @@ func TestControllerPartialTranscriptDoesNotAdvancePastFailedFragment(t *testing.
 			if seq, cursor := checkpoint(); seq != 0 || cursor == nil || cursor.ByteOffset != 123 {
 				t.Fatal("failed fragment advanced its durable cursor")
 			}
-			if _, ok, err := c.nextPendingRun(ctx, false, false, true); err != nil || ok {
-				t.Fatal("failed ordinary fragment retried without its existing trigger policy")
+			next, ok, err = c.nextPendingRun(ctx, false, false, true)
+			if err != nil || !ok || next.cause.RuleID != "transcript_continuation" {
+				t.Fatalf("failed fragment lost continuation: %v %v", ok, err)
 			}
 			fail = false
 			progress = &transcriptProgress{CompletedSeq: 1}
-			next.state, _ = store.LoadJobState(ctx, jobType)
 			if err := c.runPending(ctx, next); err != nil {
 				t.Fatal(err)
 			}
