@@ -44,6 +44,12 @@ func (r *routedDecisionAdapter) Check(
 	if err != nil {
 		return decision.Response{}, err
 	}
+	if !model.Capabilities.Has("decision") {
+		return decision.Response{}, fmt.Errorf(
+			"role decision model %q: missing capability decision",
+			model.ProviderModel,
+		)
+	}
 	request.Model = model.ProviderModel
 	if err := request.Validate(); err != nil {
 		return decision.Response{}, fmt.Errorf("decision /v1/systemone: %w", err)
@@ -82,12 +88,6 @@ func (r *routedDecisionAdapter) resolve(ref string) (modelcatalog.Model, error) 
 				return modelcatalog.Model{}, fmt.Errorf(
 					"role decision model %q: requested model differs from binding",
 					ref,
-				)
-			}
-			if !model.Capabilities.Decision {
-				return modelcatalog.Model{}, fmt.Errorf(
-					"role decision model %q: missing capability decision",
-					binding.Model,
 				)
 			}
 			return model, nil

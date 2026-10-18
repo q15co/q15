@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -150,3 +151,70 @@ func TestDecisionContractVersion(t *testing.T) {
 
 // ContractVersion identifies the implemented decision port.
 func (c *fakeDecisionClient) ContractVersion() string { return decision.ContractVersion }
+
+func TestDecisionPortRefusesModelWithoutDecision(t *testing.T) {
+	for _, ref := range []string{"", "native/model", "native-model"} {
+		t.Run(ref, func(t *testing.T) {
+			models := map[string][]modelcatalog.Model{"api": {{
+				ProviderModel: "native/model",
+				Capabilities:  modelcatalog.Capabilities{Chat: true},
+			}}}
+			registry := testRegistry(t, models)
+			registry.SetRoleBindings([]modelcatalog.RoleBinding{{
+				Role: "decision", Provider: "api", Model: "native/model",
+				RequestsPerMinute: 2, RequestBytesPerMinute: 10000,
+			}})
+			client := &fakeDecisionClient{}
+			builds := 0
+			adapter := newRoutedDecisionAdapter(
+				registry,
+				func(modelcatalog.Model) (decision.Client, error) {
+					builds++
+					return client, nil
+				},
+			)
+			request := decision.Request{
+				Model: ref, State: "private state",
+				Questions: map[string]decision.Question{
+					"check": decision.Choice(
+						"Pick?",
+						[]decision.Option{{Name: "first"}, {Name: "second"}},
+					),
+				},
+			}
+			refuse := func() {
+				t.Helper()
+				_, err := adapter.Check(context.Background(), request)
+				if err == nil || !strings.Contains(err.Error(), "role decision") ||
+					!strings.Contains(err.Error(), "native/model") ||
+					!strings.Contains(err.Error(), "missing capability decision") ||
+					strings.Contains(err.Error(), "private state") {
+					t.Fatalf("decision refusal = %v", err)
+				}
+			}
+			refuse()
+			if builds != 0 || len(client.requests) != 0 {
+				t.Fatal("missing decision capability reached the client factory or provider")
+			}
+			models["api"][0].Capabilities.Decision = true
+			registry.Refresh(context.Background())
+			if _, err := adapter.Check(context.Background(), request); err != nil {
+				t.Fatal(err)
+			}
+			models["api"][0].Capabilities.Decision = false
+			registry.Refresh(context.Background())
+			refuse()
+			if builds != 1 || len(client.requests) != 1 {
+				t.Fatal("cached client bypassed the live decision guard")
+			}
+			models["api"][0].Capabilities.Decision = true
+			registry.Refresh(context.Background())
+			if _, err := adapter.Check(context.Background(), request); err != nil {
+				t.Fatalf("refused calls consumed the decision quota: %v", err)
+			}
+			if builds != 1 || len(client.requests) != 2 {
+				t.Fatalf("builds = %d, provider calls = %d", builds, len(client.requests))
+			}
+		})
+	}
+}
