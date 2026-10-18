@@ -64,3 +64,5 @@ func TestDecisionCheckUsesInjectedClient(t *testing.T) {
 		t.Fatalf("invalid arguments reached client: %d calls", calls)
 	}
 }
+
+func (f decisionClientFunc) ContractVersion() string { return decision.ContractVersion }

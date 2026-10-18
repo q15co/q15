@@ -117,3 +117,20 @@ func TestDecisionRoutingRejectsChatAndPropagatesCancellation(t *testing.T) {
 		t.Fatalf("cancellation = %v", err)
 	}
 }
+
+func TestDecisionContractVersion(t *testing.T) {
+	for _, kind := range []string{"ollama", "openai-compatible", "systemone-compatible"} {
+		client, err := defaultDecisionClientFactory(
+			modelcatalog.Model{ProviderType: kind, ProviderBaseURL: "https://example.invalid/v1"},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := client.ContractVersion(); got != "decision/v1" {
+			t.Fatalf("%s contract = %q", kind, got)
+		}
+	}
+}
+
+// ContractVersion identifies the implemented decision port.
+func (c *fakeDecisionClient) ContractVersion() string { return decision.ContractVersion }

@@ -89,6 +89,8 @@ func (r *routedDecisionAdapter) clientFor(model modelcatalog.Model) (decision.Cl
 	return cached.(decision.Client), nil
 }
 
+// In-tree Go adapters are checked by the compiler. A runtime contract assertion is
+// reserved for out-of-tree adapters; q15 has no runtime adapter loader.
 func defaultDecisionClientFactory(model modelcatalog.Model) (decision.Client, error) {
 	switch providertypes.NormalizeOrEmpty(model.ProviderType) {
 	case providertypes.Ollama:
@@ -101,3 +103,6 @@ func defaultDecisionClientFactory(model modelcatalog.Model) (decision.Client, er
 		return nil, fmt.Errorf("unsupported decision provider type %q", model.ProviderType)
 	}
 }
+
+// ContractVersion identifies the implemented decision port.
+func (r *routedDecisionAdapter) ContractVersion() string { return decision.ContractVersion }

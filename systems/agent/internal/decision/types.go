@@ -9,9 +9,13 @@ import (
 	"strings"
 )
 
+// ContractVersion identifies the typed decision wire contract.
+const ContractVersion = "decision/v1"
+
 // Client evaluates typed questions independently of provider transport and model selection.
 // Implementations return a validated answer for every named question.
 type Client interface {
+	ContractVersion() string
 	Check(context.Context, Request) (Response, error)
 }
 

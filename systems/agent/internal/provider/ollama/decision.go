@@ -129,3 +129,6 @@ func decisionSDKError(err error) error {
 	// SDK parse and upstream errors may include response content.
 	return fmt.Errorf("ollama /v1/systemone: SDK request or response failed")
 }
+
+// ContractVersion identifies the implemented decision port.
+func (c *decisionClient) ContractVersion() string { return decision.ContractVersion }

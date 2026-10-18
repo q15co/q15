@@ -94,3 +94,6 @@ func (c *Client) Check(ctx context.Context, request decision.Request) (decision.
 	}
 	return result, nil
 }
+
+// ContractVersion identifies the implemented decision port.
+func (c *Client) ContractVersion() string { return decision.ContractVersion }
