@@ -113,12 +113,17 @@ only classifies and enriches models already returned by the configured provider.
 does not establish decision support. Confirmed decision models remain visible through `list_models`
 but cannot be selected or called as chat models.
 
-The System One HTTP adapter is shared by Ollama, OpenAI-compatible providers with decision models,
-and dedicated `systemone-compatible` providers. API roots belong to the provider adapter: Ollama
-adds `/v1/systemone` to its native root; compatible providers append `systemone` to their documented
-API root. The pinned Ollama Go SDK (`v0.22.1`) lacks `SystemOne`, so its decision adapter uses the
-shared HTTP implementation. Upgrading that SDK can replace this adapter without changing the tool or
-routing interface.
+Ollama's decision adapter uses `SystemOne` from the Ollama Go SDK (`v0.40.6`). OpenAI-compatible
+providers with decision models and dedicated `systemone-compatible` providers use the shared System
+One HTTP adapter. API roots belong to the provider adapter: Ollama's SDK adds `/v1/systemone` to its
+native root; compatible providers append `systemone` to their documented API root. Both adapters
+preserve the typed request/response validation and option order.
+
+Ollama Cloud API keys are supplied by the SDK adapter's transport. The SDK otherwise attempts
+SSH-key authentication for `ollama.com` before calling the transport, so a bearer-authenticated SDK
+client uses an internal authority that the transport replaces with the configured endpoint. This
+keeps API-key access independent of Ollama's local sign-in files. Non-success responses are rejected
+before SDK decoding, and SDK errors are sanitized to avoid exposing response content.
 
 Upstream contracts: [models.dev catalog filtering](https://github.com/anomalyco/models.dev#api),
 [Ollama decision API](https://docs.ollama.com/capabilities/decision), and
