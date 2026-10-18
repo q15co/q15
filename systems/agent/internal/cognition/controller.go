@@ -659,6 +659,9 @@ func (c *Controller) runPending(ctx context.Context, pending pendingRun) error {
 	if runErr != nil {
 		state.LastFailureAt = finishedAt
 		state.ConsecutiveFailures++
+		if pending.state.TranscriptPending {
+			state.LastRunInputSeq = pending.state.LastRunInputSeq
+		}
 		state = preserveDirtyState(state, pending.headSeq, headSeq, headAt)
 	} else if result.NoWork {
 		state.LastRunNoWork = true
@@ -676,7 +679,7 @@ func (c *Controller) runPending(ctx context.Context, pending pendingRun) error {
 			state.LastRunInputSeq = coveredSeq
 		}
 	}
-	if result.Repair {
+	if result.Repair || runErr != nil {
 		state.TranscriptPending = pending.state.TranscriptPending
 	} else if runErr == nil && result.transcriptProgress != nil {
 		state.TranscriptPending = partial != nil || result.transcriptProgress.RemainingTurns > 0
