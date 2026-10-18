@@ -458,5 +458,22 @@ func (p repairWritePlan) planClaims(
 		}
 		paths[id] = destination
 	}
+	destinations := make([]string, 0, len(p.files))
+	for relative := range p.files {
+		destinations = append(destinations, relative)
+	}
+	sort.Strings(destinations)
+	for _, relative := range destinations {
+		capBytes := SemanticCapBytes(relative)
+		if capBytes > 0 && len(p.files[relative]) > capBytes {
+			return nil, fmt.Errorf(
+				"repair destination %s lacks capacity: current=%d planned=%d cap=%d; choose a sibling topic with room",
+				relative,
+				len(spec.Baseline[memoryRuntimePrefix+relative]),
+				len(p.files[relative]),
+				capBytes,
+			)
+		}
+	}
 	return paths, nil
 }
