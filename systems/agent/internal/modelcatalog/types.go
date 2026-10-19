@@ -10,13 +10,19 @@ const (
 	SourceOllama    = "ollama"
 	SourceOpenAI    = "openai"
 	SourceModelsDev = "models-dev"
+	SourceSystemOne = "systemone"
 )
 
 // Capabilities is the normalized capability set discovered for one model.
 type Capabilities struct {
 	// Known distinguishes reported capability metadata from a text-only
 	// fallback when discovery could not obtain it.
-	Known       bool
+	Known    bool
+	Chat     bool
+	Embed    bool
+	Decision bool
+	// Provenance records the winning source per capability, including explicit denials.
+	Provenance  map[string]string
 	Text        bool
 	ImageInput  bool
 	AudioInput  bool
@@ -40,6 +46,8 @@ type Model struct {
 	ProviderBaseURL string
 	// ProviderAPIKey is the resolved API key for this provider.
 	ProviderAPIKey string
+	// ProviderDecisionPath overrides this provider's System One endpoint path.
+	ProviderDecisionPath string
 	// ProviderModel is the provider-side model identifier (e.g.
 	// "kimi-k2.7-code:cloud" for an Ollama model including its tag).
 	ProviderModel string
@@ -90,6 +98,11 @@ type Model struct {
 	StructuredOutputKnown bool
 }
 
+// IsDecision reports whether discovery positively identified a decision model.
+func (m Model) IsDecision() bool {
+	return m.Capabilities.Decision
+}
+
 // Options controls discovery behavior for one provider.
 type Options struct {
 	// ModelsDev selects whether roster entries are enriched from models.dev.
@@ -112,6 +125,10 @@ type Provider struct {
 	BaseURL string
 	APIKey  string
 	Options Options
+	// DecisionPath overrides the per-kind System One endpoint path.
+	DecisionPath string
+	// CapabilityOverrides correct provider claims per native model ID.
+	CapabilityOverrides map[string]map[string]bool
 }
 
 // Catalog discovers the live model roster for one provider.

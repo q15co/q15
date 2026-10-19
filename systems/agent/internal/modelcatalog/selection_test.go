@@ -23,11 +23,14 @@ func selectionTestRegistry(t *testing.T) *Registry {
 		},
 		selectionTestCatalog{models: map[string][]Model{
 			"ollama-cloud": {
-				{ProviderModel: "kimi-k2.7-code:cloud"},
-				{ProviderModel: "shared-model"},
+				{
+					ProviderModel: "kimi-k2.7-code:cloud",
+					Capabilities:  Capabilities{Chat: true, Text: true},
+				},
+				{ProviderModel: "shared-model", Capabilities: Capabilities{Chat: true, Text: true}},
 			},
 			"moonshot": {
-				{ProviderModel: "shared-model"},
+				{ProviderModel: "shared-model", Capabilities: Capabilities{Chat: true, Text: true}},
 			},
 		}},
 		time.Hour,

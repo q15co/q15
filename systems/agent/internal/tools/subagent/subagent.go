@@ -74,6 +74,8 @@ type StartRequest struct {
 // inner provider client on every Complete call instead of the engine's
 // agent-facing ref, so tagged Ollama variants resolve correctly at the API.
 type mediaAdaptiveClient struct {
+	registry      *modelcatalog.Registry
+	boundModel    modelcatalog.Model
 	inner         agent.ModelClient
 	support       q15media.Support
 	store         q15media.Store
@@ -86,6 +88,18 @@ func (c *mediaAdaptiveClient) Complete(
 	messages []conversation.Message,
 	tools []agent.ToolDefinition,
 ) (agent.ModelClientResult, error) {
+	if c.registry != nil {
+		current, ok := c.registry.Lookup(c.boundModel.ProviderName, c.boundModel.Ref)
+		if !ok || current.ProviderModel != c.boundModel.ProviderModel {
+			return agent.ModelClientResult{}, fmt.Errorf(
+				"role primary model %q: missing capability chat in the live catalog",
+				c.boundModel.ProviderModel,
+			)
+		}
+		if err := c.registry.RequireChat("primary", current); err != nil {
+			return agent.ModelClientResult{}, err
+		}
+	}
 	adapted := q15media.AdaptMediaToCapabilities(messages, c.support, c.store)
 	// Send the bound provider-facing model id (e.g. "gemma3:4b") to the inner
 	// provider client rather than the engine's agent-facing ref (e.g.
@@ -176,14 +190,19 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) (*Session, error)
 	if err := m.validateSkillToolsAvailable(skills); err != nil {
 		return nil, err
 	}
+	if err := m.registry.RequireChat("primary", modelCfg); err != nil {
+		return nil, err
+	}
 	client, err := m.factory(modelCfg, m.media)
 	if err != nil {
 		return nil, fmt.Errorf("configure subagent model %q: %w", modelRef, err)
 	}
 	client = &mediaAdaptiveClient{
-		inner:   client,
-		support: q15media.SupportFromCapabilities(modelCfg.Capabilities),
-		store:   m.media,
+		registry:   m.registry,
+		boundModel: modelCfg,
+		inner:      client,
+		support:    q15media.SupportFromCapabilities(modelCfg.Capabilities),
+		store:      m.media,
 		// Provider-facing model id (full tag) so tagged Ollama variants such
 		// as "gemma3:4b" reach the provider API intact. The engine and
 		// session continue to use the agent-facing ref (modelCfg.Ref).

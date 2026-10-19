@@ -67,25 +67,26 @@ type configReloadInfo struct {
 }
 
 type modelInfo struct {
-	Provider          string             `json:"provider"`
-	ProviderType      string             `json:"provider_type"`
-	ProviderModel     string             `json:"provider_model"`
-	Ref               string             `json:"ref"`
-	Name              string             `json:"name,omitempty"`
-	Current           bool               `json:"current,omitempty"`
-	Modalities        []string           `json:"modalities"`
-	Capabilities      []string           `json:"capabilities"`
-	CapabilitiesKnown bool               `json:"capabilities_known"`
-	StructuredOutput  *bool              `json:"structured_output"`
-	Params            int64              `json:"params,omitempty"`
-	Context           int                `json:"context,omitempty"`
-	Output            int                `json:"output,omitempty"`
-	ReleaseDate       string             `json:"release_date,omitempty"`
-	CostTier          string             `json:"cost_tier,omitempty"`
-	CostPerMTokIn     *float64           `json:"cost_per_mtok_in,omitempty"`
-	CostPerMTokOut    *float64           `json:"cost_per_mtok_out,omitempty"`
-	Benchmarks        map[string]float64 `json:"benchmarks,omitempty"`
-	Source            string             `json:"source,omitempty"`
+	Provider             string             `json:"provider"`
+	ProviderType         string             `json:"provider_type"`
+	ProviderModel        string             `json:"provider_model"`
+	Ref                  string             `json:"ref"`
+	Name                 string             `json:"name,omitempty"`
+	Current              bool               `json:"current,omitempty"`
+	Modalities           []string           `json:"modalities"`
+	Capabilities         []string           `json:"capabilities"`
+	CapabilityProvenance map[string]string  `json:"capability_provenance"`
+	CapabilitiesKnown    bool               `json:"capabilities_known"`
+	StructuredOutput     *bool              `json:"structured_output"`
+	Params               int64              `json:"params,omitempty"`
+	Context              int                `json:"context,omitempty"`
+	Output               int                `json:"output,omitempty"`
+	ReleaseDate          string             `json:"release_date,omitempty"`
+	CostTier             string             `json:"cost_tier,omitempty"`
+	CostPerMTokIn        *float64           `json:"cost_per_mtok_in,omitempty"`
+	CostPerMTokOut       *float64           `json:"cost_per_mtok_out,omitempty"`
+	Benchmarks           map[string]float64 `json:"benchmarks,omitempty"`
+	Source               string             `json:"source,omitempty"`
 }
 
 // NewListProviders constructs the list_providers tool.
@@ -148,6 +149,7 @@ func (t *ListProviders) Definition() agent.ToolDefinition {
 			"A provider is reachable when it has at least one model in the current live roster.",
 			"An unreachable provider carries a reason: either the discovery attempt failed, with its error, or it succeeded and the provider listed no models. Report the reason rather than guessing.",
 			"config_reload reports the last attempt to apply an edited config file: when it ran, whether it was applied, and why it was refused. A refused edit leaves the previous providers running.",
+			"role_selections reports which provider/model pair each runtime slot (interactive, decision) currently holds; a null slot has no selection yet and its feature stays unavailable until switch_model selects one.",
 		},
 		Parameters: map[string]any{
 			"type":       "object",
@@ -203,7 +205,35 @@ func (t *ListProviders) Run(_ context.Context, _ string) (string, error) {
 		}
 	}
 
+	payload["role_selections"] = t.roleSelections()
 	return jsonOutput(payload)
+}
+
+// roleSelectionInfo reports one runtime-owned model selection slot.
+type roleSelectionInfo struct {
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+}
+
+// roleSelections reports the held runtime model selections: the interactive
+// selection plus the decision slot, null while the slot is empty.
+func (t *ListProviders) roleSelections() map[string]*roleSelectionInfo {
+	selections := map[string]*roleSelectionInfo{
+		"interactive": nil,
+		"decision":    nil,
+	}
+	if t.selection != nil {
+		if provider, model := t.selection.Current(); provider != "" && model != "" {
+			selections["interactive"] = &roleSelectionInfo{Provider: provider, Model: model}
+		}
+	}
+	if decision, ok := t.registry.Decision(); ok {
+		selections["decision"] = &roleSelectionInfo{
+			Provider: decision.Provider,
+			Model:    decision.Model,
+		}
+	}
+	return selections
 }
 
 // Definition returns the list_models schema exposed to the model.
@@ -226,7 +256,7 @@ func (t *ListModels) Definition() agent.ToolDefinition {
 				},
 				"capability": map[string]any{
 					"type":        "string",
-					"description": "Optional capability filter: text, tool_calling/tools, reasoning, image_input/vision, audio_input/audio, video_input/video, structured_output/json.",
+					"description": "Optional capability filter: decision, text, tool_calling/tools, reasoning, image_input/vision, audio_input/audio, video_input/video, structured_output/json.",
 				},
 				"min_context": map[string]any{
 					"type":        "integer",
@@ -314,11 +344,13 @@ func (t *ListModels) Run(_ context.Context, arguments string) (string, error) {
 func (t *SwitchModel) Definition() agent.ToolDefinition {
 	return agent.ToolDefinition{
 		Name:        "switch_model",
-		Description: "Switch the session-scoped current provider and model. The pair must exist in the live roster.",
+		Description: "Switch the provider and model held by one runtime selection slot: interactive (default) or decision. The pair must exist in the live roster.",
 		PromptGuidance: []string{
 			"Use only after you have a specific reason to switch, such as required capability, larger context, fresher model, or cost.",
 			"Call list_providers/list_models first when you need to discover valid provider and model values.",
-			"A switch takes effect on the next model turn.",
+			"A switch takes effect on the next model turn; the selection persists across restarts.",
+			"slot \"interactive\" changes the chat model and requires the chat capability.",
+			"slot \"decision\" changes the decision model behind decision_check and requires the decision capability.",
 		},
 		Parameters: map[string]any{
 			"type": "object",
@@ -330,6 +362,11 @@ func (t *SwitchModel) Definition() agent.ToolDefinition {
 				"model": map[string]any{
 					"type":        "string",
 					"description": "Agent-side model ref from list_models (not the provider_model tag).",
+				},
+				"slot": map[string]any{
+					"type":        "string",
+					"description": "Which selection slot to change. Omit for the interactive chat model.",
+					"enum":        []string{"interactive", "decision"},
 				},
 				"reason": map[string]any{
 					"type":        "string",
@@ -349,10 +386,27 @@ func (t *SwitchModel) Run(_ context.Context, arguments string) (string, error) {
 	var args struct {
 		Provider string `json:"provider"`
 		Model    string `json:"model"`
+		Slot     string `json:"slot"`
 		Reason   string `json:"reason"`
 	}
 	if err := json.Unmarshal([]byte(arguments), &args); err != nil {
 		return "", fmt.Errorf("invalid arguments JSON: %w", err)
+	}
+	slot := strings.ToLower(strings.TrimSpace(args.Slot))
+	if slot == "" {
+		slot = "interactive"
+	}
+	switch slot {
+	case "interactive", "decision":
+	case "embed":
+		return "", fmt.Errorf(
+			"embedding models are pinned to the embedding tool; changing them requires an explicit collection re-embedding migration",
+		)
+	default:
+		return "", fmt.Errorf(
+			"slot must be \"interactive\" or \"decision\", got %q",
+			args.Slot,
+		)
 	}
 	provider := strings.TrimSpace(args.Provider)
 	modelRef := strings.TrimSpace(args.Model)
@@ -364,20 +418,51 @@ func (t *SwitchModel) Run(_ context.Context, arguments string) (string, error) {
 			provider,
 		)
 	}
-	// Persist before mutating the live selection so a persistence failure leaves
-	// the running agent unchanged rather than switching without durability.
-	if t.store != nil {
-		if err := t.store.SetInteractive(provider, modelRef); err != nil {
-			return "", fmt.Errorf("persist model selection: %w", err)
-		}
-	}
-	if err := t.selection.Set(provider, modelRef); err != nil {
-		return "", err
-	}
 	reason := strings.TrimSpace(args.Reason)
-	log.Printf("q15: switch_model provider=%q model=%q reason=%q", provider, modelRef, reason)
+	switch slot {
+	case "interactive":
+		if err := t.registry.RequireChat("primary", model); err != nil {
+			return "", err
+		}
+		// Persist before mutating the live selection so a persistence failure
+		// leaves the running agent unchanged rather than switching without
+		// durability.
+		if t.store != nil {
+			if err := t.store.SetInteractive(provider, modelRef); err != nil {
+				return "", fmt.Errorf("persist interactive selection: %w", err)
+			}
+		}
+		if err := t.selection.Set(provider, modelRef); err != nil {
+			return "", err
+		}
+	case "decision":
+		if !model.Capabilities.Decision {
+			return "", fmt.Errorf(
+				"role decision model %q: missing capability decision",
+				model.ProviderModel,
+			)
+		}
+		if t.store != nil {
+			if err := t.store.SetDecision(provider, modelRef); err != nil {
+				return "", fmt.Errorf("persist decision selection: %w", err)
+			}
+		}
+		t.registry.SetDecision(modelcatalog.RoleSelection{
+			Provider:      provider,
+			Model:         modelRef,
+			ProviderModel: model.ProviderModel,
+		})
+	}
+	log.Printf(
+		"q15: switch_model slot=%q provider=%q model=%q reason=%q",
+		slot,
+		provider,
+		modelRef,
+		reason,
+	)
 
 	return jsonOutput(map[string]any{
+		"slot":    slot,
 		"current": describeModel(model, true),
 		"reason":  reason,
 	})
@@ -482,6 +567,9 @@ func (t *SwitchCognitionModel) Run(_ context.Context, arguments string) (string,
 			provider,
 		)
 	}
+	if err := t.registry.RequireChat("primary", model); err != nil {
+		return "", err
+	}
 	if err := t.store.SetCognition(jobType, provider, modelRef); err != nil {
 		return "", fmt.Errorf("persist cognition selection: %w", err)
 	}
@@ -502,21 +590,22 @@ func (t *SwitchCognitionModel) Run(_ context.Context, arguments string) (string,
 
 func describeModel(m modelcatalog.Model, current bool) modelInfo {
 	info := modelInfo{
-		Provider:          m.ProviderName,
-		ProviderType:      m.ProviderType,
-		ProviderModel:     m.ProviderModel,
-		Ref:               m.Ref,
-		Name:              m.Name,
-		Current:           current,
-		Modalities:        modelModalities(m),
-		Capabilities:      modelCapabilities(m),
-		CapabilitiesKnown: m.Capabilities.Known,
-		Params:            m.ParameterCount,
-		Context:           m.MaxContextTokens,
-		Output:            m.MaxOutputTokens,
-		CostTier:          m.CostTier,
-		Benchmarks:        m.BenchmarkScores,
-		Source:            m.Source,
+		Provider:             m.ProviderName,
+		ProviderType:         m.ProviderType,
+		ProviderModel:        m.ProviderModel,
+		Ref:                  m.Ref,
+		Name:                 m.Name,
+		Current:              current,
+		Modalities:           modelModalities(m),
+		Capabilities:         modelCapabilities(m),
+		CapabilitiesKnown:    m.Capabilities.Known,
+		CapabilityProvenance: m.Capabilities.Provenance,
+		Params:               m.ParameterCount,
+		Context:              m.MaxContextTokens,
+		Output:               m.MaxOutputTokens,
+		CostTier:             m.CostTier,
+		Benchmarks:           m.BenchmarkScores,
+		Source:               m.Source,
 	}
 	if m.StructuredOutputKnown || m.StructuredOutput {
 		value := m.StructuredOutput
@@ -554,7 +643,16 @@ func modelModalities(m modelcatalog.Model) []string {
 }
 
 func modelCapabilities(m modelcatalog.Model) []string {
-	capabilities := make([]string, 0, 3)
+	capabilities := make([]string, 0, 5)
+	if m.Capabilities.Chat {
+		capabilities = append(capabilities, "chat")
+	}
+	if m.Capabilities.Embed {
+		capabilities = append(capabilities, "embed")
+	}
+	if m.Capabilities.Decision {
+		capabilities = append(capabilities, "decision")
+	}
 	if m.Capabilities.ToolCalling {
 		capabilities = append(capabilities, "tool_calling")
 	}
@@ -573,6 +671,8 @@ func normalizeCapability(capability string) string {
 		return ""
 	case "text":
 		return "text"
+	case "chat", "embed", "decision":
+		return strings.ToLower(strings.TrimSpace(capability))
 	case "tool", "tools", "tool_calling":
 		return "tool_calling"
 	case "reasoning":
@@ -592,6 +692,10 @@ func normalizeCapability(capability string) string {
 
 func modelHasCapability(m modelcatalog.Model, capability string) bool {
 	switch capability {
+	case "chat", "embed":
+		return m.Capabilities.Has(capability)
+	case "decision":
+		return m.Capabilities.Decision
 	case "text":
 		return m.Capabilities.Text
 	case "tool_calling":

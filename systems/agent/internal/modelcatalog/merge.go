@@ -92,20 +92,11 @@ func mergeModel(base, enriched Model) Model {
 // roster already reported.
 func mergeCapabilities(base, enriched Capabilities) Capabilities {
 	base.Known = base.Known || enriched.Known
-	if enriched.Text {
-		base.Text = true
-	}
-	if enriched.ImageInput {
-		base.ImageInput = true
-	}
-	if enriched.AudioInput {
-		base.AudioInput = true
-	}
-	if enriched.ToolCalling {
-		base.ToolCalling = true
-	}
-	if enriched.Reasoning {
-		base.Reasoning = true
+	for _, name := range capabilityNames {
+		source := enriched.Provenance[name]
+		if source != "" || enriched.Has(name) {
+			base.Set(name, enriched.Has(name), source)
+		}
 	}
 	return base
 }

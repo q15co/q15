@@ -32,6 +32,7 @@ type routedModelAdapter struct {
 	selection  *modelcatalog.Selection
 	mediaStore q15media.Store
 	factory    modelClientFactory
+	clientMu   sync.Mutex
 	clients    sync.Map // providerClientKey → agent.ModelClient
 }
 
@@ -40,6 +41,7 @@ type providerClientKey struct {
 	providerType string
 	baseURL      string
 	apiKey       string
+	decisionPath string
 }
 
 // modelClientFactory builds a provider client for one discovered model.
@@ -106,7 +108,7 @@ func (r *routedModelAdapter) CompleteStreamWithReasoning(
 			model,
 		)
 	}
-	return r.completeModel(ctx, m, messages, tools, onDelta, onReasoning)
+	return r.completeModel(ctx, m, "primary", messages, tools, onDelta, onReasoning)
 }
 
 // BindProviderModel resolves an exact provider and agent-side model ref once.
@@ -181,7 +183,7 @@ func (c boundProviderModelClient) CompleteStreamWithReasoning(
 			modelRef,
 		)
 	}
-	return c.adapter.completeModel(ctx, c.model, messages, tools, onDelta, onReasoning)
+	return c.adapter.completeModel(ctx, c.model, "primary", messages, tools, onDelta, onReasoning)
 }
 
 // completeModel applies the provider client, capability, and media adaptation
@@ -189,11 +191,24 @@ func (c boundProviderModelClient) CompleteStreamWithReasoning(
 func (r *routedModelAdapter) completeModel(
 	ctx context.Context,
 	m modelcatalog.Model,
+	role string,
 	messages []conversation.Message,
 	tools []agent.ToolDefinition,
 	onDelta func(string),
 	onReasoning func(string),
 ) (agent.ModelClientResult, error) {
+	current, exists := r.registry.Lookup(m.ProviderName, m.Ref)
+	if !exists || current.ProviderModel != m.ProviderModel {
+		return agent.ModelClientResult{}, fmt.Errorf(
+			"role %s model %q: missing capability chat in the live catalog",
+			role,
+			m.ProviderModel,
+		)
+	}
+	m.Capabilities = current.Capabilities
+	if err := r.registry.RequireChat(role, m); err != nil {
+		return agent.ModelClientResult{}, err
+	}
 	client, err := r.clientFor(m)
 	if err != nil {
 		return agent.ModelClientResult{}, err
@@ -224,11 +239,27 @@ func (r *routedModelAdapter) completeModel(
 	return client.Complete(ctx, m.ProviderModel, adapted, tools)
 }
 
-// lookupModel resolves a ref to a live model, preferring the currently selected
-// provider/model pair when the ref matches the current model.
+// lookupModel resolves a ref to a live model. A provider-qualified ref
+// ("provider/model") keeps its provider identity; a bare ref prefers the
+// currently selected provider/model pair when it matches, and otherwise
+// resolves to the first roster entry for that ref.
 func (r *routedModelAdapter) lookupModel(ref string) (modelcatalog.Model, bool) {
 	ref = strings.TrimSpace(ref)
 	if r == nil || r.registry == nil || ref == "" {
+		return modelcatalog.Model{}, false
+	}
+	if strings.Contains(ref, "/") {
+		// Agent-side refs never contain "/" (the catalog normalizes it to
+		// "-"), so the longest provider prefix match is exact even for
+		// provider names that contain one.
+		for _, m := range r.registry.Snapshot() {
+			if ref == m.ProviderName+"/"+m.Ref {
+				return m, true
+			}
+		}
+		if provider, modelRef, ok := strings.Cut(ref, "/"); ok {
+			return r.registry.Lookup(provider, modelRef)
+		}
 		return modelcatalog.Model{}, false
 	}
 	if r.selection != nil {
@@ -246,11 +277,14 @@ func (r *routedModelAdapter) lookupModel(ref string) (modelcatalog.Model, bool) 
 func (r *routedModelAdapter) clientFor(
 	m modelcatalog.Model,
 ) (agent.ModelClient, error) {
+	r.clientMu.Lock()
+	defer r.clientMu.Unlock()
 	key := providerClientKey{
 		name:         m.ProviderName,
 		providerType: m.ProviderType,
 		baseURL:      m.ProviderBaseURL,
 		apiKey:       m.ProviderAPIKey,
+		decisionPath: m.ProviderDecisionPath,
 	}
 	if cached, ok := r.clients.Load(key); ok {
 		return cached.(agent.ModelClient), nil
@@ -294,23 +328,26 @@ func newModelAdapterWithSelectionAndFactory(
 	}, nil
 }
 
-// defaultModelClientFactory builds the provider client for a discovered model
-// based on its canonical provider type.
-func defaultModelClientFactory(
-	m modelcatalog.Model,
-	mediaStore q15media.Store,
-) (agent.ModelClient, error) {
-	return makeDumpAwareFactory(nil)(m, mediaStore)
-}
-
 // makeDumpAwareFactory returns a modelClientFactory that threads an optional
 // dump transport through to each provider's NewClient. When rt is nil the
 // factory uses default HTTP transports.
 func makeDumpAwareFactory(rt http.RoundTripper) modelClientFactory {
 	return func(m modelcatalog.Model, mediaStore q15media.Store) (agent.ModelClient, error) {
+		if !m.Capabilities.Chat {
+			return nil, fmt.Errorf(
+				"role primary model %q: missing capability chat",
+				m.ProviderModel,
+			)
+		}
 		switch providertypes.NormalizeOrEmpty(m.ProviderType) {
 		case providertypes.Ollama:
-			return ollama.NewClient(m.ProviderBaseURL, m.ProviderAPIKey, mediaStore, rt)
+			return ollama.NewClient(
+				m.ProviderBaseURL,
+				m.ProviderAPIKey,
+				mediaStore,
+				rt,
+				m.ProviderDecisionPath,
+			)
 		case providertypes.OpenAICompatible:
 			return openaicompatible.NewClient(m.ProviderBaseURL, m.ProviderAPIKey, mediaStore, rt)
 		case providertypes.OpenAICodex:
@@ -345,34 +382,49 @@ func openDumpWriter() (io.Writer, func()) {
 	}
 }
 
-// buildModelRefs returns the engine's eligible model-ref list: the current
-// model first, then the remaining roster snapshot refs (deduped). This is the
-// honest, live fallback — if the current model is gone, the engine falls
-// through to other roster models.
+// buildModelRefs returns the chat fallback chain: the current model first,
+// then other chat-capable models in roster order.
 func buildModelRefs(currentRef string, registry *modelcatalog.Registry) []string {
-	currentRef = strings.TrimSpace(currentRef)
-	snapshot := registry.Snapshot()
-
-	refs := make([]string, 0, len(snapshot)+1)
-	seen := make(map[string]struct{}, len(snapshot)+1)
-
-	if currentRef != "" {
-		refs = append(refs, currentRef)
-		seen[currentRef] = struct{}{}
+	refs := []string{}
+	seen := map[string]bool{}
+	add := func(ref string) {
+		ref = strings.TrimSpace(ref)
+		if ref != "" && !seen[ref] {
+			refs = append(refs, ref)
+			seen[ref] = true
+		}
 	}
-	for _, m := range snapshot {
-		if _, ok := seen[m.Ref]; ok {
+	add(currentRef)
+	for _, m := range registry.Snapshot() {
+		if seen[m.Ref] {
 			continue
 		}
-		refs = append(refs, m.Ref)
-		seen[m.Ref] = struct{}{}
+		if registry.RequireChat("primary", m) != nil {
+			continue
+		}
+		add(m.Ref)
 	}
 	return refs
 }
 
-// loadInteractiveSelection materializes the in-memory interactive model
-// selection from the persisted selection store, auto-selecting and persisting
-// a first-eligible roster model on first run.
+// loadRuntimeSelections restores or bootstraps chat and decision selections.
+func loadRuntimeSelections(
+	registry *modelcatalog.Registry,
+	store *selectionstore.Store,
+) (*modelcatalog.Selection, error) {
+	selection, err := loadInteractiveSelection(registry, store)
+	if err != nil {
+		return nil, err
+	}
+	if err := resolveDecisionSelection(registry, store, store.Decision()); err != nil {
+		return nil, err
+	}
+	return selection, nil
+}
+
+// loadInteractiveSelection restores the persisted interactive selection when
+// it is roster-valid and chat-capable, and otherwise auto-selects the first
+// eligible roster model, preferring Text and ToolCalling. The choice is persisted.
 func loadInteractiveSelection(
 	registry *modelcatalog.Registry,
 	store *selectionstore.Store,
@@ -380,48 +432,80 @@ func loadInteractiveSelection(
 	if registry == nil || store == nil {
 		return nil, errors.New("registry and selection store are required")
 	}
-
-	if current := store.Interactive(); current.IsValid() {
-		return modelcatalog.NewSelection(registry, current.Provider, current.Model), nil
+	current := store.Interactive()
+	if current.IsValid() {
+		if m, ok := registry.Lookup(current.Provider, current.Model); ok {
+			if err := registry.RequireChat("primary", m); err == nil {
+				return modelcatalog.NewSelection(registry, current.Provider, current.Model), nil
+			}
+		}
+		// The persisted selection is stale or no longer chat-capable: fall
+		// through and auto-select instead of aborting startup.
 	}
 
-	provider, model, ok := autoSelectModel(registry)
-	if !ok {
-		return nil, errors.New(
-			"no models available in the live roster — cannot bootstrap model selection",
-		)
-	}
-	if err := store.SetInteractive(provider, model); err != nil {
-		return nil, fmt.Errorf("persist auto-selected model: %w", err)
-	}
-	return modelcatalog.NewSelection(registry, provider, model), nil
-}
-
-// autoSelectModel picks the first-eligible roster model for bootstrap. It
-// prefers a text+tool-calling model (so the agent keeps its tools), then falls
-// back to any text-capable model. Returns false when the roster is empty.
-func autoSelectModel(registry *modelcatalog.Registry) (string, string, bool) {
-	if registry == nil {
-		return "", "", false
-	}
-	snapshot := registry.Snapshot()
-	var textFallback *modelcatalog.Model
-	for i := range snapshot {
-		m := &snapshot[i]
-		if !m.Capabilities.Text {
+	var candidate *modelcatalog.Model
+	for _, m := range registry.Snapshot() {
+		if err := registry.RequireChat("primary", m); err != nil {
 			continue
 		}
-		if m.Capabilities.ToolCalling {
-			return m.ProviderName, m.Ref, true
+		if m.Capabilities.Text && m.Capabilities.ToolCalling {
+			candidate = &m
+			break
 		}
-		if textFallback == nil {
-			textFallback = m
+		if candidate == nil {
+			first := m
+			candidate = &first
 		}
 	}
-	if textFallback != nil {
-		return textFallback.ProviderName, textFallback.Ref, true
+	if candidate == nil {
+		return nil, errors.New(
+			"no chat-capable model in the live roster; check provider connectivity and API keys",
+		)
 	}
-	return "", "", false
+	if err := store.SetInteractive(candidate.ProviderName, candidate.Ref); err != nil {
+		return nil, err
+	}
+	return modelcatalog.NewSelection(registry, candidate.ProviderName, candidate.Ref), nil
+}
+
+// resolveDecisionSelection publishes the decision slot on the registry. A
+// persisted selection must resolve in the roster with the effective decision
+// capability; a stale persisted selection is re-auto-selected.
+func resolveDecisionSelection(
+	registry *modelcatalog.Registry,
+	store *selectionstore.Store,
+	persisted selectionstore.Selection,
+) error {
+	if persisted.IsValid() {
+		if m, ok := registry.Lookup(persisted.Provider, persisted.Model); ok &&
+			m.Capabilities.Decision {
+			registry.SetDecision(modelcatalog.RoleSelection{
+				Provider:      persisted.Provider,
+				Model:         persisted.Model,
+				ProviderModel: m.ProviderModel,
+			})
+			return nil
+		}
+		// Stale persisted selection: fall through to auto-select.
+	}
+	for _, m := range registry.Snapshot() {
+		if !m.Capabilities.Decision {
+			continue
+		}
+		if err := store.SetDecision(m.ProviderName, m.Ref); err != nil {
+			return err
+		}
+		registry.SetDecision(modelcatalog.RoleSelection{
+			Provider:      m.ProviderName,
+			Model:         m.Ref,
+			ProviderModel: m.ProviderModel,
+		})
+		return nil
+	}
+	// No decision-capable roster candidate: the decision feature stays absent
+	// until switch_model selects one.
+	registry.SetDecision(modelcatalog.RoleSelection{})
+	return nil
 }
 
 // newCognitionRefResolver returns a per-job model ref resolver for the

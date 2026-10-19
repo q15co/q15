@@ -20,7 +20,7 @@ func TestCognitionPreflightSkipsInsufficientKnownContexts(t *testing.T) {
 				models := []modelcatalog.Model{
 					{
 						ProviderModel:    "small",
-						Capabilities:     modelcatalog.Capabilities{Text: true},
+						Capabilities:     modelcatalog.Capabilities{Chat: true, Text: true},
 						MaxContextTokens: 8192,
 					},
 				}
@@ -30,7 +30,7 @@ func TestCognitionPreflightSkipsInsufficientKnownContexts(t *testing.T) {
 						models,
 						modelcatalog.Model{
 							ProviderModel:    "large",
-							Capabilities:     modelcatalog.Capabilities{Text: true},
+							Capabilities:     modelcatalog.Capabilities{Chat: true, Text: true},
 							MaxContextTokens: 128 * 1024,
 						},
 					)
@@ -78,10 +78,10 @@ func TestContextPreflightIsOptInAndPreservesUnknownMetadata(t *testing.T) {
 	registry := testRegistry(t, map[string][]modelcatalog.Model{"synthetic": {
 		{
 			ProviderModel:    "small",
-			Capabilities:     modelcatalog.Capabilities{Text: true},
+			Capabilities:     modelcatalog.Capabilities{Chat: true, Text: true},
 			MaxContextTokens: 8192,
 		},
-		{ProviderModel: "unknown", Capabilities: modelcatalog.Capabilities{Text: true}},
+		{ProviderModel: "unknown", Capabilities: modelcatalog.Capabilities{Chat: true, Text: true}},
 	}})
 	adapter, err := newModelAdapterWithFactory(
 		registry,

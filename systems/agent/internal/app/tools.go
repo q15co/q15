@@ -34,10 +34,13 @@ func buildRuntimeTools(
 	skillManager *q15skills.Manager,
 	dumpWriter io.Writer,
 	scheduleManager *schedule.Manager,
+	modelAdapter *routedModelAdapter,
 ) []agent.Tool {
 	subAgentManager := subagent.NewManager(
 		registry,
-		defaultModelClientFactory,
+		func(model modelcatalog.Model, _ q15media.Store) (agent.ModelClient, error) {
+			return modelAdapter.clientFor(model)
+		},
 		baseToolRegistry,
 		mediaStore,
 		subagentSkillResolver{manager: skillManager},
@@ -47,6 +50,7 @@ func buildRuntimeTools(
 		baseToolList,
 		tools.NewListProviders(registry, selection),
 		tools.NewListModels(registry, selection),
+		tools.NewDecisionCheck(newRoutedDecisionAdapter(registry, modelAdapter.decisionClientFor)),
 		tools.NewSwitchModel(registry, selection, selectionStore),
 		tools.NewSwitchCognitionModel(registry, selectionStore, cognitionJobTypes),
 		subagent.NewSpawn(subAgentManager),

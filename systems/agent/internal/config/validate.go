@@ -3,12 +3,14 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"path"
 	"strconv"
 	"strings"
 
 	"github.com/q15co/q15/systems/agent/internal/embed"
+	"github.com/q15co/q15/systems/agent/internal/provider/systemone"
 	"github.com/q15co/q15/systems/agent/internal/providertypes"
 )
 
@@ -44,21 +46,34 @@ func (c Config) validate() error {
 		if normalizedType == "" {
 			return fmt.Errorf("providers[%d].type %q is not supported", i, provider.Type)
 		}
-		if normalizedType == providertypes.OpenAICompatible &&
+		if (normalizedType == providertypes.OpenAICompatible || normalizedType == providertypes.SystemOneCompatible) &&
 			strings.TrimSpace(provider.BaseURL) == "" {
 			return fmt.Errorf(
-				"providers[%d].base_url is required for openai-compatible providers",
-				i,
+				"providers[%d].base_url is required for %s providers",
+				i, normalizedType,
 			)
 		}
-		if normalizedType == providertypes.OpenAICompatible {
+		if normalizedType == providertypes.OpenAICompatible ||
+			normalizedType == providertypes.SystemOneCompatible {
 			if err := validateOpenAICompatibleBaseURL(provider.BaseURL); err != nil {
 				return fmt.Errorf("providers[%d].base_url: %w", i, err)
 			}
 		}
 		if normalizedType == providertypes.OpenAICompatible &&
-			strings.TrimSpace(provider.KeyEnv) == "" {
-			return fmt.Errorf("providers[%d].key_env is required", i)
+			strings.TrimSpace(provider.KeyEnv) == "" && !isLocalBaseURL(provider.BaseURL) {
+			return fmt.Errorf(
+				"providers[%d].key_env is required for openai-compatible providers on a public host; set key_env or point base_url at a local endpoint",
+				i,
+			)
+		}
+		if normalizedType == providertypes.SystemOneCompatible {
+			base, err := url.Parse(strings.TrimSpace(provider.BaseURL))
+			if err != nil || base.User != nil || base.RawQuery != "" || base.Fragment != "" {
+				return fmt.Errorf(
+					"providers[%d].base_url must not include credentials, a query, or a fragment",
+					i,
+				)
+			}
 		}
 		if normalizedType == providertypes.Ollama && strings.TrimSpace(provider.KeyEnv) == "" &&
 			isOllamaCloudBaseURL(provider.BaseURL) {
@@ -66,6 +81,39 @@ func (c Config) validate() error {
 				"providers[%d].key_env is required for Ollama Cloud providers",
 				i,
 			)
+		}
+		if strings.TrimSpace(provider.DecisionPath) != "" {
+			base := provider.BaseURL
+			if strings.TrimSpace(base) == "" && normalizedType == providertypes.Ollama {
+				base = "http://localhost:11434"
+			}
+			if _, err := systemone.Endpoint(base, provider.DecisionPath); err != nil {
+				return fmt.Errorf("providers[%d].decision_path: %w", i, err)
+			}
+		}
+		for model, capabilities := range provider.CapabilityOverrides {
+			if strings.TrimSpace(model) == "" {
+				return fmt.Errorf("providers[%d].capability_overrides requires a model ID", i)
+			}
+			for capability := range capabilities {
+				switch capability {
+				case "chat",
+					"embed",
+					"decision",
+					"text",
+					"image_input",
+					"audio_input",
+					"tool_calling",
+					"reasoning":
+				default:
+					return fmt.Errorf(
+						"providers[%d].capability_overrides model %q: unsupported capability %q",
+						i,
+						model,
+						capability,
+					)
+				}
+			}
 		}
 		if err := validateDiscoveryGlobs(i, provider.Discovery); err != nil {
 			return err
@@ -301,6 +349,34 @@ func isOllamaCloudBaseURL(raw string) bool {
 		return false
 	}
 	return strings.EqualFold(base.Hostname(), "ollama.com")
+}
+
+// isLocalBaseURL reports whether the URL points at a loopback, private, or
+// link-local address, or a single-label Docker service or machine name, which
+// is how unauthenticated local inference and embedding servers appear in
+// Compose files and on developer machines. A host with a dot and a host that
+// parses as a public IP are reported as public. A URL with no parseable host
+// is reported as public too, so requiring a key on a public host fails closed.
+func isLocalBaseURL(raw string) bool {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return false
+	}
+	base, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(base.Hostname())
+	if host == "" {
+		return false
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
+	}
+	if host == "localhost" {
+		return true
+	}
+	return !strings.Contains(host, ".")
 }
 
 // validateOpenAICompatibleBaseURL checks URL syntax. The provider's documented

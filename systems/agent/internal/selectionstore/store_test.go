@@ -3,6 +3,7 @@ package selectionstore
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -77,6 +78,59 @@ func TestCognitionOverridesRoundTripAndClear(t *testing.T) {
 	}
 	if _, ok := reopened.Cognition("working_memory.consolidate"); ok {
 		t.Fatal("cleared cognition override still present")
+	}
+}
+
+func TestDecisionSlotRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "selection.json")
+	store, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	if store.Decision().IsValid() {
+		t.Fatal("decision slot non-empty on first run")
+	}
+	if err := store.SetInteractive("p", "chat"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetDecision("p", "clef"); err != nil {
+		t.Fatalf("SetDecision() error = %v", err)
+	}
+
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatalf("reopen error = %v", err)
+	}
+	if got := reopened.Interactive(); got.Provider != "p" || got.Model != "chat" {
+		t.Fatalf("reopened interactive = %+v", got)
+	}
+	if got := reopened.Decision(); got.Provider != "p" || got.Model != "clef" {
+		t.Fatalf("reopened decision = %+v", got)
+	}
+	// A later slot write keeps the sibling slots.
+	if err := reopened.SetDecision("p", "clef-flash"); err != nil {
+		t.Fatal(err)
+	}
+	again, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := again.Decision(); got.Model != "clef-flash" {
+		t.Fatalf("decision after rewrite = %+v", got)
+	}
+	if got := again.Interactive(); got.Model != "chat" {
+		t.Fatalf("interactive lost after decision rewrite: %+v", got)
+	}
+}
+
+func TestSlotSetRequiresProviderAndModel(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "selection.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetDecision("p", ""); err == nil ||
+		!strings.Contains(err.Error(), "decision selection requires provider and model") {
+		t.Fatalf("SetDecision() error = %v", err)
 	}
 }
 

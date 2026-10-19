@@ -9,6 +9,7 @@ import (
 	"io"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
+	"github.com/q15co/q15/systems/agent/internal/decision"
 	"github.com/q15co/q15/systems/agent/internal/embed"
 	"github.com/q15co/q15/systems/agent/internal/execution"
 	"github.com/q15co/q15/systems/agent/internal/fileops"
@@ -17,6 +18,7 @@ import (
 	scheduled "github.com/q15co/q15/systems/agent/internal/schedule"
 
 	"github.com/q15co/q15/systems/agent/internal/selectionstore"
+	decisiontools "github.com/q15co/q15/systems/agent/internal/tools/decision"
 	embedtools "github.com/q15co/q15/systems/agent/internal/tools/embed"
 	"github.com/q15co/q15/systems/agent/internal/tools/exec"
 	"github.com/q15co/q15/systems/agent/internal/tools/files"
@@ -27,6 +29,11 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/tools/subagent"
 	"github.com/q15co/q15/systems/agent/internal/tools/web"
 )
+
+// NewDecisionCheck delegates to decision.NewCheck.
+func NewDecisionCheck(client decision.Client) *decisiontools.Check {
+	return decisiontools.NewCheck(client)
+}
 
 // FileToolExecutor performs rooted file operations inside the runtime-visible roots.
 type FileToolExecutor = files.FileToolExecutor

@@ -11,7 +11,7 @@ var _ modelselection.Planner = (*routedModelAdapter)(nil)
 
 // Plan resolves model refs against the live registry, filters by hard
 // capability requirements, and returns the eligible refs in their original
-// order (current model first, then roster order). Refs not in the current
+// order supplied by the caller. Refs not in the current
 // roster are skipped with a clear reason.
 func (r *routedModelAdapter) Plan(
 	modelRefs []string,
@@ -33,6 +33,10 @@ func (r *routedModelAdapter) Plan(
 				Ref:    ref,
 				Reason: "not in current roster (provider down or model deprecated)",
 			})
+			continue
+		}
+		if err := r.registry.RequireChat("primary", m); err != nil {
+			plan.Skipped = append(plan.Skipped, modelselection.Skip{Ref: ref, Reason: err.Error()})
 			continue
 		}
 		caps := modelselection.Capabilities{

@@ -68,8 +68,12 @@ func testRegistry(t *testing.T) *modelcatalog.Registry {
 			},
 			"openai": {
 				{
-					ProviderModel:    "gpt-5.5",
-					Capabilities:     modelcatalog.Capabilities{Text: true, ToolCalling: true},
+					ProviderModel: "gpt-5.5",
+					Capabilities: modelcatalog.Capabilities{
+						Chat:        true,
+						Text:        true,
+						ToolCalling: true,
+					},
 					MaxContextTokens: 1_000_000,
 					CostPerMTokIn:    1.25,
 					CostPerMTokOut:   10,

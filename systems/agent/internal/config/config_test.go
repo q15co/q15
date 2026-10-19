@@ -217,7 +217,30 @@ func TestValidateRejectsUnsupportedProviderType(t *testing.T) {
 	}
 }
 
-func TestValidateRequiresKeyEnvForOpenAICompatible(t *testing.T) {
+func TestValidateAcceptsLocalOpenAICompatibleWithoutKeyEnv(t *testing.T) {
+	cfg := Config{
+		Providers: []Provider{
+			{Name: "p", Type: "openai-compatible", BaseURL: "http://q15-tei:80"},
+		},
+		Agent: testAgent("a"),
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("unauthenticated local provider config: %v", err)
+	}
+	key, err := ResolveProviderAPIKey(cfg.Providers[0], "openai-compatible")
+	if err != nil || key != "" {
+		t.Fatalf("unauthenticated provider key = %q, %v", key, err)
+	}
+	t.Setenv("Q15_TEST_MISSING_PROVIDER_KEY", "")
+	t.Setenv("Q15_TEST_MISSING_PROVIDER_KEY_FILE", "")
+	cfg.Providers[0].KeyEnv = "Q15_TEST_MISSING_PROVIDER_KEY"
+	if _, err := ResolveProviderAPIKey(cfg.Providers[0], "openai-compatible"); err == nil ||
+		!strings.Contains(err.Error(), "Q15_TEST_MISSING_PROVIDER_KEY") {
+		t.Fatalf("explicit missing provider secret = %v", err)
+	}
+}
+
+func TestValidateRequiresKeyEnvForPublicOpenAICompatible(t *testing.T) {
 	cfg := Config{
 		Providers: []Provider{
 			{Name: "p", Type: "openai-compatible", BaseURL: "https://x.example/v1"},
@@ -225,7 +248,36 @@ func TestValidateRequiresKeyEnvForOpenAICompatible(t *testing.T) {
 		Agent: testAgent("a"),
 	}
 	if err := cfg.Validate(); err == nil {
-		t.Fatal("expected error for missing key_env")
+		t.Fatal("expected error for missing key_env on a public openai-compatible provider")
+	}
+}
+
+func TestIsLocalBaseURL(t *testing.T) {
+	local := []string{
+		"http://localhost:11434",
+		"http://127.0.0.1:8000/v1",
+		"http://172.16.0.3/hf",
+		"http://169.254.10.1",
+		"http://q15-tei:80",
+		"https://tei",
+	}
+	public := []string{
+		"https://x.example/v1",
+		"https://api.moonshot.ai/v1",
+		"https://8.8.8.8",
+		"https://[2001:4860:4860::8888]",
+		"",
+		"not a url",
+	}
+	for _, raw := range local {
+		if !isLocalBaseURL(raw) {
+			t.Errorf("isLocalBaseURL(%q) = false, want true", raw)
+		}
+	}
+	for _, raw := range public {
+		if isLocalBaseURL(raw) {
+			t.Errorf("isLocalBaseURL(%q) = true, want false (fail closed)", raw)
+		}
 	}
 }
 

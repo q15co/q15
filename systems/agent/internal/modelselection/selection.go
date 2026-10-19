@@ -55,7 +55,7 @@ func (p Plan) SkipSummary() string {
 	return formatSkips(p.Skipped)
 }
 
-// Planner can reduce a configured fallback list to the eligible candidates for
+// Planner can reduce a model-ref fallback chain to the eligible candidates for
 // the current request requirements before provider calls.
 type Planner interface {
 	Plan(modelRefs []string, requirements Requirements) (Plan, error)

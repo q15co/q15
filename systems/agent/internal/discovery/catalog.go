@@ -10,6 +10,7 @@ import (
 	ollamaprovider "github.com/q15co/q15/systems/agent/internal/provider/ollama"
 	openaicodexprovider "github.com/q15co/q15/systems/agent/internal/provider/openaicodex"
 	openaicompatibleprovider "github.com/q15co/q15/systems/agent/internal/provider/openaicompatible"
+	"github.com/q15co/q15/systems/agent/internal/provider/systemone"
 	"github.com/q15co/q15/systems/agent/internal/providertypes"
 )
 
@@ -44,9 +45,10 @@ func NewCatalog(httpClient *http.Client) Catalog {
 	}
 	return &defaultCatalog{
 		rosters: map[string]rosterDiscoverer{
-			providertypes.Ollama:           ollamaprovider.NewRosterClient(httpClient),
-			providertypes.OpenAICompatible: openaicompatibleprovider.NewRosterClient(httpClient),
-			providertypes.OpenAICodex:      openaicodexprovider.NewRosterClient(),
+			providertypes.Ollama:              ollamaprovider.NewRosterClient(httpClient),
+			providertypes.OpenAICompatible:    openaicompatibleprovider.NewRosterClient(httpClient),
+			providertypes.OpenAICodex:         openaicodexprovider.NewRosterClient(),
+			providertypes.SystemOneCompatible: systemone.NewRosterClient(httpClient),
 		},
 		modelsdev: newModelsDevClientWithSource(httpClient, defaultCatalogModelsDevURL),
 	}

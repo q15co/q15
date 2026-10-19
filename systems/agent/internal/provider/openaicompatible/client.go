@@ -38,6 +38,7 @@ const assistantImageFollowupText = "Use the attached image output from the assis
 const systemOnlyFollowupText = "Use the system instructions above as the full task definition and complete them directly."
 
 // NewClient constructs a Chat Completions-compatible model client.
+// apiKey may be empty for an unauthenticated endpoint.
 // rt overrides the HTTP transport; nil uses the SDK default.
 func NewClient(
 	baseURL string,
@@ -50,13 +51,13 @@ func NewClient(
 		return nil, fmt.Errorf("provider base url is required")
 	}
 	apiKey = strings.TrimSpace(apiKey)
-	if apiKey == "" {
-		return nil, fmt.Errorf("provider api key is required")
-	}
 
 	opts := []option.RequestOption{
 		option.WithBaseURL(baseURL),
 		option.WithAPIKey(apiKey),
+	}
+	if apiKey == "" {
+		opts = append(opts, option.WithHeaderDel("Authorization"))
 	}
 	if rt != nil {
 		opts = append(opts, option.WithHTTPClient(&http.Client{Transport: rt}))

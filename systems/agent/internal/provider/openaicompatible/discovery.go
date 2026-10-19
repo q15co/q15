@@ -39,6 +39,7 @@ type openaiModelsResponse struct {
 
 type openaiModelsEntry struct {
 	ID       string `json:"id"`
+	Type     string `json:"type"`
 	Metadata struct {
 		Tags []string `json:"tags"`
 	} `json:"metadata"`
@@ -97,8 +98,14 @@ func (c *RosterClient) Discover(
 		models = append(models, modelcatalog.Model{
 			ProviderModel: id,
 			Name:          id,
-			Capabilities:  modelcatalog.Capabilities{Text: true},
-			Source:        modelcatalog.SourceOpenAI,
+			Capabilities: modelcatalog.Capabilities{
+				Text:     true,
+				Chat:     entry.Type != "decision",
+				Decision: entry.Type == "decision",
+			}.WithProvenance(
+				"derived",
+			),
+			Source: modelcatalog.SourceOpenAI,
 		})
 	}
 	return models, nil

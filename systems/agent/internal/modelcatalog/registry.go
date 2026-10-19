@@ -34,7 +34,8 @@ type Registry struct {
 	statusByProvider map[string]Status
 	// reload is the most recent attempt to apply an edited provider list, nil
 	// until one runs.
-	reload *ReloadStatus
+	reload   *ReloadStatus
+	decision RoleSelection
 }
 
 // Status distinguishes discovery failures from successful empty rosters.
@@ -135,7 +136,11 @@ func (r *Registry) discover(ctx context.Context, providers []Provider) rosterSna
 			models[i].ProviderType = p.Type
 			models[i].ProviderBaseURL = p.BaseURL
 			models[i].ProviderAPIKey = p.APIKey
+			models[i].ProviderDecisionPath = p.DecisionPath
 			models[i].Ref = deriveRef(models[i].ProviderModel)
+			for name, supported := range p.CapabilityOverrides[models[i].ProviderModel] {
+				models[i].Capabilities.Set(name, supported, "override")
+			}
 		}
 		combined = append(combined, models...)
 	}

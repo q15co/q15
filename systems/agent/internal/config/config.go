@@ -54,11 +54,15 @@ type Config struct {
 
 // Provider defines a named model provider entry in config.yaml.
 type Provider struct {
-	Name      string            `yaml:"name"`
-	Type      string            `yaml:"type"`
-	BaseURL   string            `yaml:"base_url"`
-	KeyEnv    string            `yaml:"key_env"`
-	Discovery ProviderDiscovery `yaml:"discovery,omitempty"`
+	Name    string `yaml:"name"`
+	Type    string `yaml:"type"`
+	BaseURL string `yaml:"base_url"`
+	KeyEnv  string `yaml:"key_env"`
+	// DecisionPath overrides the per-kind System One endpoint path.
+	DecisionPath string `yaml:"decision_path,omitempty"`
+	// CapabilityOverrides correct capabilities per native model ID.
+	CapabilityOverrides map[string]map[string]bool `yaml:"capability_overrides,omitempty"`
+	Discovery           ProviderDiscovery          `yaml:"discovery,omitempty"`
 }
 
 // ProviderDiscovery configures model-roster discovery for one provider.
@@ -80,9 +84,8 @@ type ProviderDiscovery struct {
 
 // Agent defines one configured q15 agent instance.
 //
-// The interactive and cognition models are NOT configured here: they are
-// runtime state, auto-selected from the live roster on first run and then
-// persisted (see internal/selectionstore) so switches survive restart.
+// Chat and decision selections are persisted runtime state switched through
+// tools. Embedding settings retain the embedding tool's fixed model binding.
 type Agent struct {
 	Name              string `yaml:"name"`
 	MemoryRecentTurns int    `yaml:"memory_recent_turns"`

@@ -22,9 +22,9 @@ import (
 
 const (
 	// modelsDevAPIURL is the default source for the models.dev catalog.
-	modelsDevAPIURL = "https://models.dev/api.json"
+	modelsDevAPIURL = "https://models.dev/api.json?type=all"
 	// modelsDevCacheFileName is the cache file name within the cache directory.
-	modelsDevCacheFileName = "models-dev.json"
+	modelsDevCacheFileName = "models-dev-all.json"
 	// modelsDevCacheSubDir is the default cache directory under the OS temp
 	// dir when Q15_DISCOVERY_CACHE_DIR is unset.
 	modelsDevCacheSubDir = "q15-discovery"
@@ -68,6 +68,12 @@ func newModelsDevClientWithSource(httpClient *http.Client, sourceURL string) *mo
 	if strings.TrimSpace(sourceURL) == "" {
 		sourceURL = modelsDevAPIURL
 	}
+	if source, err := url.Parse(sourceURL); err == nil {
+		query := source.Query()
+		query.Set("type", "all")
+		source.RawQuery = query.Encode()
+		sourceURL = source.String()
+	}
 	return &modelsDevClient{
 		http:      httpClient,
 		sourceURL: sourceURL,
@@ -90,6 +96,7 @@ type modelsDevEntry struct {
 }
 
 type modelsDevModel struct {
+	Type             string              `json:"type"`
 	Name             string              `json:"name"`
 	ReleaseDate      string              `json:"release_date"`
 	Limit            modelsDevLimit      `json:"limit"`
@@ -276,7 +283,12 @@ func parseModelsDevFile(data []byte) (modelsDevFile, error) {
 // bool) → StructuredOutput. Cost comes from the cost block (already USD per
 // million tokens). models.dev publishes no benchmarks.
 func modelFromModelsDev(id string, md modelsDevModel) Model {
-	caps := Capabilities{Known: true}
+	caps := Capabilities{
+		Known:    true,
+		Decision: md.Type == "decision",
+		Embed:    md.Type == "embedding",
+		Chat:     md.Type == "" || md.Type == "language" || md.Type == "text-generation",
+	}
 	for _, modality := range md.Modalities.Input {
 		switch strings.ToLower(strings.TrimSpace(modality)) {
 		case "text":
@@ -333,7 +345,7 @@ func modelFromModelsDev(id string, md modelsDevModel) Model {
 	return Model{
 		ProviderModel:         id,
 		Name:                  name,
-		Capabilities:          caps,
+		Capabilities:          caps.WithProvenance("declared"),
 		CostTier:              deriveCostTier(costIn, costOut),
 		CostPerMTokIn:         costIn,
 		CostPerMTokOut:        costOut,

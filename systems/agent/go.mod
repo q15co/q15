@@ -8,7 +8,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/mymmrac/telego v1.12.1
 	github.com/netresearch/go-cron v0.13.4
-	github.com/ollama/ollama v0.22.1
+	github.com/ollama/ollama v0.40.6
 	github.com/openai/openai-go/v3 v3.22.0
 	github.com/q15co/q15/libs/chat-contract v0.0.0
 	github.com/q15co/q15/libs/exec-contract v0.0.0
