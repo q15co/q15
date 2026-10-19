@@ -160,38 +160,38 @@ Notes:
 - `ollama` defaults to local `http://localhost:11434` when `base_url` is omitted; set
   `base_url: https://ollama.com` plus `key_env: OLLAMA_API_KEY` for direct Ollama Cloud API access
 
-- TEI embedding servers can serve `agent.tools.embeddings` with `provider: openai` and their service
-  root as `base_url_env` (for example, `http://q15-tei:80`). They are an embedding backend only: TEI
-  serves no `/models` roster, so it cannot appear under `providers`, and the embed model slot must
-  point at an embed-capable roster model from another provider (Ollama or Gemini; see "Runtime model
-  state" below). Omit `key_env` for a local unauthenticated endpoint (loopback, a private or
-  link-local address, or a service name without a dot); `key_env` stays required on a public host,
-  so a misconfigured cloud provider is refused at load rather than at the first request. When
-  supplied, the named secret must resolve even for a local service.
+- TEI embedding servers continue to serve `agent.tools.embeddings` with `provider: openai`, their
+  service root in `base_url_env` (for example, `http://q15-tei:80`), and their exact served model ID
+  in `model`. The embedding tool owns this fixed model and transport together; provider discovery
+  and chat/decision switches do not change them. Existing TEI deployments need no new provider
+  declaration or collection re-embedding for this change.
 
-- Model selection is runtime state; the config file carries no model assignments. q15 holds three
-  selection slots — `interactive` (chat), `decision`, and `embed` — persisted to
-  `/workspace/.q15/agent/selection.json` on every change. At startup a persisted, roster-valid
-  selection is restored; an empty or stale slot auto-selects from the live roster (interactive
-  prefers a Text+ToolCalling model) and persists the choice. The live selections are shown in
-  `list_providers` under `role_selections`.
+- For `openai-compatible` providers, omit `key_env` for a local unauthenticated endpoint (loopback,
+  private or link-local address, or single-label service name). Public hosts require `key_env`. A
+  named secret must resolve even for a local service.
 
-- The interactive model chats and falls back along the live roster in discovery order (current model
-  first), skipping models without the chat capability and the model selected as decision. Capability
-  checks repeat at dispatch, so a roster refresh never routes chat into a model that lost or lacks
-  the capability. The decision model never equals the interactive chat model: `decision_check` and
-  every chat dispatch enforce that selection rule.
+- Interactive and decision model selections are runtime state in
+  `/workspace/.q15/agent/selection.json`, with no YAML model assignments. At startup a persisted,
+  roster-valid selection is restored; an empty or stale slot auto-selects an eligible live model and
+  persists the choice. Interactive selection prefers text plus tool calling. `list_providers`
+  exposes both slots under `role_selections`.
 
-- `decision_check` dispatches the decision slot only. With no decision selection the tool reports
-  "role decision: no model selected; use switch_model with slot decision"; the embedding tools
-  likewise require an embed selection. Incoming `type: decision` metadata normalizes into the
-  capability, with provenance. A model with both `chat` and `decision` may serve either role;
-  capability flags do not prohibit it from chat, only the selection rule does.
+- Each operation checks its effective capability at dispatch: chat requires `chat` and decisions
+  require `decision`. Text or image input does not imply chat generation. A decision-only model
+  cannot become an interactive model or chat fallback. A provider model genuinely supporting both
+  operations may be selected for both; selecting it for one operation does not disable the other.
+  Chat falls back through chat-capable models in live roster order, current model first.
 
-- `switch_model` takes an optional `slot` parameter: `interactive` (the default), `decision`, or
-  `embed`. Each switch validates the slot's capability (`chat`, `decision`, `embed`) against the
-  live roster, applies the dual-role rule (interactive refuses the decision-selected model and vice
-  versa), persists to `selection.json`, and takes effect on the next use without a restart.
+- `decision_check` uses the decision selection. Without one, it reports "role decision: no model
+  selected; use switch_model with slot decision". Incoming `type: decision` metadata normalizes into
+  the capability with provenance.
+
+- `switch_model` accepts `slot: interactive` (default) or `slot: decision`, validates the required
+  capability, and persists the selection before publishing the change. Embedding model changes
+  require an explicit collection re-embedding migration; there is no general `embed` switching slot.
+  Until the provider-registry migration in #376, embedding model and transport settings stay in
+  `agent.tools.embeddings`. Do not change these settings against existing vectors without rebuilding
+  the affected collections.
 
 - A dedicated [System One compatible provider](https://docs.typesafe.ai/models) can use
   `type: systemone-compatible`, `base_url: https://api.typesafe.ai/v1`, and
@@ -311,12 +311,15 @@ Notes:
 
 - interactive model switches are explicit provider/model selections persisted under
   `/workspace/.q15/agent/selection.json`. Use `list_providers`, `list_models`, `switch_model`
-  (including its `decision` and `embed` slots), and `switch_cognition_model`; switches are checked
-  before persistence. The chat fallback chain is the live roster in discovery order with the current
-  model first, filtered to chat-capable models and excluding the decision-selected model.
+  (including `slot: decision`), and `switch_cognition_model`; switches are checked before
+  persistence. The chat fallback chain is the live roster in discovery order with the current model
+  first, filtered to chat-capable models.
 
 - background cognition jobs inherit the interactive model unless `switch_cognition_model` sets a
-  per-job override
+  persisted per-job override. There is no separately configured initial cognition model. The
+  decision selection introduced by #374 does not replace this generative model: cognition's
+  typed-tool cutovers and automatic decision calls are tracked in #367 and #369–#373. System One
+  chooses supplied outcomes; generation still supplies new claim text and explanations.
 
 - current inference is intentionally text-first; image-input and tool-calling requirement inference
   land when canonical request signals for those modes are available

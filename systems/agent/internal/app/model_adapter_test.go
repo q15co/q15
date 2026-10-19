@@ -614,10 +614,8 @@ func TestBuildModelRefsCurrentNotInSnapshot(t *testing.T) {
 	}
 }
 
-// The fallback chain is chat dispatch: the decision-selected model and models
-// without the chat capability never enter it, and Plan applies the same
-// exclusions through RequireChat.
-func TestFallbackChainSkipsDecisionAndNonChatModels(t *testing.T) {
+// Chat dispatch excludes models without the chat capability, including deciders.
+func TestFallbackChainSkipsNonChatModels(t *testing.T) {
 	registry := testRegistry(t, map[string][]modelcatalog.Model{
 		"p": {
 			{
@@ -626,7 +624,7 @@ func TestFallbackChainSkipsDecisionAndNonChatModels(t *testing.T) {
 			},
 			{
 				ProviderModel: "decider",
-				Capabilities:  modelcatalog.Capabilities{Chat: true, Decision: true, Text: true},
+				Capabilities:  modelcatalog.Capabilities{Decision: true, Text: true},
 			},
 			{ProviderModel: "silent", Capabilities: modelcatalog.Capabilities{Text: true}},
 			{
@@ -668,14 +666,14 @@ func TestFallbackChainSkipsDecisionAndNonChatModels(t *testing.T) {
 	if len(plan.Skipped) != 2 {
 		t.Fatalf("skipped = %#v", plan.Skipped)
 	}
-	if !strings.Contains(plan.Skipped[0].Reason, "decision model") {
+	if !strings.Contains(plan.Skipped[0].Reason, "missing capability chat") {
 		t.Fatalf("decision skip reason = %q", plan.Skipped[0].Reason)
 	}
 	if !strings.Contains(plan.Skipped[1].Reason, "missing capability chat") {
 		t.Fatalf("non-chat skip reason = %q", plan.Skipped[1].Reason)
 	}
 	if _, err := adapter.Complete(context.Background(), "decider", nil, nil); err == nil ||
-		!strings.Contains(err.Error(), "decision model") {
+		!strings.Contains(err.Error(), "missing capability chat") {
 		t.Fatalf("dispatch to the decision selection = %v", err)
 	}
 	if calls != 0 {
@@ -710,16 +708,14 @@ func TestAutoSelectPrefersTextAndToolCalling(t *testing.T) {
 	}
 }
 
-// The persisted decision selection resolves before interactive auto-selection
-// so the chat model never lands on the decider, even when the decider sorts
-// first in the roster.
-func TestAutoSelectSkipsDecisionSelection(t *testing.T) {
+// Text input and tool metadata do not make a decision-only model eligible for chat.
+func TestAutoSelectSkipsDecisionOnlyModels(t *testing.T) {
 	registry := testRegistry(t, map[string][]modelcatalog.Model{
 		"p": {
 			{
 				ProviderModel: "decider",
 				Capabilities: modelcatalog.Capabilities{
-					Chat: true, Decision: true, Text: true, ToolCalling: true,
+					Decision: true, Text: true, ToolCalling: true,
 				},
 			},
 			{
@@ -755,56 +751,35 @@ func TestAutoSelectSkipsDecisionSelection(t *testing.T) {
 	}
 }
 
-// The decider may never equal the chat model, at boot and through the tool.
-func TestDecisionSelectionRefusesInteractiveModel(t *testing.T) {
-	t.Run("boot", func(t *testing.T) {
-		registry := testRegistry(t, map[string][]modelcatalog.Model{
-			"p": {{
+func TestDecisionSelectionAllowsModelSupportingBothOperations(t *testing.T) {
+	registry := testRegistry(t, map[string][]modelcatalog.Model{
+		"p": {
+			{
 				ProviderModel: "both",
 				Capabilities:  modelcatalog.Capabilities{Chat: true, Decision: true, Text: true},
-			}},
-		})
-		store := openTestSelectionStore(t)
-		if err := store.SetInteractive("p", "both"); err != nil {
-			t.Fatal(err)
-		}
-		if err := store.SetDecision("p", "both"); err != nil {
-			t.Fatal(err)
-		}
-		_, err := loadRuntimeSelections(registry, store)
-		if err == nil || !strings.Contains(err.Error(), "role decision") ||
-			!strings.Contains(err.Error(), "may not equal the chat model") ||
-			!strings.Contains(err.Error(), "slot decision") {
-			t.Fatalf("boot error = %v", err)
-		}
+			},
+		},
 	})
-	t.Run("switch", func(t *testing.T) {
-		registry := testRegistry(t, map[string][]modelcatalog.Model{
-			"p": {{
-				ProviderModel: "both",
-				Capabilities:  modelcatalog.Capabilities{Chat: true, Decision: true, Text: true},
-			}},
-		})
-		store := openTestSelectionStore(t)
-		selection, err := loadRuntimeSelections(registry, store)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if provider, model := selection.Current(); provider != "p" || model != "both" {
-			t.Fatalf("interactive = %q/%q, want p/both", provider, model)
-		}
-		_, err = modeltools.NewSwitchModel(registry, selection, store).Run(
-			context.Background(),
-			`{"provider":"p","model":"both","slot":"decision"}`,
-		)
-		if err == nil || !strings.Contains(err.Error(), "role decision") ||
-			!strings.Contains(err.Error(), "may not equal the interactive chat model") {
-			t.Fatalf("switch error = %v", err)
-		}
-		if got := store.Decision(); got.IsValid() {
-			t.Fatalf("refused switch persisted decision selection: %+v", got)
-		}
-	})
+	store := openTestSelectionStore(t)
+	if err := store.SetInteractive("p", "both"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetDecision("p", "both"); err != nil {
+		t.Fatal(err)
+	}
+	selection, err := loadRuntimeSelections(registry, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := modeltools.NewSwitchModel(registry, selection, store).Run(t.Context(), `{"provider":"p","model":"both","slot":"decision"}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := modeltools.NewSwitchModel(registry, selection, store).Run(t.Context(), `{"provider":"p","model":"both"}`); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.Decision(); got.Provider != "p" || got.Model != "both" {
+		t.Fatalf("decision = %+v", got)
+	}
 }
 
 func TestLoadInteractiveSelectionRestoresPersistedSelection(t *testing.T) {

@@ -383,8 +383,7 @@ func openDumpWriter() (io.Writer, func()) {
 }
 
 // buildModelRefs returns the chat fallback chain: the current model first,
-// then the roster in discovery order, limited to chat-capable models and
-// excluding the model currently selected as decision (the dual-role rule).
+// then other chat-capable models in roster order.
 func buildModelRefs(currentRef string, registry *modelcatalog.Registry) []string {
 	refs := []string{}
 	seen := map[string]bool{}
@@ -408,48 +407,16 @@ func buildModelRefs(currentRef string, registry *modelcatalog.Registry) []string
 	return refs
 }
 
-// loadRuntimeSelections resolves the interactive, decision, and embed model
-// slots at boot and returns the interactive selection. A persisted decision
-// selection resolves first so interactive auto-selection steps around it; an
-// empty decision slot resolves after the interactive model is known.
-// Auto-selected slots are persisted; a slot without any roster candidate
-// leaves its feature absent until switch_model selects one.
+// loadRuntimeSelections restores or bootstraps chat and decision selections.
 func loadRuntimeSelections(
 	registry *modelcatalog.Registry,
 	store *selectionstore.Store,
 ) (*modelcatalog.Selection, error) {
-	if registry == nil || store == nil {
-		return nil, errors.New("registry and selection store are required")
-	}
-	decision := store.Decision()
-	// A persisted decision selection that currently resolves registers before
-	// the interactive model, so interactive auto-selection steps around it. An
-	// empty or stale decision slot resolves after the interactive model is
-	// known, so its dual-role check compares against the resolved chat model.
-	persistedDecision := false
-	if decision.IsValid() {
-		if m, ok := registry.Lookup(decision.Provider, decision.Model); ok &&
-			m.Capabilities.Decision {
-			persistedDecision = true
-		}
-	}
-	if persistedDecision {
-		if err := resolveDecisionSelection(registry, store, decision, store.Interactive()); err != nil {
-			return nil, err
-		}
-	}
 	selection, err := loadInteractiveSelection(registry, store)
 	if err != nil {
 		return nil, err
 	}
-	if !persistedDecision {
-		provider, ref := selection.Current()
-		interactive := selectionstore.Selection{Provider: provider, Model: ref}
-		if err := resolveDecisionSelection(registry, store, decision, interactive); err != nil {
-			return nil, err
-		}
-	}
-	if err := resolveEmbedSelection(registry, store); err != nil {
+	if err := resolveDecisionSelection(registry, store, store.Decision()); err != nil {
 		return nil, err
 	}
 	return selection, nil
@@ -457,8 +424,7 @@ func loadRuntimeSelections(
 
 // loadInteractiveSelection restores the persisted interactive selection when
 // it is roster-valid and chat-capable, and otherwise auto-selects the first
-// eligible roster model — Text and ToolCalling preferred — skipping the model
-// selected as decision. An auto-selected model is persisted.
+// eligible roster model, preferring Text and ToolCalling. The choice is persisted.
 func loadInteractiveSelection(
 	registry *modelcatalog.Registry,
 	store *selectionstore.Store,
@@ -504,29 +470,15 @@ func loadInteractiveSelection(
 
 // resolveDecisionSelection publishes the decision slot on the registry. A
 // persisted selection must resolve in the roster with the effective decision
-// capability and must differ from the interactive model; a stale persisted
-// selection is re-auto-selected. interactive may be zero when the interactive
-// model is not yet resolved (a persisted decision resolves first).
+// capability; a stale persisted selection is re-auto-selected.
 func resolveDecisionSelection(
 	registry *modelcatalog.Registry,
 	store *selectionstore.Store,
 	persisted selectionstore.Selection,
-	interactive selectionstore.Selection,
 ) error {
-	sameAsInteractive := func(provider, model string) bool {
-		return interactive.IsValid() &&
-			interactive.Provider == provider &&
-			(interactive.Model == model)
-	}
 	if persisted.IsValid() {
 		if m, ok := registry.Lookup(persisted.Provider, persisted.Model); ok &&
 			m.Capabilities.Decision {
-			if sameAsInteractive(persisted.Provider, persisted.Model) {
-				return fmt.Errorf(
-					"role decision model %q equals the interactive chat model; the decider may not equal the chat model — pick another model with switch_model using slot decision",
-					persisted.Model,
-				)
-			}
 			registry.SetDecision(modelcatalog.RoleSelection{
 				Provider:      persisted.Provider,
 				Model:         persisted.Model,
@@ -538,9 +490,6 @@ func resolveDecisionSelection(
 	}
 	for _, m := range registry.Snapshot() {
 		if !m.Capabilities.Decision {
-			continue
-		}
-		if sameAsInteractive(m.ProviderName, m.Ref) {
 			continue
 		}
 		if err := store.SetDecision(m.ProviderName, m.Ref); err != nil {
@@ -556,42 +505,6 @@ func resolveDecisionSelection(
 	// No decision-capable roster candidate: the decision feature stays absent
 	// until switch_model selects one.
 	registry.SetDecision(modelcatalog.RoleSelection{})
-	return nil
-}
-
-// resolveEmbedSelection publishes the embed slot on the registry. A persisted
-// selection must resolve in the roster with the effective embed capability; a
-// stale one is re-auto-selected. With no embed-capable roster model the
-// embedding tools stay unavailable at dispatch until switch_model selects one.
-func resolveEmbedSelection(registry *modelcatalog.Registry, store *selectionstore.Store) error {
-	persisted := store.Embed()
-	if persisted.IsValid() {
-		if m, ok := registry.Lookup(persisted.Provider, persisted.Model); ok &&
-			m.Capabilities.Embed {
-			registry.SetEmbed(modelcatalog.RoleSelection{
-				Provider:      persisted.Provider,
-				Model:         persisted.Model,
-				ProviderModel: m.ProviderModel,
-			})
-			return nil
-		}
-		// Stale persisted selection: fall through to auto-select.
-	}
-	for _, m := range registry.Snapshot() {
-		if !m.Capabilities.Embed {
-			continue
-		}
-		if err := store.SetEmbed(m.ProviderName, m.Ref); err != nil {
-			return err
-		}
-		registry.SetEmbed(modelcatalog.RoleSelection{
-			Provider:      m.ProviderName,
-			Model:         m.Ref,
-			ProviderModel: m.ProviderModel,
-		})
-		return nil
-	}
-	registry.SetEmbed(modelcatalog.RoleSelection{})
 	return nil
 }
 

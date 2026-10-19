@@ -84,9 +84,8 @@ type ProviderDiscovery struct {
 
 // Agent defines one configured q15 agent instance.
 //
-// Config carries no model assignments at all: which model chats, decides, and
-// embeds is runtime state, persisted per slot by internal/selectionstore and
-// switched with the switch_model tool.
+// Chat and decision selections are persisted runtime state switched through
+// tools. Embedding settings retain the embedding tool's fixed model binding.
 type Agent struct {
 	Name              string `yaml:"name"`
 	MemoryRecentTurns int    `yaml:"memory_recent_turns"`

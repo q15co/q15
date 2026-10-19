@@ -1366,6 +1366,7 @@ func TestWorkingMemoryConsolidationApplyResultAcceptsRecordedExits(t *testing.T)
 	}
 	job := NewWorkingMemoryConsolidationRegistration(0, 0).NewJob()
 	spec := buildWorkingMemorySpec(t, loader)
+	spec.RunAt = time.Date(2026, time.October, 12, 4, 0, 0, 0, time.UTC)
 
 	// A healthy run: one item exits, one loop closes, and each exit gets
 	// exactly one appended ledger line.

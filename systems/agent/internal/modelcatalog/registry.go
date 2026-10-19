@@ -36,7 +36,6 @@ type Registry struct {
 	// until one runs.
 	reload   *ReloadStatus
 	decision RoleSelection
-	embed    RoleSelection
 }
 
 // Status distinguishes discovery failures from successful empty rosters.

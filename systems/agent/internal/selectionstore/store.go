@@ -1,8 +1,8 @@
 // Package selectionstore persists the session's runtime model selections
-// (interactive agent, decision and embed slots, and per-job cognition
+// (interactive agent and decision selections, and per-job cognition
 // overrides) so a switch survives a service restart. It is the durable layer
-// under the live modelcatalog selection; the config file carries no model
-// choices at all — every model selection is runtime state.
+// under the live modelcatalog selection. Chat and decision choices stay outside
+// config; embedding models remain owned by their tool.
 package selectionstore
 
 import (
@@ -41,7 +41,6 @@ type document struct {
 	SchemaVersion int                  `json:"schema_version"`
 	Interactive   Selection            `json:"interactive"`
 	Decision      Selection            `json:"decision,omitempty"`
-	Embed         Selection            `json:"embed,omitempty"`
 	Cognition     map[string]Selection `json:"cognition,omitempty"`
 }
 
@@ -55,7 +54,6 @@ type Store struct {
 
 	interactive Selection
 	decision    Selection
-	embed       Selection
 	cognition   map[string]Selection
 }
 
@@ -110,7 +108,6 @@ func (s *Store) load() error {
 	s.mu.Lock()
 	s.interactive = doc.Interactive
 	s.decision = doc.Decision
-	s.embed = doc.Embed
 	if doc.Cognition != nil {
 		s.cognition = cloneCognitionMap(doc.Cognition)
 	} else {
@@ -145,16 +142,6 @@ func (s *Store) Decision() Selection {
 	return s.decision
 }
 
-// Embed returns the persisted embed selection.
-func (s *Store) Embed() Selection {
-	if s == nil {
-		return Selection{}
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.embed
-}
-
 // SetInteractive persists the interactive selection. Persistence happens
 // before the in-memory state is committed, so a write failure leaves the
 // running selection unchanged.
@@ -166,12 +153,6 @@ func (s *Store) SetInteractive(provider, model string) error {
 // as SetInteractive.
 func (s *Store) SetDecision(provider, model string) error {
 	return s.setSelection("decision", provider, model)
-}
-
-// SetEmbed persists the embed selection with the same durability rule as
-// SetInteractive.
-func (s *Store) SetEmbed(provider, model string) error {
-	return s.setSelection("embed", provider, model)
 }
 
 // setSelection stages one slot's next value, persists the whole document
@@ -199,8 +180,6 @@ func (s *Store) setSelection(slot, provider, model string) error {
 		next.Interactive = selection
 	case "decision":
 		next.Decision = selection
-	case "embed":
-		next.Embed = selection
 	default:
 		return fmt.Errorf("unknown selection slot %q", slot)
 	}
@@ -214,8 +193,6 @@ func (s *Store) setSelection(slot, provider, model string) error {
 		s.interactive = selection
 	case "decision":
 		s.decision = selection
-	case "embed":
-		s.embed = selection
 	}
 	s.mu.Unlock()
 	return nil
@@ -323,7 +300,6 @@ func (s *Store) documentLocked() document {
 		SchemaVersion: SchemaVersion,
 		Interactive:   s.interactive,
 		Decision:      s.decision,
-		Embed:         s.embed,
 		Cognition:     cloneCognitionMap(s.cognition),
 	}
 }

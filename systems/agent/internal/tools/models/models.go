@@ -149,7 +149,7 @@ func (t *ListProviders) Definition() agent.ToolDefinition {
 			"A provider is reachable when it has at least one model in the current live roster.",
 			"An unreachable provider carries a reason: either the discovery attempt failed, with its error, or it succeeded and the provider listed no models. Report the reason rather than guessing.",
 			"config_reload reports the last attempt to apply an edited config file: when it ran, whether it was applied, and why it was refused. A refused edit leaves the previous providers running.",
-			"role_selections reports which provider/model pair each runtime slot (interactive, decision, embed) currently holds; a null slot has no selection yet and its feature stays unavailable until switch_model selects one.",
+			"role_selections reports which provider/model pair each runtime slot (interactive, decision) currently holds; a null slot has no selection yet and its feature stays unavailable until switch_model selects one.",
 		},
 		Parameters: map[string]any{
 			"type":       "object",
@@ -216,12 +216,11 @@ type roleSelectionInfo struct {
 }
 
 // roleSelections reports the held runtime model selections: the interactive
-// selection plus the decision and embed slots, null while a slot is empty.
+// selection plus the decision slot, null while the slot is empty.
 func (t *ListProviders) roleSelections() map[string]*roleSelectionInfo {
 	selections := map[string]*roleSelectionInfo{
 		"interactive": nil,
 		"decision":    nil,
-		"embed":       nil,
 	}
 	if t.selection != nil {
 		if provider, model := t.selection.Current(); provider != "" && model != "" {
@@ -233,9 +232,6 @@ func (t *ListProviders) roleSelections() map[string]*roleSelectionInfo {
 			Provider: decision.Provider,
 			Model:    decision.Model,
 		}
-	}
-	if embed, ok := t.registry.Embed(); ok {
-		selections["embed"] = &roleSelectionInfo{Provider: embed.Provider, Model: embed.Model}
 	}
 	return selections
 }
@@ -348,14 +344,13 @@ func (t *ListModels) Run(_ context.Context, arguments string) (string, error) {
 func (t *SwitchModel) Definition() agent.ToolDefinition {
 	return agent.ToolDefinition{
 		Name:        "switch_model",
-		Description: "Switch the provider and model held by one runtime selection slot: interactive (default), decision, or embed. The pair must exist in the live roster.",
+		Description: "Switch the provider and model held by one runtime selection slot: interactive (default) or decision. The pair must exist in the live roster.",
 		PromptGuidance: []string{
 			"Use only after you have a specific reason to switch, such as required capability, larger context, fresher model, or cost.",
 			"Call list_providers/list_models first when you need to discover valid provider and model values.",
 			"A switch takes effect on the next model turn; the selection persists across restarts.",
-			"slot \"interactive\" changes the chat model and requires the chat capability. It refuses the model currently selected as decision; move the decision slot first instead.",
-			"slot \"decision\" changes the decision model behind decision_check and requires the decision capability. The decision model may never equal the interactive chat model.",
-			"slot \"embed\" changes the model behind the embedding tools and requires the embed capability.",
+			"slot \"interactive\" changes the chat model and requires the chat capability.",
+			"slot \"decision\" changes the decision model behind decision_check and requires the decision capability.",
 		},
 		Parameters: map[string]any{
 			"type": "object",
@@ -371,7 +366,7 @@ func (t *SwitchModel) Definition() agent.ToolDefinition {
 				"slot": map[string]any{
 					"type":        "string",
 					"description": "Which selection slot to change. Omit for the interactive chat model.",
-					"enum":        []string{"interactive", "decision", "embed"},
+					"enum":        []string{"interactive", "decision"},
 				},
 				"reason": map[string]any{
 					"type":        "string",
@@ -402,10 +397,14 @@ func (t *SwitchModel) Run(_ context.Context, arguments string) (string, error) {
 		slot = "interactive"
 	}
 	switch slot {
-	case "interactive", "decision", "embed":
+	case "interactive", "decision":
+	case "embed":
+		return "", fmt.Errorf(
+			"embedding models are pinned to the embedding tool; changing them requires an explicit collection re-embedding migration",
+		)
 	default:
 		return "", fmt.Errorf(
-			"slot must be \"interactive\", \"decision\", or \"embed\", got %q",
+			"slot must be \"interactive\" or \"decision\", got %q",
 			args.Slot,
 		)
 	}
@@ -443,37 +442,12 @@ func (t *SwitchModel) Run(_ context.Context, arguments string) (string, error) {
 				model.ProviderModel,
 			)
 		}
-		currentProvider, currentModel := t.selection.Current()
-		if currentProvider != "" && provider == currentProvider &&
-			(modelRef == currentModel || model.ProviderModel == currentModel) {
-			return "", fmt.Errorf(
-				"role decision model %q: the decider may not equal the interactive chat model; pick another model or switch the interactive model first",
-				modelRef,
-			)
-		}
 		if t.store != nil {
 			if err := t.store.SetDecision(provider, modelRef); err != nil {
 				return "", fmt.Errorf("persist decision selection: %w", err)
 			}
 		}
 		t.registry.SetDecision(modelcatalog.RoleSelection{
-			Provider:      provider,
-			Model:         modelRef,
-			ProviderModel: model.ProviderModel,
-		})
-	case "embed":
-		if !model.Capabilities.Embed {
-			return "", fmt.Errorf(
-				"role embed model %q: missing capability embed",
-				model.ProviderModel,
-			)
-		}
-		if t.store != nil {
-			if err := t.store.SetEmbed(provider, modelRef); err != nil {
-				return "", fmt.Errorf("persist embed selection: %w", err)
-			}
-		}
-		t.registry.SetEmbed(modelcatalog.RoleSelection{
 			Provider:      provider,
 			Model:         modelRef,
 			ProviderModel: model.ProviderModel,

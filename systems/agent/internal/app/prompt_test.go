@@ -146,7 +146,6 @@ func TestRenderCurrentModelPromptReflectsSelection(t *testing.T) {
 		`provider: "p"`,
 		`model: "alpha" ("tools, reasoning, vision | 42B params | 128000 context | released 2026-01-02")`,
 		"decision model: not selected",
-		"embed model: not selected",
 		"Use `list_providers` and `list_models`",
 		"`switch_model`",
 		"slot \"decision\"",
@@ -157,14 +156,10 @@ func TestRenderCurrentModelPromptReflectsSelection(t *testing.T) {
 		}
 	}
 
-	registry.SetRoleSelections(
-		modelcatalog.RoleSelection{Provider: "p", Model: "judge"},
-		modelcatalog.RoleSelection{Provider: "q", Model: "vector"},
-	)
+	registry.SetDecision(modelcatalog.RoleSelection{Provider: "p", Model: "judge"})
 	prompt = renderCurrentModelPrompt(registry, selection, store)
 	for _, want := range []string{
 		`decision model: "judge" (provider "p")`,
-		`embed model: "vector" (provider "q")`,
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("current model prompt missing %q:\n%s", want, prompt)

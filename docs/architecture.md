@@ -103,26 +103,23 @@ prompt-visible user message:
 
 The model boundary has three layers. Kind is the connection family in `providertypes`, the only
 provider enum; a task does not become a kind. A model is a provider-bound catalog row with
-normalized capabilities and per-capability provenance. A role is one of the runtime selection slots
-— `interactive`, ordered by the fallback chain, plus `decision` and `embed` — held on the registry
-and persisted under `/workspace/.q15/agent/selection.json`. Nothing in the config file assigns a
-model to a role; selections are made at runtime (startup auto-selection or `switch_model`) and
-re-checked against the live roster at boot and on every dispatch.
+normalized capabilities and per-capability provenance. Interactive and decision selections are
+runtime state persisted under `/workspace/.q15/agent/selection.json` and switched with tools.
+Embedding model and transport settings remain owned by the embedding tool until #376; no chat or
+decision selection change can replace the model used for its stored vectors.
 
 Incoming provider and models.dev `type: decision` metadata normalizes into `Capabilities.Decision`.
 Operator `override` evidence wins over provider API or artifact `derived` evidence, which wins over
 models.dev `declared` evidence. Enrichment fetches `api.json?type=all` and enriches only live
-models. The boolean capability struct, loose flags, and existing embedding backend configuration
-remain until #375. `list_models` filters effective capabilities and reports their provenance.
+models. The boolean capability struct and loose flags remain until #375. `list_models` filters
+effective capabilities and reports their provenance.
 
-Boot resolves each slot: a persisted selection is reused when it is roster-valid with the role's
-effective capability, otherwise the first eligible roster model is selected and persisted
-(interactive prefers a Text+ToolCalling model and steps around the decision slot). Ports repeat the
-capability check at dispatch; a slot that has no roster candidate leaves its feature absent until
-`switch_model` selects one, and chat dispatch refuses the model currently selected as decision — the
-dual-role rule is a pure selection rule with no config opt-in. The chat fallback chain is the
-current model followed by the roster in discovery order, filtered to chat-capable models and
-excluding the decision selection.
+Boot restores a selection when it is roster-valid with the operation's effective capability;
+otherwise it selects an eligible live model and persists it. Interactive selection prefers text plus
+tool calling. Chat and decision dispatch repeat their respective capability checks. A model without
+chat support cannot enter chat dispatch even if it accepts text input. If a model genuinely supports
+both operations, its identity does not prevent either. An absent decision candidate leaves
+`decision_check` unavailable while existing chat and cognition jobs continue operating.
 
 Decision calls use `decision.Client` at `decision/v1`. In-tree Go adapters are checked by the
 compiler; the version declaration reserves a check for any future adapters loaded at runtime, with
@@ -130,6 +127,14 @@ no plugin loader introduced here. The application resolves only the held decisio
 constructs its provider adapter, and injects that port into `decision_check`. The tool owns neither
 selection nor HTTP construction. Clients are keyed by provider connection facts so reloads cannot
 reuse an obsolete connection.
+
+The cognition runner still uses the shared chat/tool engine: per-job persisted model overrides win,
+otherwise it inherits the interactive model. The provider foundation in PR 374 supports the
+[typed memory cutovers](https://github.com/q15co/q15/issues/367) and subsequent
+[decision integration](https://github.com/q15co/q15/issues/373). System One answers fixed choices,
+probabilities, and scores; it cannot generate arbitrary claim text or a complete repair JSON object.
+The cognition integration must retain a generative model for new content and keep validation,
+journaling, checkpoint accounting, and rollback in Go.
 
 One Ollama client implements the chat, streaming, reasoning-streaming, and decision ports. Its
 connection value builds the normalized root, trimmed key, bearer transport, HTTP client, and SDK

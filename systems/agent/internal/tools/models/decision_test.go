@@ -109,20 +109,7 @@ func TestSwitchModelSlotPersistsPerSlot(t *testing.T) {
 		t.Fatalf("registry decision = %+v, %v", sel, ok)
 	}
 
-	if _, err := tool.Run(
-		context.Background(),
-		`{"provider":"p","model":"embedder","slot":"embed"}`,
-	); err != nil {
-		t.Fatal(err)
-	}
-	if got := store.Embed(); got.Provider != "p" || got.Model != "embedder" {
-		t.Fatalf("embed slot = %+v", got)
-	}
-	if sel, ok := registry.Embed(); !ok || sel.Model != "embedder" {
-		t.Fatalf("registry embed = %+v, %v", sel, ok)
-	}
-
-	// All three slots survive a store reopen independently.
+	// Both selections survive a store reopen independently.
 	reopened := reopenTestStore(t, path)
 	if got := reopened.Interactive(); got.Model != "chat-model" {
 		t.Fatalf("reopened interactive = %+v", got)
@@ -130,18 +117,13 @@ func TestSwitchModelSlotPersistsPerSlot(t *testing.T) {
 	if got := reopened.Decision(); got.Model != "judge" {
 		t.Fatalf("reopened decision = %+v", got)
 	}
-	if got := reopened.Embed(); got.Model != "embedder" {
-		t.Fatalf("reopened embed = %+v", got)
-	}
 
-	// Per-slot validation: the interactive slot refuses the decision-selected
-	// model; the decision slot refuses the interactive model; the embed slot
-	// requires the embed capability; an unknown slot is rejected.
+	// Each operation requires its own capability. Embedding changes require migration.
 	if _, err := tool.Run(
 		context.Background(),
 		`{"provider":"p","model":"judge"}`,
-	); err == nil || !strings.Contains(err.Error(), "decision model") {
-		t.Fatalf("interactive accepted the decision selection: %v", err)
+	); err != nil {
+		t.Fatalf("interactive refused a model supporting chat: %v", err)
 	}
 	if _, err := tool.Run(
 		context.Background(),
@@ -151,9 +133,12 @@ func TestSwitchModelSlotPersistsPerSlot(t *testing.T) {
 	}
 	if _, err := tool.Run(
 		context.Background(),
-		`{"provider":"p","model":"chat-model","slot":"embed"}`,
-	); err == nil || !strings.Contains(err.Error(), "missing capability embed") {
-		t.Fatalf("embed slot accepted a chat-only model: %v", err)
+		`{"provider":"p","model":"embedder","slot":"embed"}`,
+	); err == nil || !strings.Contains(err.Error(), "re-embedding migration") {
+		t.Fatalf("embedding change did not require migration: %v", err)
+	}
+	if store.Interactive().Model != "judge" || store.Decision().Model != "judge" {
+		t.Fatal("refused embedding change disturbed runtime selections")
 	}
 	if _, err := tool.Run(
 		context.Background(),

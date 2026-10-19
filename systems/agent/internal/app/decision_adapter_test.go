@@ -56,12 +56,11 @@ func TestDecisionRoutingUsesDiscoveredMetadataAndReloadedProvider(t *testing.T) 
 		time.Second,
 	)
 	registry.Refresh(context.Background())
-	registry.SetRoleSelections(
+	registry.SetDecision(
 		modelcatalog.RoleSelection{
 			Provider: "gateway",
 			Model:    "vendor-unfamiliar-model",
 		},
-		modelcatalog.RoleSelection{},
 	)
 	client := &fakeDecisionClient{}
 	var built []modelcatalog.Model
@@ -113,9 +112,8 @@ func TestDecisionRoutingRejectsChatAndPropagatesCancellation(t *testing.T) {
 			Capabilities:  modelcatalog.Capabilities{Decision: true, Text: true},
 		},
 	}})
-	registry.SetRoleSelections(
+	registry.SetDecision(
 		modelcatalog.RoleSelection{Provider: "provider", Model: "decision"},
-		modelcatalog.RoleSelection{},
 	)
 	client := &fakeDecisionClient{}
 	adapter := newRoutedDecisionAdapter(
@@ -163,9 +161,8 @@ func TestDecisionPortRefusesModelWithoutDecision(t *testing.T) {
 				Capabilities:  modelcatalog.Capabilities{Chat: true},
 			}}}
 			registry := testRegistry(t, models)
-			registry.SetRoleSelections(
+			registry.SetDecision(
 				modelcatalog.RoleSelection{Provider: "api", Model: "native-model"},
-				modelcatalog.RoleSelection{},
 			)
 			client := &fakeDecisionClient{}
 			builds := 0
