@@ -17,8 +17,8 @@ This directory contains the checked-in Compose-facing config, policy, and secret
 - [docker-compose.yml](../../docker-compose.yml) in the repo root is the local-development stack. It
   keeps `build:` enabled and uses a named `q15_workspace` volume for `/workspace`; it is not the
   image-first deployment example for downstream consumers.
-- [agent-config.yaml](agent-config.yaml) selects the local TEI embeddings backend (the `q15-tei`
-  service present in both Compose stacks); see the migration runbook below.
+- [agent-config.yaml](agent-config.yaml) selects the pod-local Ollama embeddings backend (the
+  `q15-ollama` service present in both Compose stacks); see the migration runbook below.
 - [agent-config.discovery.example.yaml](agent-config.discovery.example.yaml),
   [proxy-policy.yaml](proxy-policy.yaml), and [secrets/\*.example](secrets) are generic templates
   that downstream repos can copy or adapt.
@@ -133,37 +133,40 @@ roster (deprecated) stops being selected.
 See [agent-config.discovery.example.yaml](agent-config.discovery.example.yaml) for a working example
 with include/exclude glob filters.
 
-## Embeddings backend (TEI)
+## Embeddings backend (pod-local Ollama)
 
-Both Compose stacks run a local TEI (Hugging Face Text Embeddings Inference) container, `q15-tei`,
-and [agent-config.yaml](agent-config.yaml) selects the `openai` embedding provider with
-`base_url_env: Q15_EMBEDDINGS_BASE_URL`. TEI serves no request authentication by default, so the
-agent runs keyless against it. Default model: `Qwen/Qwen3-Embedding-0.6B` served as
-`qwen3-embedding-0.6b` at 1024 dimensions.
+Both Compose stacks run a pod-local Ollama container, `q15-ollama`, and the one-shot
+`q15-ollama-init` service pulls the embedding model into the `q15_ollama_models` volume on first
+start, so the pod is self-contained. [agent-config.yaml](agent-config.yaml) selects the `openai`
+embedding provider with `base_url_env: Q15_EMBEDDINGS_BASE_URL` pointing at the service; Ollama
+serves no request authentication, so the agent runs keyless against it. Default model:
+`qwen3-embedding:0.6b` at 1024 dimensions.
 
 ```bash
-make compose-up   # local development stack (builds q15 images, pulls the TEI image)
-make compose-logs SERVICE=q15-tei
+make compose-up   # local development stack (builds q15 images; the embedding model pulls on first start)
+make compose-logs SERVICE=q15-ollama
 ```
 
 Notes:
 
-- `q15-tei` is deprecated: the install profile runs ollama for chat and for embeddings, so this
-  service is not part of it (see the install spec, issue #215), and it is removed one release after
-  that profile ships. It stays for existing deployments and for GPU hosts, where it is still the
-  better embeddings backend.
-- The default image is the CPU build, so a host without a GPU needs no extra setup. On a GPU host,
-  set `TEI_IMAGE` to a GPU build (`:turing-1.9` for T4 and RTX 2000-class, `:1.9` for Ampere and
-  newer), keep the NVIDIA container toolkit installed, and add the device reservation back in a
-  local override file.
-- `TEI_MODEL`, `TEI_SERVED_MODEL_NAME`, and `TEI_MAX_CLIENT_BATCH_SIZE` override the served model;
-  the served name must match `model` in agent-config.yaml, and `TEI_MAX_CLIENT_BATCH_SIZE` must stay
-  \>= the config's `batch_size`.
-- Model weights (~1.2 GB for the default model) download into the `q15_tei_hf_cache` volume on first
-  start. Gated or private models need `HF_TOKEN` on the `q15-tei` container.
-- TEI is reachable only on the Compose network. If you expose it, run TEI with `--api-key` and set
-  `api_key_env: Q15_EMBEDDINGS_API_KEY` in agent-config.yaml (plus the matching environment entry)
-  so the agent sends the Bearer token.
+- `q15-ollama` runs CPU by default, which keeps the pod portable across hosts. On an NVIDIA
+  host, attach the GPU with a compose override file (`deploy.resources.reservations.devices` with
+  `driver: nvidia`, `count: all`, `capabilities: [gpu]`), and the NVIDIA container toolkit on the
+  host (podman: the CDI devices stanza).
+- `OLLAMA_IMAGE` overrides the image, `OLLAMA_EMBED_MODEL` the pulled embedding model; the model
+  name must match `model` in agent-config.yaml.
+- `q15-ollama` publishes no host port, so it cannot collide with an Ollama installed on the host,
+  and it is only reachable inside the Compose network, same as Qdrant. If you expose it, put
+  authentication in front of it and set `api_key_env: Q15_EMBEDDINGS_API_KEY` in agent-config.yaml
+  (plus the matching environment entry) so the agent sends the Bearer token.
+- Switching an existing deployment from TEI means re-embedding the collections: same weights,
+  different runtime numerics, and Qdrant index geometry follows the runtime that created it. The
+  collection schema is unchanged (1024 dimensions); run an embed_source resync with `full: true`
+  after the stack is up, then the `q15-tei` service can stay stopped.
+- The deprecated `q15-tei` service stays in the stacks for deployments that have not migrated;
+  it is removed one release after the install profile ships (issue #215). Its overrides
+  (`TEI_IMAGE`, `TEI_MODEL`, `TEI_SERVED_MODEL_NAME`, `TEI_MAX_CLIENT_BATCH_SIZE`) and GPU notes
+  are documented in the compose files' comments.
 - The hosted alternative stays two lines away: set `provider: gemini` with `gemini_api_key_env`,
   model `gemini-embedding-2`, dimensions 768, and wire the `gemini_api_key` secret back into the
   Compose file (see [secrets/gemini_api_key.example](secrets)).

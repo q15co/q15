@@ -6,6 +6,12 @@ providers:
     discovery:
       models_dev: true
 
+  - name: ollama-stack
+    type: ollama
+    # Pod-local Ollama served by the q15-ollama service. Keyless by locality;
+    # the live roster picks up whatever models are pulled there.
+    base_url: http://q15-ollama:11434
+
 agent:
   name: Q15
   bridge:
@@ -16,13 +22,14 @@ agent:
       brave_api_key_env: BRAVE_API_KEY
     embeddings:
       qdrant_url_env: Q15_QDRANT_URL
-      # Local TEI (Hugging Face Text Embeddings Inference) backend; the
-      # q15-tei service in both Compose stacks serves it keylessly.
+      # Pod-local Ollama embeddings: the q15-ollama Compose service serves this
+      # model's OpenAI-compatible API keylessly, and q15-ollama-init pulls it on
+      # first start (override with OLLAMA_IMAGE / OLLAMA_EMBED_MODEL).
       # Hosted alternative: provider: gemini + gemini_api_key_env with model
       # gemini-embedding-2 and dimensions 768.
       provider: openai
       base_url_env: Q15_EMBEDDINGS_BASE_URL
-      model: qwen3-embedding-0.6b
+      model: qwen3-embedding:0.6b
       dimensions: 1024
       batch_size: 128
     schedule:

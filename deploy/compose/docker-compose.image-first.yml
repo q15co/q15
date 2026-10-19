@@ -82,10 +82,9 @@ services:
         target: /qdrant/storage
 
   q15-tei:
-    # Deprecated. The install profile runs ollama for chat and for embeddings, so this
-    # service is not part of it (see the install spec, issue #215), and it is removed one
-    # release after that profile ships. It stays here for existing deployments and for
-    # GPU hosts, where it is still the better embeddings backend.
+    # Deprecated. The q15-ollama service below is the pod's embeddings backend (install
+    # spec, issue #215), so this service is removed one release after that profile ships.
+    # It stays here for existing deployments that have not migrated yet.
     #
     # Local embeddings backend (Hugging Face Text Embeddings Inference), served keylessly
     # to q15-agent via the openai embeddings provider. Default model:
@@ -114,6 +113,46 @@ services:
         source: q15_tei_hf_cache
         target: /data
 
+  q15-ollama:
+    # Pod-local Ollama: serves the embedding model (and optionally local chat models) so
+    # the stack is self-contained, per the install spec, issue #215. CPU by default.
+    # On an NVIDIA host, attach the GPU with a compose override file:
+    #   deploy:
+    #     resources:
+    #       reservations:
+    #         devices:
+    #           - driver: nvidia
+    #             count: all
+    #             capabilities: [gpu]
+    # (docker: nvidia-container-toolkit; podman: the CDI devices stanza).
+    # No host port is published: the service is reachable inside the stack only and cannot
+    # collide with a host Ollama on 11434.
+    image: ${OLLAMA_IMAGE:-ollama/ollama:0.40.6}
+    restart: unless-stopped
+    init: true
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    volumes:
+      - type: volume
+        source: q15_ollama_models
+        target: /root/.ollama
+
+  q15-ollama-init:
+    # One-shot: pulls the pod's embedding model into the q15_ollama_models volume, then
+    # exits. q15-agent waits for completion, so first start is fully self-contained.
+    image: ${OLLAMA_IMAGE:-ollama/ollama:0.40.6}
+    restart: "no"
+    command: ["pull", "${OLLAMA_EMBED_MODEL:-qwen3-embedding:0.6b}"]
+    environment:
+      OLLAMA_HOST: http://q15-ollama:11434
+    depends_on:
+      q15-ollama:
+        condition: service_healthy
+
   q15-agent:
     image: ghcr.io/q15co/q15-agent:${Q15_IMAGE_TAG:-stable}
     restart: unless-stopped
@@ -124,8 +163,8 @@ services:
         condition: service_healthy
       q15-qdrant:
         condition: service_healthy
-      q15-tei:
-        condition: service_started
+      q15-ollama-init:
+        condition: service_completed_successfully
     healthcheck:
       test:
         - CMD-SHELL
@@ -148,7 +187,7 @@ services:
       Q15_TELEGRAM_ALLOWED_USER_IDS_FILE: /run/q15-secrets/q15_telegram_allowed_user_ids
       BRAVE_API_KEY_FILE: /run/q15-secrets/brave_api_key
       Q15_QDRANT_URL: http://q15-qdrant:6334
-      Q15_EMBEDDINGS_BASE_URL: http://q15-tei:80
+      Q15_EMBEDDINGS_BASE_URL: http://q15-ollama:11434/v1
     volumes:
       - type: bind
         source: ./agent-config.yaml
@@ -242,3 +281,4 @@ volumes:
   q15_skills:
   q15_workspace:
   q15_tei_hf_cache:
+  q15_ollama_models:
