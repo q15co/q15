@@ -731,7 +731,13 @@ func (c *Controller) runPending(ctx context.Context, pending pendingRun) error {
 	if runErr != nil {
 		record.Error = runErr.Error()
 		record.AttemptFailures = attemptFailuresFromError(runErr)
-		record.ConsecutiveCount = state.FailureBackoffStep
+		if !result.Repair {
+			// Repair failures own their retry lifecycle and must not inherit
+			// a parallel non-repair failure streak's count, or the store
+			// would suppress the commit of an unrelated repair record (#379
+			// review follow-up).
+			record.ConsecutiveCount = state.FailureBackoffStep
+		}
 	} else {
 		record.Summary = strings.TrimSpace(result.Summary)
 		record.Metadata = cloneRunRecordMetadata(result.Metadata)
@@ -908,6 +914,15 @@ func (c *Controller) nextScheduledAt(ctx context.Context, now time.Time) (time.T
 		if err != nil {
 			return time.Time{}, err
 		}
+		// Repair owns its own retry lifecycle: an armed repair retry must
+		// still fire even when an identical-failure streak parks or backs off
+		// the job (#379 review follow-up).
+		if !state.RepairRetryAt.IsZero() {
+			if nextAt.IsZero() || state.RepairRetryAt.Before(nextAt) {
+				nextAt = state.RepairRetryAt
+			}
+			continue
+		}
 		// Identical-failure backoff (#379): parked jobs contribute no wake
 		// timer at all; a job waiting out its backoff wakes exactly when the
 		// retry window opens, and its recurring schedules stay suppressed
@@ -925,12 +940,6 @@ func (c *Controller) nextScheduledAt(ctx context.Context, now time.Time) (time.T
 		// schedule cannot release an unchanged stop, but another target's
 		// active retry timer must still fire.
 		if state.RepairStopped || (len(state.RepairStops) > 0 && state.RepairRetryAt.IsZero()) {
-			continue
-		}
-		if !state.RepairRetryAt.IsZero() {
-			if nextAt.IsZero() || state.RepairRetryAt.Before(nextAt) {
-				nextAt = state.RepairRetryAt
-			}
 			continue
 		}
 		for _, rule := range job.schedule {

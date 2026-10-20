@@ -415,3 +415,92 @@ func expireFailureBackoff(t *testing.T, store *fakeControllerStore, jobType stri
 		t.Fatalf("expire failure backoff: %v", err)
 	}
 }
+
+// A repair retry owns its own lifecycle: an armed repair retry timer must
+// survive the identical-failure park, or a parked extract job that is also
+// repairing never wakes to retry the repair (#379 review follow-up).
+func TestFailureParkedJobStillHonorsRepairRetryTimer(t *testing.T) {
+	store := newFakeControllerStore()
+	store.setHead(1, time.Now().UTC())
+	repairRetryAt := time.Now().UTC().Add(4 * time.Minute).Truncate(time.Second)
+	if err := store.StoreJobState(context.Background(), "verification.check", JobState{
+		TranscriptPending:  true,
+		LastRunInputSeq:    1,
+		FailureFingerprint: failureFingerprint("verification.check", errors.New("boom")),
+		FailureBackoffStep: failureParkThreshold,
+		RepairRetryAt:      repairRetryAt,
+	}); err != nil {
+		t.Fatalf("seed job state: %v", err)
+	}
+
+	fail := true
+	registration := backoffTestRegistration(&fail)
+	registration.Policy.Schedule = []ScheduleRule{{ID: "daily", Spec: "0 4 * * *"}}
+	controller := newControllerForTest(t, store, registration)
+	controller.started = time.Now().UTC()
+
+	nextAt, err := controller.nextScheduledAt(context.Background(), time.Now().UTC())
+	if err != nil {
+		t.Fatalf("nextScheduledAt() error = %v", err)
+	}
+	if !nextAt.Equal(repairRetryAt) {
+		t.Fatalf("nextScheduledAt() = %s, want repair retry wake %s", nextAt, repairRetryAt)
+	}
+}
+
+// A failing repair run carries result.Repair and must not inherit the
+// failure-streak count of a parallel non-repair streak, or the store would
+// suppress the commit of an unrelated repair failure record (#379 review
+// follow-up).
+func TestRepairFailureRecordIgnoresFailureStreak(t *testing.T) {
+	store := newFakeControllerStore()
+	store.setHead(1, time.Now().UTC())
+	if err := store.StoreJobState(context.Background(), "verification.check", JobState{
+		FailureFingerprint: failureFingerprint("verification.check", errors.New("boom")),
+		FailureBackoffStep: failureParkThreshold,
+	}); err != nil {
+		t.Fatalf("seed job state: %v", err)
+	}
+
+	controller := newControllerForTest(t, store, JobRegistration{
+		NewJob: func() JobDefinition {
+			return fakeJob{
+				jobType: "verification.check",
+				build: func(context.Context, ContextLoader) (Spec, error) {
+					return Spec{
+						Objective:          "Repair probe.",
+						CompletionContract: "Return `status: ok`.",
+						repair:             true,
+					}, nil
+				},
+				apply: func(context.Context, ContextLoader, JobOutput) (ParsedResult, error) {
+					return ParsedResult{}, errors.New("repair apply failed")
+				},
+			}
+		},
+	})
+
+	pending := pendingRun{
+		job:     controller.jobs[0],
+		state:   store.state("verification.check"),
+		headSeq: 1,
+		headAt:  time.Now().UTC(),
+	}
+	if err := controller.runPending(context.Background(), pending); err != nil {
+		t.Fatalf("runPending() error = %v", err)
+	}
+
+	records := store.runRecords()
+	if len(records) != 1 {
+		t.Fatalf("run records = %d, want 1", len(records))
+	}
+	if records[0].Succeeded {
+		t.Fatal("record Succeeded = true, want a repair failure")
+	}
+	if got := records[0].ConsecutiveCount; got != 0 {
+		t.Fatalf(
+			"repair failure ConsecutiveCount = %d, want 0 (must not inherit the non-repair streak)",
+			got,
+		)
+	}
+}
