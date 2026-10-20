@@ -511,6 +511,7 @@ func TestControllerFailureUpdatesStateAndRunRecord(t *testing.T) {
 	}
 
 	store.setHead(2, time.Now().UTC())
+	expireFailureBackoff(t, store, "verification.check") // #379: backoff expired
 	_, ok, err = controller.nextPendingRun(context.Background(), false, false, true)
 	if err != nil {
 		t.Fatalf("nextPendingRun() after head advance error = %v", err)
@@ -1412,6 +1413,8 @@ func TestControllerStallEscalationHalvesWindowAndAlerts(t *testing.T) {
 
 	for run := 1; run <= 6; run++ {
 		store.setHead(int64(run), base)
+		// #379: each loop step is a later run after its backoff expired.
+		expireFailureBackoff(t, store, workingMemoryConsolidationJobType)
 		pending, ok, err := controller.nextPendingRun(ctx, false, false, true)
 		if err != nil {
 			t.Fatalf("run %d: nextPendingRun() error = %v", run, err)
@@ -1469,6 +1472,7 @@ func TestControllerStallEscalationHalvesWindowAndAlerts(t *testing.T) {
 	// The next success deletes the alert and resets the failure count.
 	failRuns = false
 	store.setHead(7, base)
+	expireFailureBackoff(t, store, workingMemoryConsolidationJobType)
 	pending, ok, err := controller.nextPendingRun(ctx, false, false, true)
 	if err != nil {
 		t.Fatalf("recovery: nextPendingRun() error = %v", err)

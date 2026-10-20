@@ -383,12 +383,18 @@ func (s *Store) AppendRunRecord(ctx context.Context, record cognition.RunRecord)
 			sanitizeCognitionName(jobType),
 		),
 	)
-	if err := s.repository.Commit(
-		ctx,
-		fmt.Sprintf("memory: record cognition run %s", sanitizeCognitionName(jobType)),
-		filepath.ToSlash(relative),
-	); err != nil {
-		return fmt.Errorf("commit cognition run record %q: %w", jobType, err)
+	// #379 layer 2: failure records beyond the first of a consecutive
+	// identical-failure streak stay on disk for forensics but skip the git
+	// commit, so a retry storm cannot drown the repository one commit per
+	// record. Successes keep one-commit-per-run.
+	if record.Succeeded || record.ConsecutiveCount <= 1 {
+		if err := s.repository.Commit(
+			ctx,
+			fmt.Sprintf("memory: record cognition run %s", sanitizeCognitionName(jobType)),
+			filepath.ToSlash(relative),
+		); err != nil {
+			return fmt.Errorf("commit cognition run record %q: %w", jobType, err)
+		}
 	}
 	return nil
 }

@@ -125,6 +125,13 @@ type JobState struct {
 	ConsecutiveFailures int                  `json:"consecutive_failures,omitempty"`
 	LastRunCause        RunCause             `json:"last_run_cause,omitempty"`
 	LastScheduledFor    map[string]time.Time `json:"last_scheduled_for,omitempty"`
+	// Identical-failure backoff (#379 layer 1): FailureFingerprint +
+	// FailureBackoffStep identify a consecutive same-error streak,
+	// FailureRetryAt defers re-fire, and at the park threshold the job stays
+	// silent on every trigger lane until the streak clears.
+	FailureFingerprint string    `json:"failure_fingerprint,omitempty"`
+	FailureBackoffStep int       `json:"failure_backoff_step,omitempty"`
+	FailureRetryAt     time.Time `json:"failure_retry_at,omitempty"`
 }
 
 // AttemptFailure records one failed model attempt within a cognition run.
@@ -150,6 +157,11 @@ type RunRecord struct {
 	ModelRef        string            `json:"model_ref,omitempty"`
 	AttemptFailures []AttemptFailure  `json:"attempt_failures,omitempty"`
 	Error           string            `json:"error,omitempty"`
+	// ConsecutiveCount is the record's position within its consecutive
+	// failure streak (#379 layer 2): 1 for the first failure of a streak. The
+	// store suppresses run-record commits for streak repeats and keeps
+	// one-commit-per-run for successes.
+	ConsecutiveCount int `json:"consecutive_count,omitempty"`
 }
 
 // ControllerStore persists controller state and run provenance.
@@ -467,6 +479,14 @@ func (c *Controller) nextPendingRun(
 			}
 		}
 
+		if failureParked(state) || failureBackoffWaiting(state, now) {
+			// #379: a job repeating an identical failure stays quiet through
+			// every trigger lane (startup, schedule, state, and the
+			// transcript-continuation lane below) until the backoff expires
+			// or an operator clears the streak.
+			continue
+		}
+
 		if includeState && state.TranscriptPending {
 			return pendingRun{
 				job:     job,
@@ -659,6 +679,12 @@ func (c *Controller) runPending(ctx context.Context, pending pendingRun) error {
 	if runErr != nil {
 		state.LastFailureAt = finishedAt
 		state.ConsecutiveFailures++
+		if !result.Repair {
+			// Repair failures own their retry lifecycle in
+			// repair_scheduling.go; every other failure advances the
+			// identical-failure backoff streak (#379).
+			state = updateFailureBackoff(state, pending.job.jobType, runErr, finishedAt)
+		}
 		if pending.state.TranscriptPending {
 			state.LastRunInputSeq = pending.state.LastRunInputSeq
 		}
@@ -666,11 +692,13 @@ func (c *Controller) runPending(ctx context.Context, pending pendingRun) error {
 	} else if result.NoWork {
 		state.LastRunNoWork = true
 		state.WaitingForRepair = result.WaitingForRepair
+		state = resetFailureBackoff(state)
 		state = preserveDirtyState(state, pending.headSeq, headSeq, headAt)
 	} else {
 		state.LastSuccessAt = finishedAt
 		state.LastSuccessInputSeq = coveredSeq
 		state.ConsecutiveFailures = 0
+		state = resetFailureBackoff(state)
 		state = clearOrAdvanceDirtyState(state, coveredSeq, headSeq, headAt)
 		if !result.Repair && coveredSeq < pending.headSeq {
 			// The run consumed a bounded window and left transcript turns
@@ -703,6 +731,7 @@ func (c *Controller) runPending(ctx context.Context, pending pendingRun) error {
 	if runErr != nil {
 		record.Error = runErr.Error()
 		record.AttemptFailures = attemptFailuresFromError(runErr)
+		record.ConsecutiveCount = state.FailureBackoffStep
 	} else {
 		record.Summary = strings.TrimSpace(result.Summary)
 		record.Metadata = cloneRunRecordMetadata(result.Metadata)
@@ -879,6 +908,19 @@ func (c *Controller) nextScheduledAt(ctx context.Context, now time.Time) (time.T
 		if err != nil {
 			return time.Time{}, err
 		}
+		// Identical-failure backoff (#379): parked jobs contribute no wake
+		// timer at all; a job waiting out its backoff wakes exactly when the
+		// retry window opens, and its recurring schedules stay suppressed
+		// until then.
+		if failureParked(state) {
+			continue
+		}
+		if !state.FailureRetryAt.IsZero() {
+			if nextAt.IsZero() || state.FailureRetryAt.Before(nextAt) {
+				nextAt = state.FailureRetryAt
+			}
+			continue
+		}
 		// Remaining repair targets run through state triggers. A recurring
 		// schedule cannot release an unchanged stop, but another target's
 		// active retry timer must still fire.
@@ -984,6 +1026,13 @@ func renderStallAlert(jobType string, state JobState, runErr error) string {
 	)
 	if state.RepairStopped {
 		status = "Memory repair stopped after the initial attempt and retries after 1, 2 and 4 minutes failed. Automatic retries remain stopped until the repair target changes."
+	}
+	if failureParked(state) {
+		status = fmt.Sprintf(
+			"The checkpoint-advancing cognition job `%s` is parked after %d consecutive identical failures and will not re-fire on any trigger. Fix the underlying cause, then clear failure_fingerprint, failure_backoff_step and failure_retry_at in the job's state file under cognition/triggers/jobs/ to resume it.",
+			jobType,
+			failureParkThreshold,
+		)
 	}
 	lines := []string{
 		fmt.Sprintf("# Cognition stall alert: %s", jobType),
