@@ -3,6 +3,7 @@ package cognition
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -12,6 +13,76 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
 )
+
+func TestDeriveCognitionRequestBudget(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		contextTokens int
+		outputTokens  int
+		want          int
+	}{
+		{name: "unknown_context_floors", contextTokens: 0, outputTokens: 0, want: 262144},
+		{name: "small_context_floors", contextTokens: 8192, outputTokens: 4096, want: 262144},
+		{name: "pinned_model_context_wins_over_floor", contextTokens: 131072, outputTokens: 8192, want: 294912},
+		{name: "unknown_output_reserves_nothing", contextTokens: 131072, outputTokens: 0, want: 314572},
+		{name: "absolute_cap_bounds_large_contexts", contextTokens: 1048576, outputTokens: 32768, want: 768 * 1024},
+		{name: "output_reserve_never_underflows", contextTokens: 65536, outputTokens: 200000, want: 262144},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := deriveCognitionRequestBudget(tc.contextTokens, tc.outputTokens); got != tc.want {
+				t.Fatalf(
+					"deriveCognitionRequestBudget(%d, %d) = %d, want %d",
+					tc.contextTokens,
+					tc.outputTokens,
+					got,
+					tc.want,
+				)
+			}
+		})
+	}
+}
+
+func TestCognitionRequestLimitFollowsResolvedModelContext(t *testing.T) {
+	fixed := func(contextTokens, outputTokens int) ModelContextResolver {
+		return func(string) (int, int) { return contextTokens, outputTokens }
+	}
+	for _, tc := range []struct {
+		name      string
+		resolver  ModelContextResolver
+		wantLimit int
+	}{
+		{name: "no_resolver_floors", resolver: nil, wantLimit: defaultCognitionMaxRequestBytes},
+		{name: "unknown_model_floors", resolver: fixed(0, 0), wantLimit: defaultCognitionMaxRequestBytes},
+		{name: "small_model_floors", resolver: fixed(8192, 4096), wantLimit: defaultCognitionMaxRequestBytes},
+		{name: "pinned_model_derives", resolver: fixed(131072, 8192), wantLimit: 294912},
+		{name: "large_model_caps", resolver: fixed(1048576, 32768), wantLimit: 768 * 1024},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			model := &fakeModelClient{}
+			runner := NewRunner(model, nil, []string{"first"}, &spyLoader{})
+			runner.SetModelContextResolver(tc.resolver)
+			job := fakeJob{
+				jobType: "synthetic.check",
+				build: func(context.Context, ContextLoader) (Spec, error) {
+					return Spec{
+						Objective:          strings.Repeat("synthetic evidence ", 400000),
+						CompletionContract: "Return a result.",
+					}, nil
+				},
+			}
+			_, err := runner.Run(context.Background(), job, nil)
+			var budget *agent.RequestBudgetError
+			// The error reports the preflight ceiling: the run's budget minus
+			// its one-eighth reply reserve.
+			if !errors.As(err, &budget) || budget.Limit != tc.wantLimit-tc.wantLimit/8 {
+				t.Fatalf("budget limit = %v, want %d", err, tc.wantLimit-tc.wantLimit/8)
+			}
+			if len(model.callModels) != 0 {
+				t.Fatalf("oversized request reached providers: %v", model.callModels)
+			}
+		})
+	}
+}
 
 func TestCognitionRejectsOversizedInputBeforeProviderCall(t *testing.T) {
 	model := &fakeModelClient{results: []agent.ModelClientResult{assistantResult("finished")}}

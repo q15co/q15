@@ -107,3 +107,54 @@ func TestContextPreflightIsOptInAndPreservesUnknownMetadata(t *testing.T) {
 		}
 	}
 }
+
+func TestCognitionContextResolverReadsPinnedModelLimits(t *testing.T) {
+	registry := testRegistry(t, map[string][]modelcatalog.Model{"synthetic": {
+		{
+			ProviderModel:    "small",
+			Capabilities:     modelcatalog.Capabilities{Chat: true, Text: true},
+			MaxContextTokens: 8192,
+			MaxOutputTokens:  2048,
+		},
+		{
+			ProviderModel:    "large",
+			Capabilities:     modelcatalog.Capabilities{Chat: true, Text: true},
+			MaxContextTokens: 1048576,
+			MaxOutputTokens:  32768,
+		},
+		{ProviderModel: "unknown", Capabilities: modelcatalog.Capabilities{Chat: true, Text: true}},
+	}})
+	resolver := newCognitionContextResolver(registry, func(jobType string) []string {
+		return map[string][]string{
+			"pinned-small":   {"small"},
+			"pinned-large":   {"large"},
+			"pinned-unknown": {"unknown"},
+			"pinned-missing": {"not-in-roster"},
+			"chained":        {"unknown", "large"},
+		}[jobType]
+	})
+	for _, tc := range []struct {
+		jobType string
+		context int
+		output  int
+	}{
+		{"pinned-small", 8192, 2048},
+		{"pinned-large", 1048576, 32768},
+		{"pinned-unknown", 0, 0},
+		{"pinned-missing", 0, 0},
+		// The pinned ref leads: fallback metadata must not inflate the budget.
+		{"chained", 0, 0},
+	} {
+		contextTokens, outputTokens := resolver(tc.jobType)
+		if contextTokens != tc.context || outputTokens != tc.output {
+			t.Fatalf(
+				"resolver(%q) = (%d, %d), want (%d, %d)",
+				tc.jobType,
+				contextTokens,
+				outputTokens,
+				tc.context,
+				tc.output,
+			)
+		}
+	}
+}

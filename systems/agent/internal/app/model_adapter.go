@@ -526,6 +526,31 @@ func newCognitionRefResolver(
 	}
 }
 
+// newCognitionContextResolver returns the context and output token limits of
+// the model pinned to one cognition job type, for request-budget derivation.
+// Only the leading ref of the job's chain counts: the budget sizes the pinned
+// model's turns, so fallback metadata must not inflate it. Missing roster
+// entries or unknown catalog metadata yield zeros, which the cognition runner
+// reads as the floor budget.
+func newCognitionContextResolver(
+	registry *modelcatalog.Registry,
+	refs cognition.ModelRefResolver,
+) cognition.ModelContextResolver {
+	return func(jobType string) (int, int) {
+		if registry == nil || refs == nil {
+			return 0, 0
+		}
+		chain := refs(jobType)
+		if len(chain) == 0 {
+			return 0, 0
+		}
+		if model, ok := registry.LookupByRef(chain[0]); ok {
+			return model.MaxContextTokens, model.MaxOutputTokens
+		}
+		return 0, 0
+	}
+}
+
 // cognitionJobTypeNames returns the stable job type identifiers for a set of
 // cognition job registrations, used to validate switch_cognition_model.
 func cognitionJobTypeNames(registrations []cognition.JobRegistration) []string {

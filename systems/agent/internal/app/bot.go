@@ -79,6 +79,7 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 		return buildModelRefs(selection.CurrentModel(), registry)
 	}
 	cognitionRefResolver := newCognitionRefResolver(registry, selection, selectionStore)
+	cognitionContextResolver := newCognitionContextResolver(registry, cognitionRefResolver)
 	cognitionJobTypes := cognitionJobTypeNames(jobs)
 
 	executionClient, executionInfo, err := connectExecutionService(ctx, &rt.Execution)
@@ -261,6 +262,7 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 		tools:                     toolRegistry,
 		interactiveModelRefSource: interactiveModelRefSource,
 		cognitionRefResolver:      cognitionRefResolver,
+		cognitionContextResolver:  cognitionContextResolver,
 		interactivePrompt:         systemPrompt,
 		interactiveSystemTextHints: buildInteractiveSystemTextHints(
 			registry,
