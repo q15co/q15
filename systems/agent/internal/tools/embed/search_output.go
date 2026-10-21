@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/q15co/q15/systems/agent/internal/embed"
@@ -98,7 +99,13 @@ type stringLeaf struct {
 }
 
 func (l stringLeaf) pathString() string {
-	return fmt.Sprint(l.path...)
+	// %q per segment keeps the tie-break total: string keys and int indices
+	// can never collide when each is quoted.
+	var b strings.Builder
+	for _, step := range l.path {
+		fmt.Fprintf(&b, "%q|", step)
+	}
+	return b.String()
 }
 
 // collectReducibleStrings walks a payload depth-first and lists string values
@@ -180,11 +187,11 @@ func cutOversizedPayloadStrings(
 		}
 		take := min(remaining, reducible)
 		target := cand.leaf.size - take
-		original := cutPayloadString(&bounded[cand.hit], &cloned[cand.hit], cand.leaf.path, target)
-		if original == "" {
+		excerpt := cutPayloadString(&bounded[cand.hit], &cloned[cand.hit], cand.leaf.path, target)
+		if excerpt == "" {
 			continue
 		}
-		remaining -= cand.leaf.size - len(original)
+		remaining -= cand.leaf.size - len(excerpt)
 		*disclosed = true
 	}
 	return true
@@ -228,22 +235,24 @@ func cutPayloadString(hit *embed.SearchResult, cloned *bool, path []any, target 
 	switch node := parent.(type) {
 	case map[string]any:
 		original, _ = node[last.(string)].(string)
-		if original == "" {
-			return ""
-		}
-		node[last.(string)] = excerptPrefix(original, target)
 	case []any:
 		original, _ = node[last.(int)].(string)
-		if original == "" {
-			return ""
-		}
-		node[last.(int)] = excerptPrefix(original, target)
 	default:
 		return ""
 	}
+	if original == "" {
+		return ""
+	}
+	excerpt := excerptPrefix(original, target)
+	switch node := parent.(type) {
+	case map[string]any:
+		node[last.(string)] = excerpt
+	case []any:
+		node[last.(int)] = excerpt
+	}
 	payload["truncated"] = true
-	payload["omitted_bytes"] = existingOmitted(payload) + (len(original) - target)
-	return excerptPrefix(original, target)
+	payload["omitted_bytes"] = existingOmitted(payload) + (len(original) - len(excerpt))
+	return excerpt
 }
 
 func excerptPrefix(original string, target int) string {

@@ -238,11 +238,11 @@ func TestSearchRunDoesNotMutateServiceResults(t *testing.T) {
 	}
 }
 
-// TestSearchRunReductionRungKeepsSourceReferences: when the budget forces the
-// payload-reduction rung, every returned hit keeps its source reference and
-// carries the same disclosure a truncation gets.
+// TestSearchRunReductionRungKeepsSourceReferences: when the budget exhausts
+// the excerpt rung and forces payload reduction, every returned hit keeps its
+// source reference and carries the same disclosure a truncation gets.
 func TestSearchRunReductionRungKeepsSourceReferences(t *testing.T) {
-	hits := make([]embed.SearchResult, 30)
+	hits := make([]embed.SearchResult, 50)
 	for i := range hits {
 		hits[i] = oversizedHit(
 			embed.CollectionSemantic,
@@ -253,7 +253,7 @@ func TestSearchRunReductionRungKeepsSourceReferences(t *testing.T) {
 	}
 	got, err := NewSearch(
 		&fakeService{results: hits},
-	).Run(context.Background(), `{"query":"synthetic","collection":"semantic","limit":30}`)
+	).Run(context.Background(), `{"query":"synthetic","collection":"semantic","limit":50}`)
 	if err != nil {
 		t.Fatalf("reduction rung errored instead of degrading: %v", err)
 	}
@@ -280,6 +280,22 @@ func TestSearchRunReductionRungKeepsSourceReferences(t *testing.T) {
 	first := results[0].(map[string]any)["payload"].(map[string]any)
 	if first["file_path"] != wantPath {
 		t.Fatalf("best hit kept wrong reference: %v", first["file_path"])
+	}
+	// At this size the reduction rung MUST have fired: some trailing hit lost
+	// its body text but kept the reference and the disclosure.
+	sawReduced := false
+	for _, raw := range results {
+		payload := raw.(map[string]any)["payload"].(map[string]any)
+		_, keptBody := payload["text"]
+		if !keptBody {
+			if payload["file_path"] == nil || payload["truncated"] != true {
+				t.Fatalf("reduced hit missing reference or disclosure: %v", payload)
+			}
+			sawReduced = true
+		}
+	}
+	if !sawReduced {
+		t.Fatal("50x8KiB stayed on the excerpt rung; reduction rung untested")
 	}
 }
 
