@@ -15,7 +15,6 @@ const (
 	// defaultCognitionMaxTurns caps the model/tool turns for one cognition run.
 	defaultCognitionMaxTurns               = 32
 	defaultCognitionMaxFailedModelAttempts = 3
-	defaultCognitionMaxRequestBytes        = 256 * 1024
 	memoryRecoveryTimeout                  = 30 * time.Second
 )
 
@@ -169,13 +168,14 @@ type Result struct {
 
 // Runner executes typed cognition jobs on the shared model/tool engine.
 type Runner struct {
-	modelClient agent.ModelClient
-	planner     modelselection.Planner
-	tools       agent.ToolRegistry
-	resolver    ModelRefResolver
-	engineRef   *agent.Engine // optional prebuilt engine (NewRunnerWithEngine)
-	loader      ContextLoader
-	maxTurns    int
+	modelClient  agent.ModelClient
+	planner      modelselection.Planner
+	tools        agent.ToolRegistry
+	resolver     ModelRefResolver
+	modelContext ModelContextResolver
+	engineRef    *agent.Engine // optional prebuilt engine (NewRunnerWithEngine)
+	loader       ContextLoader
+	maxTurns     int
 }
 
 // ModelRefResolver returns the ordered model refs to consider for one
@@ -288,6 +288,21 @@ func ConstantModelRefResolver(modelRefs []string) ModelRefResolver {
 	}
 }
 
+// ModelContextResolver returns the known context and output token limits of
+// the model pinned to one cognition job type. Zeros mean unknown, in which
+// case the run's request byte budget falls back to the floor.
+type ModelContextResolver func(jobType string) (contextTokens, outputTokens int)
+
+// SetModelContextResolver installs the optional per-job model metadata lookup
+// used to size the request byte budget of each run. A nil resolver pins the
+// floor budget.
+func (r *Runner) SetModelContextResolver(resolver ModelContextResolver) {
+	if r == nil {
+		return
+	}
+	r.modelContext = resolver
+}
+
 // Run executes one typed cognition job.
 func (r *Runner) Run(
 	ctx context.Context,
@@ -370,6 +385,11 @@ func (r *Runner) Run(
 	inputMessages = append(inputMessages, conversation.SystemMessage(systemPrompt))
 	inputMessages = append(inputMessages, conversation.CloneMessages(spec.InputMessages)...)
 
+	contextTokens, outputTokens := 0, 0
+	if r.modelContext != nil {
+		contextTokens, outputTokens = r.modelContext(jobType)
+	}
+
 	runCtx := ctx
 	if spec.MemoryRecoveryID != "" {
 		runCtx = withMemoryRecoveryOwner(ctx, spec.MemoryRecoveryID)
@@ -382,7 +402,12 @@ func (r *Runner) Run(
 		RequireToolCalling:     spec.RequireToolCalling,
 		Observer:               observer,
 		MaxFailedModelAttempts: defaultCognitionMaxFailedModelAttempts,
-		MaxRequestBytes:        cognitionRequestLimit(spec, systemPrompt),
+		MaxRequestBytes: cognitionRequestLimit(
+			spec,
+			systemPrompt,
+			contextTokens,
+			outputTokens,
+		),
 	})
 	if err != nil {
 		err = describeRequestBudget(jobType, spec, systemPrompt, err)

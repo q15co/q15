@@ -14,6 +14,7 @@ type runtimeEntryPoints struct {
 	tools                      agent.ToolRegistry
 	interactiveModelRefSource  agent.ModelRefSource
 	cognitionRefResolver       cognition.ModelRefResolver
+	cognitionContextResolver   cognition.ModelContextResolver
 	interactivePrompt          string
 	interactiveSystemTextHints []agent.SystemTextSource
 	interactiveStore           agent.ConversationStore
@@ -28,6 +29,7 @@ type runtimeEntryPointsConfig struct {
 	tools                      agent.ToolRegistry
 	interactiveModelRefSource  agent.ModelRefSource
 	cognitionRefResolver       cognition.ModelRefResolver
+	cognitionContextResolver   cognition.ModelContextResolver
 	interactivePrompt          string
 	interactiveSystemTextHints []agent.SystemTextSource
 	interactiveStore           agent.ConversationStore
@@ -50,6 +52,7 @@ func newRuntimeEntryPoints(cfg runtimeEntryPointsConfig) *runtimeEntryPoints {
 		tools:                      cfg.tools,
 		interactiveModelRefSource:  cfg.interactiveModelRefSource,
 		cognitionRefResolver:       cfg.cognitionRefResolver,
+		cognitionContextResolver:   cfg.cognitionContextResolver,
 		interactivePrompt:          strings.TrimSpace(cfg.interactivePrompt),
 		interactiveSystemTextHints: interactiveSystemTextHints,
 		interactiveStore:           cfg.interactiveStore,
@@ -79,13 +82,15 @@ func (r *runtimeEntryPoints) NewCognitionRunner() *cognition.Runner {
 	if r == nil {
 		return nil
 	}
-	return cognition.NewRunnerWithResolver(
+	runner := cognition.NewRunnerWithResolver(
 		r.modelClient,
 		r.planner,
 		r.tools,
 		r.cognitionRefResolver,
 		r.loader,
 	)
+	runner.SetModelContextResolver(r.cognitionContextResolver)
+	return runner
 }
 
 func (r *runtimeEntryPoints) NewCognitionController(

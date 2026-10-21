@@ -173,7 +173,7 @@ func TestSemanticExtractionSaturatedPromptAndToolsFitRequestBudget(t *testing.T)
 		Messages []conversation.Message `json:"messages"`
 		Tools    []agent.ToolDefinition `json:"tools"`
 	}{append([]conversation.Message{conversation.SystemMessage(prompt)}, spec.InputMessages...), registry.Definitions()})
-	limit := cognitionRequestLimit(spec, prompt)
+	limit := cognitionRequestLimit(spec, prompt, 0, 0)
 	if err != nil || len(request) > limit-limit/8 {
 		t.Fatalf(
 			"composed request exhausted replay reserve: bytes=%d limit=%d error=%v",

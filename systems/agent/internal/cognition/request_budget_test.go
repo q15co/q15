@@ -3,14 +3,86 @@ package cognition
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
 )
+
+func TestDeriveCognitionRequestBudget(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		contextTokens int
+		outputTokens  int
+		want          int
+	}{
+		{name: "unknown_context_floors", contextTokens: 0, outputTokens: 0, want: 262144},
+		{name: "small_context_floors", contextTokens: 8192, outputTokens: 4096, want: 262144},
+		{name: "pinned_model_context_wins_over_floor", contextTokens: 131072, outputTokens: 8192, want: 294912},
+		{name: "unknown_output_reserves_nothing", contextTokens: 131072, outputTokens: 0, want: 314572},
+		{name: "absolute_cap_bounds_large_contexts", contextTokens: 1048576, outputTokens: 32768, want: 768 * 1024},
+		{name: "output_reserve_never_underflows", contextTokens: 65536, outputTokens: 200000, want: 262144},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := deriveCognitionRequestBudget(tc.contextTokens, tc.outputTokens); got != tc.want {
+				t.Fatalf(
+					"deriveCognitionRequestBudget(%d, %d) = %d, want %d",
+					tc.contextTokens,
+					tc.outputTokens,
+					got,
+					tc.want,
+				)
+			}
+		})
+	}
+}
+
+func TestCognitionRequestLimitFollowsResolvedModelContext(t *testing.T) {
+	fixed := func(contextTokens, outputTokens int) ModelContextResolver {
+		return func(string) (int, int) { return contextTokens, outputTokens }
+	}
+	for _, tc := range []struct {
+		name      string
+		resolver  ModelContextResolver
+		wantLimit int
+	}{
+		{name: "no_resolver_floors", resolver: nil, wantLimit: defaultCognitionMaxRequestBytes},
+		{name: "unknown_model_floors", resolver: fixed(0, 0), wantLimit: defaultCognitionMaxRequestBytes},
+		{name: "small_model_floors", resolver: fixed(8192, 4096), wantLimit: defaultCognitionMaxRequestBytes},
+		{name: "pinned_model_derives", resolver: fixed(131072, 8192), wantLimit: 294912},
+		{name: "large_model_caps", resolver: fixed(1048576, 32768), wantLimit: 768 * 1024},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			model := &fakeModelClient{}
+			runner := NewRunner(model, nil, []string{"first"}, &spyLoader{})
+			runner.SetModelContextResolver(tc.resolver)
+			job := fakeJob{
+				jobType: "synthetic.check",
+				build: func(context.Context, ContextLoader) (Spec, error) {
+					return Spec{
+						Objective:          strings.Repeat("synthetic evidence ", 400000),
+						CompletionContract: "Return a result.",
+					}, nil
+				},
+			}
+			_, err := runner.Run(context.Background(), job, nil)
+			var budget *agent.RequestBudgetError
+			// The error reports the preflight ceiling: the run's budget minus
+			// its one-eighth reply reserve.
+			if !errors.As(err, &budget) || budget.Limit != tc.wantLimit-tc.wantLimit/8 {
+				t.Fatalf("budget limit = %v, want %d", err, tc.wantLimit-tc.wantLimit/8)
+			}
+			if len(model.callModels) != 0 {
+				t.Fatalf("oversized request reached providers: %v", model.callModels)
+			}
+		})
+	}
+}
 
 func TestCognitionRejectsOversizedInputBeforeProviderCall(t *testing.T) {
 	model := &fakeModelClient{results: []agent.ModelClientResult{assistantResult("finished")}}
@@ -273,5 +345,193 @@ func TestCognitionRequestRejectionRecoversJournal(t *testing.T) {
 			loader.pending,
 			loader.recovered,
 		)
+	}
+}
+
+func TestCognitionExtractRunConvergesAfterPriorTurnAccumulation(t *testing.T) {
+	registry, err := agent.NewToolRegistry(testTool{
+		def: agent.ToolDefinition{Name: "read_file"},
+		run: func(context.Context, string) (string, error) {
+			return strings.Repeat("synthetic evidence ", 700), nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	sawOmission := false
+	model := &fakeModelClient{
+		complete: func(_ context.Context, _ string, messages []conversation.Message, tools []agent.ToolDefinition) (agent.ModelClientResult, error) {
+			calls++
+			encoded, err := json.Marshal(struct {
+				Messages []conversation.Message `json:"messages"`
+				Tools    []agent.ToolDefinition `json:"tools"`
+			}{messages, tools})
+			if err != nil || len(encoded) > defaultCognitionMaxRequestBytes {
+				t.Fatalf(
+					"provider received oversized request: bytes=%d error=%v",
+					len(encoded),
+					err,
+				)
+			}
+			if !strings.Contains(conversation.TextValue(messages[0]), "Extract claims") {
+				t.Fatal("objective prompt was rewritten")
+			}
+			for _, message := range messages {
+				for _, part := range message.Parts {
+					sawOmission = sawOmission || strings.Contains(part.Content, "omitted") ||
+						strings.Contains(part.Text, "omitted") ||
+						strings.Contains(part.Arguments, "omitted")
+				}
+			}
+			if calls == 20 {
+				return assistantResult("# Extraction\n\nDone with all synthetic pages."), nil
+			}
+			return agent.ModelClientResult{
+				Messages: []conversation.Message{
+					conversation.AssistantMessage(
+						conversation.ToolCall(
+							fmt.Sprintf("read-%d", calls),
+							"read_file",
+							fmt.Sprintf(
+								`{"path":"pages/page-%02d.md","pad":"%s"}`,
+								calls,
+								strings.Repeat("a", 10*1024),
+							),
+						),
+						conversation.Text(strings.Repeat("planning note ", 700), ""),
+					),
+				},
+			}, nil
+		},
+	}
+	var applied JobOutput
+	runner := NewRunner(model, registry, []string{"first"}, &spyLoader{})
+	job := fakeJob{
+		jobType: "synthetic.extract",
+		build: func(context.Context, ContextLoader) (Spec, error) {
+			return Spec{
+				Objective:          "Extract claims from every synthetic evidence page.",
+				CompletionContract: "Return a result.",
+				ExposeTools:        true,
+			}, nil
+		},
+		apply: func(_ context.Context, _ ContextLoader, output JobOutput) (ParsedResult, error) {
+			applied = output
+			return ParsedResult{Summary: "done"}, nil
+		},
+	}
+	result, err := runner.Run(context.Background(), job, nil)
+	if err != nil || calls != 20 || !sawOmission {
+		t.Fatalf(
+			"accumulating extract run did not converge: calls=%d omitted=%v result=%#v error=%v",
+			calls,
+			sawOmission,
+			result.FinalText,
+			err,
+		)
+	}
+	recordedFull := 0
+	for _, message := range applied.Messages {
+		for _, part := range message.Parts {
+			if len(part.Arguments) >= 10*1024 || len(part.Content) >= 10*1024 {
+				recordedFull++
+			}
+		}
+	}
+	if recordedFull == 0 {
+		t.Fatal("the applied run record lost the original tool payloads")
+	}
+}
+
+func TestControllerBudgetFailureKeepsCheckpointAndArmsBackoff(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeControllerStore()
+	store.setHead(20, time.Now().UTC())
+	store.states[semanticMemoryExtractionJobType] = JobState{
+		TranscriptPending:   true,
+		LastRunInputSeq:     8,
+		LastSuccessInputSeq: 8,
+		DirtySinceSeq:       9,
+		DirtySinceAt:        store.headAt,
+	}
+	if _, err := store.StoreSemanticExtractionCheckpoint(
+		ctx,
+		SemanticExtractionCheckpoint{LastExtractedSeq: 7},
+	); err != nil {
+		t.Fatal(err)
+	}
+	model := &fakeModelClient{
+		complete: func(
+			context.Context,
+			string,
+			[]conversation.Message,
+			[]agent.ToolDefinition,
+		) (agent.ModelClientResult, error) {
+			return agent.ModelClientResult{
+				Messages: []conversation.Message{
+					conversation.AssistantMessage(
+						conversation.ToolCall("read-1", "noop", `{"page":1}`),
+						conversation.Image(
+							"",
+							"data:image/png;base64,"+strings.Repeat("A", 96*1024),
+						),
+					),
+				},
+			}, nil
+		},
+	}
+	registry, err := agent.NewToolRegistry(testTool{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller, err := NewController(
+		NewRunner(model, registry, []string{"cognition"}, &spyLoader{}),
+		store,
+		&spyLoader{},
+		JobRegistration{NewJob: func() JobDefinition {
+			return fakeJob{
+				jobType: semanticMemoryExtractionJobType,
+				build: func(context.Context, ContextLoader) (Spec, error) {
+					return Spec{
+						Objective:          "Extract the synthetic transcript window.",
+						CompletionContract: "Return status: ok.",
+						ExposeTools:        true,
+					}, nil
+				},
+			}
+		}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, ok, err := controller.nextPendingRun(ctx, false, false, true)
+	if err != nil || !ok {
+		t.Fatalf("initial continuation = %#v, %v, %v", pending, ok, err)
+	}
+	if err := controller.runPending(ctx, pending); err != nil {
+		t.Fatal(err)
+	}
+	// The irreducible assistant media accumulates until every reduction path is
+	// exhausted; the failure surfaces as a bounded request rejection, not a
+	// provider round trip that cannot be recorded.
+	if len(model.callModels) != 3 {
+		t.Fatalf("provider attempts = %v, want a deferral after three turns", model.callModels)
+	}
+	state := store.state(semanticMemoryExtractionJobType)
+	if state.ConsecutiveFailures != 1 || state.FailureBackoffStep != 1 ||
+		state.FailureRetryAt.IsZero() {
+		t.Fatalf("budget failure did not arm the failure backoff: %#v", state)
+	}
+	if state.LastSuccessInputSeq != 8 || state.LastRunInputSeq != 8 || state.DirtySinceSeq != 9 {
+		t.Fatalf("budget failure moved the covered input boundary: %#v", state)
+	}
+	if got := store.semanticCheckpoint(); got.LastExtractedSeq != 7 {
+		t.Fatalf("budget failure advanced the extraction checkpoint: %#v", got)
+	}
+	records := store.runRecords()
+	if len(records) != 1 || records[0].Succeeded ||
+		!strings.Contains(records[0].Error, "model request exceeds byte budget") {
+		t.Fatalf("budget failure record = %#v", records)
 	}
 }

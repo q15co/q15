@@ -44,7 +44,9 @@ type EngineRequest struct {
 	Observer           RunObserver
 	// MaxFailedModelAttempts bounds provider failures across all turns. Zero is unlimited.
 	MaxFailedModelAttempts int
-	// MaxRequestBytes bounds canonical JSON input on every model turn. Zero disables it.
+	// MaxRequestBytes bounds canonical JSON input on every model turn, keeping a
+	// reply reserve of one eighth so a turn never starts unable to absorb its
+	// own reply and fresh evidence. Zero disables it.
 	MaxRequestBytes int
 }
 
@@ -145,18 +147,24 @@ func (e *Engine) Run(ctx context.Context, req EngineRequest) (EngineResult, erro
 			)
 		}
 
-		size, err := fitRequestBudget(requestMessages, toolDefs, req.MaxRequestBytes, requestStart)
+		size, err := fitRequestBudget(
+			requestMessages,
+			toolDefs,
+			requestTurnLimit(req.MaxRequestBytes),
+			requestStart,
+		)
 		if err != nil {
 			return EngineResult{Messages: copyMessages(messages[start:]), Turn: turn}, err
 		}
 		if req.MaxRequestBytes > 0 {
 			log.Printf(
-				"q15: model request turn=%d canonical_bytes=%d message_bytes=%d tool_definition_bytes=%d max_bytes=%d",
+				"q15: model request turn=%d canonical_bytes=%d message_bytes=%d tool_definition_bytes=%d max_bytes=%d turn_max_bytes=%d",
 				turn,
 				size.total,
 				size.messages,
 				size.tools,
 				req.MaxRequestBytes,
+				requestTurnLimit(req.MaxRequestBytes),
 			)
 		}
 
@@ -207,6 +215,11 @@ func (e *Engine) Run(ctx context.Context, req EngineRequest) (EngineResult, erro
 			}, nil
 		}
 
+		// Preflight at the hard budget, not the reply-reserve-bound turn limit:
+		// defer before spending the pending tool executions when the reply would
+		// not fit at all. boundToolResult keeps every stored tool result within
+		// the same one-eighth arithmetic, so the next turn's turn-limit preflight
+		// only fires on irreducible accumulation.
 		if _, err := fitRequestBudget(copyMessages(messages), toolDefs, req.MaxRequestBytes, start); err != nil {
 			return EngineResult{
 				Messages: copyMessages(messages[start:]),

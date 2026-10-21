@@ -39,6 +39,21 @@ type requestSize struct {
 	prompt, input, prior, evidence, framing int
 }
 
+// turnReplyReserveDivisor reserves one eighth of the request budget for the
+// upcoming assistant reply and fresh evidence shells. boundToolResult enforces
+// the same eighth when it keeps a fresh tool result.
+const turnReplyReserveDivisor = 8
+
+// requestTurnLimit is the per-turn preflight ceiling: the hard request budget
+// minus the reply reserve. A turn that cannot leave room for its own reply is
+// rejected before the provider call instead of after an expensive round trip.
+func requestTurnLimit(limit int) int {
+	if limit <= 0 {
+		return limit
+	}
+	return limit - limit/turnReplyReserveDivisor
+}
+
 func measureRequest(messages []conversation.Message, tools []ToolDefinition) (requestSize, error) {
 	messageJSON, err := json.Marshal(messages)
 	if err != nil {
@@ -97,8 +112,19 @@ func checkRequestBudget(
 
 const omittedToolEvidence = "tool executed; result omitted because it exceeds the request evidence byte budget; use a narrower query or page, or finish from the supplied evidence; do not repeat a mutation merely because its output was omitted"
 
-// fitRequestBudget changes only the provider's copy of optional evidence. Source
+const omittedPriorTurnReasoning = "reasoning omitted because earlier turns accumulated past the request byte budget; the recorded run retains the original reasoning"
+
+const omittedPriorTurnText = "assistant text omitted because earlier turns accumulated past the request byte budget; the recorded run retains the original text"
+
+// omittedToolCallArguments stays a JSON object so providers that decode
+// tool-call arguments into a map keep accepting the call.
+const omittedToolCallArguments = `{"error":"tool call arguments omitted because earlier turns accumulated past the request byte budget; the recorded run retains the original arguments; do not repeat a mutation merely because its arguments were omitted"}`
+
+// fitRequestBudget changes only the provider's copy of replay content. Source
 // messages, tool-call arguments, replay state and the recorded run stay intact.
+// Tool-result evidence is omitted first, oldest result first; when that alone
+// cannot fit the request, prior assistant turns are compacted the same way,
+// oldest turn first, and only then is the request rejected.
 func fitRequestBudget(
 	messages []conversation.Message,
 	tools []ToolDefinition,
@@ -117,6 +143,39 @@ func fitRequestBudget(
 			}
 			part.Content = omittedToolEvidence
 			part.IsError = true
+			size, err = checkRequestBudget(messages, tools, limit)
+			if err == nil {
+				return size, nil
+			}
+		}
+	}
+	for i := start; i < len(messages); i++ {
+		if messages[i].Role != conversation.AssistantRole {
+			continue
+		}
+		for j := range messages[i].Parts {
+			part := &messages[i].Parts[j]
+			switch part.Type {
+			case conversation.ReasoningPartType:
+				if len(part.Text) <= len(omittedPriorTurnReasoning) &&
+					len(part.Replay) == 0 {
+					continue
+				}
+				part.Text = omittedPriorTurnReasoning
+				part.Replay = nil
+			case conversation.ToolCallPartType:
+				if len(part.Arguments) <= len(omittedToolCallArguments) {
+					continue
+				}
+				part.Arguments = omittedToolCallArguments
+			case conversation.TextPartType:
+				if len(part.Text) <= len(omittedPriorTurnText) {
+					continue
+				}
+				part.Text = omittedPriorTurnText
+			default:
+				continue
+			}
 			size, err = checkRequestBudget(messages, tools, limit)
 			if err == nil {
 				return size, nil
@@ -146,9 +205,7 @@ func boundToolResult(
 	if err != nil {
 		return ToolResult{}, err
 	}
-	// Reserve an eighth for assistant decisions and small error results after the
-	// evidence allowance is exhausted.
-	allowance := limit / 8
+	allowance := limit / turnReplyReserveDivisor
 	if len(encoded) <= min(32*1024, allowance) && size.total <= limit-allowance {
 		return result, runErr
 	}
