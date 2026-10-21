@@ -556,10 +556,9 @@ func (s *Search) Run(ctx context.Context, arguments string) (string, error) {
 		return "", err
 	}
 	if len(output) > maxSearchOutputBytes {
-		return "", fmt.Errorf(
-			"search results exceed %d byte output limit; narrow the query, reduce limit, or use paginated read_file",
-			maxSearchOutputBytes,
-		)
+		// A single oversized hit must not turn a successful search into a
+		// hard error: degrade to bounded excerpts instead (#380).
+		return boundedSearchOutput(results, maxSearchOutputBytes)
 	}
 	return output, nil
 }
