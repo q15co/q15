@@ -158,12 +158,13 @@ func (e *Engine) Run(ctx context.Context, req EngineRequest) (EngineResult, erro
 		}
 		if req.MaxRequestBytes > 0 {
 			log.Printf(
-				"q15: model request turn=%d canonical_bytes=%d message_bytes=%d tool_definition_bytes=%d max_bytes=%d",
+				"q15: model request turn=%d canonical_bytes=%d message_bytes=%d tool_definition_bytes=%d max_bytes=%d turn_max_bytes=%d",
 				turn,
 				size.total,
 				size.messages,
 				size.tools,
 				req.MaxRequestBytes,
+				requestTurnLimit(req.MaxRequestBytes),
 			)
 		}
 
@@ -214,6 +215,11 @@ func (e *Engine) Run(ctx context.Context, req EngineRequest) (EngineResult, erro
 			}, nil
 		}
 
+		// Preflight at the hard budget, not the reply-reserve-bound turn limit:
+		// defer before spending the pending tool executions when the reply would
+		// not fit at all. boundToolResult keeps every stored tool result within
+		// the same one-eighth arithmetic, so the next turn's turn-limit preflight
+		// only fires on irreducible accumulation.
 		if _, err := fitRequestBudget(copyMessages(messages), toolDefs, req.MaxRequestBytes, start); err != nil {
 			return EngineResult{
 				Messages: copyMessages(messages[start:]),
