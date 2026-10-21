@@ -126,6 +126,8 @@ func TestControllerPartialTranscriptDoesNotAdvancePastFailedFragment(t *testing.
 			if seq, cursor := checkpoint(); seq != 0 || cursor == nil || cursor.ByteOffset != 123 {
 				t.Fatal("failed fragment advanced its durable cursor")
 			}
+			// #379: the failed fragment armed a backoff window; move past it.
+			expireFailureBackoff(t, store, jobType)
 			next, ok, err = c.nextPendingRun(ctx, false, false, true)
 			if err != nil || !ok || next.cause.RuleID != "transcript_continuation" {
 				t.Fatalf("failed fragment lost continuation: %v %v", ok, err)

@@ -63,6 +63,9 @@ func TestControllerFailedContinuationRetriesWithoutNewAppendsAndDrainsTail(t *te
 					store.semanticExtractionCheckpoint.LastExtractedSeq != 0 {
 					t.Fatal("failed run advanced a checkpoint")
 				}
+				// #379: the identical failure armed a backoff window; move
+				// past it so the continuation lane re-fires.
+				expireFailureBackoff(t, store, jobType)
 				pending, ok, err = controller.nextPendingRun(ctx, false, false, true)
 				if err != nil || !ok || pending.cause.RuleID != "transcript_continuation" ||
 					pending.headSeq != 20 {
