@@ -68,8 +68,8 @@ func TestSearchRunBoundsSingleOversizedHit(t *testing.T) {
 		t.Fatalf("source reference lost: %v", payload)
 	}
 	text, ok := payload["text"].(string)
-	if !ok || len(text) == 0 || len(text) > 14*1024 {
-		t.Fatalf("excerpt missing or unbounded: %d bytes", len(text))
+	if !ok || len(text) == 0 || len(text) > len(strings.Repeat("huge ", 16*1024))/4 {
+		t.Fatalf("excerpt missing or unreduced: %d bytes", len(text))
 	}
 	if payload["truncated"] != true {
 		t.Fatalf("truncation not disclosed: %v", payload)
@@ -235,5 +235,141 @@ func TestSearchRunDoesNotMutateServiceResults(t *testing.T) {
 	}
 	if _, exists := payload["truncated"]; exists {
 		t.Fatal("service result gained disclosure keys")
+	}
+}
+
+// TestSearchRunReductionRungKeepsSourceReferences: when the budget forces the
+// payload-reduction rung, every returned hit keeps its source reference and
+// carries the same disclosure a truncation gets.
+func TestSearchRunReductionRungKeepsSourceReferences(t *testing.T) {
+	hits := make([]embed.SearchResult, 30)
+	for i := range hits {
+		hits[i] = oversizedHit(
+			embed.CollectionSemantic,
+			string(rune('a'+i%26))+string(rune('0'+i/26))+"-hit",
+			float32(100-i),
+			strings.Repeat("p", 8*1024),
+		)
+	}
+	got, err := NewSearch(
+		&fakeService{results: hits},
+	).Run(context.Background(), `{"query":"synthetic","collection":"semantic","limit":30}`)
+	if err != nil {
+		t.Fatalf("reduction rung errored instead of degrading: %v", err)
+	}
+	if len(got) > maxSearchOutputBytes {
+		t.Fatalf("output = %d bytes, cap %d", len(got), maxSearchOutputBytes)
+	}
+	decoded := parseSearchOutput(t, got)
+	results := decoded["results"].([]any)
+	if len(results) == 0 {
+		t.Fatal("reduction dropped every hit instead of reducing payloads")
+	}
+	for _, raw := range results {
+		hit := raw.(map[string]any)
+		payload, hasPayload := hit["payload"].(map[string]any)
+		if !hasPayload || payload["file_path"] == nil {
+			t.Fatalf("returned hit lost its source reference: %v", hit)
+		}
+	}
+	dropped, _ := decoded["dropped_hits"].(float64)
+	if len(results)+int(dropped) != len(hits) {
+		t.Fatalf("returned %d + dropped %.0f != %d served hits", len(results), dropped, len(hits))
+	}
+	wantPath := "/memory/semantic/" + string(rune('a')) + "0-hit.md"
+	first := results[0].(map[string]any)["payload"].(map[string]any)
+	if first["file_path"] != wantPath {
+		t.Fatalf("best hit kept wrong reference: %v", first["file_path"])
+	}
+}
+
+// TestSearchRunDegradationIsDeterministic: identical requests must degrade to
+// identical bytes so a retrying model sees a stable view.
+func TestSearchRunDegradationIsDeterministic(t *testing.T) {
+	hits := []embed.SearchResult{
+		oversizedHit(embed.CollectionSemantic, "tie-a", 0.9, strings.Repeat("x", 9000)),
+		oversizedHit(embed.CollectionSemantic, "tie-b", 0.8, strings.Repeat("y", 9000)),
+	}
+	hits[0].Payload["extra_one"] = strings.Repeat("m", 9000)
+	hits[0].Payload["extra_two"] = strings.Repeat("n", 9000)
+	service := &fakeService{results: hits}
+	first, err := NewSearch(service).Run(context.Background(), `{"query":"synthetic","limit":2}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		again, err := NewSearch(
+			service,
+		).Run(context.Background(), `{"query":"synthetic","limit":2}`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if again != first {
+			t.Fatalf(
+				"call %d degraded differently (first %d bytes, again %d)",
+				i+2,
+				len(first),
+				len(again),
+			)
+		}
+	}
+}
+
+// TestSearchRunExcerptsNestedPayloadStrings: YAML frontmatter nesting survives
+// ingest, so a long string inside a nested map must be excerpted too, with
+// the hit's disclosure on the payload root.
+func TestSearchRunExcerptsNestedPayloadStrings(t *testing.T) {
+	hit := oversizedHit(embed.CollectionSemantic, "nested", 1, "short")
+	hit.Payload["meta"] = map[string]any{
+		"chunk": strings.Repeat("nested ", 16*1024),
+		"depth": 2,
+	}
+	got, err := NewSearch(
+		&fakeService{results: []embed.SearchResult{hit}},
+	).Run(context.Background(), `{"query":"synthetic","collection":"semantic","limit":1}`)
+	if err != nil {
+		t.Fatalf("nested payload errored instead of degrading: %v", err)
+	}
+	if len(got) > maxSearchOutputBytes {
+		t.Fatalf("output = %d bytes, cap %d", len(got), maxSearchOutputBytes)
+	}
+	payload := parseSearchOutput(t, got)["results"].([]any)[0].(map[string]any)["payload"].(map[string]any)
+	meta, ok := payload["meta"].(map[string]any)
+	if !ok {
+		t.Fatalf("nested map lost instead of excerpted: %v", payload)
+	}
+	chunk, ok := meta["chunk"].(string)
+	if !ok || len(chunk) == 0 || len(chunk) > len(strings.Repeat("nested ", 16*1024))/4 {
+		t.Fatalf("nested excerpt missing or unreduced: %d bytes", len(chunk))
+	}
+	if payload["truncated"] != true {
+		t.Fatalf("nested truncation not disclosed: %v", payload)
+	}
+	if meta["depth"] != float64(2) {
+		t.Fatalf("nested scalar lost: %v", meta)
+	}
+}
+
+// TestBoundedSearchOutputUnsatisfiableErrorPath pins the reserved error: a cap
+// too small for any representation errors with sizes and lookup guidance only.
+func TestBoundedSearchOutputUnsatisfiableErrorPath(t *testing.T) {
+	hits := []embed.SearchResult{
+		oversizedHit(embed.CollectionSemantic, "pin", 1, "short"),
+	}
+	secret := "synthetic-secret-payload"
+	hits[0].Payload["text"] = secret
+	got, err := boundedSearchOutput(hits, 8)
+	if err == nil || got != "" {
+		t.Fatalf("unsatisfiable cap returned %d bytes with error %v", len(got), err)
+	}
+	if len(err.Error()) >= 256 {
+		t.Fatalf("error is not bounded: %d bytes", len(err.Error()))
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("error leaked payload content: %q", err)
+	}
+	if !strings.Contains(err.Error(), "reduce limit") ||
+		!strings.Contains(err.Error(), "read_file") {
+		t.Fatalf("error lost its actionable guidance: %q", err)
 	}
 }
