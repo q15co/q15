@@ -44,7 +44,9 @@ type EngineRequest struct {
 	Observer           RunObserver
 	// MaxFailedModelAttempts bounds provider failures across all turns. Zero is unlimited.
 	MaxFailedModelAttempts int
-	// MaxRequestBytes bounds canonical JSON input on every model turn. Zero disables it.
+	// MaxRequestBytes bounds canonical JSON input on every model turn, keeping a
+	// reply reserve of one eighth so a turn never starts unable to absorb its
+	// own reply and fresh evidence. Zero disables it.
 	MaxRequestBytes int
 }
 
@@ -145,7 +147,12 @@ func (e *Engine) Run(ctx context.Context, req EngineRequest) (EngineResult, erro
 			)
 		}
 
-		size, err := fitRequestBudget(requestMessages, toolDefs, req.MaxRequestBytes, requestStart)
+		size, err := fitRequestBudget(
+			requestMessages,
+			toolDefs,
+			requestTurnLimit(req.MaxRequestBytes),
+			requestStart,
+		)
 		if err != nil {
 			return EngineResult{Messages: copyMessages(messages[start:]), Turn: turn}, err
 		}
