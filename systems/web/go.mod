@@ -1,6 +1,6 @@
 module github.com/q15co/q15/systems/web
 
-go 1.26.9
+go 1.26.10
 
 require (
 	github.com/coder/websocket v1.8.14

@@ -1,6 +1,6 @@
 module github.com/q15co/q15/systems/proxy
 
-go 1.26.9
+go 1.26.10
 
 require (
 	github.com/elazarl/goproxy v1.8.2

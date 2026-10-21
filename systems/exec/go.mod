@@ -1,6 +1,6 @@
 module github.com/q15co/q15/systems/exec
 
-go 1.26.9
+go 1.26.10
 
 require (
 	github.com/q15co/q15/libs/exec-contract v0.0.0
