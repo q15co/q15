@@ -98,6 +98,12 @@ apply step defers that one claim - it removes it from the written file, names th
 refusal in the run result's `deferred_claims` metadata (bounded list; the overflow is disclosed as a
 count), and the run still applies its valid claims and still advances the extraction checkpoint.
 
+One more disclosed deferral class extends the same contract: a claim the pass wrote so badly it
+never gained a stable ID and statement. The apply step drops that raw item, names it by the byte
+offset of its head line in the written file under the same `deferred_claims` metadata, and keeps the
+rest of the pass; an item that names no claim at all - a bare bullet or index-shaped prose - still
+rejects the run whole, as does a parse-invalid rewrite of a claim the baseline already knows.
+
 The protective contract is unchanged: a rewrite that drops or replaces the provenance of an existing
 durable claim rejects the whole run and rolls it back, because silently rewriting durable knowledge
 is never acceptable.

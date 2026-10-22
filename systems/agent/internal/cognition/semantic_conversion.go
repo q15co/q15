@@ -232,7 +232,7 @@ func checkLedgerCompleteness(
 	ctx context.Context,
 	loader ContextLoader,
 	baseline map[string]string,
-	deferred []claimSrcDeferral,
+	deferred []claimDeferral,
 ) (int, int, error) {
 	before, ok := baseline[workingMemoryRuntimePath]
 	if !ok {
@@ -452,22 +452,66 @@ func workingScaffoldHeading(line string) bool {
 // workingItems extracts structured claims and loops with their continuation
 // lines, ignoring documentation blocks and empty seed entries.
 func workingItems(content string) []string {
-	var items []string
+	spans := workingItemSpans(content)
+	items := make([]string, len(spans))
+	for i, span := range spans {
+		items[i] = span.Item
+	}
+	return items
+}
+
+// workingItemSpan is one structured working item together with the byte range
+// its head and continuation lines occupy in the scanned content, so a
+// raw-item deferral can drop exactly that range (#394).
+type workingItemSpan struct {
+	// Item is the item text workingItems returns.
+	Item string
+	// Head is the byte offset of the item's first line.
+	Head int
+	// End sits just past the item, including the newline that follows its
+	// last line when one exists, so dropping [Head, End) removes the item
+	// and its own line separator. The newline that separates the previous
+	// line from the item belongs to that previous line and survives, as does
+	// every blank line that precedes the item's head.
+	End int
+}
+
+// workingItemSpans applies the workingItems item rules and also reports where
+// each returned item sits in the content. The scan is the one workingItems is
+// derived from: a new item starts at an unindented "- ", "* " or "+ " line,
+// continuation lines are blank-or-indented runs, and comments and fences
+// never contribute.
+func workingItemSpans(content string) []workingItemSpan {
+	lines := strings.Split(content, "\n")
+	offsets := make([]int, len(lines)+1)
+	for i, line := range lines {
+		offsets[i+1] = offsets[i] + len(line) + 1
+	}
+	var spans []workingItemSpan
 	var current []string
+	head, last := 0, 0
 	flush := func() {
 		if len(current) == 0 {
 			return
 		}
 		item := strings.TrimRight(strings.Join(current, "\n"), "\n")
 		description := workingItemDescription(item)
+		end := len(content)
+		if last+1 < len(lines) {
+			end = offsets[last+1]
+		}
 		if description != "" && !strings.EqualFold(strings.Trim(description, "()."), "none") {
-			items = append(items, item)
+			spans = append(spans, workingItemSpan{
+				Item: item,
+				Head: offsets[head],
+				End:  end,
+			})
 		}
 		current = nil
 	}
 	inComment := false
 	fence := ""
-	for _, line := range strings.Split(content, "\n") {
+	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if inComment {
 			if strings.Contains(line, "-->") {
@@ -495,18 +539,32 @@ func workingItems(content string) []string {
 			(strings.HasPrefix(line, "- ") || strings.HasPrefix(line, "* ") || strings.HasPrefix(line, "+ ")) {
 			flush()
 			current = []string{line}
+			head, last = i, i
 			continue
 		}
 		if len(current) > 0 &&
 			(strings.TrimSpace(line) == "" || line != strings.TrimLeft(line, " \t") ||
 				(strings.TrimSpace(current[len(current)-1]) != "" && !strings.HasPrefix(line, "#"))) {
 			current = append(current, line)
+			last = i
 			continue
 		}
 		flush()
 	}
 	flush()
-	return items
+	return spans
+}
+
+// dropWorkingItemSpans splices every given span out of content in one pass.
+// The spans were scanned from content itself and are disjoint and file-ordered,
+// so removing them in reverse keeps every byte offset valid while the splice
+// runs, and each removed item's recorded Head is its offset in the file as it
+// was written - the offset a raw-item deferral is named by.
+func dropWorkingItemSpans(content string, spans []workingItemSpan) string {
+	for i := len(spans) - 1; i >= 0; i-- {
+		content = content[:spans[i].Head] + content[spans[i].End:]
+	}
+	return content
 }
 
 func workingItemDescription(item string) string {

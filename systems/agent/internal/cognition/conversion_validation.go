@@ -25,6 +25,22 @@ func (e claimSrcRefusalError) Error() string {
 	return fmt.Sprintf("invalid claim src %q", e.src)
 }
 
+// claimParseRefusalError is the typed parse-stage refusal: a written item
+// failed the stable-ID-and-statement grammar before any validated claim
+// exists to check further (issue #394). The refusal fires on the raw item,
+// which is why the ids it still recognized are carried with it: the apply
+// boundary defers this class for a claim attempt - an item with a claim head
+// or the canonical metadata span - by dropping the item's own bytes and
+// naming them by byte offset, unless one of those ids is a claim the
+// baseline knows, which stays a mangled rewrite of durable knowledge and
+// fails the run whole. The message is the fixed grammar refusal, so a
+// disclosed deferral reason is bounded by construction.
+type claimParseRefusalError struct{ ids []string }
+
+func (claimParseRefusalError) Error() string {
+	return "claim requires a stable ID and statement"
+}
+
 var (
 	claimIDPattern           = regexp.MustCompile(`^c-[0-9]{4}-[0-9]{4,}$`)
 	loopHeadPattern          = regexp.MustCompile(`^[-*+] \[(l-[0-9]{4}-[0-9]{4,})\]\s+(.+)`)
@@ -81,7 +97,7 @@ func validateExitTargets(
 	ctx context.Context,
 	loader ContextLoader,
 	entries []claims.LedgerEntry,
-	deferred map[string]claimSrcDeferral,
+	deferred map[string]claimDeferral,
 ) error {
 	for _, entry := range entries {
 		switch entry.Outcome {
@@ -123,10 +139,12 @@ func validateExitTargets(
 			if !found {
 				if deferral, ok := deferred[entry.TargetID]; ok &&
 					deferral.Path == entry.TargetPath {
-					// The apply step deferred this claim's src citations and
-					// removed it from the written file. The exit still records
-					// the completed working-memory exit it names, and the run
-					// result discloses the deferral.
+					// The apply step deferred this claim - its src citations
+					// alone failed the grammar (#390), or it was written so
+					// badly its ID stayed but the statement did not (#394) -
+					// and removed it from the written file. The exit still
+					// records the completed working-memory exit it names, and
+					// the run result discloses the deferral.
 					continue
 				}
 				return fmt.Errorf(
@@ -174,7 +192,11 @@ func validateClaimItem(item string) error {
 	}
 	if len(parsed) != 1 || !claimIDPattern.MatchString(parsed[0].ID) ||
 		strings.TrimSpace(parsed[0].Text) == "" {
-		return fmt.Errorf("claim requires a stable ID and statement")
+		ids := make([]string, 0, len(parsed))
+		for _, claim := range parsed {
+			ids = append(ids, claim.ID)
+		}
+		return claimParseRefusalError{ids: ids}
 	}
 	fields, err := itemMetadata(item, "status", "kind", "confidence", "src", "rev")
 	if err != nil {
@@ -205,14 +227,21 @@ func validateClaimItem(item string) error {
 	return nil
 }
 
-// claimSrcDeferral records one claim the conversion apply step removed from
-// the written file instead of failing the run (issue #390): a
-// never-before-seen claim whose src citations alone failed the grammar. The
-// deferral is disclosed in the run result so the pass's valid claims still
-// apply and the extraction checkpoint still advances.
-type claimSrcDeferral struct {
-	// ID is the deferred claim's stable identifier.
+// claimDeferral records one written claim item the conversion apply step
+// removed from the file instead of failing the run: a never-before-seen
+// claim whose src citations alone failed the grammar (issue #390), or a
+// parse-invalid item - one that never gained a stable ID and statement -
+// dropped at the raw-item level (issue #394). The deferral is disclosed in
+// the run result so the pass's valid claims still apply and the extraction
+// checkpoint still advances.
+type claimDeferral struct {
+	// ID is the removed item's stable claim ID. A parse-invalid item that
+	// carries no usable ID defers with ID empty, and is then not keyed for
+	// the exit-target check because no ledger exit can name it.
 	ID string
+	// Name is the run-result disclosure name: the claim ID for an ID-keyed
+	// removal, else the dropped item's byte offset in the written file.
+	Name string
 	// Path is the repository-relative semantic file the claim was removed
 	// from, e.g. "semantic/facts.md".
 	Path string
@@ -229,38 +258,87 @@ const (
 	semanticDeferredSrcTokenBytes = 200
 )
 
-// deferSrcInvalidClaim removes one src-invalid claim item from content and
-// returns its deferral record. It defers only a refusal of the typed
-// src-grammar error on a newly introduced claim - a claim the baseline
-// semantic files know is a rewrite of durable knowledge and fails the run
-// instead - and only when the item's removal actually succeeds; anything
-// else keeps today's whole-pass failure.
+// deferSrcInvalidClaim decides whether one src-invalid claim item is
+// deferred, and its deferral record is the disclosure: the claim ID keys the
+// exit-target check and names the deferral in the run result. It defers only
+// a refusal of the typed src-grammar error on a newly introduced claim with
+// one well-formed head - a claim the baseline semantic files know is a
+// rewrite of durable knowledge and fails the run instead; anything else
+// keeps today's whole-pass failure.
 func deferSrcInvalidClaim(
-	content, item string,
+	item string,
 	validationErr error,
 	before map[string]claims.Claim,
-) (string, claimSrcDeferral, bool) {
+) (claimDeferral, bool) {
 	var refusal claimSrcRefusalError
 	if !errors.As(validationErr, &refusal) {
-		return content, claimSrcDeferral{}, false
+		return claimDeferral{}, false
 	}
 	parsed, _, err := claims.ParseClaims(item)
-	if err != nil || len(parsed) != 1 || !claimIDPattern.MatchString(parsed[0].ID) {
-		return content, claimSrcDeferral{}, false
+	if err != nil || len(parsed) != 1 {
+		return claimDeferral{}, false
+	}
+	// A single well-formed claim head keeps an ID worth keying the exit
+	// check and the disclosure on; the removal itself is the item's own byte
+	// range, exactly like the raw-item deferral.
+	if !claimIDPattern.MatchString(parsed[0].ID) {
+		return claimDeferral{}, false
 	}
 	if _, existed := before[parsed[0].ID]; existed {
-		return content, claimSrcDeferral{}, false
+		return claimDeferral{}, false
 	}
-	cleaned, err := claims.ReplaceClaim(content, parsed[0].ID, "")
-	if err != nil {
-		return content, claimSrcDeferral{}, false
-	}
-	return cleaned, claimSrcDeferral{
-		ID: parsed[0].ID,
+	return claimDeferral{
+		ID:   parsed[0].ID,
+		Name: parsed[0].ID,
 		Reason: claimSrcRefusalError{
 			src: boundedDeferredSrc(refusal.src),
 		}.Error(),
 	}, true
+}
+
+// deferParseInvalidItem decides whether one parse-invalid item is deferred.
+// It defers only the typed parse-stage refusal (#394) on a claim attempt -
+// an item that carries a claim head or the canonical metadata span the claim
+// grammar reads - and only when none of the item's claim heads is an ID the
+// baseline knows: a baseline-known ID here is a mangled rewrite of durable
+// knowledge and keeps today's whole-run refusal. Bare bullets and
+// index-shaped prose name no claim at all, so they keep today's whole-run
+// refusal too, protecting the topic-index integrity guardrail. The loop
+// names the record by the item's own byte offset, because with no stable ID
+// and statement there is nothing else to name.
+func deferParseInvalidItem(
+	item string,
+	validationErr error,
+	before map[string]claims.Claim,
+) (claimDeferral, bool) {
+	var refusal claimParseRefusalError
+	if !errors.As(validationErr, &refusal) {
+		return claimDeferral{}, false
+	}
+	for _, id := range refusal.ids {
+		if _, existed := before[id]; existed {
+			return claimDeferral{}, false
+		}
+	}
+	if len(refusal.ids) == 0 && !hasCanonicalClaimMetadata(item) {
+		return claimDeferral{}, false
+	}
+	var id string
+	if len(refusal.ids) > 0 {
+		id = refusal.ids[0]
+	}
+	return claimDeferral{
+		ID:     id,
+		Reason: refusal.Error(),
+	}, true
+}
+
+// hasCanonicalClaimMetadata reports whether the item carries the canonical
+// claim metadata span with every claim field, the shape of a claim the
+// extraction model attempted but broke at the ID/statement stage.
+func hasCanonicalClaimMetadata(item string) bool {
+	_, err := itemMetadata(item, "status", "kind", "confidence", "src", "rev")
+	return err == nil
 }
 
 // boundedDeferredSrc collapses whitespace in a deferred citation value and
@@ -384,7 +462,7 @@ func checkSemanticClaims(
 	loader ContextLoader,
 	baseline map[string]string,
 	written []string,
-) ([]claimSrcDeferral, error) {
+) ([]claimDeferral, error) {
 	sizes, err := loader.LoadSemanticFileSizes(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list semantic claims: %w", err)
@@ -415,7 +493,7 @@ func checkSemanticClaims(
 		changed[runtimePath] = true
 	}
 	seen := make(map[string]string)
-	var deferred []claimSrcDeferral
+	var deferred []claimDeferral
 	for relative := range sizes {
 		runtimePath := memoryRuntimePrefix + relative
 		raw, existed, err := loader.ReadFileBytes(ctx, relative)
@@ -488,25 +566,33 @@ func checkSemanticClaims(
 		if !changed[runtimePath] {
 			continue
 		}
-		// The apply boundary defers src-invalid new claims individually
-		// (issue #390): a one-claim citation failure must not discard every
-		// valid claim in the pass, so the item is removed from the written
-		// file and named in the run result. Everything the baseline already
-		// knows as durable stays protected: a src-invalid rewrite of an
-		// existing claim fails the run whole, as does any other refusal.
+		// The apply boundary defers one-item failures that cannot cost
+		// durable knowledge (issues #390, #394): a one-claim citation failure
+		// or a parse-invalid claim attempt must not discard every valid
+		// claim in the pass, so the item is removed from the written file and
+		// named in the run result. Everything the baseline already knows as
+		// durable stays protected: a refusal on a rewrite of an existing
+		// claim fails the run whole, as does any refusal on an item that
+		// never claimed to be a claim.
 		content := string(raw)
-		var fileDeferrals []claimSrcDeferral
-		for _, item := range workingItems(content) {
+		var fileDeferrals []claimDeferral
+		var drops []workingItemSpan
+		// One scan decides every item against the file as written; the
+		// single splice afterwards keeps each disclosed byte offset a real
+		// offset in that written file, whatever the other removals did.
+		for _, span := range workingItemSpans(content) {
+			item := span.Item
 			if relative == semanticProjectsRelativePath && validTopicIndex(item) {
 				continue
 			}
 			if validationErr := validateClaimItem(item); validationErr != nil {
-				cleaned, deferral, ok := deferSrcInvalidClaim(
-					content,
-					item,
-					validationErr,
-					before,
-				)
+				deferral, ok := deferSrcInvalidClaim(item, validationErr, before)
+				// A src refusal on one well-formed claim head is ID-keyed;
+				// anything else gets its one chance at the raw-item
+				// parse-stage deferral.
+				if !ok {
+					deferral, ok = deferParseInvalidItem(item, validationErr, before)
+				}
 				if !ok {
 					return nil, fmt.Errorf(
 						"invalid written semantic claim in %s: %w",
@@ -514,14 +600,20 @@ func checkSemanticClaims(
 						validationErr,
 					)
 				}
-				content = cleaned
 				deferral.Path = relative
+				if deferral.Name == "" {
+					// The parse-stage record carries no ID to name, so the
+					// run result names the dropped item's own byte offset.
+					deferral.Name = fmt.Sprintf("byte %d", span.Head)
+				}
 				fileDeferrals = append(fileDeferrals, deferral)
+				drops = append(drops, span)
 			}
 		}
-		if len(fileDeferrals) > 0 {
+		if len(drops) > 0 {
+			content = dropWorkingItemSpans(content, drops)
 			if err := loader.WriteFileBytes(ctx, relative, []byte(content)); err != nil {
-				return nil, fmt.Errorf("defer src-invalid claims in %s: %w", relative, err)
+				return nil, fmt.Errorf("defer invalid claims in %s: %w", relative, err)
 			}
 			deferred = append(deferred, fileDeferrals...)
 		}
@@ -553,22 +645,26 @@ func checkSemanticClaims(
 	return deferred, nil
 }
 
-// deferredClaimIndex maps deferrals by claim ID for the exit-target check.
-func deferredClaimIndex(deferrals []claimSrcDeferral) map[string]claimSrcDeferral {
+// deferredClaimIndex maps the deferrals that carry a claim ID by that ID for
+// the exit-target check; raw-item deferrals have no ID to key.
+func deferredClaimIndex(deferrals []claimDeferral) map[string]claimDeferral {
 	if len(deferrals) == 0 {
 		return nil
 	}
-	index := make(map[string]claimSrcDeferral, len(deferrals))
+	index := make(map[string]claimDeferral, len(deferrals))
 	for _, deferral := range deferrals {
-		index[deferral.ID] = deferral
+		if deferral.ID != "" {
+			index[deferral.ID] = deferral
+		}
 	}
 	return index
 }
 
 // deferredClaimMetadata renders the run result's deferral disclosure: every
-// deferred claim named with its bounded refusal, up to a fixed list bound,
-// with the overflow disclosed as a count.
-func deferredClaimMetadata(deferrals []claimSrcDeferral) map[string]string {
+// deferred item named with its bounded refusal, up to a fixed list bound,
+// with the overflow disclosed as a count. An ID-keyed removal names the
+// claim ID; a raw-item drop names the item's byte offset.
+func deferredClaimMetadata(deferrals []claimDeferral) map[string]string {
 	if len(deferrals) == 0 {
 		return nil
 	}
@@ -577,7 +673,7 @@ func deferredClaimMetadata(deferrals []claimSrcDeferral) map[string]string {
 	for _, deferral := range deferrals[:named] {
 		disclosures = append(
 			disclosures,
-			fmt.Sprintf("%s in %s: %s", deferral.ID, deferral.Path, deferral.Reason),
+			fmt.Sprintf("%s in %s: %s", deferral.Name, deferral.Path, deferral.Reason),
 		)
 	}
 	metadata := map[string]string{
