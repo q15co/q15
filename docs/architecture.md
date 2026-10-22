@@ -76,6 +76,32 @@ mounts `/memory` read-only, so shell commands and background sessions cannot byp
 boundary. Other deployment arrangements must preserve that mount contract. Direct host edits are an
 operator action and must wait until cognition is idle.
 
+## Semantic Claim Src Citations
+
+Every durable claim carries a `src` field in its `{...}` metadata line that names the evidence
+behind the statement. One grammar owns what a `src` may cite; the conversion apply step
+(`semantic_memory.extract`) validates every claim in the files its run wrote against it:
+
+- `t<seq>` is a transcript sequence marker: the letter `t` followed by a positive decimal integer
+  with no leading zero, no ranges and no punctuation, for example `t4312`.
+- `mem:<path>:<byte-offset>` is a memory-file citation: `<path>` sits under `semantic/` or
+  `working/`, and `<byte-offset>` is decimal. The memory-repair flow uses this form for a claim it
+  adopted out of a drained memory file.
+
+Several citations are separated by commas. Anything else - guessed sources, URLs, dates, `t0`,
+citation ranges, trailing punctuation - fails the claim src grammar. The grammar itself is not
+relaxed at the boundary; its refusals stay exact.
+
+The apply boundary treats one src-grammar refusal differently from every other validation failure. A
+pass that introduces a claim whose citations alone are invalid does not lose its valid claims: the
+apply step defers that one claim - it removes it from the written file, names the claim ID and the
+refusal in the run result's `deferred_claims` metadata (bounded list; the overflow is disclosed as a
+count), and the run still applies its valid claims and still advances the extraction checkpoint.
+
+The protective contract is unchanged: a rewrite that drops or replaces the provenance of an existing
+durable claim rejects the whole run and rolls it back, because silently rewriting durable knowledge
+is never acceptable.
+
 ## Prompt-Visible Temporal Metadata
 
 Interactive user turns may carry runtime-injected temporal metadata at the start of the

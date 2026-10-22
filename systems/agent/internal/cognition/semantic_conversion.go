@@ -232,6 +232,7 @@ func checkLedgerCompleteness(
 	ctx context.Context,
 	loader ContextLoader,
 	baseline map[string]string,
+	deferred []claimSrcDeferral,
 ) (int, int, error) {
 	before, ok := baseline[workingMemoryRuntimePath]
 	if !ok {
@@ -281,7 +282,7 @@ func checkLedgerCompleteness(
 			}
 		}
 	}
-	if err := validateExitTargets(ctx, loader, entries); err != nil {
+	if err := validateExitTargets(ctx, loader, entries, deferredClaimIndex(deferred)); err != nil {
 		return 0, 0, err
 	}
 	if err := checkPreservedOpenLoops(ctx, loader, baseline); err != nil {

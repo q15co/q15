@@ -83,8 +83,12 @@ var semanticMemoryAllowedTools = []string{
 // also gives model writers the ledger grammar; typed repair uses its runtime
 // formatter instead of asking the model to reproduce persisted records.
 const (
-	conversionClaimFormatRule    = "- Claim format: `- [c-YYYY-NNNN] <self-contained statement>` followed by an indented `{status: active|conflicted, kind: fact|inference|preference, confidence: confirmed|likely|uncertain, src: t<seq>[, t<seq>], rev: YYYY-MM-DD}` line. Claim IDs are globally unique and never reused, including IDs recorded in archived ledgers. Preserve existing source markers when revising an existing claim."
-	conversionClaimStorageRule   = "- Store durable claims only in the canonical semantic roots or direct `semantic/topics/<slug>.md` files. Other topic extensions are not indexed by semantic retrieval and fail claim validation."
+	conversionClaimFormatRule  = "- Claim format: `- [c-YYYY-NNNN] <self-contained statement>` followed by an indented `{status: active|conflicted, kind: fact|inference|preference, confidence: confirmed|likely|uncertain, src: t<seq>[, t<seq>], rev: YYYY-MM-DD}` line. Claim IDs are globally unique and never reused, including IDs recorded in archived ledgers. Preserve existing source markers when revising an existing claim."
+	conversionClaimStorageRule = "- Store durable claims only in the canonical semantic roots or direct `semantic/topics/<slug>.md` files. Other topic extensions are not indexed by semantic retrieval and fail claim validation."
+	// conversionClaimSrcRule points at the documented claim-src rules instead
+	// of restating them, so one document owns the citation grammar and the
+	// apply boundary's deferral behaviour stays disclosed, not silent (#390).
+	conversionClaimSrcRule       = "- Claim `src` citations must follow the src rules documented in docs/architecture.md under \"Semantic claim src citations\". A citation outside that grammar defers that one claim at the apply step and names it in the run result."
 	conversionLedgerFormatRule   = "- Ledger format: one line per exit, `YYYY-MM-DDTHH:MMZ run=semantic_memory.extract src=t<a>..t<b> <outcome> \"<working-memory item>\" → <claim-or-loop-id> (<file>)`. For a drop, omit the target and give the reason in parentheses."
 	ledgerDescriptionQuotingRule = `- Ledger descriptions use Go-style double-quoted string literals: escape embedded double quotes as \" and backslashes as \\. Parentheses and backticks inside the description remain literal. For example, the source text A "sample" in C:\notes becomes "A \"sample\" in C:\\notes". Decoding the description must preserve the full original text with whitespace collapsed.`
 )
@@ -446,6 +450,7 @@ func (j semanticMemoryExtractionJob) Build(
 					"- Contradicting match: mark the old claim status: conflicted, add the new claim also as conflicted, and cross-reference both IDs. Never flatten the conflict.",
 					"- Supersession (the new claim is the acknowledged replacement): write the new claim as active, delete the old claim, and append a superseded ledger record targeting the old claim ID with the replacement ID in its reason. Every removed durable claim needs a superseded, retracted, or resolved ledger record targeting its old ID and explaining the reason.",
 					conversionClaimFormatRule,
+					conversionClaimSrcRule,
 					conversionClaimStorageRule,
 					"- Retraction: delete an explicitly withdrawn claim and append a retracted ledger record targeting its old ID with the reason. The transcript retains the evidence.",
 					"- Open-loop format: `- [l-YYYY-NNNN] <intention>` followed by an indented `{trigger: date:YYYY-MM-DD | event:\"<description>\" | next-session, owner: agent|user, src: t<seq>}` line.",
@@ -575,13 +580,24 @@ func (j semanticMemoryExtractionJob) ApplyResult(
 			err,
 		)
 	}
-	if err := checkSemanticClaims(ctx, loader, output.Spec.Baseline, successfulWritePaths(output.Messages)); err != nil {
+	deferred, err := checkSemanticClaims(
+		ctx,
+		loader,
+		output.Spec.Baseline,
+		successfulWritePaths(output.Messages),
+	)
+	if err != nil {
 		return ParsedResult{}, rollbackFailedRun(ctx, loader, output.Spec.FileSnapshots, err)
 	}
 	if err := checkWorkingFileBudgets(ctx, loader, j.budgets); err != nil {
 		return ParsedResult{}, rollbackFailedRun(ctx, loader, output.Spec.FileSnapshots, err)
 	}
-	removed, appended, err := checkLedgerCompleteness(ctx, loader, output.Spec.Baseline)
+	removed, appended, err := checkLedgerCompleteness(
+		ctx,
+		loader,
+		output.Spec.Baseline,
+		deferred,
+	)
 	if err != nil {
 		return ParsedResult{}, rollbackFailedRun(
 			ctx,
@@ -606,6 +622,9 @@ func (j semanticMemoryExtractionJob) ApplyResult(
 		"projects_changed":      strconv.FormatBool(targets[semanticProjectsRuntimePath].mutated),
 		"working_items_exited":  strconv.Itoa(removed),
 		"ledger_lines_appended": strconv.Itoa(appended),
+	}
+	for key, value := range deferredClaimMetadata(deferred) {
+		metadata[key] = value
 	}
 
 	return ParsedResult{

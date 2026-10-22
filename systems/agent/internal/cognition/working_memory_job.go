@@ -548,7 +548,7 @@ func checkWorkingMemoryLedgerCompleteness(
 			}
 		}
 	}
-	return validateExitTargets(ctx, loader, entries)
+	return validateExitTargets(ctx, loader, entries, nil)
 }
 
 func unmatchedWorkingExits(before, after string) map[string]int {
