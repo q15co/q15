@@ -155,8 +155,14 @@ type RunRecord struct {
 	Summary         string            `json:"summary,omitempty"`
 	Metadata        map[string]string `json:"metadata,omitempty"`
 	ModelRef        string            `json:"model_ref,omitempty"`
-	AttemptFailures []AttemptFailure  `json:"attempt_failures,omitempty"`
-	Error           string            `json:"error,omitempty"`
+	// Turns and TurnBudget record the model/tool turns the run consumed and
+	// the turn budget it ran under (#387), so turn-cap fitness is observable
+	// from the run history on success and failure alike. Zero means the
+	// attempt never reached the engine loop (a no-work or build failure).
+	Turns           int              `json:"turns,omitempty"`
+	TurnBudget      int              `json:"turn_budget,omitempty"`
+	AttemptFailures []AttemptFailure `json:"attempt_failures,omitempty"`
+	Error           string           `json:"error,omitempty"`
 	// ConsecutiveCount is the record's position within its consecutive
 	// failure streak (#379 layer 2): 1 for the first failure of a streak. The
 	// store suppresses run-record commits for streak repeats and keeps
@@ -727,6 +733,8 @@ func (c *Controller) runPending(ctx context.Context, pending pendingRun) error {
 		OutputSeq:       headSeq,
 		OutputUpdatedAt: headAt,
 		Succeeded:       runErr == nil,
+		Turns:           result.Turn,
+		TurnBudget:      result.MaxTurns,
 	}
 	if runErr != nil {
 		record.Error = runErr.Error()

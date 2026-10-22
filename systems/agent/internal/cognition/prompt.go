@@ -42,6 +42,13 @@ type Spec struct {
 	FileSnapshots map[string]FileSnapshot
 	// MemoryRecoveryID identifies the durable journal for this run.
 	MemoryRecoveryID string
+	// MaxTurns overrides the runner's default model/tool turn budget for this
+	// one run. Zero selects the runner default. A job sets it when its fixed
+	// shape - the protocol its completion contract mandates over the input it
+	// serves - cannot fit in the default budget: the turn cap is uniform per
+	// engine, so the budget has to be declared per job. The effective budget
+	// is reported back on the run result so it lands in the run record.
+	MaxTurns int
 	// repair marks the spec as the semantic job's bounded repair mode: the
 	// memory surface held a repairable target, so the run drains one chunk of
 	// repairTarget instead of running the transcript-driven conversion. A

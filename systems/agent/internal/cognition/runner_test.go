@@ -2,6 +2,7 @@ package cognition
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -632,4 +633,153 @@ func TestRunnerReportsARollbackFailureAlongsideTheRunFailure(t *testing.T) {
 		t.Fatalf("Run() error = %v, want the rollback failure in it", err)
 	}
 
+}
+
+func turnBudgetSpec(maxTurns int) Spec {
+	return Spec{
+		Objective:          "Exercise the turn budget.",
+		CompletionContract: "Return `status: ok` when complete.",
+		ExposeTools:        true,
+		AllowedTools:       []string{"noop"},
+		MaxTurns:           maxTurns,
+	}
+}
+
+// loopingToolModel answers every turn with a fresh tool call, so the engine
+// can only stop at its turn budget. Unique arguments keep the tool-loop
+// detector below its critical threshold.
+func loopingToolModel(toolName string) *fakeModelClient {
+	calls := 0
+	return &fakeModelClient{
+		complete: func(
+			context.Context,
+			string,
+			[]conversation.Message,
+			[]agent.ToolDefinition,
+		) (agent.ModelClientResult, error) {
+			calls++
+			return toolCallResult(
+				fmt.Sprintf("call-%d", calls),
+				toolName,
+				fmt.Sprintf(`{"n":%d}`, calls),
+			), nil
+		},
+	}
+}
+
+func newTurnBudgetRunner(t *testing.T, model *fakeModelClient) *Runner {
+	t.Helper()
+	registry, err := agent.NewToolRegistry(testTool{def: agent.ToolDefinition{Name: "noop"}})
+	if err != nil {
+		t.Fatalf("NewToolRegistry() error = %v", err)
+	}
+	return NewRunner(model, registry, []string{"m1"}, &spyLoader{})
+}
+
+func turnBudgetJob(spec Spec) fakeJob {
+	return fakeJob{
+		jobType: "budget.probe",
+		build: func(context.Context, ContextLoader) (Spec, error) {
+			return spec, nil
+		},
+		apply: func(context.Context, ContextLoader, JobOutput) (ParsedResult, error) {
+			return ParsedResult{Summary: "ok"}, nil
+		},
+	}
+}
+
+func TestRunnerAppliesTheJobDeclaredTurnBudget(t *testing.T) {
+	t.Parallel()
+
+	model := loopingToolModel("noop")
+	runner := newTurnBudgetRunner(t, model)
+
+	result, err := runner.Run(
+		context.Background(),
+		turnBudgetJob(turnBudgetSpec(76)),
+		nil,
+	)
+	if err == nil {
+		t.Fatal("Run() error = nil, want the turn-limit stop")
+	}
+	var stopErr *agent.StopError
+	if !errors.As(err, &stopErr) || stopErr.Reason != agent.StopReasonToolTurnLimit {
+		t.Fatalf("Run() error = %v, want a tool-turn-limit stop", err)
+	}
+	if !strings.Contains(err.Error(), "(76)") {
+		t.Fatalf("Run() error = %q, want the job-scoped budget named", err)
+	}
+	if got, want := result.MaxTurns, 76; got != want {
+		t.Fatalf("result.MaxTurns = %d, want %d", got, want)
+	}
+	if got, want := result.Turn, 76; got != want {
+		// A run stopped at its budget consumed the whole budget.
+		t.Fatalf("result.Turn = %d, want %d", got, want)
+	}
+}
+
+func TestRunnerKeepsTheDefaultTurnBudgetForJobsWithoutAnOverride(t *testing.T) {
+	t.Parallel()
+
+	model := loopingToolModel("noop")
+	runner := newTurnBudgetRunner(t, model)
+
+	spec := turnBudgetSpec(0)
+	result, err := runner.Run(context.Background(), turnBudgetJob(spec), nil)
+	if err == nil {
+		t.Fatal("Run() error = nil, want the turn-limit stop")
+	}
+	want := defaultCognitionMaxTurns
+	if !strings.Contains(err.Error(), fmt.Sprintf("(%d)", want)) {
+		t.Fatalf("Run() error = %q, want the default budget (%d) named", err, want)
+	}
+	if got := result.MaxTurns; got != want {
+		t.Fatalf("result.MaxTurns = %d, want %d", got, want)
+	}
+	if got := result.Turn; got != want {
+		t.Fatalf("result.Turn = %d, want %d", got, want)
+	}
+}
+
+func TestRunnerReportsTurnBudgetAndConsumedTurnsOnSuccess(t *testing.T) {
+	t.Parallel()
+
+	model := &fakeModelClient{
+		results: []agent.ModelClientResult{
+			toolCallResult("call-1", "noop", "{}"),
+			assistantResult("status: ok"),
+		},
+	}
+	runner := newTurnBudgetRunner(t, model)
+
+	result, err := runner.Run(
+		context.Background(),
+		turnBudgetJob(turnBudgetSpec(40)),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if got, want := result.MaxTurns, 40; got != want {
+		t.Fatalf("result.MaxTurns = %d, want %d", got, want)
+	}
+	if got, want := result.Turn, 2; got != want {
+		t.Fatalf("result.Turn = %d, want %d consumed turns", got, want)
+	}
+
+	defaulted := &fakeModelClient{results: []agent.ModelClientResult{assistantResult("status: ok")}}
+	defaultedResult, err := newTurnBudgetRunner(t, defaulted).Run(
+		context.Background(),
+		turnBudgetJob(turnBudgetSpec(0)),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if got, want := defaultedResult.MaxTurns, defaultCognitionMaxTurns; got != want {
+		t.Fatalf("defaulted result.MaxTurns = %d, want %d", got, want)
+	}
+	if got, want := defaultedResult.Turn, 1; got != want {
+		t.Fatalf("defaulted result.Turn = %d, want %d", got, want)
+	}
 }
