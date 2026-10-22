@@ -982,3 +982,101 @@ func (*semanticMemoryJobLoader) BeginMemoryRepairRecovery(
 func (*semanticMemoryJobLoader) CompleteMemoryRecovery(context.Context, string) error { return nil }
 
 func (*semanticMemoryJobLoader) RecoverMemory(context.Context, string) error { return nil }
+
+func TestSemanticExtractionMaxTurns(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		span int
+		want int
+	}{
+		{semanticMemoryWindowTurns / 2, 44},
+		{semanticMemoryWindowTurns, 76},
+		{semanticMemoryRecentTurns, 140},
+		{0, semanticExtractionFixedTurns},
+		{-3, semanticExtractionFixedTurns},
+	} {
+		if got := semanticExtractionMaxTurns(tc.span); got != tc.want {
+			t.Fatalf("semanticExtractionMaxTurns(%d) = %d, want %d", tc.span, got, tc.want)
+		}
+	}
+}
+
+func TestSemanticMemoryExtractionBuildSetsWindowScopedTurnBudget(t *testing.T) {
+	t.Parallel()
+
+	semantic := agent.SemanticMemory{
+		Files: []agent.SemanticMemoryFile{
+			{
+				RelativePath: semanticFactsRelativePath,
+				Content:      "# Semantic Facts\n\n## Confirmed Facts\n\n- None\n\n## Grounded Inferences\n\n- None\n",
+			},
+			{
+				RelativePath: semanticPreferencesRelativePath,
+				Content:      "# Semantic Preferences\n\n## User Preferences\n\n- None\n\n## Collaboration Preferences\n\n- None\n",
+			},
+			{
+				RelativePath: semanticProjectsRelativePath,
+				Content:      "# Semantic Projects\n\n## Active Projects\n\n- None\n\n## Durable Project Knowledge\n\n- None\n",
+			},
+		},
+	}
+	working := agent.WorkingMemory{
+		RelativePath: workingMemoryRelativePath,
+		Content:      "# Working Memory\n\n## Active Tasks\n\n- None\n",
+	}
+
+	buildMaxTurns := func(loader *semanticMemoryJobLoader) int {
+		t.Helper()
+		spec, err := NewSemanticMemoryExtractionRegistration(0, 0).NewJob().Build(
+			context.Background(),
+			loader,
+		)
+		if err != nil {
+			t.Fatalf("Build() error = %v", err)
+		}
+		return spec.MaxTurns
+	}
+
+	// The steady-state checkpoint window serves semanticMemoryWindowTurns
+	// transcript turns, so the budget is the fixed protocol spine plus one
+	// evidence round per window turn: 12+4*16=76.
+	steady := &semanticMemoryJobLoader{
+		checkpoint: SemanticExtractionCheckpoint{LastExtractedSeq: 40},
+		semantic:   semantic,
+		working:    working,
+		recent: []conversation.Message{
+			conversation.UserMessage("A windowed turn after the checkpoint."),
+			conversation.AssistantMessage(conversation.Text("Noted.", "")),
+		},
+	}
+	if got, want := buildMaxTurns(steady), semanticExtractionMaxTurns(semanticMemoryWindowTurns); got != want {
+		t.Fatalf("steady-state spec.MaxTurns = %d, want %d", got, want)
+	}
+
+	// A degraded job serves the halved window, so the budget halves with it:
+	// 12+4*8=44, still above the universal default it replaces.
+	degraded := &semanticMemoryJobLoader{
+		checkpoint: SemanticExtractionCheckpoint{LastExtractedSeq: 40},
+		semantic:   semantic,
+		working:    working,
+		jobState:   JobState{ConsecutiveFailures: stallDegradedFailures},
+	}
+	if got, want := buildMaxTurns(degraded), semanticExtractionMaxTurns(semanticMemoryWindowTurns/2); got != want {
+		t.Fatalf("degraded spec.MaxTurns = %d, want %d", got, want)
+	}
+
+	// The checkpoint-less initial replay spans semanticMemoryRecentTurns, so
+	// its budget is 12+4*32=140.
+	initial := &semanticMemoryJobLoader{
+		semantic: semantic,
+		working:  working,
+		recent: []conversation.Message{
+			conversation.UserMessage("First replay turn."),
+			conversation.AssistantMessage(conversation.Text("Noted.", "")),
+		},
+	}
+	if got, want := buildMaxTurns(initial), semanticExtractionMaxTurns(semanticMemoryRecentTurns); got != want {
+		t.Fatalf("initial-replay spec.MaxTurns = %d, want %d", got, want)
+	}
+}

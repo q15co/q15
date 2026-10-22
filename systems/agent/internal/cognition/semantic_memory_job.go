@@ -26,6 +26,45 @@ const (
 	memorySurfaceRepairableRuleID   = "memory_surface_repairable"
 )
 
+// The extraction run's turn budget is derived from the shape of the
+// conversion pass, not from a global constant: every run pays a fixed
+// protocol spine, then one evidence round per transcript turn the input
+// window can still nominate.
+const (
+	// semanticExtractionFixedTurns covers the window-independent spine the
+	// completion contract and semantic_memory_execution_order mandate on every
+	// run: inspect the three semantic roots, read the open-loops file and the
+	// conversion ledger (steps 1-2), write the ledger, working-memory and
+	// open-loops updates (steps 4-5), and re-inspect the written files for
+	// the closing de-duplication and cap checks (steps 6-8).
+	semanticExtractionFixedTurns = 12
+	// semanticExtractionTurnsPerWindowTurn budgets the evidence-per-candidate
+	// rounds: conversion_rules require retrieve-before-writing for each exit
+	// or promotion candidate - one embed_search, one target re-read, one
+	// write or edit, and one ledger append per candidate - and a transcript
+	// turn nominates about one candidate on the passes that fill a window.
+	// Candidate-sparse turns bank the unused rounds for turns that nominate
+	// several.
+	semanticExtractionTurnsPerWindowTurn = 4
+)
+
+// semanticExtractionMaxTurns derives one extraction run's tool-turn budget
+// from the transcript span its window can serve: the fixed protocol spine
+// plus one evidence round per window turn. The windowed replay serves at
+// most semanticMemoryWindowTurns turns (halved while the job degrades after
+// repeated failures), so the steady-state budget is 12+4*16=76 turns and the
+// initial checkpoint-less replay, which spans semanticMemoryRecentTurns, gets
+// 12+4*32=140. Measured against the production failure that prompted this
+// (#387): real conversion passes blew straight through the universal 32-turn
+// cap, and this job is the only one whose contract prices its turns from the
+// input it is handed.
+func semanticExtractionMaxTurns(windowSpanTurns int) int {
+	if windowSpanTurns < 0 {
+		windowSpanTurns = 0
+	}
+	return semanticExtractionFixedTurns + semanticExtractionTurnsPerWindowTurn*windowSpanTurns
+}
+
 // SemanticMemoryExtractionJobType is the job type under which the built-in
 // semantic-memory extraction job persists its trigger state. The controller
 // writes that state and read-only status reporting reads it back by this name,
@@ -177,7 +216,11 @@ func (j semanticMemoryExtractionJob) Build(
 	var transcriptStatus string
 	windowEndSeq := int64(0)
 	var progress *transcriptProgress
+	// windowSpanTurns is the transcript span this run's input window can
+	// serve; it prices the run's turn budget (semanticExtractionMaxTurns).
+	var windowSpanTurns int
 	if semanticCheckpoint.LastExtractedSeq > 0 || semanticCheckpoint.PartialTurn != nil {
+		windowSpanTurns = windowTurns
 		window, loadErr := loadTranscriptWindow(
 			ctx,
 			loader,
@@ -200,6 +243,7 @@ func (j semanticMemoryExtractionJob) Build(
 		)
 	} else {
 		recentTurns := semanticMemoryRecentTurns * windowTurns / semanticMemoryWindowTurns
+		windowSpanTurns = recentTurns
 		window, loadErr := loadInitialTranscriptWindow(ctx, loader, recentTurns, loader.LoadLatestMessages)
 		if loadErr != nil {
 			return Spec{}, fmt.Errorf("load latest messages: %w", loadErr)
@@ -449,6 +493,7 @@ func (j semanticMemoryExtractionJob) Build(
 		ExposeTools:         true,
 		RequireToolCalling:  true,
 		AllowedTools:        append([]string(nil), semanticMemoryAllowedTools...),
+		MaxTurns:            semanticExtractionMaxTurns(windowSpanTurns),
 		transcriptProgress:  progress,
 		CheckpointSeq:       windowEndSeq,
 		Baseline:            baseline,

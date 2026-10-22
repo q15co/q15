@@ -2,6 +2,7 @@ package cognition
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -12,7 +13,11 @@ import (
 )
 
 const (
-	// defaultCognitionMaxTurns caps the model/tool turns for one cognition run.
+	// defaultCognitionMaxTurns caps the model/tool turns of one cognition run
+	// whose job declares no budget of its own on Spec.MaxTurns. It sizes the
+	// short protocol shapes (repair, verification, working-memory): a few
+	// mandated inspections plus a bounded write set. The semantic extraction
+	// conversion pass declares a larger window-scoped budget instead.
 	defaultCognitionMaxTurns               = 32
 	defaultCognitionMaxFailedModelAttempts = 3
 	memoryRecoveryTimeout                  = 30 * time.Second
@@ -153,7 +158,15 @@ type Result struct {
 	FinalText        string
 	Messages         []conversation.Message
 	ModelRef         string
-	Turn             int
+	// Turn counts the model/tool turns the run consumed (the engine's
+	// zero-based loop index plus one; a run stopped at its turn budget
+	// consumed the whole budget). Zero means no turn was attempted.
+	Turn int
+	// MaxTurns is the model/tool turn budget this run was executed under: the
+	// job's Spec.MaxTurns override when it declares one, otherwise the
+	// runner's default. Zero means the runner resolved no budget (a prebuilt
+	// engine run whose job declared no override).
+	MaxTurns int
 	// CheckpointSeq is the transcript sequence this run actually processed when
 	// the job worked through a bounded window. Zero means the run covered
 	// everything up to the run head.
@@ -243,7 +256,8 @@ func NewRunnerWithResolver(
 	}
 }
 
-// SetMaxTurns overrides the maximum model/tool turns for a cognition run.
+// SetMaxTurns overrides the default maximum model/tool turns of a cognition
+// run. A job's own Spec.MaxTurns declaration takes precedence per run.
 func (r *Runner) SetMaxTurns(maxTurns int) {
 	if r == nil || maxTurns <= 0 {
 		return
@@ -251,11 +265,24 @@ func (r *Runner) SetMaxTurns(maxTurns int) {
 	r.maxTurns = maxTurns
 }
 
+// maxTurnsForSpec resolves the effective turn budget of one run: the job's
+// declared Spec.MaxTurns when positive, the runner default otherwise.
+func (r *Runner) maxTurnsForSpec(spec Spec) int {
+	if spec.MaxTurns > 0 {
+		return spec.MaxTurns
+	}
+	return r.maxTurns
+}
+
 // engineForJob selects the engine for one cognition job. A prebuilt engine
 // (NewRunnerWithEngine) is used as-is; otherwise the per-job model ref resolver
-// chooses the refs for this job type.
-func (r *Runner) engineForJob(jobType string) (*agent.Engine, error) {
+// chooses the refs for this job type. maxTurns is the resolved turn budget for
+// this run; a non-positive value leaves the engine's own default untouched.
+func (r *Runner) engineForJob(jobType string, maxTurns int) (*agent.Engine, error) {
 	if r.engineRef != nil {
+		if maxTurns > 0 {
+			r.engineRef.SetMaxTurns(maxTurns)
+		}
 		return r.engineRef, nil
 	}
 	if r.modelClient == nil {
@@ -264,8 +291,8 @@ func (r *Runner) engineForJob(jobType string) (*agent.Engine, error) {
 
 	refs := r.modelRefsForJob(jobType)
 	engine := agent.NewEngineWithPlanner(r.modelClient, r.planner, r.tools, refs)
-	if r.maxTurns > 0 {
-		engine.SetMaxTurns(r.maxTurns)
+	if maxTurns > 0 {
+		engine.SetMaxTurns(maxTurns)
 	}
 	return engine, nil
 }
@@ -361,7 +388,9 @@ func (r *Runner) Run(
 	}
 
 	failureResult := repairFailureResult(jobType, spec)
-	engine, err := r.engineForJob(jobType)
+	maxTurns := r.maxTurnsForSpec(spec)
+	failureResult.MaxTurns = maxTurns
+	engine, err := r.engineForJob(jobType, maxTurns)
 	if err != nil {
 		err = r.withRollbackError(ctx, job, spec, err)
 		notifyRunEvent(ctx, observer, agent.RunEvent{
@@ -412,6 +441,7 @@ func (r *Runner) Run(
 	if err != nil {
 		err = describeRequestBudget(jobType, spec, systemPrompt, err)
 		err = r.withRollbackError(ctx, job, spec, err)
+		failureResult.Turn = consumedTurns(runResult, err, maxTurns)
 		notifyRunEvent(ctx, observer, agent.RunEvent{
 			Type:      agent.RunEventRunFailed,
 			Turn:      runResult.Turn,
@@ -436,6 +466,7 @@ func (r *Runner) Run(
 	}
 	if err != nil {
 		err = r.withRollbackError(ctx, job, spec, err)
+		failureResult.Turn = consumedTurns(runResult, err, maxTurns)
 		notifyRunEvent(ctx, observer, agent.RunEvent{
 			Type:      agent.RunEventRunFailed,
 			Turn:      runResult.Turn,
@@ -453,7 +484,8 @@ func (r *Runner) Run(
 		FinalText:          runResult.FinalText,
 		Messages:           conversation.CloneMessages(runResult.Messages),
 		ModelRef:           runResult.ModelRef,
-		Turn:               runResult.Turn,
+		Turn:               consumedTurns(runResult, nil, maxTurns),
+		MaxTurns:           maxTurns,
 		CheckpointSeq:      parsed.CheckpointSeq,
 		Repair:             parsed.Repair,
 		repairTarget:       failureResult.repairTarget,
@@ -462,7 +494,7 @@ func (r *Runner) Run(
 	}
 	notifyRunEvent(ctx, observer, agent.RunEvent{
 		Type:      agent.RunEventRunFinished,
-		Turn:      result.Turn,
+		Turn:      runResult.Turn,
 		ModelRef:  result.ModelRef,
 		FinalText: result.FinalText,
 	})
@@ -494,6 +526,21 @@ func (r *Runner) rollbackFailedRun(
 		return nil
 	}
 	return rollbacker.Rollback(cleanupCtx, r.loader, spec)
+}
+
+// consumedTurns normalizes the engine's zero-based turn index into the
+// number of model/tool turns the run consumed. The engine's turn-limit stop
+// path reports no index at all, so a run that died on its budget reports the
+// whole budget: it consumed every turn it was given. That count is what the
+// controller persists next to the budget, so turn-cap fitness is visible
+// from the run record without reproducing the run.
+func consumedTurns(runResult agent.EngineResult, runErr error, maxTurns int) int {
+	var stopErr *agent.StopError
+	if errors.As(runErr, &stopErr) && stopErr.Reason == agent.StopReasonToolTurnLimit &&
+		runResult.Turn <= 0 {
+		return maxTurns
+	}
+	return runResult.Turn + 1
 }
 
 func cloneMetadata(in map[string]string) map[string]string {

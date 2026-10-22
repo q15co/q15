@@ -1502,3 +1502,139 @@ func TestControllerStallEscalationHalvesWindowAndAlerts(t *testing.T) {
 		t.Fatalf("delete calls = %v, want %q among them", deleted, alertPath)
 	}
 }
+
+func TestControllerRunRecordCarriesTurnBudgetAndConsumedTurnsOnSuccess(t *testing.T) {
+	t.Parallel()
+
+	store := newFakeControllerStore()
+	controller := newControllerForTest(t, store, JobRegistration{
+		NewJob: func() JobDefinition {
+			return fakeJob{
+				jobType: "verification.check",
+				build: func(context.Context, ContextLoader) (Spec, error) {
+					spec := turnBudgetSpec(64)
+					spec.Objective = "Review dirty state."
+					return spec, nil
+				},
+				apply: func(context.Context, ContextLoader, JobOutput) (ParsedResult, error) {
+					return ParsedResult{Summary: "checked"}, nil
+				},
+			}
+		},
+		Policy: TriggerPolicy{
+			Startup: []StartupRule{{
+				ID: "startup",
+				Evaluate: func(context.Context, Snapshot, JobState) (bool, string, error) {
+					return true, "startup tail", nil
+				},
+			}},
+		},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- controller.Run(ctx)
+	}()
+
+	waitFor(t, 2*time.Second, func() bool {
+		return len(store.runRecords()) == 1
+	})
+
+	records := store.runRecords()
+	if !records[0].Succeeded {
+		t.Fatalf("run record succeeded = false, error = %q", records[0].Error)
+	}
+	if got, want := records[0].TurnBudget, 64; got != want {
+		t.Fatalf("run record turn budget = %d, want %d", got, want)
+	}
+	if got, want := records[0].Turns, 1; got != want {
+		t.Fatalf("run record turns = %d, want %d", got, want)
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for controller exit")
+	}
+}
+
+func TestControllerFailedRunRecordCarriesTurnBudgetAndConsumedTurns(t *testing.T) {
+	t.Parallel()
+
+	store := newFakeControllerStore()
+	registry, err := agent.NewToolRegistry(testTool{def: agent.ToolDefinition{Name: "noop"}})
+	if err != nil {
+		t.Fatalf("NewToolRegistry() error = %v", err)
+	}
+	controller, err := NewController(
+		NewRunner(loopingToolModel("noop"), registry, []string{"cognition"}, &spyLoader{}),
+		store,
+		&spyLoader{},
+		JobRegistration{
+			NewJob: func() JobDefinition {
+				return fakeJob{
+					jobType: "semantic_memory.extract",
+					build: func(context.Context, ContextLoader) (Spec, error) {
+						spec := turnBudgetSpec(3)
+						spec.ExposeTools = true
+						return spec, nil
+					},
+				}
+			},
+			Policy: TriggerPolicy{
+				Startup: []StartupRule{{
+					ID: "startup",
+					Evaluate: func(context.Context, Snapshot, JobState) (bool, string, error) {
+						return true, "startup tail", nil
+					},
+				}},
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewController() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- controller.Run(ctx)
+	}()
+
+	waitFor(t, 2*time.Second, func() bool {
+		return len(store.runRecords()) >= 1
+	})
+
+	records := store.runRecords()
+	if records[0].Succeeded {
+		t.Fatal("run record succeeded = true, want a turn-limit failure")
+	}
+	if got, want := records[0].TurnBudget, 3; got != want {
+		t.Fatalf("failed run record turn budget = %d, want %d", got, want)
+	}
+	if got, want := records[0].Turns, 3; got != want {
+		t.Fatalf("failed run record turns = %d, want %d", got, want)
+	}
+	if !strings.Contains(records[0].Error, "(3)") {
+		t.Fatalf("run record error = %q, want the budget named", records[0].Error)
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for controller exit")
+	}
+}
