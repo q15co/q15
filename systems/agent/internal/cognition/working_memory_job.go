@@ -573,10 +573,7 @@ func checkWorkingMemoryLedgerCompleteness(
 			}
 		}
 	}
-	if err := validateExitTargets(ctx, loader, entries); err != nil {
-		return nil, err
-	}
-	return deferrals, nil
+	return deferrals, validateExitTargets(ctx, loader, entries, nil)
 }
 
 // ledgerExitDeferral names one appended ledger exit that could not record a

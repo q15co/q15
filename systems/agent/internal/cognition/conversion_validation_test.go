@@ -24,6 +24,20 @@ func (l *conversionValidationLoader) ReadFileBytes(
 	return []byte(raw), ok, nil
 }
 
+// WriteFileBytes mirrors ReadFileBytes so the deferral write in
+// checkSemanticClaims lands where the loader reads it back from.
+func (l *conversionValidationLoader) WriteFileBytes(
+	_ context.Context,
+	relative string,
+	raw []byte,
+) error {
+	if l.files == nil {
+		l.files = make(map[string]string)
+	}
+	l.files[relative] = string(raw)
+	return nil
+}
+
 func (l *conversionValidationLoader) LoadConversionLedgerHistory(context.Context) (string, error) {
 	return l.history, nil
 }
@@ -91,6 +105,7 @@ func TestConversionExitEvidenceMatchesEveryOutcomeAndTarget(t *testing.T) {
 			workingLedgerRuntimePath: "",
 			openLoopsRuntimePath:     "",
 		},
+		nil,
 	)
 	if err != nil || removed != 3 || appended != 3 {
 		t.Fatalf("checkLedgerCompleteness() = %d, %d, %v; want 3, 3, nil", removed, appended, err)
@@ -127,7 +142,7 @@ func TestConversionRejectsInvalidExitEvidence(t *testing.T) {
 					"working/OPEN_LOOPS.md":   test.loop,
 				},
 			}
-			if _, _, err := checkLedgerCompleteness(context.Background(), loader, map[string]string{workingMemoryRuntimePath: "- A.\n", workingLedgerRuntimePath: ""}); err == nil {
+			if _, _, err := checkLedgerCompleteness(context.Background(), loader, map[string]string{workingMemoryRuntimePath: "- A.\n", workingLedgerRuntimePath: ""}, nil); err == nil {
 				t.Fatal("invalid exit evidence was accepted")
 			}
 		})
@@ -193,6 +208,7 @@ func TestConversionMultilineRemovalRequiresCompleteDescription(t *testing.T) {
 					workingLedgerRuntimePath: "",
 					openLoopsRuntimePath:     "",
 				},
+				nil,
 			)
 			valid := strings.Contains(description, "Critical")
 			if (err == nil) != valid || (valid && removed != 1) {
@@ -230,7 +246,7 @@ func TestConversionClaimIdentityAndProvenance(t *testing.T) {
 				semanticFactsRuntimePath: test.previous,
 				workingLedgerRuntimePath: "",
 			}
-			err := checkSemanticClaims(
+			_, err := checkSemanticClaims(
 				context.Background(),
 				loader,
 				baseline,
@@ -287,7 +303,7 @@ func TestConversionTopicIndexCannotBypassClaimValidation(t *testing.T) {
 			loader := &conversionValidationLoader{files: map[string]string{
 				semanticProjectsRelativePath: test.item,
 			}}
-			err := checkSemanticClaims(
+			_, err := checkSemanticClaims(
 				context.Background(),
 				loader,
 				emptyConversionBaseline(),
@@ -456,7 +472,7 @@ func TestConversionRemovedClaimsRequireLifecycleHistory(t *testing.T) {
 				semanticFactsRuntimePath: validConversionClaim,
 				workingLedgerRuntimePath: "",
 			}
-			err := checkSemanticClaims(
+			_, err := checkSemanticClaims(
 				context.Background(),
 				loader,
 				baseline,
@@ -499,7 +515,7 @@ func TestConversionTargetsRequireIndexedSemanticPaths(t *testing.T) {
 			}
 			err := validateExitTargets(context.Background(), loader, []claims.LedgerEntry{{
 				Outcome: claims.OutcomeConverted, TargetID: "c-2026-0001", TargetPath: test.target,
-			}})
+			}}, nil)
 			if (err == nil) != test.valid {
 				t.Fatalf("valid=%v error=%v", test.valid, err)
 			}
@@ -607,5 +623,92 @@ func TestItemMetadataAcceptsMixedSourceList(t *testing.T) {
 	}
 	if _, ok := fields["nope"]; ok || strings.Contains(fields["status"], "nope") == false {
 		t.Fatalf("fields = %#v, want nope: left inside the status value, not a field", fields)
+	}
+}
+
+// TestConversionApplyDefersSrcInvalidNewClaims pins the apply-boundary
+// stability behaviour (#390): a conversion pass that cites a new claim with
+// a source outside the claim src grammar loses that one claim, which the
+// apply step removes from the written file and names in the run result,
+// while every other refusal - and any src failure on a claim the baseline
+// already knows - still fails the whole run.
+func TestConversionApplyDefersSrcInvalidNewClaims(t *testing.T) {
+	t.Parallel()
+	const deferredSrcClaim = "- [c-2026-0002] The release notes live in memory/notes.\n" +
+		"  {status: active, kind: fact, confidence: confirmed, src: guessed, rev: 2026-10-14}\n"
+	for _, test := range []struct {
+		name, previous, current, wantError string
+		deferred                           bool
+	}{
+		{name: "deferred new claim", current: validConversionClaim + deferredSrcClaim, deferred: true},
+		{name: "invalid src rewrite drops provenance", previous: validConversionClaim,
+			current:   strings.ReplaceAll(validConversionClaim, "src: t12", "src: guessed"),
+			wantError: "removed existing provenance"},
+		{name: "invalid src rewrite keeps provenance", previous: validConversionClaim,
+			current:   strings.ReplaceAll(validConversionClaim, "src: t12", "src: t12, guessed"),
+			wantError: `invalid written semantic claim`},
+		{name: "invalid kind is not deferred", current: validConversionClaim + strings.ReplaceAll(deferredSrcClaim, "kind: fact", "kind: guess"), wantError: "invalid claim kind"},
+		{name: "invalid rev is not deferred", current: validConversionClaim + strings.ReplaceAll(deferredSrcClaim, "rev: 2026-10-14", "rev: 2026-02-31"), wantError: "invalid claim rev"},
+		{name: "malformed metadata is not deferred", current: validConversionClaim + "- [c-2026-0003] Orphan statement.\n", wantError: "missing canonical metadata"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			loader := &conversionValidationLoader{
+				files: map[string]string{semanticFactsRelativePath: test.current},
+			}
+			baseline := map[string]string{
+				semanticFactsRuntimePath: test.previous,
+				workingLedgerRuntimePath: "",
+			}
+			deferred, err := checkSemanticClaims(
+				context.Background(),
+				loader,
+				baseline,
+				[]string{semanticFactsRuntimePath},
+			)
+			if test.deferred {
+				if err != nil {
+					t.Fatalf("checkSemanticClaims() error = %v, want the claim deferred", err)
+				}
+				if len(deferred) != 1 || deferred[0].ID != "c-2026-0002" ||
+					deferred[0].Path != semanticFactsRelativePath ||
+					deferred[0].Reason != `invalid claim src "guessed"` {
+					t.Fatalf("deferrals = %#v", deferred)
+				}
+				if after := loader.files[semanticFactsRelativePath]; after != validConversionClaim {
+					t.Fatalf("post-deferral file =\n%s\nwant the valid claim intact", after)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("checkSemanticClaims() error = %v; want %q", err, test.wantError)
+			}
+		})
+	}
+}
+
+func TestDeferredClaimDisclosureIsBounded(t *testing.T) {
+	t.Parallel()
+	if metadata := deferredClaimMetadata(nil); metadata != nil {
+		t.Fatalf("deferredClaimMetadata(nil) = %v, want nil", metadata)
+	}
+	const total = semanticDeferredClaimListLimit + 4
+	deferrals := make([]claimSrcDeferral, 0, total)
+	for i := range total {
+		deferrals = append(deferrals, claimSrcDeferral{
+			ID:     fmt.Sprintf("c-2026-0%03d", i),
+			Path:   "semantic/facts.md",
+			Reason: `invalid claim src "guessed"`,
+		})
+	}
+	metadata := deferredClaimMetadata(deferrals)
+	if metadata["deferred_claim_count"] != fmt.Sprint(total) {
+		t.Fatalf("deferred_claim_count = %q", metadata["deferred_claim_count"])
+	}
+	if metadata["deferred_claims_omitted"] != fmt.Sprint(total-semanticDeferredClaimListLimit) {
+		t.Fatalf("deferred_claims_omitted = %q", metadata["deferred_claims_omitted"])
+	}
+	if named := strings.Count(metadata["deferred_claims"], "c-2026-0"); named != semanticDeferredClaimListLimit {
+		t.Fatalf("deferred_claims named %d entries, want %d", named, semanticDeferredClaimListLimit)
 	}
 }

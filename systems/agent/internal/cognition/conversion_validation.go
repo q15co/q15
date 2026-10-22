@@ -2,6 +2,7 @@ package cognition
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path"
 	"regexp"
@@ -12,6 +13,17 @@ import (
 
 	"github.com/q15co/q15/systems/agent/internal/memory/claims"
 )
+
+// claimSrcRefusalError is the typed src-grammar refusal: a claim's src field,
+// as documented in docs/architecture.md under "Semantic claim src citations",
+// did not parse as citation evidence. The conversion apply boundary defers
+// exactly this refusal for never-before-seen claims (issue #390); every other
+// refusal still fails the whole run.
+type claimSrcRefusalError struct{ src string }
+
+func (e claimSrcRefusalError) Error() string {
+	return fmt.Sprintf("invalid claim src %q", e.src)
+}
 
 var (
 	claimIDPattern           = regexp.MustCompile(`^c-[0-9]{4}-[0-9]{4,}$`)
@@ -69,6 +81,7 @@ func validateExitTargets(
 	ctx context.Context,
 	loader ContextLoader,
 	entries []claims.LedgerEntry,
+	deferred map[string]claimSrcDeferral,
 ) error {
 	for _, entry := range entries {
 		switch entry.Outcome {
@@ -108,6 +121,14 @@ func validateExitTargets(
 				found = true
 			}
 			if !found {
+				if deferral, ok := deferred[entry.TargetID]; ok &&
+					deferral.Path == entry.TargetPath {
+					// The apply step deferred this claim's src citations and
+					// removed it from the written file. The exit still records
+					// the completed working-memory exit it names, and the run
+					// result discloses the deferral.
+					continue
+				}
 				return fmt.Errorf(
 					"converted ledger target %s does not exist in %s",
 					entry.TargetID,
@@ -172,13 +193,85 @@ func validateClaimItem(item string) error {
 	default:
 		return fmt.Errorf("invalid claim confidence %q", fields["confidence"])
 	}
-	if !validSourceList(fields["src"]) {
-		return fmt.Errorf("invalid claim src %q", fields["src"])
-	}
+	// The rev check comes before src so the typed src refusal proves the
+	// claim's other fields already validated; the apply boundary reads that
+	// guarantee when it decides to defer a claim instead of failing a run.
 	if _, err := time.Parse(time.DateOnly, fields["rev"]); err != nil {
 		return fmt.Errorf("invalid claim rev %q", fields["rev"])
 	}
+	if !validSourceList(fields["src"]) {
+		return claimSrcRefusalError{src: fields["src"]}
+	}
 	return nil
+}
+
+// claimSrcDeferral records one claim the conversion apply step removed from
+// the written file instead of failing the run (issue #390): a
+// never-before-seen claim whose src citations alone failed the grammar. The
+// deferral is disclosed in the run result so the pass's valid claims still
+// apply and the extraction checkpoint still advances.
+type claimSrcDeferral struct {
+	// ID is the deferred claim's stable identifier.
+	ID string
+	// Path is the repository-relative semantic file the claim was removed
+	// from, e.g. "semantic/facts.md".
+	Path string
+	// Reason is the bounded src-grammar refusal text.
+	Reason string
+}
+
+const (
+	// semanticDeferredClaimListLimit bounds how many deferred claims a run
+	// result names individually; the overflow is disclosed as a count.
+	semanticDeferredClaimListLimit = 8
+	// semanticDeferredSrcTokenBytes bounds one disclosed citation value, so a
+	// garbage src cannot bloat the run record.
+	semanticDeferredSrcTokenBytes = 200
+)
+
+// deferSrcInvalidClaim removes one src-invalid claim item from content and
+// returns its deferral record. It defers only a refusal of the typed
+// src-grammar error on a newly introduced claim - a claim the baseline
+// semantic files know is a rewrite of durable knowledge and fails the run
+// instead - and only when the item's removal actually succeeds; anything
+// else keeps today's whole-pass failure.
+func deferSrcInvalidClaim(
+	content, item string,
+	validationErr error,
+	before map[string]claims.Claim,
+) (string, claimSrcDeferral, bool) {
+	var refusal claimSrcRefusalError
+	if !errors.As(validationErr, &refusal) {
+		return content, claimSrcDeferral{}, false
+	}
+	parsed, _, err := claims.ParseClaims(item)
+	if err != nil || len(parsed) != 1 || !claimIDPattern.MatchString(parsed[0].ID) {
+		return content, claimSrcDeferral{}, false
+	}
+	if _, existed := before[parsed[0].ID]; existed {
+		return content, claimSrcDeferral{}, false
+	}
+	cleaned, err := claims.ReplaceClaim(content, parsed[0].ID, "")
+	if err != nil {
+		return content, claimSrcDeferral{}, false
+	}
+	return cleaned, claimSrcDeferral{
+		ID: parsed[0].ID,
+		Reason: claimSrcRefusalError{
+			src: boundedDeferredSrc(refusal.src),
+		}.Error(),
+	}, true
+}
+
+// boundedDeferredSrc collapses whitespace in a deferred citation value and
+// caps its length, so the refusal text the run result names stays bounded.
+func boundedDeferredSrc(src string) string {
+	src = compactSemanticMemoryText(src)
+	runes := []rune(src)
+	if len(runes) <= semanticDeferredSrcTokenBytes {
+		return src
+	}
+	return string(runes[:semanticDeferredSrcTokenBytes-3]) + "..."
 }
 
 func validateLoopItem(item string) error {
@@ -291,10 +384,10 @@ func checkSemanticClaims(
 	loader ContextLoader,
 	baseline map[string]string,
 	written []string,
-) error {
+) ([]claimSrcDeferral, error) {
 	sizes, err := loader.LoadSemanticFileSizes(ctx)
 	if err != nil {
-		return fmt.Errorf("list semantic claims: %w", err)
+		return nil, fmt.Errorf("list semantic claims: %w", err)
 	}
 	before := make(map[string]claims.Claim)
 	for runtimePath, raw := range baseline {
@@ -303,7 +396,7 @@ func checkSemanticClaims(
 		}
 		parsed, _, err := claims.ParseClaims(raw)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		for _, claim := range parsed {
 			before[claim.ID] = claim
@@ -311,7 +404,7 @@ func checkSemanticClaims(
 	}
 	history, err := loader.LoadConversionLedgerHistory(ctx)
 	if err != nil {
-		return fmt.Errorf("load historical claim IDs: %w", err)
+		return nil, fmt.Errorf("load historical claim IDs: %w", err)
 	}
 	historical := make(map[string]bool)
 	for _, id := range historicalClaimIDPattern.FindAllString(history+"\n"+baseline[workingLedgerRuntimePath], -1) {
@@ -322,21 +415,22 @@ func checkSemanticClaims(
 		changed[runtimePath] = true
 	}
 	seen := make(map[string]string)
+	var deferred []claimSrcDeferral
 	for relative := range sizes {
 		runtimePath := memoryRuntimePrefix + relative
 		raw, existed, err := loader.ReadFileBytes(ctx, relative)
 		if err != nil {
-			return fmt.Errorf("read semantic claims %s: %w", relative, err)
+			return nil, fmt.Errorf("read semantic claims %s: %w", relative, err)
 		}
 		if !existed {
-			return fmt.Errorf("semantic claim inventory file %s is missing", relative)
+			return nil, fmt.Errorf("semantic claim inventory file %s is missing", relative)
 		}
 		if previous, present := baseline[runtimePath]; !present || previous != string(raw) {
 			changed[runtimePath] = true
 		}
 		if limit := semanticCapFor(runtimePath); changed[runtimePath] && limit > 0 &&
 			len(raw) > limit {
-			return fmt.Errorf(
+			return nil, fmt.Errorf(
 				"changed semantic file %s is over cap (%d>%d)",
 				relative,
 				len(raw),
@@ -345,17 +439,17 @@ func checkSemanticClaims(
 		}
 		parsed, _, err := claims.ParseClaims(string(raw))
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if len(parsed) > 0 && !semanticClaimPath(runtimePath) {
-			return fmt.Errorf(
+			return nil, fmt.Errorf(
 				"durable claims in %s cannot be indexed; semantic claim files must end in .md",
 				relative,
 			)
 		}
 		for _, claim := range parsed {
 			if previous, ok := seen[claim.ID]; ok {
-				return fmt.Errorf(
+				return nil, fmt.Errorf(
 					"duplicate claim ID %s in %s and %s",
 					claim.ID,
 					previous,
@@ -365,7 +459,10 @@ func checkSemanticClaims(
 			seen[claim.ID] = relative
 			old, existedBefore := before[claim.ID]
 			if !existedBefore && historical[claim.ID] {
-				return fmt.Errorf("claim ID %s was previously used and cannot be reused", claim.ID)
+				return nil, fmt.Errorf(
+					"claim ID %s was previously used and cannot be reused",
+					claim.ID,
+				)
 			}
 			if existedBefore && changed[runtimePath] {
 				for _, source := range old.Src {
@@ -376,7 +473,7 @@ func checkSemanticClaims(
 						}
 					}
 					if !found {
-						return fmt.Errorf(
+						return nil, fmt.Errorf(
 							"claim %s removed existing provenance %s",
 							claim.ID,
 							source,
@@ -384,42 +481,113 @@ func checkSemanticClaims(
 					}
 				}
 				if claim.Rev < old.Rev {
-					return fmt.Errorf("claim %s moved revision backwards", claim.ID)
+					return nil, fmt.Errorf("claim %s moved revision backwards", claim.ID)
 				}
 			}
 		}
 		if !changed[runtimePath] {
 			continue
 		}
-		for _, item := range workingItems(string(raw)) {
+		// The apply boundary defers src-invalid new claims individually
+		// (issue #390): a one-claim citation failure must not discard every
+		// valid claim in the pass, so the item is removed from the written
+		// file and named in the run result. Everything the baseline already
+		// knows as durable stays protected: a src-invalid rewrite of an
+		// existing claim fails the run whole, as does any other refusal.
+		content := string(raw)
+		var fileDeferrals []claimSrcDeferral
+		for _, item := range workingItems(content) {
 			if relative == semanticProjectsRelativePath && validTopicIndex(item) {
 				continue
 			}
-			if err := validateClaimItem(item); err != nil {
-				return fmt.Errorf("invalid written semantic claim in %s: %w", relative, err)
+			if validationErr := validateClaimItem(item); validationErr != nil {
+				cleaned, deferral, ok := deferSrcInvalidClaim(
+					content,
+					item,
+					validationErr,
+					before,
+				)
+				if !ok {
+					return nil, fmt.Errorf(
+						"invalid written semantic claim in %s: %w",
+						relative,
+						validationErr,
+					)
+				}
+				content = cleaned
+				deferral.Path = relative
+				fileDeferrals = append(fileDeferrals, deferral)
 			}
+		}
+		if len(fileDeferrals) > 0 {
+			if err := loader.WriteFileBytes(ctx, relative, []byte(content)); err != nil {
+				return nil, fmt.Errorf("defer src-invalid claims in %s: %w", relative, err)
+			}
+			deferred = append(deferred, fileDeferrals...)
 		}
 	}
 	entries, err := appendedWorkingLedgerEntries(ctx, loader, baseline, "semantic-memory run")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	recorded := make(map[string]bool)
 	for _, entry := range entries {
 		switch entry.Outcome {
 		case claims.OutcomeSuperseded, claims.OutcomeRetracted, claims.OutcomeResolved:
 			if !claimIDPattern.MatchString(entry.TargetID) || strings.TrimSpace(entry.Note) == "" {
-				return fmt.Errorf("claim lifecycle entry requires the old claim ID and a reason")
+				return nil, fmt.Errorf(
+					"claim lifecycle entry requires the old claim ID and a reason",
+				)
 			}
 			recorded[entry.TargetID] = true
 		}
 	}
 	for id := range before {
 		if _, remains := seen[id]; !remains && !recorded[id] {
-			return fmt.Errorf("removed durable claim %s has no lifecycle ledger record", id)
+			return nil, fmt.Errorf(
+				"removed durable claim %s has no lifecycle ledger record",
+				id,
+			)
 		}
 	}
-	return nil
+	return deferred, nil
+}
+
+// deferredClaimIndex maps deferrals by claim ID for the exit-target check.
+func deferredClaimIndex(deferrals []claimSrcDeferral) map[string]claimSrcDeferral {
+	if len(deferrals) == 0 {
+		return nil
+	}
+	index := make(map[string]claimSrcDeferral, len(deferrals))
+	for _, deferral := range deferrals {
+		index[deferral.ID] = deferral
+	}
+	return index
+}
+
+// deferredClaimMetadata renders the run result's deferral disclosure: every
+// deferred claim named with its bounded refusal, up to a fixed list bound,
+// with the overflow disclosed as a count.
+func deferredClaimMetadata(deferrals []claimSrcDeferral) map[string]string {
+	if len(deferrals) == 0 {
+		return nil
+	}
+	named := min(len(deferrals), semanticDeferredClaimListLimit)
+	disclosures := make([]string, 0, named)
+	for _, deferral := range deferrals[:named] {
+		disclosures = append(
+			disclosures,
+			fmt.Sprintf("%s in %s: %s", deferral.ID, deferral.Path, deferral.Reason),
+		)
+	}
+	metadata := map[string]string{
+		"deferred_claim_count": strconv.Itoa(len(deferrals)),
+		"deferred_claims":      strings.Join(disclosures, "; "),
+	}
+	if omitted := len(deferrals) - named; omitted > 0 {
+		metadata["deferred_claims_omitted"] = strconv.Itoa(omitted)
+	}
+	return metadata
 }
 
 func validTopicIndex(item string) bool {

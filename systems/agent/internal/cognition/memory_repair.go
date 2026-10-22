@@ -711,7 +711,7 @@ func validateRepairRun(
 		}
 	}
 
-	if err := validateExitTargets(ctx, loader, entries); err != nil {
+	if err := validateExitTargets(ctx, loader, entries, nil); err != nil {
 		return 0, err
 	}
 	if err := checkRepairClaimExits(ctx, loader, output.Spec.Baseline, entries, written); err != nil {
