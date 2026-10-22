@@ -670,14 +670,14 @@ func TestSearchRunOutputByteLimit(t *testing.T) {
 	}
 	room := outputLimit - len(empty)
 	for _, tc := range []struct {
-		name, text string
-		wantBytes  int
-		wantError  bool
+		name, text  string
+		wantBytes   int
+		wantBounded bool
 	}{
 		{name: "below limit", text: strings.Repeat("x", room-1), wantBytes: outputLimit - 1},
 		{name: "exact limit", text: strings.Repeat("x", room), wantBytes: outputLimit},
-		{name: "over limit", text: strings.Repeat("x", room+1), wantBytes: outputLimit + 1, wantError: true},
-		{name: "JSON escaping exceeds limit", text: strings.Repeat("<", room/6+1), wantBytes: len(empty) + (room/6+1)*6, wantError: true},
+		{name: "over limit", text: strings.Repeat("x", room+1), wantBytes: outputLimit + 1, wantBounded: true},
+		{name: "JSON escaping exceeds limit", text: strings.Repeat("<", room/6+1), wantBytes: len(empty) + (room/6+1)*6, wantBounded: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			result.Payload = map[string]any{"text": tc.text}
@@ -692,13 +692,22 @@ func TestSearchRunOutputByteLimit(t *testing.T) {
 			got, err := NewSearch(
 				&fakeService{results: results},
 			).Run(context.Background(), `{"query":"synthetic","collection":"semantic","limit":1}`)
-			if tc.wantError {
-				if err == nil || got != "" {
-					t.Fatalf("oversized search returned %d bytes with error %v", len(got), err)
+			if tc.wantBounded {
+				// #380: an oversized hit degrades to a bounded excerpt instead
+				// of erroring; the error path is reserved for results that
+				// cannot be bounded at all.
+				if err != nil {
+					t.Fatalf("oversized search errored instead of degrading: %v", err)
 				}
-				if len(err.Error()) >= 256 || !strings.Contains(err.Error(), "reduce limit") ||
-					!strings.Contains(err.Error(), "read_file") {
-					t.Fatalf("oversized search error is not bounded and actionable: %q", err)
+				if len(got) > outputLimit {
+					t.Fatalf("bounded output = %d bytes, cap %d", len(got), outputLimit)
+				}
+				if !strings.Contains(got, `"truncated": true`) ||
+					!strings.Contains(got, `"omitted_bytes"`) {
+					t.Fatalf(
+						"truncation not disclosed in bounded output: %q",
+						got[:min(len(got), 256)],
+					)
 				}
 				return
 			}
@@ -843,9 +852,6 @@ func TestSearchRunOversizedResultStaysOutOfNextModelRequest(t *testing.T) {
 	var toolResults []conversation.Part
 	for _, message := range model.requests[1] {
 		for _, part := range message.Parts {
-			if strings.Contains(part.Text+part.Content+part.Arguments, marker) {
-				t.Fatal("oversized search payload reached the next model request")
-			}
 			if part.Type == conversation.ToolResultPartType {
 				toolResults = append(toolResults, part)
 			}
@@ -855,9 +861,27 @@ func TestSearchRunOversizedResultStaysOutOfNextModelRequest(t *testing.T) {
 		t.Fatalf("tool results = %d, want 1", len(toolResults))
 	}
 	result := toolResults[0]
-	if !result.IsError || result.ToolCallID != "synthetic-search" || len(result.Content) >= 256 ||
-		!strings.Contains(result.Content, "read_file") {
-		t.Fatalf("tool error = %#v, want bounded error with lookup guidance", result)
+	// #380: the result is a bounded excerpt, not an error. The marker is the
+	// text's leading bytes and legitimately appears in the excerpt; what must
+	// not reach the next request is the unbounded payload.
+	if result.IsError || result.ToolCallID != "synthetic-search" {
+		t.Fatalf("tool result = %#v, want bounded success", result)
+	}
+	if len(result.Content) > maxSearchOutputBytes {
+		t.Fatalf(
+			"oversized search payload reached the next model request: %d bytes > cap %d",
+			len(result.Content),
+			maxSearchOutputBytes,
+		)
+	}
+	if !strings.Contains(result.Content, `"truncated": true`) {
+		t.Fatalf(
+			"truncation not disclosed in bounded tool result: %q",
+			result.Content[:min(len(result.Content), 256)],
+		)
+	}
+	if !strings.Contains(result.Content, marker) {
+		t.Fatal("bounded excerpt lost the hit's leading content")
 	}
 	if vectors.request.Limit != 1 {
 		t.Fatalf("search request limit = %d, want 1", vectors.request.Limit)
