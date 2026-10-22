@@ -3,6 +3,7 @@ package cognition
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -423,7 +424,8 @@ func (j workingMemoryConsolidationJob) ApplyResult(
 	if loader == nil {
 		return ParsedResult{}, fmt.Errorf("context loader is required")
 	}
-	if err := checkWorkingMemoryLedgerCompleteness(ctx, loader, output.Spec.Baseline); err != nil {
+	deferrals, err := checkWorkingMemoryLedgerCompleteness(ctx, loader, output.Spec.Baseline)
+	if err != nil {
 		return ParsedResult{}, rollbackWorkingMemoryRun(
 			ctx,
 			loader,
@@ -439,15 +441,15 @@ func (j workingMemoryConsolidationJob) ApplyResult(
 		return ParsedResult{}, rollbackWorkingMemoryRun(ctx, loader, output.Spec, err)
 	}
 
-	summary := summarizeWorkingMemoryNotes(output.FinalText)
-
-	return ParsedResult{
-		Summary: summary,
+	result := ParsedResult{
+		Summary: summarizeWorkingMemoryNotes(output.FinalText),
 		Metadata: map[string]string{
 			"path": workingMemoryRuntimePath,
 		},
 		CheckpointSeq: output.Spec.CheckpointSeq,
-	}, nil
+	}
+	recordLedgerExitDeferrals(result.Metadata, deferrals)
+	return result, nil
 }
 
 // Rollback returns the run's writable paths to the state Build snapshotted.
@@ -467,96 +469,288 @@ func (workingMemoryConsolidationJob) Rollback(
 
 // checkWorkingMemoryLedgerCompleteness matches every removed item and complete
 // loop against exactly one typed record, then checks its destination or reason.
+//
+// The exit side of that match is tiered (#388):
+//
+//   - verbatim: the exit's whitespace-collapsed description equals a removed
+//     item's canonical description (the #324 contract) and consumes it.
+//   - drift-tolerated: the quote preserves the removal's full word sequence
+//     but not its markdown framing — one leading bullet marker carried on the
+//     quote (ledger history quotes markers), or the removed block's leading
+//     custom heading lines omitted (a natural quote names the section's
+//     content, not a heading the block parser keeps as part of the item). The
+//     match still consumes the removal, and the exit is deferred: tolerated
+//     because the words are whole, disclosed because the record is not
+//     verbatim.
+//   - unmatched: no removed item or closed loop matches even drift-tolerantly.
+//     The exit consumes nothing and is deferred with that reason.
+//
+// A deferral is named on the run result instead of failing the whole apply: a
+// drifted working file can make a verbatim quote un-satisfiable on every run,
+// and #324's hard fail then parks the lane on one identical fingerprint. What
+// still fails the run is the reverse direction — a removal no exit records,
+// verbatim or tolerated — because that is genuinely rewritten content, the
+// case this contract exists to catch. Structural violations (run, outcome,
+// reason, target) stay hard failures as well.
 func checkWorkingMemoryLedgerCompleteness(
 	ctx context.Context,
 	loader ContextLoader,
 	baseline map[string]string,
-) error {
+) ([]ledgerExitDeferral, error) {
 	for _, runtimePath := range []string{workingMemoryRuntimePath, openLoopsRuntimePath, workingLedgerRuntimePath} {
 		if _, ok := baseline[runtimePath]; !ok {
-			return fmt.Errorf("spec baseline is missing pre-run %s", runtimePath)
+			return nil, fmt.Errorf("spec baseline is missing pre-run %s", runtimePath)
 		}
 	}
 	working, _, err := loader.ReadFileBytes(ctx, workingMemoryRelativePath)
 	if err != nil {
-		return fmt.Errorf("load post-run working memory: %w", err)
+		return nil, fmt.Errorf("load post-run working memory: %w", err)
 	}
 	afterLoops, _, err := loader.ReadFileBytes(ctx, relativeMemoryPath(openLoopsRuntimePath))
 	if err != nil {
-		return fmt.Errorf("load post-run open loops: %w", err)
+		return nil, fmt.Errorf("load post-run open loops: %w", err)
 	}
 	beforeLoopItems, err := parseOpenLoops(baseline[openLoopsRuntimePath])
 	if err != nil {
-		return fmt.Errorf("invalid pre-run open loops: %w", err)
+		return nil, fmt.Errorf("invalid pre-run open loops: %w", err)
 	}
 	afterLoopItems, err := parseOpenLoops(string(afterLoops))
 	if err != nil {
-		return fmt.Errorf("invalid post-run open loops: %w", err)
+		return nil, fmt.Errorf("invalid post-run open loops: %w", err)
 	}
 	entries, err := appendedWorkingLedgerEntries(ctx, loader, baseline, "working-memory run")
 	if err != nil {
-		return err
+		return nil, err
 	}
-	workingExits := unmatchedWorkingExits(baseline[workingMemoryRuntimePath], string(working))
-	loopExits := make(map[string]int)
-	for _, loop := range beforeLoopItems {
-		loopExits[workingItemDescription(loop.Item)]++
-	}
-	for _, loop := range afterLoopItems {
-		description := workingItemDescription(loop.Item)
-		if loopExits[description] > 0 {
-			loopExits[description]--
-		}
-	}
-	for _, entry := range entries {
+	workingExits := newExitDemandList(removedWorkingItems(
+		baseline[workingMemoryRuntimePath],
+		string(working),
+	))
+	loopExits := newExitDemandList(removedOpenLoopItems(beforeLoopItems, afterLoopItems))
+	var deferrals []ledgerExitDeferral
+	for index, entry := range entries {
 		if entry.Run != workingMemoryConsolidationJobType {
-			return fmt.Errorf("working-memory ledger entry has wrong run %q", entry.Run)
+			return nil, fmt.Errorf("working-memory ledger entry has wrong run %q", entry.Run)
 		}
-		var unmatched map[string]int
+		var demands *exitDemandList
 		switch entry.Outcome {
 		case claims.OutcomeConverted, claims.OutcomeMoved, claims.OutcomeDropped:
-			unmatched = workingExits
+			demands = workingExits
 		case claims.OutcomeClosed:
 			if entry.TargetID != "" || entry.TargetPath != "" ||
 				strings.TrimSpace(entry.Note) == "" {
-				return fmt.Errorf("closed loop ledger exit requires a reason and no target")
+				return nil, fmt.Errorf("closed loop ledger exit requires a reason and no target")
 			}
-			unmatched = loopExits
+			demands = loopExits
 		default:
-			return fmt.Errorf(
+			return nil, fmt.Errorf(
 				"working-memory ledger entry has unsupported outcome %q",
 				entry.Outcome,
 			)
 		}
-		description := normalizeExitDescription(entry.Description)
-		if unmatched[description] == 0 {
-			return fmt.Errorf(
-				"ledger exit does not match an unrecorded removed working-memory item or complete open loop: %q",
-				entry.Description,
-			)
+		if demands.consumeVerbatim(normalizeExitDescription(entry.Description)) {
+			continue
 		}
-		unmatched[description]--
+		deferral := ledgerExitDeferral{index: index + 1, entry: entry}
+		if demand, ok := demands.consumeDrifted(driftedExitForms(entry.Description)); ok {
+			deferral.reason = fmt.Sprintf(
+				"records removed item %q only drift-tolerantly: its words are whole but the quote is not the verbatim markdown block",
+				compactWorkingMemoryText(demand.description),
+			)
+		} else {
+			deferral.reason = "quotes no item or loop this run removed, even drift-tolerantly, so it records nothing"
+		}
+		deferrals = append(deferrals, deferral)
 	}
-	for _, unmatched := range []map[string]int{workingExits, loopExits} {
-		for description, count := range unmatched {
-			if count > 0 {
-				return fmt.Errorf(
+	for _, demands := range []*exitDemandList{workingExits, loopExits} {
+		for _, demand := range demands.order {
+			if demand.count > 0 {
+				return nil, fmt.Errorf(
 					"working-memory run removed item without a matching ledger exit in %s: %q",
 					workingLedgerRuntimePath,
-					description,
+					compactWorkingMemoryText(demand.description),
 				)
 			}
 		}
 	}
-	return validateExitTargets(ctx, loader, entries, nil)
+	return deferrals, validateExitTargets(ctx, loader, entries, nil)
 }
 
-func unmatchedWorkingExits(before, after string) map[string]int {
-	unmatched := make(map[string]int)
-	for _, item := range removedWorkingItems(before, after) {
-		unmatched[workingItemDescription(item)]++
+// ledgerExitDeferral names one appended ledger exit that could not record a
+// removal verbatim, disclosed on the run result instead of failing the whole
+// apply. Index is the exit's 1-based position among this run's appended
+// ledger entries, the only stable identity an appended line has.
+type ledgerExitDeferral struct {
+	index  int
+	entry  claims.LedgerEntry
+	reason string
+}
+
+// ledgerExitDeferralsListed bounds how many deferrals the run result spells
+// out; the count key always reports the full number.
+const ledgerExitDeferralsListed = 5
+
+// recordLedgerExitDeferrals discloses deferred ledger exits on the run
+// result: how many, and for the first ledgerExitDeferralsListed which entry
+// and why. A deferred exit still lands on the ledger, so the disclosure is
+// what keeps the tolerated record from going silent.
+func recordLedgerExitDeferrals(metadata map[string]string, deferrals []ledgerExitDeferral) {
+	if len(deferrals) == 0 {
+		return
 	}
-	return unmatched
+	metadata["ledger_exits_deferred"] = strconv.Itoa(len(deferrals))
+	listed := min(len(deferrals), ledgerExitDeferralsListed)
+	details := make([]string, 0, listed+1)
+	for _, deferral := range deferrals[:listed] {
+		details = append(details, fmt.Sprintf(
+			"entry[%d] %s %q: %s",
+			deferral.index,
+			deferral.entry.Outcome,
+			compactWorkingMemoryText(deferral.entry.Description),
+			deferral.reason,
+		))
+	}
+	if extra := len(deferrals) - listed; extra > 0 {
+		details = append(details, fmt.Sprintf("(+%d more)", extra))
+	}
+	metadata["ledger_exit_deferrals"] = strings.Join(details, "; ")
+}
+
+// exitDemand is one removal the run's ledger exits must still record.
+type exitDemand struct {
+	// description is the removal's canonical whitespace-collapsed text.
+	description string
+	// forms are the drift-tolerant presentations that also match: the
+	// canonical description and its section-scoped form.
+	forms map[string]bool
+	count int
+}
+
+// exitDemandList is the removal multiset a run's exits are matched against,
+// kept in file order so a drift-tolerant match consumes deterministically.
+type exitDemandList struct {
+	order   []*exitDemand
+	byMatch map[string]*exitDemand
+}
+
+func newExitDemandList(items []string) *exitDemandList {
+	list := &exitDemandList{byMatch: make(map[string]*exitDemand)}
+	for _, item := range items {
+		description := workingItemDescription(item)
+		if demand, ok := list.byMatch[description]; ok {
+			for form := range driftedRemovalForms(item) {
+				demand.forms[form] = true
+			}
+			demand.count++
+			continue
+		}
+		demand := &exitDemand{
+			description: description,
+			forms:       driftedRemovalForms(item),
+			count:       1,
+		}
+		list.order = append(list.order, demand)
+		list.byMatch[description] = demand
+	}
+	return list
+}
+
+// consumeVerbatim records an exact match against the canonical description:
+// the contract's verbatim tier.
+func (l *exitDemandList) consumeVerbatim(description string) bool {
+	demand, ok := l.byMatch[description]
+	if !ok || demand.count <= 0 {
+		return false
+	}
+	demand.count--
+	return true
+}
+
+// consumeDrifted records quoted forms against the first outstanding removal
+// whose drift-tolerant forms overlap, in file order, and reports what it
+// consumed so the deferral can name the removal the record stands for.
+func (l *exitDemandList) consumeDrifted(forms map[string]bool) (*exitDemand, bool) {
+	for _, demand := range l.order {
+		if demand.count <= 0 {
+			continue
+		}
+		for form := range forms {
+			if demand.forms[form] {
+				demand.count--
+				return demand, true
+			}
+		}
+	}
+	return nil, false
+}
+
+// driftedExitForms returns every normalized presentation of one quoted ledger
+// exit the drift-tolerant tier accepts: the whitespace-collapsed text, and
+// the same text without one leading bullet marker. Ledger history lines quote
+// the marker (`dropped "- Old item"`), so a run that mimics them must still
+// match the removal workingItemDescription already strips of its marker.
+func driftedExitForms(description string) map[string]bool {
+	normalized := normalizeExitDescription(description)
+	forms := map[string]bool{normalized: true}
+	if unmarked := withoutBulletMarker(normalized); unmarked != normalized {
+		forms[unmarked] = true
+	}
+	return forms
+}
+
+// driftedRemovalForms returns every normalized presentation of one removed
+// item the drift-tolerant tier accepts: its canonical description and its
+// section-scoped form. A drifted file holds blocks framed by custom headings
+// the exit accounting keeps inside the item; a natural quote names the
+// section's content without that framing.
+func driftedRemovalForms(item string) map[string]bool {
+	forms := map[string]bool{workingItemDescription(item): true}
+	if scoped := sectionScopedExitDescription(item); scoped != "" {
+		forms[scoped] = true
+	}
+	return forms
+}
+
+// sectionScopedExitDescription renders an item's description from its content
+// lines alone, dropping leading markdown heading lines. Only leading lines
+// drop: a heading inside the block stays part of the quoted content, so a
+// partial quote still cannot pass for a whole removal.
+func sectionScopedExitDescription(item string) string {
+	lines := strings.Split(item, "\n")
+	for len(lines) > 0 && strings.HasPrefix(strings.TrimSpace(lines[0]), "#") {
+		lines = lines[1:]
+	}
+	return workingItemDescription(strings.Join(lines, "\n"))
+}
+
+// withoutBulletMarker strips one leading markdown bullet marker from an
+// already whitespace-collapsed description.
+func withoutBulletMarker(normalized string) string {
+	for _, marker := range []string{"- ", "* ", "+ "} {
+		if stripped, ok := strings.CutPrefix(normalized, marker); ok {
+			return stripped
+		}
+	}
+	return normalized
+}
+
+// removedOpenLoopItems returns the loop items closed between the two parses
+// as a multiset difference in file order.
+func removedOpenLoopItems(before, after []conversionOpenLoop) []string {
+	remaining := make(map[string]int)
+	for _, loop := range after {
+		remaining[workingItemDescription(loop.Item)]++
+	}
+	var removed []string
+	for _, loop := range before {
+		description := workingItemDescription(loop.Item)
+		if remaining[description] > 0 {
+			remaining[description]--
+			continue
+		}
+		removed = append(removed, loop.Item)
+	}
+	return removed
 }
 
 // snapshotWorkingMemoryFiles captures the pre-run on-disk bytes of the three

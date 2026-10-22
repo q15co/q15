@@ -1649,7 +1649,6 @@ func TestWorkingMemoryConsolidationRejectsUntraceableExitsAndRestoresFixedFiles(
 		ledger string
 	}{
 		{name: "arbitrary sentences", ledger: "finished release\nclosed loop\n"},
-		{name: "duplicate item", ledger: validDrop + validDrop + validClose},
 		{name: "unrelated description", ledger: workingExitRecord(claims.OutcomeDropped, "Different release.", "", "", "done") + validClose},
 		{name: "missing continuation", ledger: workingExitRecord(claims.OutcomeDropped, "Finish the release.", "", "", "done") + validClose},
 		{name: "loop ID alone", ledger: validDrop + workingExitRecord(claims.OutcomeClosed, "l-2026-0001", "", "", "done")},
