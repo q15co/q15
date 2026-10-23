@@ -3,6 +3,7 @@ package cognition
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -60,6 +61,11 @@ func (l *conversionValidationLoader) LoadSemanticFileSizes(
 const validConversionClaim = "- [c-2026-0001] The deployment target is stable.\n  {status: active, kind: fact, confidence: confirmed, src: t12, rev: 2026-10-14}\n"
 
 const validConversionLoop = "- [l-2026-0001] Ship the release.\n  {trigger: next-session, owner: agent, src: t12}\n"
+
+// parseRefusalReason is the fixed message of the typed parse-stage refusal
+// the #394 deferral discloses; it has no variable payload, so it is bounded
+// exactly as written.
+const parseRefusalReason = "claim requires a stable ID and statement"
 
 func exitRecord(outcome claims.LedgerOutcome, description, id, target, reason string) string {
 	return claims.FormatLedgerEntry(claims.LedgerEntry{
@@ -693,10 +699,19 @@ func TestDeferredClaimDisclosureIsBounded(t *testing.T) {
 		t.Fatalf("deferredClaimMetadata(nil) = %v, want nil", metadata)
 	}
 	const total = semanticDeferredClaimListLimit + 4
-	deferrals := make([]claimSrcDeferral, 0, total)
-	for i := range total {
-		deferrals = append(deferrals, claimSrcDeferral{
+	deferrals := make([]claimDeferral, 0, total)
+	// The first deferral is the #394 raw-item class: no ID to name, so the
+	// run result names the dropped item's byte offset.
+	deferrals = append(deferrals, claimDeferral{
+		ID:     "",
+		Name:   "byte 41",
+		Path:   "semantic/facts.md",
+		Reason: parseRefusalReason,
+	})
+	for i := 1; i < total; i++ {
+		deferrals = append(deferrals, claimDeferral{
 			ID:     fmt.Sprintf("c-2026-0%03d", i),
+			Name:   fmt.Sprintf("c-2026-0%03d", i),
 			Path:   "semantic/facts.md",
 			Reason: `invalid claim src "guessed"`,
 		})
@@ -708,7 +723,160 @@ func TestDeferredClaimDisclosureIsBounded(t *testing.T) {
 	if metadata["deferred_claims_omitted"] != fmt.Sprint(total-semanticDeferredClaimListLimit) {
 		t.Fatalf("deferred_claims_omitted = %q", metadata["deferred_claims_omitted"])
 	}
-	if named := strings.Count(metadata["deferred_claims"], "c-2026-0"); named != semanticDeferredClaimListLimit {
-		t.Fatalf("deferred_claims named %d entries, want %d", named, semanticDeferredClaimListLimit)
+	if named := strings.Count(metadata["deferred_claims"], "c-2026-0"); named != semanticDeferredClaimListLimit-1 {
+		t.Fatalf(
+			"deferred_claims named %d ID entries, want %d",
+			named,
+			semanticDeferredClaimListLimit-1,
+		)
+	}
+	if !strings.Contains(
+		metadata["deferred_claims"],
+		"byte 41 in semantic/facts.md: "+parseRefusalReason,
+	) {
+		t.Fatalf(
+			"deferred_claims = %q, want the byte-offset item named",
+			metadata["deferred_claims"],
+		)
+	}
+	if index := deferredClaimIndex(deferrals); len(index) != total-1 {
+		t.Fatalf(
+			"deferredClaimIndex keyed %d entries, want %d: the ID-less item is not keyable",
+			len(index),
+			total-1,
+		)
+	}
+}
+
+// TestWorkingItemSpansAndDropPinTheRawItemByteRange pins the scan the #394
+// deferral is built on: every span covers exactly the item's own bytes, and
+// dropping the spans leaves the neighbouring bytes intact - including the
+// newline that belongs to the line before the item and a final line without
+// a trailing newline.
+func TestWorkingItemSpansAndDropPinTheRawItemByteRange(t *testing.T) {
+	t.Parallel()
+	const first = "- [c-2026-0001] First claim.\n  {status: active, kind: fact, confidence: confirmed, src: t12, rev: 2026-10-14}\n"
+	const middle = "- [c-2026-0002] Second claim. {status: active, kind: fact, confidence: confirmed, src: t12, rev: 2026-10-14}\n"
+	const last = "- [c-2026-0003] Third claim. {status: active, kind: fact, confidence: confirmed, src: t12, rev: 2026-10-14}"
+	spans := workingItemSpans(first + middle + last)
+	wantSpans := []workingItemSpan{
+		{Item: strings.TrimSuffix(first, "\n"), Head: 0, End: len(first)},
+		{Item: strings.TrimSuffix(middle, "\n"), Head: len(first), End: len(first) + len(middle)},
+		{
+			Item: last,
+			Head: len(first) + len(middle),
+			End:  len(first) + len(middle) + len(last),
+		},
+	}
+	if !slices.Equal(spans, wantSpans) {
+		t.Fatalf("workingItemSpans = %+#v, want %+#v", spans, wantSpans)
+	}
+	dropped := dropWorkingItemSpans(first+middle+last, []workingItemSpan{spans[1]})
+	if dropped != first+last {
+		t.Fatalf("dropped middle = %q, want the neighbours intact", dropped)
+	}
+	if after := dropWorkingItemSpans(first+middle+last, spans); after != "" {
+		t.Fatalf("dropped all = %q, want the empty file", after)
+	}
+	if empty := workingItemSpans(""); len(empty) != 0 {
+		t.Fatalf("empty content produced %d spans, want none", len(empty))
+	}
+}
+
+// TestConversionApplyDefersParseInvalidItems pins the apply-boundary
+// stability behaviour for #394: a conversion pass whose output writes an item
+// that never gains a stable ID and statement loses that one raw item, which
+// the apply step drops by its own bytes and names by byte offset in the run
+// result, while a parse-invalid rewrite of a claim the baseline knows - and
+// any refusal outside the two typed classes - still fails the whole run.
+func TestConversionApplyDefersParseInvalidItems(t *testing.T) {
+	t.Parallel()
+	deferredNoID := "- The deployment target is staging. {status: active, kind: fact, confidence: confirmed, src: t13, rev: 2026-10-14}\n"
+	deferredEmptyStatement := "- [c-2026-0003] {status: active, kind: fact, confidence: confirmed, src: t13, rev: 2026-10-14}\n"
+	deferredShortID := "- [c-2026-12] The deploy target is staging. {status: active, kind: fact, confidence: confirmed, src: t13, rev: 2026-10-14}\n"
+	for _, test := range []struct {
+		name, previous, current, wantError string
+		deferred                           bool
+		wantID, wantName                   string
+	}{
+		{
+			name:     "deferred headless item",
+			current:  validConversionClaim + deferredNoID,
+			deferred: true,
+			wantID:   "",
+			wantName: fmt.Sprintf("byte %d", len(validConversionClaim)),
+		},
+		{
+			name:     "deferred empty statement under a fresh ID",
+			current:  validConversionClaim + deferredEmptyStatement,
+			deferred: true,
+			wantID:   "c-2026-0003",
+			wantName: fmt.Sprintf("byte %d", len(validConversionClaim)),
+		},
+		{
+			name:     "deferred ID that never reached the stable grammar",
+			current:  validConversionClaim + deferredShortID,
+			deferred: true,
+			wantID:   "c-2026-12",
+			wantName: fmt.Sprintf("byte %d", len(validConversionClaim)),
+		},
+		{
+			name:      "statement-drop rewrite of a durable claim fails whole",
+			previous:  validConversionClaim,
+			current:   "- [c-2026-0001] {status: active, kind: fact, confidence: confirmed, src: t12, rev: 2026-10-14}\n",
+			wantError: parseRefusalReason,
+		},
+		{
+			name:     "malformed item naming a durable claim fails whole",
+			previous: validConversionClaim,
+			current: "- [c-2026-0004] Fresh claim.\n" +
+				"  - [c-2026-0001] {status: active, kind: fact, confidence: confirmed, src: t12, rev: 2026-10-14}\n",
+			wantError: parseRefusalReason,
+		},
+		{
+			name:      "untyped refusals are never deferred",
+			current:   validConversionClaim + "- [c-2026-0005] Orphan statement.\n",
+			wantError: "missing canonical metadata",
+		},
+		{
+			name:      "bare bullet is not a claim attempt and stays whole-run",
+			current:   validConversionClaim + "- An untyped durable detail.\n",
+			wantError: parseRefusalReason,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			loader := &conversionValidationLoader{
+				files: map[string]string{semanticFactsRelativePath: test.current},
+			}
+			baseline := map[string]string{
+				semanticFactsRuntimePath: test.previous,
+				workingLedgerRuntimePath: "",
+			}
+			deferred, err := checkSemanticClaims(
+				context.Background(),
+				loader,
+				baseline,
+				[]string{semanticFactsRuntimePath},
+			)
+			if test.deferred {
+				if err != nil {
+					t.Fatalf("checkSemanticClaims() error = %v, want the item deferred", err)
+				}
+				if len(deferred) != 1 || deferred[0].ID != test.wantID ||
+					deferred[0].Name != test.wantName ||
+					deferred[0].Path != semanticFactsRelativePath ||
+					deferred[0].Reason != parseRefusalReason {
+					t.Fatalf("deferrals = %#v", deferred)
+				}
+				if after := loader.files[semanticFactsRelativePath]; after != validConversionClaim {
+					t.Fatalf("post-deferral file =\n%s\nwant the valid claim intact", after)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("checkSemanticClaims() error = %v; want %q", err, test.wantError)
+			}
+		})
 	}
 }

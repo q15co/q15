@@ -1227,3 +1227,157 @@ func TestSemanticMemoryExtractionApplyResultStillRejectsDurableFactRewrite(t *te
 		}
 	}
 }
+
+// TestSemanticMemoryExtractionApplyResultDefersParseInvalidItemsAndAdvances
+// pins the #394 stability contract at the apply boundary: a pass whose model
+// output writes claims that fail at the stable-ID-and-statement stage - a
+// headless item and an empty statement - still applies its valid claims,
+// still records its working-memory exits, and still advances the extraction
+// checkpoint, with the malformed items dropped, named by their byte offsets
+// in the file the run wrote, and disclosed in the run result.
+func TestSemanticMemoryExtractionApplyResultDefersParseInvalidItemsAndAdvances(t *testing.T) {
+	t.Parallel()
+
+	validSecondClaim := strings.ReplaceAll(validConversionClaim, "c-2026-0001", "c-2026-0002")
+	validSecondClaim = strings.ReplaceAll(
+		validSecondClaim,
+		"The deployment target is stable.",
+		"The release notes live in memory/notes.",
+	)
+	validSecondClaim = strings.ReplaceAll(validSecondClaim, "src: t12", "src: t13")
+	deferredNoID := "- The deployment target is staging. {status: active, kind: fact, confidence: confirmed, src: t14, rev: 2026-10-14}\n"
+	deferredEmptyStatement := "- [c-2026-0003] {status: active, kind: fact, confidence: confirmed, src: t15, rev: 2026-10-14}\n"
+	const factsHeader = "# Semantic Facts\n\n## Confirmed Facts\n\n"
+	const prefAfter = "# Semantic Preferences\n\n## User Preferences\n\n- None\n\n## Collaboration Preferences\n\n- None\n"
+	const projAfter = "# Semantic Projects\n\n## Active Projects\n\n- None\n\n## Durable Project Knowledge\n\n- None\n"
+	workingAfter := "# Working Memory\n\n## Active Tasks\n\n- None\n\n## Open Threads\n\n- None\n"
+	factsWritten := factsHeader + validConversionClaim + validSecondClaim +
+		deferredNoID + deferredEmptyStatement
+	loader := &semanticMemoryJobLoader{
+		files: map[string][]byte{
+			semanticFactsRelativePath:       []byte(factsWritten),
+			semanticPreferencesRelativePath: []byte(prefAfter),
+			semanticProjectsRelativePath:    []byte(projAfter),
+			workingMemoryRelativePath:       []byte(workingAfter),
+			"working/LEDGER.md": []byte(conversionLedgerBefore + "\n" +
+				exitRecord(claims.OutcomeConverted, "Deploy target switched after staging issue.",
+					"c-2026-0002", semanticFactsRelativePath, "") +
+				exitRecord(claims.OutcomeConverted, "Ship T8.", "c-2026-0001",
+					semanticFactsRelativePath, "")),
+			"working/OPEN_LOOPS.md": []byte(""),
+		},
+	}
+	result, err := NewSemanticMemoryExtractionRegistration(0, 0).NewJob().ApplyResult(
+		context.Background(),
+		loader,
+		JobOutput{
+			Type:      semanticMemoryExtractionJobType,
+			Spec:      Spec{CheckpointSeq: 4240, Baseline: conversionBaseline()},
+			FinalText: "Converted working memory.",
+			Messages: conversionRunMessages(
+				semanticFactsRuntimePath,
+				workingMemoryRuntimePath,
+				workingLedgerRuntimePath,
+			),
+		},
+	)
+	if err != nil {
+		t.Fatalf("ApplyResult() error = %v", err)
+	}
+	if got, want := result.CheckpointSeq, int64(4240); got != want {
+		t.Fatalf("CheckpointSeq = %d, want %d: the pass must advance past it", got, want)
+	}
+	if got, want := result.Metadata["working_items_exited"], "2"; got != want {
+		t.Fatalf("working_items_exited = %q, want %q", got, want)
+	}
+	if got, want := result.Metadata["ledger_lines_appended"], "2"; got != want {
+		t.Fatalf("ledger_lines_appended = %q, want %q", got, want)
+	}
+	offsetNoID := len(factsHeader) + len(validConversionClaim) + len(validSecondClaim)
+	offsetEmptyStatement := offsetNoID + len(deferredNoID)
+	wantDeferred := fmt.Sprintf(
+		"byte %d in semantic/facts.md: %s; byte %d in semantic/facts.md: %s",
+		offsetNoID, parseRefusalReason, offsetEmptyStatement, parseRefusalReason,
+	)
+	if got, want := result.Metadata["deferred_claim_count"], "2"; got != want {
+		t.Fatalf("deferred_claim_count = %q, want %q", got, want)
+	}
+	if got, want := result.Metadata["deferred_claims"], wantDeferred; got != want {
+		t.Fatalf("deferred_claims =\n%q\nwant\n%q", got, want)
+	}
+	if _, present := result.Metadata["deferred_claims_omitted"]; present {
+		t.Fatalf("deferred_claims_omitted present below the cap: %v", result.Metadata)
+	}
+	if got := string(loader.files[semanticFactsRelativePath]); got !=
+		factsHeader+validConversionClaim+validSecondClaim {
+		t.Fatalf(
+			"post-apply facts = %q, want the valid claims kept and the malformed items gone",
+			got,
+		)
+	}
+}
+
+// TestSemanticMemoryExtractionApplyResultStillRejectsParseInvalidDurableRewrite
+// pins the protective contract that outlives the #394 deferral: a pass that
+// rewrites an existing durable claim into one without a statement still
+// rejects the whole run and rolls every written path back to the pre-run
+// bytes.
+func TestSemanticMemoryExtractionApplyResultStillRejectsParseInvalidDurableRewrite(t *testing.T) {
+	t.Parallel()
+
+	const durableClaim = "- [c-2026-0947] The deploy target is staging.\n" +
+		"  {status: active, kind: fact, confidence: confirmed, src: t100, rev: 2026-09-30}\n"
+	const durableStatementDropped = "- [c-2026-0947] {status: active, kind: fact, confidence: confirmed, src: t100, rev: 2026-09-30}\n"
+	const factsHeader = "# Semantic Facts\n\n## Confirmed Facts\n\n"
+	const prefAfter = "# Semantic Preferences\n\n## User Preferences\n\n- None\n\n## Collaboration Preferences\n\n- None\n"
+	const projAfter = "# Semantic Projects\n\n## Active Projects\n\n- None\n\n## Durable Project Knowledge\n\n- None\n"
+	workingAfter := "# Working Memory\n\n## Active Tasks\n\n- None\n\n## Open Threads\n\n- None\n"
+	baseline := conversionBaseline()
+	baseline[semanticFactsRuntimePath] = factsHeader + durableClaim
+	snapshots := make(map[string]FileSnapshot, len(baseline))
+	for runtimePath, raw := range baseline {
+		snapshots[runtimePath] = FileSnapshot{Existed: true, Content: []byte(raw)}
+	}
+	loader := &semanticMemoryJobLoader{
+		files: map[string][]byte{
+			semanticFactsRelativePath:       []byte(factsHeader + durableStatementDropped),
+			semanticPreferencesRelativePath: []byte(prefAfter),
+			semanticProjectsRelativePath:    []byte(projAfter),
+			workingMemoryRelativePath:       []byte(workingAfter),
+			"working/LEDGER.md":             []byte(conversionLedgerBefore),
+			"working/OPEN_LOOPS.md":         []byte(""),
+		},
+	}
+	_, err := NewSemanticMemoryExtractionRegistration(0, 0).NewJob().ApplyResult(
+		context.Background(),
+		loader,
+		JobOutput{
+			Type:      semanticMemoryExtractionJobType,
+			Spec:      Spec{CheckpointSeq: 4240, Baseline: baseline, FileSnapshots: snapshots},
+			FinalText: "Converted working memory.",
+			Messages: conversionRunMessages(
+				semanticFactsRuntimePath,
+				workingMemoryRuntimePath,
+				workingLedgerRuntimePath,
+			),
+		},
+	)
+	if err == nil || !strings.Contains(
+		err.Error(),
+		"invalid written semantic claim in semantic/facts.md: "+parseRefusalReason,
+	) {
+		t.Fatalf("ApplyResult() error = %v, want the durable rewrite rejected whole", err)
+	}
+	for name, want := range map[string]string{
+		semanticFactsRelativePath:       factsHeader + durableClaim,
+		workingMemoryRelativePath:       conversionWorkingBefore,
+		"working/LEDGER.md":             conversionLedgerBefore,
+		"working/OPEN_LOOPS.md":         "",
+		semanticPreferencesRelativePath: prefAfter,
+		semanticProjectsRelativePath:    projAfter,
+	} {
+		if got := string(loader.files[name]); got != want {
+			t.Fatalf("post-rollback %s = %q, want the pre-run bytes %q", name, got, want)
+		}
+	}
+}
