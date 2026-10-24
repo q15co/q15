@@ -12,7 +12,6 @@ import (
 	"sync"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
-	"github.com/q15co/q15/systems/agent/internal/cognition"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
 	q15media "github.com/q15co/q15/systems/agent/internal/media"
 	"github.com/q15co/q15/systems/agent/internal/modelcatalog"
@@ -146,6 +145,31 @@ type boundProviderModelClient struct {
 	adapter *routedModelAdapter
 	model   modelcatalog.Model
 	ref     string
+}
+
+// ContextForModel keeps scheduled-run limits pinned to their exact provider.
+func (c boundProviderModelClient) ContextForModel(ref string) agent.ModelContext {
+	if ref != c.ref {
+		return agent.ModelContext{Ref: ref}
+	}
+	return agent.ModelContext{
+		Ref:              c.model.ProviderName + "/" + c.model.Ref,
+		MaxContextTokens: c.model.MaxContextTokens,
+		MaxOutputTokens:  c.model.MaxOutputTokens,
+	}
+}
+
+// ContextForModel resolves context metadata through the completion's routing rules.
+func (r *routedModelAdapter) ContextForModel(ref string) agent.ModelContext {
+	model, ok := r.lookupModel(ref)
+	if !ok {
+		return agent.ModelContext{Ref: ref}
+	}
+	return agent.ModelContext{
+		Ref:              model.ProviderName + "/" + model.Ref,
+		MaxContextTokens: model.MaxContextTokens,
+		MaxOutputTokens:  model.MaxOutputTokens,
+	}
 }
 
 func (c boundProviderModelClient) Complete(
@@ -506,69 +530,4 @@ func resolveDecisionSelection(
 	// until switch_model selects one.
 	registry.SetDecision(modelcatalog.RoleSelection{})
 	return nil
-}
-
-// newCognitionRefResolver returns a per-job model ref resolver for the
-// cognition runner: a job with a persisted override runs on that model when it
-// is still in the live roster, otherwise it inherits the interactive model.
-func newCognitionRefResolver(
-	registry *modelcatalog.Registry,
-	selection *modelcatalog.Selection,
-	store *selectionstore.Store,
-) cognition.ModelRefResolver {
-	return func(jobType string) []string {
-		if override, ok := store.Cognition(jobType); ok {
-			if _, exists := registry.Lookup(override.Provider, override.Model); exists {
-				return buildModelRefs(override.Model, registry)
-			}
-		}
-		return buildModelRefs(selection.CurrentModel(), registry)
-	}
-}
-
-// newCognitionContextResolver returns the context and output token limits of
-// the model pinned to one cognition job type, for request-budget derivation.
-// Only the leading ref of the job's chain counts: the budget sizes the pinned
-// model's turns, so fallback metadata must not inflate it. Missing roster
-// entries or unknown catalog metadata yield zeros, which the cognition runner
-// reads as the floor budget.
-func newCognitionContextResolver(
-	registry *modelcatalog.Registry,
-	refs cognition.ModelRefResolver,
-) cognition.ModelContextResolver {
-	return func(jobType string) (int, int) {
-		if registry == nil || refs == nil {
-			return 0, 0
-		}
-		chain := refs(jobType)
-		if len(chain) == 0 {
-			return 0, 0
-		}
-		if model, ok := registry.LookupByRef(chain[0]); ok {
-			return model.MaxContextTokens, model.MaxOutputTokens
-		}
-		return 0, 0
-	}
-}
-
-// cognitionJobTypeNames returns the stable job type identifiers for a set of
-// cognition job registrations, used to validate switch_cognition_model.
-func cognitionJobTypeNames(registrations []cognition.JobRegistration) []string {
-	out := make([]string, 0, len(registrations))
-	seen := make(map[string]struct{}, len(registrations))
-	for _, registration := range registrations {
-		if registration.NewJob == nil {
-			continue
-		}
-		jobType := strings.TrimSpace(registration.NewJob().Type())
-		if jobType == "" {
-			continue
-		}
-		if _, ok := seen[jobType]; ok {
-			continue
-		}
-		seen[jobType] = struct{}{}
-		out = append(out, jobType)
-	}
-	return out
 }

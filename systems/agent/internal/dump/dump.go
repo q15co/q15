@@ -29,6 +29,14 @@ type ModelClientDump struct {
 	writer *lineWriter
 }
 
+// ContextForModel forwards catalog limits without exposing provider credentials.
+func (d *ModelClientDump) ContextForModel(ref string) agent.ModelContext {
+	if source, ok := d.inner.(agent.ModelContextSource); ok {
+		return source.ContextForModel(ref)
+	}
+	return agent.ModelContext{Ref: ref}
+}
+
 var _ agent.ModelClient = (*ModelClientDump)(nil)
 var _ agent.StreamingModelClient = (*ModelClientDump)(nil)
 var _ agent.ReasoningStreamingModelClient = (*ModelClientDump)(nil)

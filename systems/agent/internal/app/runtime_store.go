@@ -2,86 +2,24 @@ package app
 
 import (
 	"context"
-	"sync"
+	"fmt"
 	"time"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
-	"github.com/q15co/q15/systems/agent/internal/cognition"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
 	"github.com/q15co/q15/systems/agent/internal/memory"
 	q15skills "github.com/q15co/q15/systems/agent/internal/skills"
 )
 
+type transcriptStore interface {
+	agent.ConversationStore
+	RecordDeliveredAssistantEvent(context.Context, conversation.DeliveredAssistantEvent) error
+}
 type runtimeStore struct {
-	memory *memory.Store
-	skills *q15skills.Manager
-
-	mu              sync.Mutex
-	appendObservers []func()
-}
-
-var _ agent.ConversationStore = (*runtimeStore)(nil)
-var _ agent.CoreMemoryStore = (*runtimeStore)(nil)
-var _ agent.SemanticMemoryStore = (*runtimeStore)(nil)
-var _ agent.WorkingMemoryStore = (*runtimeStore)(nil)
-var _ agent.SkillCatalogStore = (*runtimeStore)(nil)
-var _ cognition.ContextLoader = (*runtimeStore)(nil)
-var _ cognition.InitialTranscriptWindowLoader = (*runtimeStore)(nil)
-var _ cognition.ControllerStore = (*runtimeStore)(nil)
-
-func (s *runtimeStore) LoadRecentMessages(
-	ctx context.Context,
-	turns int,
-) ([]conversation.Message, error) {
-	return s.memory.LoadRecentMessages(ctx, turns)
-}
-
-func (s *runtimeStore) LoadLatestMessages(
-	ctx context.Context,
-	turns int,
-) ([]conversation.Message, error) {
-	return s.memory.LoadLatestMessages(ctx, turns)
-}
-
-func (s *runtimeStore) LoadMessagesSinceSeq(
-	ctx context.Context,
-	afterSeq int64,
-) ([]conversation.Message, error) {
-	return s.memory.LoadMessagesSinceSeq(ctx, afterSeq)
-}
-
-func (s *runtimeStore) LoadMessagesSinceSeqWindow(
-	ctx context.Context,
-	afterSeq int64,
-	maxTurns int,
-) (cognition.TurnWindow, error) {
-	return s.memory.LoadMessagesSinceSeqWindow(ctx, afterSeq, maxTurns)
-}
-
-func (s *runtimeStore) LoadTranscriptWindow(
-	ctx context.Context,
-	afterSeq int64,
-	turns int,
-	cursor *cognition.TranscriptCursor,
-) (cognition.TurnWindow, error) {
-	return s.memory.LoadTranscriptWindow(ctx, afterSeq, turns, cursor)
-}
-
-func (s *runtimeStore) LoadLatestTranscriptWindow(
-	ctx context.Context,
-	maxTurns int,
-) (cognition.TurnWindow, error) {
-	return s.memory.LoadLatestTranscriptWindow(ctx, maxTurns)
-}
-
-func (s *runtimeStore) LoadLastUserTimestamp(
-	ctx context.Context,
-) (time.Time, bool, error) {
-	return s.memory.LoadLastUserTimestamp(ctx)
-}
-
-func (s *runtimeStore) ReserveTurnSeq(ctx context.Context) (int64, error) {
-	return s.memory.ReserveTurnSeq(ctx)
+	memory         *memory.Store
+	transcript     transcriptStore
+	skills         *q15skills.Manager
+	contextService agent.ContextAssembler
 }
 
 func (s *runtimeStore) AppendTurnAtSeq(
@@ -89,110 +27,34 @@ func (s *runtimeStore) AppendTurnAtSeq(
 	seq int64,
 	messages []conversation.Message,
 ) error {
-	if err := s.memory.AppendTurnAtSeq(ctx, seq, messages); err != nil {
-		return err
-	}
-	s.notifyAppendObservers()
-	return nil
+	return s.transcript.AppendTurnAtSeq(ctx, seq, messages)
 }
 
 func (s *runtimeStore) RecordDeliveredAssistantEvent(
 	ctx context.Context,
 	event conversation.DeliveredAssistantEvent,
 ) error {
-	if err := s.memory.RecordDeliveredAssistantEvent(ctx, event); err != nil {
-		return err
-	}
-	s.notifyAppendObservers()
-	return nil
+	return s.transcript.RecordDeliveredAssistantEvent(ctx, event)
+}
+func (s *runtimeStore) LoadRecentMessages(
+	ctx context.Context,
+	turns int,
+) ([]conversation.Message, error) {
+	return s.transcript.LoadRecentMessages(ctx, turns)
 }
 
-func (s *runtimeStore) notifyAppendObservers() {
-	s.mu.Lock()
-	observers := append([]func(){}, s.appendObservers...)
-	s.mu.Unlock()
-	for _, observer := range observers {
-		if observer == nil {
-			continue
-		}
-		observer()
-	}
+func (s *runtimeStore) LoadLastUserTimestamp(
+	ctx context.Context,
+) (time.Time, bool, error) {
+	return s.transcript.LoadLastUserTimestamp(ctx)
+}
+
+func (s *runtimeStore) ReserveTurnSeq(ctx context.Context) (int64, error) {
+	return s.transcript.ReserveTurnSeq(ctx)
 }
 
 func (s *runtimeStore) LoadCoreMemory(ctx context.Context) (agent.CoreMemory, error) {
 	return s.memory.LoadCoreMemory(ctx)
-}
-
-func (s *runtimeStore) LoadSemanticMemory(ctx context.Context) (agent.SemanticMemory, error) {
-	return s.memory.LoadSemanticMemory(ctx)
-}
-
-func (s *runtimeStore) LoadWorkingMemory(ctx context.Context) (agent.WorkingMemory, error) {
-	return s.memory.LoadWorkingMemory(ctx)
-}
-
-func (s *runtimeStore) LoadSemanticFileSizes(ctx context.Context) (map[string]int64, error) {
-	return s.memory.LoadSemanticFileSizes(ctx)
-}
-
-func (s *runtimeStore) ListMemoryFiles(ctx context.Context) ([]cognition.MemoryFile, error) {
-	return s.memory.ListMemoryFiles(ctx)
-}
-
-func (s *runtimeStore) LoadSemanticTopics(ctx context.Context) (map[string]string, error) {
-	return s.memory.LoadSemanticTopics(ctx)
-}
-
-func (s *runtimeStore) LoadOpenLoops(ctx context.Context) (string, error) {
-	return s.memory.LoadOpenLoops(ctx)
-}
-
-func (s *runtimeStore) LoadWorkingLedger(ctx context.Context) (string, error) {
-	_ = ctx
-	return s.memory.ReadWorkingLedger()
-}
-
-func (s *runtimeStore) ReadFileBytes(
-	ctx context.Context,
-	relativePath string,
-) ([]byte, bool, error) {
-	return s.memory.ReadFileBytes(ctx, relativePath)
-}
-
-func (s *runtimeStore) LoadConversionLedgerHistory(ctx context.Context) (string, error) {
-	return s.memory.LoadConversionLedgerHistory(ctx)
-}
-
-func (s *runtimeStore) WriteFileBytes(ctx context.Context, relativePath string, data []byte) error {
-	return s.memory.WriteFileBytes(ctx, relativePath, data)
-}
-
-func (s *runtimeStore) DeleteFile(ctx context.Context, relativePath string) error {
-	return s.memory.DeleteFile(ctx, relativePath)
-}
-
-func (s *runtimeStore) BeginMemoryRecovery(
-	ctx context.Context,
-	snapshots map[string]cognition.FileSnapshot,
-	topicDir string,
-) (string, error) {
-	return s.memory.BeginMemoryRecovery(ctx, snapshots, topicDir)
-}
-
-func (s *runtimeStore) BeginMemoryRepairRecovery(
-	ctx context.Context,
-	snapshots map[string]cognition.FileSnapshot,
-	target string,
-) (string, error) {
-	return s.memory.BeginMemoryRepairRecovery(ctx, snapshots, target)
-}
-
-func (s *runtimeStore) CompleteMemoryRecovery(ctx context.Context, id string) error {
-	return s.memory.CompleteMemoryRecovery(ctx, id)
-}
-
-func (s *runtimeStore) RecoverMemory(ctx context.Context, id string) error {
-	return s.memory.RecoverMemory(ctx, id)
 }
 
 func (s *runtimeStore) LoadSkillCatalog(ctx context.Context) (agent.SkillCatalog, error) {
@@ -218,78 +80,12 @@ func (s *runtimeStore) LoadSkillCatalog(ctx context.Context) (agent.SkillCatalog
 	}, nil
 }
 
-func (s *runtimeStore) LoadCognitionArtifact(
+func (s *runtimeStore) PrepareContext(
 	ctx context.Context,
-	relativePath string,
-) (cognition.Artifact, error) {
-	return s.memory.LoadCognitionArtifact(ctx, relativePath)
-}
-
-func (s *runtimeStore) StoreCognitionArtifact(
-	ctx context.Context,
-	artifact cognition.Artifact,
-) error {
-	return s.memory.StoreCognitionArtifact(ctx, artifact)
-}
-
-func (s *runtimeStore) DeleteCognitionArtifact(ctx context.Context, relativePath string) error {
-	return s.memory.DeleteCognitionArtifact(ctx, relativePath)
-}
-
-func (s *runtimeStore) LoadHead(ctx context.Context) (int64, time.Time, error) {
-	return s.memory.LoadHead(ctx)
-}
-
-func (s *runtimeStore) LoadConsolidationCheckpoint(
-	ctx context.Context,
-) (cognition.ConsolidationCheckpoint, error) {
-	return s.memory.LoadConsolidationCheckpoint(ctx)
-}
-
-func (s *runtimeStore) LoadSemanticExtractionCheckpoint(
-	ctx context.Context,
-) (cognition.SemanticExtractionCheckpoint, error) {
-	return s.memory.LoadSemanticExtractionCheckpoint(ctx)
-}
-
-func (s *runtimeStore) LoadJobState(
-	ctx context.Context,
-	jobType string,
-) (cognition.JobState, error) {
-	return s.memory.LoadJobState(ctx, jobType)
-}
-
-func (s *runtimeStore) StoreJobState(
-	ctx context.Context,
-	jobType string,
-	state cognition.JobState,
-) error {
-	return s.memory.StoreJobState(ctx, jobType, state)
-}
-
-func (s *runtimeStore) StoreConsolidationCheckpoint(
-	ctx context.Context,
-	checkpoint cognition.ConsolidationCheckpoint,
-) (cognition.ConsolidationCheckpoint, error) {
-	return s.memory.StoreConsolidationCheckpoint(ctx, checkpoint)
-}
-
-func (s *runtimeStore) StoreSemanticExtractionCheckpoint(
-	ctx context.Context,
-	checkpoint cognition.SemanticExtractionCheckpoint,
-) (cognition.SemanticExtractionCheckpoint, error) {
-	return s.memory.StoreSemanticExtractionCheckpoint(ctx, checkpoint)
-}
-
-func (s *runtimeStore) AppendRunRecord(ctx context.Context, record cognition.RunRecord) error {
-	return s.memory.AppendRunRecord(ctx, record)
-}
-
-func (s *runtimeStore) AddAppendObserver(observer func()) {
-	if observer == nil {
-		return
+	system, input []conversation.Message,
+) (agent.PreparedContext, error) {
+	if s.contextService == nil {
+		return agent.PreparedContext{}, fmt.Errorf("history context service is required")
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.appendObservers = append(s.appendObservers, observer)
+	return s.contextService.PrepareContext(ctx, system, input)
 }

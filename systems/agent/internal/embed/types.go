@@ -47,6 +47,7 @@ const (
 const (
 	ProviderGemini  = "gemini"
 	ProviderOpenAI  = "openai"
+	ProviderOllama  = "ollama"
 	DefaultProvider = ProviderGemini
 )
 

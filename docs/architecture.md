@@ -1,7 +1,8 @@
 # q15 architecture
 
 How the runtime is put together: the services and what each one owns, how a conversation and its
-memory are stored on disk, and how the agent keeps local time and reports progress back to a chat.
+memory are stored in Postgres and authored files, and how the agent keeps local time and reports
+progress back to a chat.
 
 ## Architecture
 
@@ -30,83 +31,61 @@ setup.
 
 ## Conversation History
 
-- Completed turns are stored as JSON files under `/memory/history/turns/YYYY/MM/DD/`.
-- Transcript sequence metadata is stored under `/memory/history/state/head.json`.
-- The current persisted format is `schema_version: 5` with canonical ordered `messages[].parts[]`
-  entries of type `text`, `reasoning`, `tool_call`, and `tool_result`.
-- On agent startup, existing history is eagerly upgraded in place before replay. Unreadable turn
-  files are moved to `/memory/history/quarantine/`.
-- Provider-specific opaque replay state is only persisted on `reasoning.replay`. Cross-provider
-  fallback uses portable transcript data first.
-- When a provider exposes only opaque reasoning for an assistant tool-call replay, q15 backfills an
-  explicit portable reasoning placeholder before persisting the turn so later fallback remains
-  replayable.
-- After a scheduled notification is transport-acknowledged, its exact text is idempotently appended
-  as an assistant event with structured job, run, transport, and delivery-time metadata. During
-  replay, q15 exposes that provenance in a trusted system-role record immediately before the exact
-  delivered assistant text; assistant-authored lookalike metadata is never trusted. The scheduled
-  job's private prompt/tool trace is not included.
+Postgres is the sole conversation store. `memory.turns` assigns numeric identities; messages and
+ordered parts have their own keys and foreign keys. Separate typed tables store text, reasoning,
+tool calls/results, attachments, original user clocks and acknowledged scheduled deliveries.
+Completed source turns are immutable; deleting a turn cascades to its messages, chunks, digest and
+vectors. Relationships between a digest and its earlier context are recorded explicitly.
 
-## Memory Layout
+The schema uses relational columns for identities, order, timestamps and relationships. JSONB is
+reserved for valid tool arguments and opaque provider replay structures. Exceptional payloads that
+Postgres text or JSONB cannot represent, including NUL characters and malformed legacy arguments,
+use mutually exclusive bytea columns. Original source content is retained. pgvector stores typed,
+dimension-checked vectors; native Postgres full-text indexes provide lexical search. Existing AGE
+and other application schemas are not altered.
 
-- `/memory/core/` stores the agent's always-injected identity, personality, and self-model files.
-- `/memory/semantic/` stores durable extracted knowledge the agent knows in the canonical editable
-  files `facts.md`, `preferences.md`, and `projects.md`; it is not auto-injected.
-- `/memory/working/WORKING_MEMORY.md` is the canonical prompt-visible working-memory artifact for
-  bounded active state.
-- Other files under `/memory/working/` are not implicitly prompt-visible, and `/memory/notes/`
-  remains the general notebook area.
-- `/memory/history/` stores the canonical episodic transcript and its sequencing metadata.
-- `/memory/cognition/` is reserved for system-owned control, indexing, and background-maintenance
-  state.
-- `/memory/notes/inbox/`, `/memory/notes/zettel/`, and `/memory/notes/maps/` form the auxiliary
-  zettelkasten notebook layer.
-- Scheduled-job operational state is deliberately outside Git-backed memory:
-  `/var/lib/q15/agent/schedule/jobs/` stores active definitions and
-  `/var/lib/q15/agent/schedule/runs/YYYY/MM/DD/` stores completed run records.
+A background indexer creates one short digest per completed turn and chunks original message and
+tool text. Digests use the configured Ollama model, with no interactive-model fallback. Each digest
+records its model, prompt version, input hash, actual token usage and earlier source dependencies.
+Failures retry independently per turn. Source persistence does not wait for generation or indexing.
+There is no cognition controller, verification review, semantic extraction, consolidation, repair
+protocol, open-loops file or conversion ledger.
 
-The working files `WORKING_MEMORY.md`, `OPEN_LOOPS.md`, and `LEDGER.md` are maintained only by
-cognition jobs. Foreground and scheduled runs can read them but cannot mutate them, even while
-cognition is idle; this keeps every exit under the jobs' ledger validation. Other memory file
-mutations use the agent's `write_file`, `edit_file`, and `apply_patch` tools. A cognition run
-reserves its snapshotted paths until validation or recovery completes. File tools hold the memory
-repository lease during the actual mutation; another run cannot write a reserved path, including
-through a directory alias. Reads and unrelated memory paths remain available. The execution service
-mounts `/memory` read-only, so shell commands and background sessions cannot bypass this ownership
-boundary. Other deployment arrangements must preserve that mount contract. Direct host edits are an
-operator action and must wait until cognition is idle.
+Context assembly combines recent source turns, dated summaries of the intervening history, and
+relevant retrieved summaries or original-message excerpts. Every block identifies its source and
+whether it is generated. Recent turns are excluded from retrieval, and overlapping gap/retrieval
+results are deduplicated. Short acknowledgements use nearby conversation context for retrieval.
+`history_search` finds older evidence and `history_read` pages original turn JSON.
 
-## Semantic Claim Src Citations
+Before each provider attempt, including model fallback and subsequent tool steps, the runtime fits
+an immutable history snapshot to that model's working budget and catalog ceiling. It accounts for
+encoded messages and tool definitions, reserves response/framing room, shortens marked tool-output
+and reasoning excerpts, collapses older turns to summaries, and removes optional history. It keeps
+the current request, saved clock metadata, latest assistant context and complete tool pairs. An
+irreducible request fails before dispatch. These are conservative encoded-byte budgets, not exact
+provider token counts or a universal model-quality threshold. Per-model working budgets can be
+configured without changing stored history; there is no cloud recall benchmark in this slice.
 
-Every durable claim carries a `src` field in its `{...}` metadata line that names the evidence
-behind the statement. One grammar owns what a `src` may cite; the conversion apply step
-(`semantic_memory.extract`) validates every claim in the files its run wrote against it:
+Library and document search retain their existing Qdrant collections and embedding bindings.
+Conversation embeddings have a separate explicit space: provider, model, dimensions and prompt
+prefix version. EmbeddingGemma 2 uses its documented query/document prefixes and native Ollama
+requests disable silent input truncation. Query embedding failure degrades hybrid search to lexical
+search; background work remains resumable.
 
-- `t<seq>` is a transcript sequence marker: the letter `t` followed by a positive decimal integer
-  with no leading zero, no ranges and no punctuation, for example `t4312`.
-- `mem:<path>:<byte-offset>` is a memory-file citation: `<path>` sits under `semantic/` or
-  `working/`, and `<byte-offset>` is decimal. The memory-repair flow uses this form for a claim it
-  adopted out of a drained memory file.
+## Authored Files
 
-Several citations are separated by commas. Anything else - guessed sources, URLs, dates, `t0`,
-citation ranges, trailing punctuation - fails the claim src grammar. The grammar itself is not
-relaxed at the boundary; its refusals stay exact.
+`/memory/core/*.md` remains the authored identity and guidance injected into each prompt. Skills and
+ordinary notebook files remain authored files. The runtime initializes only identity and notes; it
+never seeds the retired memory layers. Old files are migration/archive material and are not runtime
+state. File tools serialize authored changes with the repository lease. The executor mounts that
+filesystem read-only.
 
-The apply boundary treats one src-grammar refusal differently from every other validation failure. A
-pass that introduces a claim whose citations alone are invalid does not lose its valid claims: the
-apply step defers that one claim - it removes it from the written file, names the claim ID and the
-refusal in the run result's `deferred_claims` metadata (bounded list; the overflow is disclosed as a
-count), and the run still applies its valid claims and still advances the extraction checkpoint.
+Scheduled-job definitions and run records remain under `/var/lib/q15/agent/schedule/`. Delivered
+notifications enter Postgres only after transport acknowledgement, with structured provenance and
+idempotent delivery identity. Their private prompts and tool traces are not copied into chat
+history.
 
-One more disclosed deferral class extends the same contract: a claim the pass wrote so badly it
-never gained a stable ID and statement. The apply step drops that raw item, names it by the byte
-offset of its head line in the written file under the same `deferred_claims` metadata, and keeps the
-rest of the pass; an item that names no claim at all - a bare bullet or index-shaped prose - still
-rejects the run whole, as does a parse-invalid rewrite of a claim the baseline already knows.
-
-The protective contract is unchanged: a rewrite that drops or replaces the provenance of an existing
-durable claim rejects the whole run and rolls it back, because silently rewriting durable knowledge
-is never acceptable.
+See [the cutover runbook](postgres-history-cutover.md) for import, verification and preparation.
 
 ## Prompt-Visible Temporal Metadata
 
@@ -151,7 +130,7 @@ otherwise it selects an eligible live model and persists it. Interactive selecti
 tool calling. Chat and decision dispatch repeat their respective capability checks. A model without
 chat support cannot enter chat dispatch even if it accepts text input. If a model genuinely supports
 both operations, its identity does not prevent either. An absent decision candidate leaves
-`decision_check` unavailable while existing chat and cognition jobs continue operating.
+`decision_check` unavailable while chat continues operating.
 
 Decision calls use `decision.Client` at `decision/v1`. In-tree Go adapters are checked by the
 compiler; the version declaration reserves a check for any future adapters loaded at runtime, with
@@ -159,14 +138,6 @@ no plugin loader introduced here. The application resolves only the held decisio
 constructs its provider adapter, and injects that port into `decision_check`. The tool owns neither
 selection nor HTTP construction. Clients are keyed by provider connection facts so reloads cannot
 reuse an obsolete connection.
-
-The cognition runner still uses the shared chat/tool engine: per-job persisted model overrides win,
-otherwise it inherits the interactive model. The provider foundation in PR 374 supports the
-[typed memory cutovers](https://github.com/q15co/q15/issues/367) and subsequent
-[decision integration](https://github.com/q15co/q15/issues/373). System One answers fixed choices,
-probabilities, and scores; it cannot generate arbitrary claim text or a complete repair JSON object.
-The cognition integration must retain a generative model for new content and keep validation,
-journaling, checkpoint accounting, and rollback in Go.
 
 One Ollama client implements the chat, streaming, reasoning-streaming, and decision ports. Its
 connection value builds the normalized root, trimmed key, bearer transport, HTTP client, and SDK

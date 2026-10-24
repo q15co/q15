@@ -35,13 +35,12 @@ The runtime contract is fixed in the binaries. Overlays only need to provide:
   `q15-proxy-state`
 
 Provider discovery is mandatory: provider rosters are the source of truth for available models and
-capabilities. The interactive and cognition models are runtime state, persisted under
+capabilities. The interactive and decision models are runtime state, persisted under
 `/workspace/.q15/agent/selection.json` on the durable `q15-workspace` volume. On first run q15
 auto-selects a first-eligible roster model (preferring a tool-calling model); the agent/user then
-changes it at runtime with `list_providers`, `list_models`, `switch_model`, and
-`switch_cognition_model` (per background cognition job). Switches survive restart. Current inference
-is text-first; image-input and tool-calling requirement inference are staged for the corresponding
-canonical request signals.
+changes it at runtime with `list_providers`, `list_models` and `switch_model`. Switches survive
+restart. Current inference is text-first; image-input and tool-calling requirement inference are
+staged for the corresponding canonical request signals.
 
 `q15-workspace` is the stack's long-term project and working-state PVC. A fresh
 `PersistentVolumeClaim/q15-workspace` may be empty on first deployment; pre-seeding it is optional
@@ -49,17 +48,13 @@ and the empty initial state still satisfies the runtime contract. Operators shou
 across restarts and redeployments and treat it as durable stack state for retention and backup
 planning.
 
-`q15-memory` is also durable stack state. On `q15-agent` startup, stored turn files under
-`/memory/history/turns/` are eagerly upgraded to the latest transcript schema before replay.
-Unreadable files are moved aside under `/memory/history/quarantine/`. The same persistent root also
-holds core self-model files under `/memory/core/`, canonical semantic memory files at
-`/memory/semantic/facts.md`, `/memory/semantic/preferences.md`, and `/memory/semantic/projects.md`,
-the working layer under `/memory/working/` with the canonical prompt-visible active-state file at
-`/memory/working/WORKING_MEMORY.md`, cognition maintenance state under `/memory/cognition/`, and
-zettelkasten notebook folders under `/memory/notes/inbox/`, `/memory/notes/zettel/`, and
-`/memory/notes/maps/`. The notes tree remains auxiliary notebook space, not implicit working memory.
-The agent mounts this PVC writable and the executor mounts it read-only. Memory mutations use agent
-file tools, which serialize writes with cognition recovery and reject another run's reserved paths.
+`q15-memory` contains authored identity under `/memory/core/` and ordinary notes. The agent mounts
+it writable and the executor mounts it read-only. Conversation turns, digests and search indexes are
+stored in a separate persistent Postgres database with pgvector. Provide `Q15_DATABASE_URL` in
+`Secret/q15-agent-env`, and provide the configured history embedding endpoint and Ollama summary
+provider credential. The overlay owns that database and its storage. Existing deployments must
+follow the [cutover runbook](../../../docs/postgres-history-cutover.md). The old cognition jobs and
+file-backed transcript initialization are removed.
 
 `q15-agent-state` is private durable runtime state for `q15-agent`, mounted at `/var/lib/q15/agent`.
 Scheduled-job definitions and append-only run provenance live below `/var/lib/q15/agent/schedule/`;

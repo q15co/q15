@@ -10,10 +10,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/q15co/q15/systems/agent/internal/conversation"
+
 	"github.com/q15co/q15/libs/chat-contract/browser"
 	"github.com/q15co/q15/libs/chat-contract/chatpb"
 	"github.com/q15co/q15/systems/agent/internal/media"
-	"github.com/q15co/q15/systems/agent/internal/memory"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -28,20 +29,18 @@ const serviceVersion = "dev"
 // human message including a pasted block, and far below the transport's 4 MiB
 // default receive limit, so an oversized send is rejected here as a clear
 // contract error instead of being parsed, accepted, and then repeated into
-// the transcript, the provider's context and the git history on every run.
+// the transcript and the provider's context on every run.
 const maxSendTextLen = 48 * 1024
 
 // TurnLister is the transcript read surface the bridge serves. It is an
-// interface rather than *memory.Store so tests can fake the page and the head
+// interface so tests can fake the page and the head
 // and so the bridge carries no other store dependency.
 type TurnLister interface {
-	ListTurns(ctx context.Context, afterSeq int64, limit int) (memory.TurnPage, error)
+	ListTurns(ctx context.Context, afterSeq int64, limit int) (conversation.TurnPage, error)
 	// LoadHead returns the transcript head as the store holds it. It may sit
 	// above the newest turn record while a run is in flight.
 	LoadHead(ctx context.Context) (int64, time.Time, error)
 }
-
-var _ TurnLister = (*memory.Store)(nil)
 
 // Service keeps canonical host state behind both console and sealed browser adapters.
 type Service struct {

@@ -44,43 +44,6 @@ func TestSetInteractivePersistsAcrossReopen(t *testing.T) {
 	}
 }
 
-func TestCognitionOverridesRoundTripAndClear(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "selection.json")
-	store, err := Open(path)
-	if err != nil {
-		t.Fatalf("Open() error = %v", err)
-	}
-
-	if _, ok := store.Cognition("working_memory.consolidate"); ok {
-		t.Fatal("missing cognition override reported as present")
-	}
-	if err := store.SetCognition("working_memory.consolidate", "moonshot", "kimi-k2"); err != nil {
-		t.Fatalf("SetCognition() error = %v", err)
-	}
-	if err := store.SetCognition("semantic_memory.extract", "openai", "gpt-5.5"); err != nil {
-		t.Fatalf("SetCognition() error = %v", err)
-	}
-
-	reopened, err := Open(path)
-	if err != nil {
-		t.Fatalf("reopen error = %v", err)
-	}
-	got, ok := reopened.Cognition("working_memory.consolidate")
-	if !ok || got.Provider != "moonshot" || got.Model != "kimi-k2" {
-		t.Fatalf("reopened cognition override = %+v ok=%v", got, ok)
-	}
-	if len(reopened.CognitionSelections()) != 2 {
-		t.Fatalf("cognition overrides = %d, want 2", len(reopened.CognitionSelections()))
-	}
-
-	if err := reopened.ClearCognition("working_memory.consolidate"); err != nil {
-		t.Fatalf("ClearCognition() error = %v", err)
-	}
-	if _, ok := reopened.Cognition("working_memory.consolidate"); ok {
-		t.Fatal("cleared cognition override still present")
-	}
-}
-
 func TestDecisionSlotRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "selection.json")
 	store, err := Open(path)
@@ -163,28 +126,6 @@ func TestSetInteractiveLeavesMemoryUnchangedOnPersistFailure(t *testing.T) {
 			"in-memory interactive advanced despite persistence failure: %+v",
 			store.Interactive(),
 		)
-	}
-}
-
-func TestSetCognitionLeavesMemoryUnchangedOnPersistFailure(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "selection.json"))
-	if err != nil {
-		t.Fatalf("Open() error = %v", err)
-	}
-	if err := store.SetCognition("working_memory.consolidate", "p", "m"); err != nil {
-		t.Fatalf("seed SetCognition() error = %v", err)
-	}
-	store.path = "/dev/null/cannot-create/selection.json"
-
-	if err := store.SetCognition("semantic_memory.extract", "q", "n"); err == nil {
-		t.Fatal("expected SetCognition to fail on unwritable path")
-	}
-	overrides := store.CognitionSelections()
-	if _, ok := overrides["semantic_memory.extract"]; ok {
-		t.Fatal("in-memory cognition advanced despite persistence failure")
-	}
-	if _, ok := overrides["working_memory.consolidate"]; !ok {
-		t.Fatal("pre-existing cognition override lost on failed sibling write")
 	}
 }
 

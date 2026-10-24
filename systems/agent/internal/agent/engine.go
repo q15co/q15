@@ -48,6 +48,7 @@ type EngineRequest struct {
 	// reply reserve of one eighth so a turn never starts unable to absorb its
 	// own reply and fresh evidence. Zero disables it.
 	MaxRequestBytes int
+	ContextFitter   RequestContextFitter
 }
 
 // EngineResult captures the engine-produced messages and final outcome for one
@@ -177,6 +178,8 @@ func (e *Engine) Run(ctx context.Context, req EngineRequest) (EngineResult, erro
 			req.Observer,
 			&failureBudget,
 			size.total,
+			req.ContextFitter,
+			requestStart,
 		)
 		if err != nil {
 			return EngineResult{
@@ -390,6 +393,8 @@ func (e *Engine) completeWithObserver(
 	observer RunObserver,
 	budget *modelFailureBudget,
 	inputBytes int,
+	contextFitter RequestContextFitter,
+	generatedStart int,
 ) (string, ModelClientResult, error) {
 	modelRefs := normalizeModelRefs(e.modelRefSource())
 	if len(modelRefs) == 0 {
@@ -404,6 +409,9 @@ func (e *Engine) completeWithObserver(
 		requirements.ToolCalling = true
 	}
 	requirements.InputBytes = inputBytes
+	if contextFitter != nil {
+		requirements.InputBytes = 0
+	}
 
 	plan, err := e.planner.Plan(modelRefs, requirements)
 	if err != nil {
@@ -437,7 +445,22 @@ func (e *Engine) completeWithObserver(
 			ModelRef: modelRef,
 		})
 
-		result, err := e.completeModel(ctx, modelRef, messages, tools, turn, observer)
+		attemptMessages := messages
+		if contextFitter != nil {
+			modelContext := ModelContext{Ref: modelRef}
+			if source, ok := e.modelClient.(ModelContextSource); ok {
+				modelContext = source.ContextForModel(modelRef)
+			}
+			attemptMessages, err = contextFitter(ctx, modelContext, messages, tools, generatedStart)
+			if err != nil {
+				attemptFailures = append(
+					attemptFailures,
+					ModelAttemptFailure{ModelRef: modelRef, Err: err},
+				)
+				continue
+			}
+		}
+		result, err := e.completeModel(ctx, modelRef, attemptMessages, tools, turn, observer)
 		if ctx.Err() != nil {
 			return modelRef, ModelClientResult{}, ctx.Err()
 		}

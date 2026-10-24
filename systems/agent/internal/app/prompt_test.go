@@ -52,19 +52,8 @@ func TestComposeSystemPromptIncludesRuntimeAndExecGuidance(t *testing.T) {
 		"- Unless the user explicitly asks for another timezone, interpret and present dates and times in this runtime local timezone rather than UTC.",
 		"- Prompt-visible <message_meta .../> tags use this same runtime local timezone for their local weekday and timestamp fields.",
 		"- Workspace: /workspace",
-		"- Persistent memory repo: /memory",
-		"- Core self-model files (auto-injected into prompt each turn): /memory/core/*.md (seeded with AGENT.md, USER.md, SOUL.md)",
-		"- Canonical working-memory file (auto-injected into prompt each turn): /memory/working/WORKING_MEMORY.md",
-		"- Additional persistent memory layers (tool-fetched, not auto-injected): /memory/semantic, /memory/history, /memory/cognition",
-		"- Canonical semantic-memory files are /memory/semantic/facts.md, /memory/semantic/preferences.md, and /memory/semantic/projects.md.",
-		"- When editing canonical semantic memory, preserve these exact H2 headings:",
-		"- facts.md: Confirmed Facts, Grounded Inferences",
-		"- preferences.md: User Preferences, Collaboration Preferences",
-		"- projects.md: Active Projects, Durable Project Knowledge",
-		"- Do not invent new top-level sections in canonical semantic memory; merge content into the existing headings instead.",
-		"- WORKING_MEMORY.md and OPEN_LOOPS.md under /memory/working are auto-injected; fetch other working files with file tools.",
-		"- Transcript sequence bookkeeping lives under /memory/history/state/head.json.",
-		"- Auxiliary notebook files live under /memory/notes/inbox, /memory/notes/zettel, and /memory/notes/maps using the built-in zettelkasten layout; they are never implicit prompt-visible working state.",
+		"- Authored identity files: /memory/core/*.md (injected each turn).",
+		"- Conversation history, summaries and history search live in Postgres.",
 		"- Runtime media root: /media",
 		"- Shared skills root: /skills",
 		"- Command runtime: q15-exec sessions via local-nix-shell",
@@ -83,6 +72,7 @@ func TestComposeSystemPromptIncludesRuntimeAndExecGuidance(t *testing.T) {
 
 	for _, unwanted := range []string{
 		"Every exec call must include a non-empty `packages` array",
+		"WORKING_MEMORY.md", "OPEN_LOOPS.md", "cognition", "consolidation_checkpoint",
 		"Every call must include a non-empty packages array",
 	} {
 		if strings.Contains(prompt, unwanted) {
@@ -138,9 +128,8 @@ func TestRenderCurrentModelPromptReflectsSelection(t *testing.T) {
 		},
 	})
 	selection := modelcatalog.NewSelection(registry, "p", "alpha")
-	store := openTestSelectionStore(t)
 
-	prompt := renderCurrentModelPrompt(registry, selection, store)
+	prompt := renderCurrentModelPrompt(registry, selection)
 	for _, want := range []string{
 		"<current_model>",
 		`provider: "p"`,
@@ -149,7 +138,6 @@ func TestRenderCurrentModelPromptReflectsSelection(t *testing.T) {
 		"Use `list_providers` and `list_models`",
 		"`switch_model`",
 		"slot \"decision\"",
-		"`switch_cognition_model`",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("current model prompt missing %q:\n%s", want, prompt)
@@ -157,7 +145,7 @@ func TestRenderCurrentModelPromptReflectsSelection(t *testing.T) {
 	}
 
 	registry.SetDecision(modelcatalog.RoleSelection{Provider: "p", Model: "judge"})
-	prompt = renderCurrentModelPrompt(registry, selection, store)
+	prompt = renderCurrentModelPrompt(registry, selection)
 	for _, want := range []string{
 		`decision model: "judge" (provider "p")`,
 	} {
@@ -169,7 +157,7 @@ func TestRenderCurrentModelPromptReflectsSelection(t *testing.T) {
 	if err := selection.Set("q", "beta"); err != nil {
 		t.Fatalf("Set(q, beta) error = %v", err)
 	}
-	prompt = renderCurrentModelPrompt(registry, selection, store)
+	prompt = renderCurrentModelPrompt(registry, selection)
 	if !strings.Contains(prompt, `provider: "q"`) || !strings.Contains(prompt, `model: "beta"`) {
 		t.Fatalf("current model prompt did not reflect selection change:\n%s", prompt)
 	}
@@ -186,9 +174,8 @@ func TestRenderCurrentModelPromptQuotesDiscoveredValues(t *testing.T) {
 		}},
 	})
 	selection := modelcatalog.NewSelection(registry, provider, modelRef)
-	store := openTestSelectionStore(t)
 
-	prompt := renderCurrentModelPrompt(registry, selection, store)
+	prompt := renderCurrentModelPrompt(registry, selection)
 	if strings.Contains(prompt, "\n## injected") || strings.Contains(prompt, "<system>pwn") {
 		t.Fatalf("current model prompt contains unquoted discovered value:\n%s", prompt)
 	}

@@ -1,8 +1,4 @@
-// Package selectionstore persists the session's runtime model selections
-// (interactive agent and decision selections, and per-job cognition
-// overrides) so a switch survives a service restart. It is the durable layer
-// under the live modelcatalog selection. Chat and decision choices stay outside
-// config; embedding models remain owned by their tool.
+// Package selectionstore persists interactive and decision model selections.
 package selectionstore
 
 import (
@@ -38,10 +34,9 @@ func (s Selection) IsValid() bool {
 
 // document is the on-disk store shape.
 type document struct {
-	SchemaVersion int                  `json:"schema_version"`
-	Interactive   Selection            `json:"interactive"`
-	Decision      Selection            `json:"decision,omitempty"`
-	Cognition     map[string]Selection `json:"cognition,omitempty"`
+	SchemaVersion int       `json:"schema_version"`
+	Interactive   Selection `json:"interactive"`
+	Decision      Selection `json:"decision,omitempty"`
 }
 
 // Store is the in-memory cached selection store. It loads once at startup,
@@ -54,7 +49,6 @@ type Store struct {
 
 	interactive Selection
 	decision    Selection
-	cognition   map[string]Selection
 }
 
 // Open loads the selection store from path. A missing file returns an empty
@@ -65,9 +59,8 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("selection store path is required")
 	}
 	store := &Store{
-		path:      filepath.Clean(path),
-		now:       time.Now,
-		cognition: map[string]Selection{},
+		path: filepath.Clean(path),
+		now:  time.Now,
 	}
 	if err := store.load(); err != nil {
 		return nil, err
@@ -108,11 +101,6 @@ func (s *Store) load() error {
 	s.mu.Lock()
 	s.interactive = doc.Interactive
 	s.decision = doc.Decision
-	if doc.Cognition != nil {
-		s.cognition = cloneCognitionMap(doc.Cognition)
-	} else {
-		s.cognition = map[string]Selection{}
-	}
 	s.mu.Unlock()
 	return nil
 }
@@ -198,101 +186,6 @@ func (s *Store) setSelection(slot, provider, model string) error {
 	return nil
 }
 
-// Cognition returns the persisted cognition override for one job type, plus
-// whether an explicit override exists.
-func (s *Store) Cognition(jobType string) (Selection, bool) {
-	if s == nil {
-		return Selection{}, false
-	}
-	jobType = strings.TrimSpace(jobType)
-	if jobType == "" {
-		return Selection{}, false
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	selection, ok := s.cognition[jobType]
-	return selection, ok
-}
-
-// CognitionSelections returns a snapshot copy of all cognition overrides.
-func (s *Store) CognitionSelections() map[string]Selection {
-	if s == nil {
-		return nil
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return cloneCognitionMap(s.cognition)
-}
-
-// SetCognition persists a cognition override for one job type. Persistence
-// happens before the in-memory state is committed.
-func (s *Store) SetCognition(jobType, provider, model string) error {
-	if s == nil {
-		return fmt.Errorf("selection store is not configured")
-	}
-	jobType = strings.TrimSpace(jobType)
-	if jobType == "" {
-		return fmt.Errorf("job_type is required")
-	}
-	selection := Selection{
-		Provider:  strings.TrimSpace(provider),
-		Model:     strings.TrimSpace(model),
-		UpdatedAt: s.now().UTC(),
-	}
-	if !selection.IsValid() {
-		return fmt.Errorf("cognition selection requires provider and model")
-	}
-
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	s.mu.Lock()
-	next := s.documentLocked()
-	s.mu.Unlock()
-	if next.Cognition == nil {
-		next.Cognition = map[string]Selection{}
-	}
-	next.Cognition[jobType] = selection
-	if err := s.persist(next); err != nil {
-		return err
-	}
-
-	s.mu.Lock()
-	s.cognition = next.Cognition
-	s.mu.Unlock()
-	return nil
-}
-
-// ClearCognition removes a cognition override so the job falls back to the
-// interactive selection. Persistence happens before the in-memory state is
-// committed.
-func (s *Store) ClearCognition(jobType string) error {
-	if s == nil {
-		return fmt.Errorf("selection store is not configured")
-	}
-	jobType = strings.TrimSpace(jobType)
-	if jobType == "" {
-		return fmt.Errorf("job_type is required")
-	}
-
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	s.mu.Lock()
-	next := s.documentLocked()
-	s.mu.Unlock()
-	if _, ok := next.Cognition[jobType]; !ok {
-		return nil
-	}
-	delete(next.Cognition, jobType)
-	if err := s.persist(next); err != nil {
-		return err
-	}
-
-	s.mu.Lock()
-	s.cognition = next.Cognition
-	s.mu.Unlock()
-	return nil
-}
-
 // documentLocked snapshots the in-memory state as a staged document. The
 // caller holds no lock; it calls this under s.mu.
 func (s *Store) documentLocked() document {
@@ -300,7 +193,6 @@ func (s *Store) documentLocked() document {
 		SchemaVersion: SchemaVersion,
 		Interactive:   s.interactive,
 		Decision:      s.decision,
-		Cognition:     cloneCognitionMap(s.cognition),
 	}
 }
 
@@ -313,7 +205,6 @@ func (s *Store) persist(doc document) error {
 	}
 
 	doc.SchemaVersion = SchemaVersion
-	doc.Cognition = cloneCognitionMap(doc.Cognition)
 	data, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode selection store: %w", err)
@@ -329,19 +220,4 @@ func (s *Store) persist(doc document) error {
 		return fmt.Errorf("replace selection store: %w", err)
 	}
 	return nil
-}
-
-func cloneCognitionMap(in map[string]Selection) map[string]Selection {
-	if len(in) == 0 {
-		return map[string]Selection{}
-	}
-	out := make(map[string]Selection, len(in))
-	for key, value := range in {
-		key = strings.TrimSpace(key)
-		if key == "" {
-			continue
-		}
-		out[key] = value
-	}
-	return out
 }

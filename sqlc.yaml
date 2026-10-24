@@ -1,0 +1,17 @@
+version: "2"
+sql:
+  - engine: postgresql
+    schema: systems/agent/internal/history/migrations
+    queries:
+      - systems/agent/internal/history/queries.sql
+      - systems/agent/internal/history/dense.sql
+    gen:
+      go:
+        package: historydb
+        out: systems/agent/internal/history/historydb
+        sql_package: pgx/v5
+        emit_pointers_for_null_types: true
+        emit_empty_slices: true
+        overrides:
+          - db_type: vector
+            go_type: string

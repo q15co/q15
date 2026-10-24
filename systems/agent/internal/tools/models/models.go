@@ -37,15 +37,6 @@ type SwitchModel struct {
 	store     *selectionstore.Store
 }
 
-// SwitchCognitionModel mutates and persists the model used by one background
-// cognition job type.
-type SwitchCognitionModel struct {
-	registry *modelcatalog.Registry
-	store    *selectionstore.Store
-	jobTypes map[string]struct{}
-	jobOrder []string
-}
-
 type providerInfo struct {
 	Name      string `json:"name"`
 	Type      string `json:"type"`
@@ -112,31 +103,6 @@ func NewSwitchModel(
 	store *selectionstore.Store,
 ) *SwitchModel {
 	return &SwitchModel{registry: registry, selection: selection, store: store}
-}
-
-// NewSwitchCognitionModel constructs the switch_cognition_model tool. jobTypes
-// is the set of registered cognition job type identifiers the tool may target.
-func NewSwitchCognitionModel(
-	registry *modelcatalog.Registry,
-	store *selectionstore.Store,
-	jobTypes []string,
-) *SwitchCognitionModel {
-	tool := &SwitchCognitionModel{registry: registry, store: store}
-	for _, jobType := range jobTypes {
-		jobType = strings.TrimSpace(jobType)
-		if jobType == "" {
-			continue
-		}
-		if tool.jobTypes == nil {
-			tool.jobTypes = map[string]struct{}{}
-		}
-		if _, ok := tool.jobTypes[jobType]; ok {
-			continue
-		}
-		tool.jobTypes[jobType] = struct{}{}
-		tool.jobOrder = append(tool.jobOrder, jobType)
-	}
-	return tool
 }
 
 // Definition returns the list_providers schema exposed to the model.
@@ -465,126 +431,6 @@ func (t *SwitchModel) Run(_ context.Context, arguments string) (string, error) {
 		"slot":    slot,
 		"current": describeModel(model, true),
 		"reason":  reason,
-	})
-}
-
-// Definition returns the switch_cognition_model schema exposed to the model.
-func (t *SwitchCognitionModel) Definition() agent.ToolDefinition {
-	return agent.ToolDefinition{
-		Name:        "switch_cognition_model",
-		Description: "Set or clear the model used by one background cognition job type. Jobs without an override inherit the interactive model.",
-		PromptGuidance: []string{
-			"Use to run a specific background cognition job on a different model than the interactive one (for example a cheaper model for consolidation, or a stronger model for extraction).",
-			"Valid job_type values are the registered cognition jobs; pass action \"clear\" to restore inheritance from the interactive model.",
-			"The pair must exist in the live roster, and the change takes effect on the next run of that job.",
-		},
-		Parameters: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"job_type": map[string]any{
-					"type":        "string",
-					"description": "Registered cognition job type identifier.",
-					"enum":        append([]string(nil), t.jobOrder...),
-				},
-				"action": map[string]any{
-					"type":        "string",
-					"description": "Optional action: omit (default) to set the model, or \"clear\" to remove the override.",
-					"enum":        []string{"set", "clear"},
-				},
-				"provider": map[string]any{
-					"type":        "string",
-					"description": "Configured provider name hosting the model (required for action \"set\").",
-				},
-				"model": map[string]any{
-					"type":        "string",
-					"description": "Agent-side model ref from list_models (required for action \"set\").",
-				},
-				"reason": map[string]any{
-					"type":        "string",
-					"description": "Optional concise reason for the switch; logged for auditability.",
-				},
-			},
-			"required": []string{"job_type"},
-		},
-	}
-}
-
-// Run executes switch_cognition_model.
-func (t *SwitchCognitionModel) Run(_ context.Context, arguments string) (string, error) {
-	if t == nil || t.store == nil {
-		return "", fmt.Errorf("cognition selection store is not configured")
-	}
-	var args struct {
-		JobType  string `json:"job_type"`
-		Action   string `json:"action"`
-		Provider string `json:"provider"`
-		Model    string `json:"model"`
-		Reason   string `json:"reason"`
-	}
-	if err := json.Unmarshal([]byte(arguments), &args); err != nil {
-		return "", fmt.Errorf("invalid arguments JSON: %w", err)
-	}
-	jobType := strings.TrimSpace(args.JobType)
-	if jobType == "" {
-		return "", fmt.Errorf("job_type is required")
-	}
-	if len(t.jobTypes) > 0 {
-		if _, ok := t.jobTypes[jobType]; !ok {
-			return "", fmt.Errorf("job_type %q is not a registered cognition job", jobType)
-		}
-	}
-	action := strings.ToLower(strings.TrimSpace(args.Action))
-	if action == "" {
-		action = "set"
-	}
-	if action != "set" && action != "clear" {
-		return "", fmt.Errorf("action must be \"set\" or \"clear\", got %q", args.Action)
-	}
-	reason := strings.TrimSpace(args.Reason)
-
-	if action == "clear" {
-		if err := t.store.ClearCognition(jobType); err != nil {
-			return "", fmt.Errorf("clear cognition selection: %w", err)
-		}
-		log.Printf("q15: switch_cognition_model job=%q action=clear reason=%q", jobType, reason)
-		return jsonOutput(map[string]any{
-			"job_type": jobType,
-			"action":   "clear",
-			"reason":   reason,
-		})
-	}
-
-	provider := strings.TrimSpace(args.Provider)
-	modelRef := strings.TrimSpace(args.Model)
-	if t.registry == nil {
-		return "", fmt.Errorf("model registry is not configured")
-	}
-	model, ok := t.registry.Lookup(provider, modelRef)
-	if !ok {
-		return "", fmt.Errorf(
-			"model %q for provider %q is not in the current live roster",
-			modelRef,
-			provider,
-		)
-	}
-	if err := t.registry.RequireChat("primary", model); err != nil {
-		return "", err
-	}
-	if err := t.store.SetCognition(jobType, provider, modelRef); err != nil {
-		return "", fmt.Errorf("persist cognition selection: %w", err)
-	}
-	log.Printf(
-		"q15: switch_cognition_model job=%q provider=%q model=%q reason=%q",
-		jobType,
-		provider,
-		modelRef,
-		reason,
-	)
-	return jsonOutput(map[string]any{
-		"job_type": jobType,
-		"action":   "set",
-		"current":  describeModel(model, true),
-		"reason":   reason,
 	})
 }
 

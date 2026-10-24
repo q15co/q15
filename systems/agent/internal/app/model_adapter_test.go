@@ -817,42 +817,6 @@ func TestLoadInteractiveSelectionRestoresPersistedSelection(t *testing.T) {
 	}
 }
 
-func TestSwitchCognitionModelPersistsAndResolverFallsBack(t *testing.T) {
-	registry := testRegistry(t, map[string][]modelcatalog.Model{
-		"p": {
-			{
-				ProviderModel: "alpha",
-				Capabilities:  modelcatalog.Capabilities{Chat: true, Text: true},
-			},
-		},
-		"q": {
-			{
-				ProviderModel: "beta",
-				Capabilities:  modelcatalog.Capabilities{Chat: true, Text: true},
-			},
-		},
-	})
-	selection := modelcatalog.NewSelection(registry, "p", "alpha")
-	store := openTestSelectionStore(t)
-
-	resolver := func(jobType string) []string {
-		if override, ok := store.Cognition(jobType); ok {
-			return buildModelRefs(override.Model, registry)
-		}
-		return buildModelRefs(selection.CurrentModel(), registry)
-	}
-	if refs := resolver("working_memory.consolidate"); len(refs) == 0 || refs[0] != "alpha" {
-		t.Fatalf("fallback resolver refs = %v, want alpha first", refs)
-	}
-
-	if err := store.SetCognition("working_memory.consolidate", "q", "beta"); err != nil {
-		t.Fatalf("SetCognition() error = %v", err)
-	}
-	if refs := resolver("working_memory.consolidate"); len(refs) == 0 || refs[0] != "beta" {
-		t.Fatalf("override resolver refs = %v, want beta first", refs)
-	}
-}
-
 func TestRoutedModelAdapterCacheIncludesProviderConnectionSettings(t *testing.T) {
 	tests := []struct {
 		name   string

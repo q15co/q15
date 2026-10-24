@@ -19,6 +19,10 @@ func (c Config) ResolveAgentRuntime() (*AgentRuntime, error) {
 	}
 
 	agentCfg := c.Agent
+	historyRuntime, err := c.ResolveHistory()
+	if err != nil {
+		return nil, err
+	}
 
 	token, err := agentCfg.TelegramToken()
 	if err != nil {
@@ -41,31 +45,17 @@ func (c Config) ResolveAgentRuntime() (*AgentRuntime, error) {
 		return nil, fmt.Errorf("resolve embeddings config for agent %q: %w", agentCfg.Name, err)
 	}
 
-	memoryRecentTurns := agentCfg.MemoryRecentTurns
-	if memoryRecentTurns == 0 {
-		memoryRecentTurns = defaultMemoryRecentTurns
-	}
-	memoryWorkingBudgetBytes := agentCfg.MemoryWorkingBudgetBytes
-	if memoryWorkingBudgetBytes == 0 {
-		memoryWorkingBudgetBytes = defaultMemoryWorkingBudgetBytes
-	}
-	memoryOpenLoopsBudgetBytes := agentCfg.MemoryOpenLoopsBudgetBytes
-	if memoryOpenLoopsBudgetBytes == 0 {
-		memoryOpenLoopsBudgetBytes = defaultMemoryOpenLoopsBudgetBytes
-	}
 	scheduleRuntime := resolveScheduleRuntime(agentCfg.Tools.Schedule)
 
 	return &AgentRuntime{
-		Name:                       strings.TrimSpace(agentCfg.Name),
-		WorkspaceLocalDir:          runtimeWorkspaceLocalDir,
-		MemoryLocalDir:             "/memory",
-		MediaLocalDir:              runtimeMediaLocalDir,
-		SkillsLocalDir:             runtimeSkillsLocalDir,
-		StateLocalDir:              runtimeStateLocalDir,
-		MemoryRecentTurns:          memoryRecentTurns,
-		MemoryWorkingBudgetBytes:   memoryWorkingBudgetBytes,
-		MemoryOpenLoopsBudgetBytes: memoryOpenLoopsBudgetBytes,
-		Execution:                  ExecutionRuntime{ServiceAddress: runtimeExecutionServiceAddr},
+		History:           historyRuntime,
+		Name:              strings.TrimSpace(agentCfg.Name),
+		WorkspaceLocalDir: runtimeWorkspaceLocalDir,
+		MemoryLocalDir:    "/memory",
+		MediaLocalDir:     runtimeMediaLocalDir,
+		SkillsLocalDir:    runtimeSkillsLocalDir,
+		StateLocalDir:     runtimeStateLocalDir,
+		Execution:         ExecutionRuntime{ServiceAddress: runtimeExecutionServiceAddr},
 		Tools: ToolsRuntime{
 			WebSearch: WebSearchToolRuntime{
 				BraveAPIKey: braveAPIKey,

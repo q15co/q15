@@ -39,6 +39,13 @@ type requestSize struct {
 	prompt, input, prior, evidence, framing int
 }
 
+// RequestEncodedBytes measures the same canonical envelope as the engine's guard.
+// The value is an encoded-byte allowance, not a provider tokenizer's token count.
+func RequestEncodedBytes(messages []conversation.Message, tools []ToolDefinition) (int, error) {
+	size, err := measureRequest(messages, tools)
+	return size.total, err
+}
+
 // turnReplyReserveDivisor reserves one eighth of the request budget for the
 // upcoming assistant reply and fresh evidence shells. boundToolResult enforces
 // the same eighth when it keeps a fresh tool result.

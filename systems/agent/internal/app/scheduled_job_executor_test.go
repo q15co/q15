@@ -58,15 +58,6 @@ func (scheduledExecutorTestContextStore) LoadCoreMemory(
 	}}, nil
 }
 
-func (scheduledExecutorTestContextStore) LoadWorkingMemory(
-	context.Context,
-) (agent.WorkingMemory, error) {
-	return agent.WorkingMemory{
-		RelativePath: "working/WORKING_MEMORY.md",
-		Content:      "active work",
-	}, nil
-}
-
 func (scheduledExecutorTestContextStore) LoadSkillCatalog(
 	context.Context,
 ) (agent.SkillCatalog, error) {
@@ -308,11 +299,13 @@ func TestScheduledJobExecutorAgentProfileUsesFullContextWithRestrictedTools(t *t
 		rendered = append(rendered, conversation.TextValue(message))
 	}
 	contextText := strings.Join(rendered, "\n")
+	if strings.Contains(contextText, "active work") {
+		t.Fatal("retired working memory was injected")
+	}
 	for _, want := range []string{
 		"full agent prompt with tools: read_file",
 		"agent identity",
 		"research skill",
-		"active work",
 		"recent assistant reply",
 		"Use the context to prepare a report.",
 		`context_profile="agent"`,

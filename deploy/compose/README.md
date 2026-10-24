@@ -59,8 +59,7 @@ Notes:
   for available models and capabilities. `agent.provider` + `agent.model` seed the current
   interactive provider/model pair; q15 can list and switch live models at runtime, and otherwise
   tries the current model first each turn before falling through to other eligible roster models.
-  `agent.cognition_model` is an optional current model ref for background cognition jobs; when
-  omitted, cognition inherits `agent.model`.
+  Conversation summaries use the explicit `agent.history.summary_provider` and `summary_model`.
 - The checked-in Compose agent config enables Brave Search with
   `agent.tools.web_search.brave_api_key_env: BRAVE_API_KEY`, and the Compose file mounts that
   optional secret as `BRAVE_API_KEY_FILE=/run/q15-secrets/brave_api_key`.
@@ -101,15 +100,10 @@ pricing. Provider matching uses models.dev's `api` and `doc` URLs;
 tasks are excluded. Models without capability metadata report `capabilities_known: false`, and
 unknown structured-output support is `null`.
 
-`agent.name`, `agent.memory_recent_turns`, and the two `agent.memory_*_budget_bytes` caps are the
-only agent fields. The budgets bound the working-memory and open-loops files the cognition
-conversion pass reads and both memory jobs enforce when applying results. Files are never truncated;
-an over-budget working memory fires a conversion run instead of being shortened. The current model
-is runtime state, not config: on first run q15 auto-selects a first-eligible roster model
-(preferring a tool-calling model) and persists it; the agent/user then changes it with
-`list_providers`, `list_models`, `switch_model`, and `switch_cognition_model`. Background cognition
-jobs inherit the interactive model unless `switch_cognition_model` sets a per-job override. Each
-path tries its model first, then falls through to other eligible roster models if it's unavailable.
+`agent.history` configures Postgres conversation context. The old cognition jobs and flat `memory_*`
+settings are removed. Interactive and decision selections remain runtime state; `list_providers`,
+`list_models` and `switch_model` manage those slots. Summaries use an explicit Ollama binding. See
+[the cutover runbook](../../docs/postgres-history-cutover.md).
 
 ```yaml
 providers:
@@ -122,7 +116,9 @@ providers:
       exclude: ["*-embed"]
 agent:
   name: Q15
-  memory_recent_turns: 6
+  history:
+    summary_provider: ollama-cloud
+    summary_model: minimax-m3.1-flash
   ...
 ```
 
@@ -235,8 +231,7 @@ agent's `bridge.listen_target`, the web's `Q15_WEB_BRIDGE` and the agent's docum
 use `unix:///run/q15/bridge.sock`. The agent adds GID 1000; the socket is owned by that group with
 mode 0660. The web runs as UID 65532, GID 1000 with a read-only directory mount. Neither the
 executor nor any other service mounts the bridge volume. The memory volume is writable in the agent
-and read-only in the executor. Use agent file tools for memory mutations so cognition can reserve
-its writable paths until validation or recovery completes.
+and read-only in the executor. Use agent file tools for authored memory mutations.
 
 A named volume is used because it is shared between containers and easy to inspect. The agent's bind
 path unlinks stale sockets after a restart. Definitions stay explicit in each standalone Compose

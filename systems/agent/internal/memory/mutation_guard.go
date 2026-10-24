@@ -6,8 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/q15co/q15/systems/agent/internal/cognition"
 )
 
 // AcquireFileMutation holds the repository lease for an entire file-tool
@@ -61,39 +59,8 @@ func (s *Store) AcquireFileMutation(ctx context.Context, localPaths []string) (f
 			return nil, fmt.Errorf("memory repository metadata is managed by the runtime")
 		}
 	}
-	journal, exists, err := s.loadMemoryRecoveryLocked()
-	if err != nil {
-		return nil, err
-	}
-	owner := cognition.MemoryRecoveryOwner(ctx)
-	for _, relative := range relatives {
-		if frameworkWorkingPath(relative) && (!exists || owner == "" || owner != journal.ID) {
-			return nil, fmt.Errorf("working-memory path %s is managed by cognition jobs", relative)
-		}
-	}
-	if exists && owner != journal.ID {
-		for _, relative := range relatives {
-			if journal.ownsPath(relative) {
-				return nil, fmt.Errorf(
-					"memory path %s is reserved by a cognition run; retry after recovery completes",
-					relative,
-				)
-			}
-		}
-	}
 	retainLease = true
 	return release, nil
-}
-
-func frameworkWorkingPath(relative string) bool {
-	switch relative {
-	case workingDirPath + "/" + workingMemoryFileName,
-		workingDirPath + "/" + openLoopsFileName,
-		workingLedgerRelativePath:
-		return true
-	default:
-		return false
-	}
 }
 
 // Resolve parents while preserving the leaf that atomic writes replace. A new

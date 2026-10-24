@@ -56,7 +56,7 @@ func (t *Check) Definition() agent.ToolDefinition {
 	}
 }
 
-// Run evaluates one choice without changing the interactive or cognition model selection.
+// Run evaluates one choice without changing the interactive model selection.
 func (t *Check) Run(ctx context.Context, arguments string) (string, error) {
 	if t == nil || t.client == nil {
 		return "", fmt.Errorf("decision_check: decision client is not configured")

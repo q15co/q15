@@ -18,6 +18,11 @@ spec:
         - name: agent
           image: ghcr.io/q15co/q15-agent:main
           env:
+            - name: Q15_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: q15-agent-env
+                  key: Q15_DATABASE_URL
             - name: HOME
               value: /root
             - name: GODEBUG

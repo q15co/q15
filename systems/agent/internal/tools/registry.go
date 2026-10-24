@@ -123,15 +123,6 @@ func NewSwitchModel(
 	return modeltools.NewSwitchModel(registry, selection, store)
 }
 
-// NewSwitchCognitionModel delegates to models.NewSwitchCognitionModel.
-func NewSwitchCognitionModel(
-	registry *modelcatalog.Registry,
-	store *selectionstore.Store,
-	jobTypes []string,
-) *modeltools.SwitchCognitionModel {
-	return modeltools.NewSwitchCognitionModel(registry, store, jobTypes)
-}
-
 // NewWebFetch delegates to web.NewFetch.
 func NewWebFetch() *web.Fetch {
 	return web.NewFetch()

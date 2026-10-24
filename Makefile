@@ -69,6 +69,25 @@ ui-auth-test-server:
 project-setup:
 	./scripts/project-setup.sh
 
+.PHONY: memory-generate memory-check
+memory-generate: project-setup
+	$(TOOLS_BIN_DIR)/sqlc generate
+
+memory-check: project-setup
+	$(TOOLS_BIN_DIR)/sqlc diff
+
+.PHONY: test-history
+test-history: project-setup
+	cd $(AGENT_MOD_DIR) && CGO_ENABLED=0 $(GO) test $(TEST_FLAGS) ./internal/history/...
+
+.PHONY: test-history-runtime
+test-history-runtime: project-setup
+	cd $(AGENT_MOD_DIR) && CGO_ENABLED=0 $(GO) test $(TEST_FLAGS) ./internal/app/...
+
+.PHONY: test-history-postgres
+test-history-postgres: project-setup
+	./scripts/test-history-postgres.sh
+
 fmt: project-setup
 	FILES="$(FILES)" ./scripts/fmt.sh
 
@@ -152,6 +171,7 @@ vulncheck: project-setup
 
 verify: project-setup
 	$(MAKE) protos-check
+	$(MAKE) memory-check
 	$(MAKE) lint
 	$(MAKE) test
 

@@ -19,7 +19,6 @@ import (
 	"github.com/q15co/q15/libs/chat-contract/chatpb"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
 	"github.com/q15co/q15/systems/agent/internal/media"
-	"github.com/q15co/q15/systems/agent/internal/memory"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -244,8 +243,8 @@ func TestSealedMediaRoundTripAndAttachmentOnlySend(t *testing.T) {
 		inputs[0].Text != "" {
 		t.Fatalf("attachment-only send lost: %+v", inputs)
 	}
-	lister.page = memory.TurnPage{
-		Turns: []memory.Turn{
+	lister.page = conversation.TurnPage{
+		Turns: []conversation.Turn{
 			{
 				Seq: 1,
 				Messages: []conversation.Message{
@@ -411,8 +410,8 @@ func TestSealedBatchStoresEachFileAndSweepsOnlyUnreferencedConversations(t *test
 			t.Fatal(err)
 		}
 	}
-	lister.page = memory.TurnPage{
-		Turns: []memory.Turn{
+	lister.page = conversation.TurnPage{
+		Turns: []conversation.Turn{
 			{
 				Seq: 1,
 				Messages: []conversation.Message{
@@ -430,7 +429,7 @@ func TestSealedBatchStoresEachFileAndSweepsOnlyUnreferencedConversations(t *test
 	if _, _, err := store.Resolve(result.Parts[1].MediaRef); err != nil {
 		t.Fatal("transcript media lost", err)
 	}
-	lister.page = memory.TurnPage{}
+	lister.page = conversation.TurnPage{}
 	if err := service.SweepMedia(b.ctx, time.Now()); err != nil {
 		t.Fatal(err)
 	}

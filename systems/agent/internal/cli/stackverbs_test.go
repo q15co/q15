@@ -23,6 +23,7 @@ func wantUnits() []string {
 		"q15-exec.service",
 		"q15-net-network.service",
 		"q15-ollama.service",
+		"q15-postgres.service",
 		"q15-proxy.service",
 		"q15-qdrant.service",
 		"q15-web.service",
@@ -243,12 +244,13 @@ func containerList(states map[string]string) string {
 // runningContainers is every container of the stack, running.
 func runningContainers() map[string]string {
 	return map[string]string{
-		"q15-agent":  "running",
-		"q15-exec":   "running",
-		"q15-ollama": "running",
-		"q15-proxy":  "running",
-		"q15-qdrant": "running",
-		"q15-web":    "running",
+		"q15-agent":    "running",
+		"q15-exec":     "running",
+		"q15-ollama":   "running",
+		"q15-postgres": "running",
+		"q15-proxy":    "running",
+		"q15-qdrant":   "running",
+		"q15-web":      "running",
 	}
 }
 

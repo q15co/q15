@@ -132,23 +132,14 @@ func (c Config) validate() error {
 	if err := validateTelegram(c.Agent.Telegram); err != nil {
 		return err
 	}
+	if err := c.Agent.History.validate(); err != nil {
+		return err
+	}
 	if err := c.Agent.Tools.Embeddings.validate(); err != nil {
 		return fmt.Errorf("agent.tools.embeddings: %w", err)
 	}
 	if err := c.Agent.Tools.Schedule.validate(); err != nil {
 		return fmt.Errorf("agent.tools.schedule: %w", err)
-	}
-	if err := validateMemoryBudget(
-		"memory_working_budget_bytes",
-		c.Agent.MemoryWorkingBudgetBytes,
-	); err != nil {
-		return err
-	}
-	if err := validateMemoryBudget(
-		"memory_open_loops_budget_bytes",
-		c.Agent.MemoryOpenLoopsBudgetBytes,
-	); err != nil {
-		return err
 	}
 	if err := validateBridgeListenTarget(c.Agent.Bridge.ListenTarget); err != nil {
 		return fmt.Errorf("agent.bridge.listen_target: %w", err)
@@ -227,22 +218,6 @@ func validateTelegram(tg Telegram) error {
 	return nil
 }
 
-// validateMemoryBudget rejects a negative memory byte budget. Zero stays
-// legal: it is how an absent key arrives, and ResolveAgentRuntime applies the
-// documented default for it, so only an explicitly configured budget has to
-// name a usable size.
-func validateMemoryBudget(key string, value int) error {
-	if value < 0 {
-		return fmt.Errorf("agent.%s must not be negative", key)
-	}
-	return nil
-}
-
-// validateBridgeListenTarget mirrors the bridge resolver's unix-only rule, so
-// a bad value fails at config load instead of at the listener's bind: the
-// bridge serves the identity surface and accepts only a unix:// socket, and
-// config must not promise the host:port form that resolver refuses at
-// startup. An empty value stays legal: it disables the listener.
 func validateBridgeListenTarget(value string) error {
 	value = strings.TrimSpace(value)
 	if value == "" {

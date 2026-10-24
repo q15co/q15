@@ -2,20 +2,15 @@
 package config
 
 const (
-	defaultMemoryRecentTurns = 6
-	// defaultMemoryWorkingBudgetBytes and defaultMemoryOpenLoopsBudgetBytes
-	// are the memory byte budgets whose absent keys resolve to these values.
-	defaultMemoryWorkingBudgetBytes   = 8192
-	defaultMemoryOpenLoopsBudgetBytes = 4096
-	defaultScheduleMaxJobs            = 64
-	defaultScheduleMaxRunTurns        = 16
-	maxScheduleJobs                   = 1000
-	maxScheduleRunTurns               = 128
-	runtimeWorkspaceLocalDir          = "/workspace"
-	runtimeMediaLocalDir              = "/media"
-	runtimeSkillsLocalDir             = "/skills"
-	runtimeStateLocalDir              = "/var/lib/q15/agent"
-	runtimeExecutionServiceAddr       = "q15-exec:50051"
+	defaultScheduleMaxJobs      = 64
+	defaultScheduleMaxRunTurns  = 16
+	maxScheduleJobs             = 1000
+	maxScheduleRunTurns         = 128
+	runtimeWorkspaceLocalDir    = "/workspace"
+	runtimeMediaLocalDir        = "/media"
+	runtimeSkillsLocalDir       = "/skills"
+	runtimeStateLocalDir        = "/var/lib/q15/agent"
+	runtimeExecutionServiceAddr = "q15-exec:50051"
 )
 
 // DefaultBridgeListenTarget is the conventional chat-contract bridge listen
@@ -23,16 +18,6 @@ const (
 // documented rather than applied: an empty ListenTarget keeps the listener
 // disabled, so a stack can run before that volume exists.
 const DefaultBridgeListenTarget = "unix:///run/q15/bridge.sock"
-
-// DefaultMemoryWorkingBudgetBytes and DefaultMemoryOpenLoopsBudgetBytes are
-// the byte budgets a configuration resolves to when the fields are absent.
-// Read-only status reporting judges sizes against these when it cannot read a
-// rendered agent configuration, so the fallback spells the same values the
-// loader's resolution applies.
-const (
-	DefaultMemoryWorkingBudgetBytes   = defaultMemoryWorkingBudgetBytes
-	DefaultMemoryOpenLoopsBudgetBytes = defaultMemoryOpenLoopsBudgetBytes
-)
 
 // SchemaVersion is the configuration schema version this build reads and
 // writes. The CLI writes it into every configuration it renders, and loading
@@ -87,19 +72,12 @@ type ProviderDiscovery struct {
 // Chat and decision selections are persisted runtime state switched through
 // tools. Embedding settings retain the embedding tool's fixed model binding.
 type Agent struct {
-	Name              string `yaml:"name"`
-	MemoryRecentTurns int    `yaml:"memory_recent_turns"`
-	// MemoryWorkingBudgetBytes is the byte budget whose overrun fires the
-	// conversion pass's working_memory_overbudget rule; absent selects the
-	// documented default.
-	MemoryWorkingBudgetBytes int `yaml:"memory_working_budget_bytes"`
-	// MemoryOpenLoopsBudgetBytes is the open-loops byte budget the
-	// working-memory consolidation job's open_loops_overbudget rule enforces;
-	// absent selects the documented default.
-	MemoryOpenLoopsBudgetBytes int      `yaml:"memory_open_loops_budget_bytes"`
-	Tools                      Tools    `yaml:"tools"`
-	Telegram                   Telegram `yaml:"telegram"`
-	Bridge                     Bridge   `yaml:"bridge"`
+	History History `yaml:"history"`
+	Name    string  `yaml:"name"`
+
+	Tools    Tools    `yaml:"tools"`
+	Telegram Telegram `yaml:"telegram"`
+	Bridge   Bridge   `yaml:"bridge"`
 }
 
 // Tools defines optional agent tool settings.
@@ -204,22 +182,17 @@ type ScheduleToolRuntime struct {
 // carries runtime bits only; the current model selection is resolved live via
 // the modelcatalog.Registry and persisted via internal/selectionstore.
 type AgentRuntime struct {
+	History           HistoryRuntime
 	Name              string
 	WorkspaceLocalDir string
 	MemoryLocalDir    string
 	MediaLocalDir     string
 	SkillsLocalDir    string
 	StateLocalDir     string
-	MemoryRecentTurns int
-	// MemoryWorkingBudgetBytes is the working-memory byte budget the semantic
-	// conversion registration's overbudget state rule enforces.
-	MemoryWorkingBudgetBytes int
-	// MemoryOpenLoopsBudgetBytes is the open-loops byte budget the
-	// working-memory consolidation job's open_loops_overbudget rule enforces.
-	MemoryOpenLoopsBudgetBytes int
-	Execution                  ExecutionRuntime
-	Tools                      ToolsRuntime
-	TelegramToken              string
-	TelegramAllowedUserIDs     []int64
-	BridgeListenTarget         string
+
+	Execution              ExecutionRuntime
+	Tools                  ToolsRuntime
+	TelegramToken          string
+	TelegramAllowedUserIDs []int64
+	BridgeListenTarget     string
 }
