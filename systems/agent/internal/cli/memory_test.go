@@ -18,7 +18,7 @@ func TestMemoryUsageAndFlags(t *testing.T) {
 			t.Fatalf("missing %s", verb)
 		}
 	}
-	for _, args := range [][]string{{"memory", "bogus"}, {"memory", "import"}, {"memory", "status", "--verify"}, {"memory", "backfill", "--batches", "-1"}, {"memory", "status", "extra"}, {"memory", "status", "--memory-root", "legacy"}} {
+	for _, args := range [][]string{{"memory", "bogus"}, {"memory", "import"}, {"memory", "status", "--verify"}, {"memory", "backfill", "--batches", "-1"}, {"memory", "backfill", "--summary-workers", "0"}, {"memory", "backfill", "--summary-workers", "9"}, {"memory", "status", "extra"}, {"memory", "status", "--memory-root", "legacy"}} {
 		err := Run(context.Background(), env, args)
 		if err == nil || command.ExitCode(err) != 2 {
 			t.Fatalf("%v: expected usage error, got %v", args, err)

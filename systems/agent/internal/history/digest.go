@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
@@ -66,22 +67,42 @@ func (i *Indexer) Digest(ctx context.Context, limit int) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	completed := 0
-	var failures []error
-	for _, turn := range turns {
-		if err := i.digestTurn(ctx, turn.ID); err != nil {
-			if ctx.Err() != nil {
-				return completed, ctx.Err()
+	workers := min(max(1, i.digestWorkers), len(turns))
+	results := make([]error, len(turns))
+	jobs := make(chan int)
+	var group sync.WaitGroup
+	for range workers {
+		group.Go(func() {
+			for n := range jobs {
+				turn := turns[n]
+				if err := i.digestTurn(ctx, turn.ID); err != nil {
+					results[n] = fmt.Errorf("digest turn %d: %w", turn.ID, err)
+					if ctx.Err() == nil {
+						results[n] = errors.Join(results[n], q.RecordDigestFailure(ctx, turn.ID))
+					}
+				}
 			}
-			failures = append(failures, fmt.Errorf("digest turn %d: %w", turn.ID, err))
-			if recordErr := q.RecordDigestFailure(ctx, turn.ID); recordErr != nil {
-				failures = append(failures, recordErr)
-			}
-			continue
-		}
-		completed++
+		})
 	}
-	return completed, errors.Join(failures...)
+	started := 0
+dispatch:
+	for n := range turns {
+		select {
+		case jobs <- n:
+			started++
+		case <-ctx.Done():
+			break dispatch
+		}
+	}
+	close(jobs)
+	group.Wait()
+	completed := 0
+	for _, err := range results[:started] {
+		if err == nil {
+			completed++
+		}
+	}
+	return completed, errors.Join(append(results[:started], ctx.Err())...)
 }
 
 func (i *Indexer) digestTurn(ctx context.Context, id int64) error {

@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/pgvector/pgvector-go"
 
@@ -180,6 +182,87 @@ func TestDigestFailureDoesNotAdvancePastAnotherTurn(t *testing.T) {
 	}
 	if _, err := q.ReadDigest(t.Context(), second); err != nil {
 		t.Fatal("another turn was blocked by the failure", err)
+	}
+}
+
+func TestParallelDigestsBoundRequestsAndKeepIndependentProgress(t *testing.T) {
+	store := testStore(t)
+	failed := appendTestTurn(t, store, "failing summary")
+	for range 3 {
+		appendTestTurn(t, store, "independent summary")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	entered := make(chan struct{}, 4)
+	release := make(chan struct{})
+	var active, peak atomic.Int32
+	indexer, err := NewIndexer(ctx, store,
+		EmbeddingSpace{Provider: "test", Model: "fixture", Dimensions: 3}, &testEmbedder{},
+		DigestFunc(func(ctx context.Context, source string) (DigestResult, error) {
+			n := active.Add(1)
+			defer active.Add(-1)
+			for previous := peak.Load(); n > previous; previous = peak.Load() {
+				if peak.CompareAndSwap(previous, n) {
+					break
+				}
+			}
+			entered <- struct{}{}
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return DigestResult{}, ctx.Err()
+			}
+			target := source[strings.LastIndex(source, "\nTARGET turn "):]
+			if strings.Contains(target, "failing summary") {
+				return DigestResult{}, errors.New("injected generation failure")
+			}
+			return DigestResult{
+				Body:     "Independent summary.",
+				Provider: "ollama-cloud",
+				Model:    "fixture",
+			}, nil
+		}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := indexer.SetDigestConcurrency(2); err != nil {
+		t.Fatal(err)
+	}
+	type outcome struct {
+		completed int
+		err       error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		n, err := indexer.Digest(ctx, 16)
+		done <- outcome{n, err}
+	}()
+	for range 2 {
+		select {
+		case <-entered:
+		case <-ctx.Done():
+			t.Fatal("summary requests did not run concurrently")
+		}
+	}
+	close(release)
+	result := <-done
+	if result.completed != 3 || result.err == nil || peak.Load() != 2 {
+		t.Fatalf(
+			"completed=%d error=%v peak_requests=%d",
+			result.completed,
+			result.err,
+			peak.Load(),
+		)
+	}
+	var digests, failures int64
+	if err := store.pool.QueryRow(ctx, "SELECT count(*) FROM memory.turn_digests d JOIN memory.turns t ON t.id=d.turn_id WHERE t.agent_id=$1", store.agentID).Scan(&digests); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.pool.QueryRow(ctx, "SELECT count(*) FROM memory.digest_failures WHERE turn_id=$1", failed).Scan(&failures); err != nil {
+		t.Fatal(err)
+	}
+	if digests != 3 || failures != 1 {
+		t.Fatalf("saved_digests=%d saved_failures=%d", digests, failures)
 	}
 }
 

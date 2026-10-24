@@ -26,11 +26,12 @@ type EmbeddingSpace struct {
 
 // Indexer maintains rebuildable search data separately from immutable history.
 type Indexer struct {
-	store    *Store
-	embedder embed.Embedder
-	space    EmbeddingSpace
-	modelID  int64
-	digester DigestGenerator
+	store         *Store
+	embedder      embed.Embedder
+	space         EmbeddingSpace
+	modelID       int64
+	digester      DigestGenerator
+	digestWorkers int
 }
 
 // NewIndexer binds an explicit embedding space and optional digest generator.
@@ -63,12 +64,22 @@ func NewIndexer(
 		return nil, err
 	}
 	return &Indexer{
-		store:    store,
-		space:    space,
-		modelID:  id,
-		embedder: embedder,
-		digester: digester,
+		store:         store,
+		space:         space,
+		modelID:       id,
+		embedder:      embedder,
+		digester:      digester,
+		digestWorkers: 1,
 	}, nil
+}
+
+// SetDigestConcurrency bounds independent summary requests before indexing starts.
+func (i *Indexer) SetDigestConcurrency(workers int) error {
+	if workers < 1 || workers > 8 {
+		return errors.New("summary concurrency must be between 1 and 8")
+	}
+	i.digestWorkers = workers
+	return nil
 }
 
 // Chunk indexes a bounded batch of source parts for lexical search.

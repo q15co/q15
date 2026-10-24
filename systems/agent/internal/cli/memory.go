@@ -44,14 +44,22 @@ func runMemory(ctx context.Context, env command.Env, args []string) error {
 	fs.BoolVar(&f.verify, "verify", false, "verify every imported turn without writing")
 	fs.BoolVar(&f.prepare, "prepare", false, "record cutover readiness after complete backfill")
 	fs.IntVar(&f.batches, "batches", 0, "maximum backfill batches; zero runs until idle")
+	fs.IntVar(
+		&f.summaryWorkers,
+		"summary-workers",
+		1,
+		"concurrent backfill summary requests (1 to 8)",
+	)
 	if err := fs.Parse(args[1:]); err != nil {
 		return command.AsUsage(err)
 	}
 	if fs.NArg() != 0 {
 		return command.Usagef("memory %s takes no positional arguments", args[0])
 	}
-	if f.agent == "" || f.batches < 0 {
-		return command.Usagef("agent must be nonempty and batches must be nonnegative")
+	if f.agent == "" || f.batches < 0 || f.summaryWorkers < 1 || f.summaryWorkers > 8 {
+		return command.Usagef(
+			"agent must be nonempty, batches nonnegative, and summary-workers between 1 and 8",
+		)
 	}
 	if args[0] == "import" && f.memoryRoot == "" {
 		return command.Usagef("memory import requires --memory-root pointing to a frozen snapshot")
@@ -96,7 +104,7 @@ func runMemory(ctx context.Context, env command.Env, args []string) error {
 type historyFlags struct {
 	agent, databaseEnv, memoryRoot, configPath string
 	verify, prepare                            bool
-	batches                                    int
+	batches, summaryWorkers                    int
 }
 
 func runHistoryBackfill(ctx context.Context, env command.Env, f historyFlags, dsn string) error {
@@ -153,6 +161,9 @@ func runHistoryBackfill(ctx context.Context, env command.Env, f historyFlags, ds
 	if err != nil {
 		return err
 	}
+	if err := indexer.SetDigestConcurrency(f.summaryWorkers); err != nil {
+		return err
+	}
 	for batch := 0; f.batches == 0 || batch < f.batches; batch++ {
 		batchCtx, cancel := context.WithTimeout(ctx, 4*time.Minute)
 		n, batchErr := indexer.RunBatch(batchCtx, 8)
@@ -184,7 +195,7 @@ func writeMemoryUsage(w io.Writer) {
 
 usage:
   q15 memory import --agent NAME --memory-root FROZEN_PATH [--verify]
-  q15 memory backfill --agent NAME --config PATH [--batches N] [--prepare]
+  q15 memory backfill --agent NAME --config PATH [--batches N] [--summary-workers N] [--prepare]
   q15 memory status --agent NAME
 
 Connection: Q15_DATABASE_URL or Q15_DATABASE_URL_FILE; override its name with --database-env.

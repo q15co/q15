@@ -113,6 +113,11 @@ write path. Never import a directory that the old agent is actively changing.
    q15 memory status --agent Q15
    ```
 
+   Backfill defaults to one summary request at a time. Add `--summary-workers 4` to run up to four
+   independent requests concurrently; the accepted range is 1–8. This changes throughput, not the
+   selected model or number of summaries. The ordinary runtime indexer remains sequential. Reduce
+   concurrency if the Cloud subscription reports rate limits.
+
    Each batch saves completed work. Errors and interruptions can be retried with the same command. A
    digest receives only its target turn and up to two earlier turns. Its source excerpts are
    explicitly bounded, and the model has a 2,048-token output cap. Original messages remain
