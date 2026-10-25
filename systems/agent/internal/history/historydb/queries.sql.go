@@ -862,6 +862,84 @@ func (q *Queries) ReadBootstrap(ctx context.Context, agentID int64) (MemoryBoots
 	return i, err
 }
 
+const readChunkSourceRefs = `-- name: ReadChunkSourceRefs :many
+SELECT c.id AS chunk_id, r.part_id
+FROM memory.chunks c JOIN memory.chunk_runs r ON r.id=c.run_id
+JOIN memory.parts p ON p.id=r.part_id JOIN memory.messages m ON m.id=p.message_id
+JOIN memory.turns t ON t.id=m.turn_id
+WHERE c.id=ANY($1::bigint[]) AND t.agent_id=$2
+`
+
+type ReadChunkSourceRefsParams struct {
+	ChunkIds []int64
+	AgentID  int64
+}
+
+type ReadChunkSourceRefsRow struct {
+	ChunkID int64
+	PartID  int64
+}
+
+func (q *Queries) ReadChunkSourceRefs(ctx context.Context, arg ReadChunkSourceRefsParams) ([]ReadChunkSourceRefsRow, error) {
+	rows, err := q.db.Query(ctx, readChunkSourceRefs, arg.ChunkIds, arg.AgentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ReadChunkSourceRefsRow{}
+	for rows.Next() {
+		var i ReadChunkSourceRefsRow
+		if err := rows.Scan(&i.ChunkID, &i.PartID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const readConversationPartIDs = `-- name: ReadConversationPartIDs :many
+WITH eligible AS (
+ SELECT p.id, m.position AS message_position, p.position AS part_position, m.role
+ FROM memory.parts p JOIN memory.messages m ON m.id=p.message_id
+ JOIN memory.turns t ON t.id=m.turn_id JOIN memory.part_text pt ON pt.part_id=p.id
+ WHERE t.id=$1 AND t.agent_id=$2 AND t.completed_at IS NOT NULL
+ AND (m.role='user' OR (m.role='assistant' AND coalesce(pt.disposition,'') <> 'commentary'))
+), conversation AS (
+ (SELECT id, message_position, part_position, role FROM eligible WHERE role='user' ORDER BY message_position,part_position LIMIT 4)
+ UNION ALL
+ (SELECT id, message_position, part_position, role FROM eligible WHERE role='assistant' AND message_position=(SELECT max(message_position) FROM eligible WHERE role='assistant') ORDER BY part_position LIMIT 4)
+)
+SELECT id FROM conversation ORDER BY message_position,part_position
+`
+
+type ReadConversationPartIDsParams struct {
+	TurnID  int64
+	AgentID int64
+}
+
+func (q *Queries) ReadConversationPartIDs(ctx context.Context, arg ReadConversationPartIDsParams) ([]int64, error) {
+	rows, err := q.db.Query(ctx, readConversationPartIDs, arg.TurnID, arg.AgentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []int64{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const readCoverage = `-- name: ReadCoverage :one
 SELECT (SELECT count(*) FROM memory.turns rt WHERE rt.agent_id=$1 AND rt.completed_at IS NOT NULL)::bigint AS turns,
  (SELECT count(*) FROM memory.turn_digests d JOIN memory.turns t ON t.id=d.turn_id WHERE t.agent_id=$1)::bigint AS digests,
@@ -1288,6 +1366,59 @@ func (q *Queries) ReadSourcePage(ctx context.Context, arg ReadSourcePageParams) 
 		&i.RawSource,
 	)
 	return i, err
+}
+
+const readToolEvidence = `-- name: ReadToolEvidence :many
+SELECT p.id AS part_id, coalesce(call.tool_name,'unknown')::text AS tool_name,
+ left(coalesce(tr.body, '[binary tool result]'),120)::text AS preview
+FROM memory.parts p JOIN memory.messages m ON m.id=p.message_id
+JOIN memory.turns t ON t.id=m.turn_id JOIN memory.part_tool_results tr ON tr.part_id=p.id
+LEFT JOIN LATERAL (
+ SELECT tc.tool_name FROM memory.part_tool_calls tc
+ JOIN memory.parts cp ON cp.id=tc.part_id JOIN memory.messages cm ON cm.id=cp.message_id
+ WHERE cm.turn_id=t.id AND tc.call_id=tr.call_id AND cm.position<m.position
+ ORDER BY cm.position DESC,cp.position DESC LIMIT 1
+) call ON true
+WHERE t.id=$1 AND t.agent_id=$2 AND t.completed_at IS NOT NULL
+ORDER BY m.position,p.position LIMIT $4 OFFSET $3
+`
+
+type ReadToolEvidenceParams struct {
+	TurnID     int64
+	AgentID    int64
+	PageOffset int32
+	PageLimit  int32
+}
+
+type ReadToolEvidenceRow struct {
+	PartID   int64
+	ToolName string
+	Preview  string
+}
+
+func (q *Queries) ReadToolEvidence(ctx context.Context, arg ReadToolEvidenceParams) ([]ReadToolEvidenceRow, error) {
+	rows, err := q.db.Query(ctx, readToolEvidence,
+		arg.TurnID,
+		arg.AgentID,
+		arg.PageOffset,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ReadToolEvidenceRow{}
+	for rows.Next() {
+		var i ReadToolEvidenceRow
+		if err := rows.Scan(&i.PartID, &i.ToolName, &i.Preview); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const readTurnHeader = `-- name: ReadTurnHeader :one

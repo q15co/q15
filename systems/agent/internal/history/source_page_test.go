@@ -55,8 +55,9 @@ func TestHistoryReadPagesPayloadsAndReplayWithoutLoadingWholeTurn(t *testing.T) 
 		args, _ := json.Marshal(struct {
 			TurnID int64 `json:"turn_id"`
 			sourceCursor
-			Limit int `json:"limit"`
-		}{id, cursor, 4096})
+			Limit int    `json:"limit"`
+			View  string `json:"view"`
+		}{id, cursor, 4096, "source"})
 		raw, err := tool.Run(t.Context(), string(args))
 		if err != nil {
 			t.Fatal(err)

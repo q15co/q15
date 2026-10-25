@@ -326,3 +326,38 @@ SELECT part_id, part_position, kind, message_position, role, created_at, instant
  coalesce(substring(body FROM sqlc.arg(page_offset)::integer+1 FOR sqlc.arg(page_limit)::integer+1),'')::text AS source,
  substring(raw_body FROM sqlc.arg(page_offset)::integer+1 FOR sqlc.arg(page_limit)::integer+1)::bytea AS raw_source
 FROM selected;
+
+-- name: ReadConversationPartIDs :many
+WITH eligible AS (
+ SELECT p.id, m.position AS message_position, p.position AS part_position, m.role
+ FROM memory.parts p JOIN memory.messages m ON m.id=p.message_id
+ JOIN memory.turns t ON t.id=m.turn_id JOIN memory.part_text pt ON pt.part_id=p.id
+ WHERE t.id=sqlc.arg(turn_id) AND t.agent_id=sqlc.arg(agent_id) AND t.completed_at IS NOT NULL
+ AND (m.role='user' OR (m.role='assistant' AND coalesce(pt.disposition,'') <> 'commentary'))
+), conversation AS (
+ (SELECT * FROM eligible WHERE role='user' ORDER BY message_position,part_position LIMIT 4)
+ UNION ALL
+ (SELECT * FROM eligible WHERE role='assistant' AND message_position=(SELECT max(message_position) FROM eligible WHERE role='assistant') ORDER BY part_position LIMIT 4)
+)
+SELECT id FROM conversation ORDER BY message_position,part_position;
+
+-- name: ReadToolEvidence :many
+SELECT p.id AS part_id, coalesce(call.tool_name,'unknown')::text AS tool_name,
+ left(coalesce(tr.body, '[binary tool result]'),120)::text AS preview
+FROM memory.parts p JOIN memory.messages m ON m.id=p.message_id
+JOIN memory.turns t ON t.id=m.turn_id JOIN memory.part_tool_results tr ON tr.part_id=p.id
+LEFT JOIN LATERAL (
+ SELECT tc.tool_name FROM memory.part_tool_calls tc
+ JOIN memory.parts cp ON cp.id=tc.part_id JOIN memory.messages cm ON cm.id=cp.message_id
+ WHERE cm.turn_id=t.id AND tc.call_id=tr.call_id AND cm.position<m.position
+ ORDER BY cm.position DESC,cp.position DESC LIMIT 1
+) call ON true
+WHERE t.id=sqlc.arg(turn_id) AND t.agent_id=sqlc.arg(agent_id) AND t.completed_at IS NOT NULL
+ORDER BY m.position,p.position LIMIT sqlc.arg(page_limit) OFFSET sqlc.arg(page_offset);
+
+-- name: ReadChunkSourceRefs :many
+SELECT c.id AS chunk_id, r.part_id
+FROM memory.chunks c JOIN memory.chunk_runs r ON r.id=c.run_id
+JOIN memory.parts p ON p.id=r.part_id JOIN memory.messages m ON m.id=p.message_id
+JOIN memory.turns t ON t.id=m.turn_id
+WHERE c.id=ANY(sqlc.arg(chunk_ids)::bigint[]) AND t.agent_id=sqlc.arg(agent_id);

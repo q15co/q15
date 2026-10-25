@@ -272,12 +272,13 @@ func (s *contextSnapshot) fit(
 		maxBytes = 4 * 1024 * 1024
 	}
 	toolCap, reasoningCap := 8192, 2048
+	activeToolCap := 8192
 	compact := false
 	materialize := func() ([]conversation.Message, int, int, error) {
 		result := append(
 			conversation.CloneMessages(system),
 			renderGroups(groups, toolCap, reasoningCap)...)
-		current := capParts(active, toolCap, reasoningCap)
+		current := capParts(active, activeToolCap, reasoningCap)
 		if compact {
 			compactActiveEvidence(current)
 		}
@@ -358,6 +359,13 @@ func (s *contextSnapshot) fit(
 			if err != nil {
 				return nil, err
 			}
+		}
+	}
+	for over() && activeToolCap > 512 {
+		activeToolCap /= 2
+		result, size, tokens, err = materialize()
+		if err != nil {
+			return nil, err
 		}
 	}
 	if over() {
@@ -569,11 +577,24 @@ func groupLabel(group contextGroup) string {
 
 func capParts(input []conversation.Message, toolCap, reasoningCap int) []conversation.Message {
 	messages := conversation.CloneMessages(input)
+	tools := make(map[string]string)
+	for _, message := range messages {
+		for _, part := range message.Parts {
+			if part.Type == conversation.ToolCallPartType {
+				tools[part.ID] = part.Name
+			}
+		}
+	}
 	for n := range messages {
 		for p := range messages[n].Parts {
 			part := &messages[n].Parts[p]
 			if part.Type == conversation.ToolResultPartType {
-				part.Content = boundedText(part.Content, toolCap)
+				tool := tools[part.ToolCallID]
+				if tool == "history_read" || tool == "history_search" {
+					part.Content = boundedRecallResult(part.Content, tool, toolCap)
+				} else {
+					part.Content = boundedText(part.Content, toolCap)
+				}
 			}
 			if part.Type == conversation.ReasoningPartType {
 				part.Text = boundedText(part.Text, reasoningCap)

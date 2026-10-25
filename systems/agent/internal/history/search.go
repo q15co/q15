@@ -24,19 +24,21 @@ type SearchOptions struct {
 
 // SearchHit identifies whether the returned text is a digest or a source excerpt.
 type SearchHit struct {
-	TurnID     int64     `json:"turn_id"`
-	UnitID     int64     `json:"unit_id"`
-	Kind       string    `json:"kind"`
-	CreatedAt  time.Time `json:"created_at"`
-	Text       string    `json:"text"`
-	RankScore  float64   `json:"rank_score"`
-	Similarity *float32  `json:"cosine_similarity,omitempty"`
+	TurnID     int64         `json:"turn_id"`
+	UnitID     int64         `json:"unit_id"`
+	Kind       string        `json:"kind"`
+	CreatedAt  time.Time     `json:"created_at"`
+	Text       string        `json:"text"`
+	RankScore  float64       `json:"rank_score"`
+	Similarity *float32      `json:"cosine_similarity,omitempty"`
+	Read       *sourceCursor `json:"read,omitempty"`
 }
 
 // SearchResult reports embedding degradation alongside the available evidence.
 type SearchResult struct {
 	Hits            []SearchHit `json:"hits"`
 	LexicalFallback bool        `json:"lexical_fallback"`
+	Truncated       bool        `json:"truncated,omitempty"`
 }
 
 // Search ranks summaries and original-message chunks in the configured vector space.
@@ -115,11 +117,39 @@ func (i *Indexer) Search(
 			lexical = append(lexical, historydb.SearchDenseRow(row))
 		}
 	}
+	hits := fuseHits(dense, lexical, options)
+	var chunks []int64
+	for n := range hits {
+		hit := &hits[n]
+		hit.Read = &sourceCursor{TurnID: hit.TurnID}
+		if hit.Kind == "chunk" {
+			chunks = append(chunks, hit.UnitID)
+		}
+	}
+	if len(chunks) > 0 {
+		refs, err := q.ReadChunkSourceRefs(
+			ctx,
+			historydb.ReadChunkSourceRefsParams{ChunkIds: chunks, AgentID: i.store.agentID},
+		)
+		if err != nil {
+			return SearchResult{}, err
+		}
+		byChunk := make(map[int64]int64, len(refs))
+		for _, ref := range refs {
+			byChunk[ref.ChunkID] = ref.PartID
+		}
+		for n := range hits {
+			if hits[n].Kind == "chunk" {
+				hits[n].Read.PartID = byChunk[hits[n].UnitID]
+				hits[n].Read.Field = "body"
+			}
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return SearchResult{}, err
 	}
 	return SearchResult{
-		Hits:            fuseHits(dense, lexical, options),
+		Hits:            hits,
 		LexicalFallback: embedErr != nil,
 	}, nil
 }

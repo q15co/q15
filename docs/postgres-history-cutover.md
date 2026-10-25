@@ -70,13 +70,16 @@ Keyword-only fallback matches are labelled and evicted before semantic matches a
 complete fit is repeated for each actual model attempt and tool step.
 
 `history_search` still searches original messages and summaries by meaning and matching words.
-`history_read` pages a single source payload directly from SQL. Start with `turn_id`, then pass the
-returned `next` cursor (`part_id`, `field`, `offset`) with the same turn id. Text offsets count
-UTF-8 characters; base64 payload offsets count original bytes. `limit` is 1–4,096 units. Reasoning
-replay has a separate field and follows portable text automatically. There is no whole-turn JSON
-marshal. JSONB payloads preserve structured values and opaque signature/encrypted strings; JSON
-whitespace and object-key order are not preserved. The supported adapters consume JSON values or
-opaque string fields, rather than a signature over serialized JSON formatting.
+`history_read` starts with the user's message, the final assistant answer and a paginated list of
+supporting tool results. Start with `turn_id`; copy returned `read`, `next` or `next_evidence`
+arguments rather than guessing part IDs. `view: evidence` pages the supporting results;
+`view: source` walks every stored part, including reasoning and provider replay. A supplied
+`part_id` reads that source directly from SQL. Text offsets count UTF-8 characters; base64 payload
+offsets count original bytes. `limit` is 1–4,096 units. Reasoning replay has a separate field and
+follows portable text automatically. There is no whole-turn JSON marshal. JSONB payloads preserve
+structured values and opaque signature/encrypted strings; JSON whitespace and object-key order are
+not preserved. The supported adapters consume JSON values or opaque string fields, rather than a
+signature over serialized JSON formatting.
 
 `q15 memory status` reports summaries, chunks, both vector counts, failures and the prepared space.
 An identical repeat import preserves readiness; an expanded frozen source requires preparation

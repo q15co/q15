@@ -2,12 +2,71 @@ package history
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
 )
+
+func TestContextFitsPastEvidenceBeforeShorteningCurrentRead(t *testing.T) {
+	input := conversation.UserMessage("Verify the report.")
+	page := sourcePage{
+		TurnID:   7,
+		PartID:   9,
+		Field:    "body",
+		Encoding: "utf8",
+		Source:   strings.Repeat("verified evidence ", 250),
+	}
+	raw, err := json.Marshal(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := contextSnapshot{
+		systemCount: 1, input: []conversation.Message{input}, settings: ContextSettings{WorkingBudgetTokens: 2048},
+		groups: []contextGroup{
+			{id: 1, kind: "recent", protected: true, messages: []conversation.Message{
+				conversation.UserMessage("Previous work"),
+				conversation.AssistantMessage(conversation.ToolCall("past", "inspect", `{}`)),
+				{
+					Role: conversation.ToolRole,
+					Parts: []conversation.Part{
+						conversation.ToolResult(
+							"past",
+							strings.Repeat("older tool evidence ", 5000),
+							false,
+						),
+					},
+				},
+				conversation.AssistantMessage(
+					conversation.Text("Previous answer", conversation.TextDispositionFinal),
+				),
+			}},
+		},
+	}
+	messages := []conversation.Message{
+		conversation.SystemMessage("Instructions"), input,
+		conversation.AssistantMessage(
+			conversation.ToolCall("read", "history_read", `{"turn_id":7,"part_id":9}`),
+		),
+		{
+			Role:  conversation.ToolRole,
+			Parts: []conversation.Part{conversation.ToolResult("read", string(raw), false)},
+		},
+	}
+	output, err := snapshot.fitRequest(t.Context(), agent.ModelContext{}, messages, nil, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := output[len(output)-1].Parts[0].Content
+	if last != string(raw) {
+		t.Fatal("fresh bounded history page was shortened to retain older tool evidence")
+	}
+	if tokens, err := agent.RequestEstimatedTokens(output, nil); err != nil || tokens > 2048 {
+		t.Fatalf("context did not fit: %d %v", tokens, err)
+	}
+}
 
 func TestWorkingBudgetUsesCatalogTokensAndReserves(t *testing.T) {
 	snapshot := contextSnapshot{
