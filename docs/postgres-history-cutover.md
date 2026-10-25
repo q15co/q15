@@ -96,7 +96,9 @@ is not loaded automatically. Full tool results remain in the session transcript,
 copy is shortened as needed.
 
 Each delegated request also receives a request-only `turn_budget` note. One turn is one model
-response and any tools it requests; remaining turns include the current request. `max_turns`
+response and any tools it requests; remaining turns include the current request. The note also
+explains in natural language how many further turns will be available after the response. On the
+last turn it explicitly says to make no tool calls, give the final answer and stop. `max_turns`
 defaults to 96 and is shared across queued follow-up messages. The last turn is reserved for a final
 answer: the provider receives no tool definitions, and the engine refuses any returned tool calls
 without executing them. Each refused call receives an error result stating that it was not executed,

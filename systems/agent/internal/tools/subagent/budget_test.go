@@ -106,7 +106,10 @@ func TestSubagentBudgetsEvidenceAndReservesFinalAnswer(t *testing.T) {
 		}
 	}
 	if len(tools[0]) != 1 || len(tools[1]) != 1 || len(tools[2]) != 0 ||
-		!messagesContainText(calls[2], `final_answer_only="true"`) {
+		!messagesContainText(calls[2], `final_answer_only="true"`) ||
+		!messagesContainText(calls[2], "Do not request any tool calls.") ||
+		!messagesContainText(calls[2], "Give your final answer now, then stop.") ||
+		!messagesContainText(calls[2], "Further turns available after this response: 0.") {
 		t.Fatal("the final turn did not disable tools and request a final answer")
 	}
 	for _, message := range session.snapshotMessages() {

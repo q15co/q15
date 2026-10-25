@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"fmt"
 	"strconv"
 
 	"github.com/q15co/q15/systems/agent/internal/conversation"
@@ -28,9 +29,14 @@ func (b *TurnBudget) Remaining() int {
 func (b *TurnBudget) next() (conversation.Message, bool) {
 	remaining := b.Remaining()
 	final := remaining == 1
-	guidance := "One turn is one model response and any tools it requests. Remaining turns include this call."
+	guidance := fmt.Sprintf(
+		"You are on turn %d of %d. One turn is one model response and any tools it requests. Remaining turns include this response. Further turns available after this response: %d.",
+		b.used+1,
+		b.limit,
+		remaining-1,
+	)
 	if final {
-		guidance += " This is your final turn. Tools are disabled. Give your final answer now, using the available evidence. State any unfinished work or uncertainty."
+		guidance += " This is your last turn. Do not request any tool calls. Tools are disabled. Give your final answer now, then stop. If work is unfinished, say what remains and identify any uncertainty. There will be no further turn after this answer."
 	} else if remaining <= 3 {
 		guidance += " The turn limit is close. Finish essential work and leave the last turn for your final answer; tools will be disabled then."
 	}
