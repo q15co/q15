@@ -82,6 +82,21 @@ type mediaAdaptiveClient struct {
 	providerModel string
 }
 
+func (c *mediaAdaptiveClient) ContextForModel(ref string) agent.ModelContext {
+	model := c.boundModel
+	if c.registry != nil {
+		if current, ok := c.registry.Lookup(model.ProviderName, model.Ref); ok {
+			model = current
+		}
+	}
+	if model.ProviderName != "" && model.Ref != "" {
+		ref = model.ProviderName + "/" + model.Ref
+	}
+	return agent.ModelContext{
+		Ref: ref, MaxContextTokens: model.MaxContextTokens, MaxOutputTokens: model.MaxOutputTokens,
+	}
+}
+
 func (c *mediaAdaptiveClient) Complete(
 	ctx context.Context,
 	model string,
@@ -122,6 +137,7 @@ type Manager struct {
 	media         q15media.Store
 	skillResolver SkillResolver
 	dumpWriter    io.Writer
+	contextFitter agent.RequestContextFitter
 	next          int64
 }
 
@@ -161,6 +177,7 @@ func NewManager(
 	media q15media.Store,
 	skillResolver SkillResolver,
 	dumpWriter io.Writer,
+	contextFitter agent.RequestContextFitter,
 ) *Manager {
 	return &Manager{
 		sessions:      map[string]*Session{},
@@ -170,6 +187,7 @@ func NewManager(
 		media:         media,
 		skillResolver: skillResolver,
 		dumpWriter:    dumpWriter,
+		contextFitter: contextFitter,
 	}
 }
 
@@ -177,6 +195,9 @@ func NewManager(
 func (m *Manager) Start(ctx context.Context, req StartRequest) (*Session, error) {
 	if m == nil {
 		return nil, fmt.Errorf("subagent manager is not configured")
+	}
+	if m.contextFitter == nil {
+		return nil, fmt.Errorf("subagent context budget is not configured")
 	}
 	modelRef := strings.TrimSpace(req.ModelRef)
 	modelCfg, ok := m.registry.LookupByRef(modelRef)
@@ -248,7 +269,7 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) (*Session, error)
 	}
 	m.sessions[id] = s
 	m.mu.Unlock()
-	go m.run(childCtx, s, engine)
+	go m.run(childCtx, s, engine, agent.NewTurnBudget(req.MaxTurns))
 	return s, nil
 }
 
@@ -256,6 +277,7 @@ func (m *Manager) run(
 	ctx context.Context,
 	s *Session,
 	engine *agent.Engine,
+	turnBudget *agent.TurnBudget,
 ) {
 	defer close(s.done)
 	observer := agent.RunObserverFunc(func(_ context.Context, ev agent.RunEvent) {
@@ -277,6 +299,8 @@ func (m *Manager) run(
 				UseTools:       true,
 				ToolCallPolicy: workspaceOnlyPolicy{},
 				Observer:       observer,
+				ContextFitter:  m.contextFitter,
+				TurnBudget:     turnBudget,
 			},
 		)
 		s.mu.Lock()
@@ -284,16 +308,22 @@ func (m *Manager) run(
 			s.mu.Unlock()
 			return
 		}
+		s.result = &result
+		s.messages = append(s.messages, result.Messages...)
 		if err != nil {
 			s.Status = "failed"
 			s.err = err
-			s.addEventLocked("failed", "", err)
+			s.addEventLocked("failed", result.FinalText, err)
 			s.mu.Unlock()
 			return
 		}
-		s.result = &result
-		s.messages = append(s.messages, result.Messages...)
-		if len(s.pending) == 0 {
+		if len(s.pending) == 0 || turnBudget.Remaining() == 0 {
+			if len(s.pending) > 0 {
+				s.addEventLocked("turn_limit", fmt.Sprintf(
+					"Turn budget exhausted; %d queued parent messages were not processed.",
+					len(s.pending),
+				), nil)
+			}
 			s.Status = "completed"
 			s.addEventLocked("completed", result.FinalText, nil)
 			s.mu.Unlock()
@@ -426,6 +456,7 @@ func (t *Spawn) Definition() agent.ToolDefinition {
 			"Use for isolated delegated work; provide only sanitized context.",
 			"Use a vision-capable model when delegating analysis of media refs such as media://sha256/... attachments.",
 			"Default tools allowlist is empty; explicitly grant only needed tools.",
+			"max_turns counts model responses, includes a final answer-only turn without tools, and is shared with queued follow-up messages.",
 			"Give the sub-agent full /workspace/... paths for files in packages whose names collide with runtime roots (memory, skills); /memory and /skills are persistent runtime roots, not Go package paths.",
 			"When delegating a skill by name or path, pass it via `skills`; its instructions are injected automatically and its declared tools are granted without listing them in `tools`.",
 		},
@@ -450,7 +481,10 @@ func (t *Spawn) Definition() agent.ToolDefinition {
 					"maximum": maxWaitSeconds,
 					"default": defaultWaitSeconds,
 				},
-				"max_turns": map[string]any{"type": "integer", "minimum": 1},
+				"max_turns": map[string]any{
+					"type": "integer", "minimum": 1,
+					"description": "Total model turns, including the final answer-only turn. The default is 96; 1 disables tools entirely.",
+				},
 			},
 			"required":             []string{"model", "task"},
 			"additionalProperties": false,

@@ -49,6 +49,7 @@ type EngineRequest struct {
 	// own reply and fresh evidence. Zero disables it.
 	MaxRequestBytes int
 	ContextFitter   RequestContextFitter
+	TurnBudget      *TurnBudget
 }
 
 // EngineResult captures the engine-produced messages and final outcome for one
@@ -138,6 +139,9 @@ func (e *Engine) Run(ctx context.Context, req EngineRequest) (EngineResult, erro
 	failureBudget := modelFailureBudget{limit: req.MaxFailedModelAttempts}
 
 	for turn := 0; turn < e.maxTurns; turn++ {
+		if req.TurnBudget != nil && req.TurnBudget.Remaining() == 0 {
+			break
+		}
 		requestMessages := copyMessages(messages)
 		requestMessages = applySystemTextSource(ctx, requestMessages, req.SystemTextSource)
 		requestStart := start + len(requestMessages) - len(messages)
@@ -147,10 +151,20 @@ func (e *Engine) Run(ctx context.Context, req EngineRequest) (EngineResult, erro
 				systemMessage(emptyResponseRetrySteeringPrompt),
 			)
 		}
+		requestTools := toolDefs
+		finalTurn := false
+		if req.TurnBudget != nil {
+			var note conversation.Message
+			note, finalTurn = req.TurnBudget.next()
+			requestMessages = append(requestMessages, note)
+			if finalTurn {
+				requestTools = nil
+			}
+		}
 
 		size, err := fitRequestBudget(
 			requestMessages,
-			toolDefs,
+			requestTools,
 			requestTurnLimit(req.MaxRequestBytes),
 			requestStart,
 		)
@@ -172,8 +186,8 @@ func (e *Engine) Run(ctx context.Context, req EngineRequest) (EngineResult, erro
 		modelRef, result, err := e.completeWithObserver(
 			ctx,
 			requestMessages,
-			toolDefs,
-			req.RequireToolCalling && len(toolDefs) > 0,
+			requestTools,
+			req.RequireToolCalling && len(requestTools) > 0,
 			turn,
 			req.Observer,
 			&failureBudget,
@@ -192,6 +206,11 @@ func (e *Engine) Run(ctx context.Context, req EngineRequest) (EngineResult, erro
 		resultMessages := conversation.NormalizeMessages(copyMessages(result.Messages))
 		toolCalls := resultToolCalls(resultMessages)
 		reply := finalReply(resultMessages, extractor)
+		if finalTurn && (len(toolCalls) > 0 ||
+			(strings.TrimSpace(reply.Text) == "" && len(reply.MediaRefs) == 0)) {
+			messages = append(messages, resultMessages...)
+			break
+		}
 		if len(toolCalls) == 0 && strings.TrimSpace(reply.Text) == "" &&
 			len(reply.MediaRefs) == 0 &&
 			emptyAssistantRetries < maxEmptyAssistantRetries {
@@ -205,6 +224,13 @@ func (e *Engine) Run(ctx context.Context, req EngineRequest) (EngineResult, erro
 		if len(toolCalls) == 0 {
 			finalMessages := extractor.Canonicalize(messages[start:])
 			reply = finalReply(finalMessages, extractor)
+			var finalErr error
+			if finalTurn && result.FinishReason != "" && result.FinishReason != "stop" {
+				finalErr = fmt.Errorf(
+					"final answer incomplete: provider finish reason %q",
+					result.FinishReason,
+				)
+			}
 			if strings.TrimSpace(reply.Text) == "" && len(reply.MediaRefs) == 0 {
 				reply.Text = "(assistant returned no text)"
 			}
@@ -215,7 +241,7 @@ func (e *Engine) Run(ctx context.Context, req EngineRequest) (EngineResult, erro
 				MediaRefs:   append([]string(nil), reply.MediaRefs...),
 				ModelRef:    modelRef,
 				Turn:        turn,
-			}, nil
+			}, finalErr
 		}
 
 		// Preflight at the hard budget, not the reply-reserve-bound turn limit:
@@ -469,11 +495,12 @@ func (e *Engine) completeWithObserver(
 				estimated, estimateErr := RequestEstimatedTokens(attemptMessages, tools)
 				if estimateErr == nil {
 					log.Printf(
-						"q15: context usage ref=%q estimated_input_tokens=%d actual_input_tokens=%d output_tokens=%d estimator=o200k_base_margin25",
+						"q15: context usage ref=%q estimated_input_tokens=%d actual_input_tokens=%d output_tokens=%d estimator=%s",
 						modelRef,
 						estimated,
 						result.Usage.InputTokens,
 						result.Usage.OutputTokens,
+						RequestTokenEstimator,
 					)
 				}
 			}

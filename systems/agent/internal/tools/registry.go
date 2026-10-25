@@ -191,6 +191,15 @@ func NewSubAgentManager(
 	mediaStore q15media.Store,
 	skillResolver subagent.SkillResolver,
 	dumpWriter io.Writer,
+	contextFitter agent.RequestContextFitter,
 ) *subagent.Manager {
-	return subagent.NewManager(registry, factory, baseTools, mediaStore, skillResolver, dumpWriter)
+	return subagent.NewManager(
+		registry,
+		factory,
+		baseTools,
+		mediaStore,
+		skillResolver,
+		dumpWriter,
+		contextFitter,
+	)
 }

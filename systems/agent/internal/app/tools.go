@@ -34,6 +34,7 @@ func buildRuntimeTools(
 	dumpWriter io.Writer,
 	scheduleManager *schedule.Manager,
 	modelAdapter *routedModelAdapter,
+	contextFitter agent.RequestContextFitter,
 ) []agent.Tool {
 	subAgentManager := subagent.NewManager(
 		registry,
@@ -44,6 +45,7 @@ func buildRuntimeTools(
 		mediaStore,
 		subagentSkillResolver{manager: skillManager},
 		dumpWriter,
+		contextFitter,
 	)
 	return append(
 		baseToolList,

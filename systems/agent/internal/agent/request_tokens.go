@@ -13,19 +13,34 @@ var requestTokenizer = sync.OnceValues(func() (tokenizer.Codec, error) {
 	return tokenizer.Get(tokenizer.O200kBase)
 })
 
-// RequestEstimatedTokens uses o200k_base as a portable text proxy, with framing
-// allowances and a 25 percent margin. Provider templates and media accounting
-// differ, so even models using this vocabulary receive an estimate.
+// RequestTokenEstimator identifies the normal tokenizer and its fallback policy.
+const RequestTokenEstimator = "o200k_base_or_bytes_margin25"
+
+// RequestEstimatedTokens uses o200k_base with framing and a 25 percent margin.
+// If tokenization fails, UTF-8 byte counts keep the estimate conservative.
 func RequestEstimatedTokens(messages []conversation.Message, tools []ToolDefinition) (int, error) {
 	codec, err := requestTokenizer()
-	if err != nil {
-		return 0, fmt.Errorf("initialize request tokenizer: %w", err)
+	var countTokens func(string) (int, error)
+	if err == nil {
+		countTokens = codec.Count
 	}
+	return requestEstimatedTokens(messages, tools, countTokens)
+}
+
+func requestEstimatedTokens(
+	messages []conversation.Message,
+	tools []ToolDefinition,
+	countTokens func(string) (int, error),
+) (int, error) {
 	tokens := 128
-	count := func(body string) error {
-		n, err := codec.Count(body)
+	count := func(body string) {
+		n := len(body)
+		if countTokens != nil {
+			if estimate, err := countTokens(body); err == nil {
+				n = estimate
+			}
+		}
 		tokens += n
-		return err
 	}
 	for _, message := range messages {
 		tokens += 16
@@ -51,9 +66,7 @@ func RequestEstimatedTokens(messages []conversation.Message, tools []ToolDefinit
 					body = string(raw)
 				}
 			}
-			if err := count(body); err != nil {
-				return 0, fmt.Errorf("estimate message tokens: %w", err)
-			}
+			count(body)
 		}
 	}
 	if len(tools) > 0 {
@@ -61,9 +74,7 @@ func RequestEstimatedTokens(messages []conversation.Message, tools []ToolDefinit
 		if err != nil {
 			return 0, fmt.Errorf("estimate tool definitions: %w", err)
 		}
-		if err := count(string(encoded)); err != nil {
-			return 0, fmt.Errorf("estimate tool tokens: %w", err)
-		}
+		count(string(encoded))
 	}
 	return tokens + (tokens+3)/4, nil
 }

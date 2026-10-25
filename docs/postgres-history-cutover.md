@@ -59,7 +59,10 @@ Token estimates use the bundled o200k_base tokenizer over message text, tool sch
 with a 25 percent margin and a separate media allowance. They are estimates for other model
 families, not exact provider tokenizer counts. Logs compare estimates with provider-reported input
 usage when available. `max_request_bytes` independently bounds the canonical encoded request. No
-additional model calls or cloud recall benchmark are used for calibration.
+additional model calls or cloud recall benchmark are used for calibration. If tokenizer
+initialization or counting fails, UTF-8 byte counts replace text token counts, with the same margin,
+framing and media allowances. This is a conservative fallback that retains both token and byte
+limits rather than failing a turn because its tokenizer is unavailable.
 
 Automatic context retains up to four recent turns and searches only generated summaries for relevant
 older work. There is no fixed wall of preceding summaries. Recent history receives one third of the
@@ -77,11 +80,27 @@ the image publishing workflow supplies them to the Docker build. Custom Docker b
 
 A `context_window` tag reports the actual attempt's model reference, estimated input tokens, working
 input budget, remaining budget, discovered model capacity, output reserve and safety reserve. It is
-rebuilt after each tool step and model change. The full request, including tool definitions and
-these counters, remains inside the configured limits. History labels also report token estimates for
-the shown turn content. Counts use the same conservative estimator as the fitter; provider-reported
-usage may differ. Unknown model capacity and reserves are labelled explicitly. Historical tags
-describe their original requests.
+rebuilt after each tool step and model change. The full request, including tool definitions and an
+allowance for these counters, remains inside the configured limits. The tag is a request-only
+user-role note at the tail, preserving the stable system instructions and preceding conversation for
+provider prefix caching. It does not become part of the stored conversation. The fitter counts each
+candidate request once and reserves space for the note; no self-referential counter loop is needed.
+History labels also report token estimates for the shown turn content. Provider-reported usage may
+differ. Unknown model capacity and reserves are labelled explicitly.
+
+Delegated subagents use the same configured token and byte budgets, fitted against their own model's
+catalog limits. Their context contains the delegated task, skills and their own work; parent history
+is not loaded automatically. Full tool results remain in the session transcript, while the provider
+copy is shortened as needed.
+
+Each delegated request also receives a request-only `turn_budget` note. One turn is one model
+response and any tools it requests; remaining turns include the current request. `max_turns`
+defaults to 96 and is shared across queued follow-up messages. The last turn is reserved for a final
+answer: the provider receives no tool definitions, and the engine refuses any returned tool calls
+without executing them. A limit of one permits only a final answer. An empty final response stops
+without a retry. Near the limit the note asks the subagent to finish essential work and report what
+remains unfinished. Provider errors or output truncation can still prevent a normal completion;
+removing tools cannot force a remote provider to return a particular finish reason.
 
 `history_search` still searches original messages and summaries by meaning and matching words.
 `history_read` starts with the user's message, the final assistant answer and a paginated list of

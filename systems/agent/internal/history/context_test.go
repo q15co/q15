@@ -58,7 +58,7 @@ func TestContextFitsWholeTurnsAndKeepsCurrentClock(t *testing.T) {
 	if err != nil || size > 5000 {
 		t.Fatalf("request bytes = %d, %v", size, err)
 	}
-	last := first[len(first)-1]
+	last := first[len(first)-2]
 	if conversation.TextValue(last) != "ok" || last.UserTemporal == nil ||
 		!last.UserTemporal.TimeLocal.Equal(clock) {
 		t.Fatalf("current acknowledgement or clock changed: %+v", last)
@@ -89,7 +89,7 @@ func TestContextRebuildsForModelChangesAndToolAccumulation(t *testing.T) {
 		input:       []conversation.Message{input},
 		settings: ContextSettings{
 			WorkingBudgetTokens: 16000, MaxRequestBytes: 16000,
-			ModelBudgetTokens: map[string]int{"small": 500},
+			ModelBudgetTokens: map[string]int{"small": 1024},
 		},
 		groups: []contextGroup{
 			{id: 1, kind: "gap", digest: strings.Repeat("remember this earlier result ", 100)},

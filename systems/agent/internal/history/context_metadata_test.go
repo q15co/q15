@@ -69,13 +69,18 @@ func TestContextCountersIncludeTheirOwnCostAndRefreshPerModelStep(t *testing.T) 
 		t.Fatalf("incorrect model context counters: %+v", one)
 	}
 	actual, err := agent.RequestEstimatedTokens(first, tools)
-	if err != nil || one.Estimated < actual || one.Estimated > actual+32 {
+	if err != nil || one.Estimated < actual || one.Estimated > actual+512 {
 		t.Fatalf(
 			"counter excluded request or its own tag: displayed=%d measured=%d error=%v",
 			one.Estimated,
 			actual,
 			err,
 		)
+	}
+	if conversation.TextValue(first[0]) != conversation.TextValue(system[0]) ||
+		!strings.Contains(conversation.TextValue(first[len(first)-1]), "<context_window ") ||
+		first[len(first)-1].Role != conversation.UserRole {
+		t.Fatal("live context counter changed the stable prefix or was not appended at the tail")
 	}
 	active := []conversation.Message{
 		conversation.AssistantMessage(conversation.ToolCall("inspect", "inspect", `{}`)),
@@ -97,6 +102,9 @@ func TestContextCountersIncludeTheirOwnCostAndRefreshPerModelStep(t *testing.T) 
 		t.Fatal(err)
 	}
 	two := readWindowMetadata(t, second)
+	if conversation.TextValue(second[0]) != conversation.TextValue(first[0]) {
+		t.Fatal("tool step changed the cacheable system prefix")
+	}
 	if two.Estimated <= one.Estimated || two.Remaining >= one.Remaining {
 		t.Fatalf("new evidence did not update counters: before=%+v after=%+v", one, two)
 	}

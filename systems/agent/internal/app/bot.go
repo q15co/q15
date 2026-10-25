@@ -251,6 +251,15 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 	if err != nil {
 		return fmt.Errorf("configure schedule manager for agent %q: %w", rt.Name, err)
 	}
+	contextSettings := history.ContextSettings{
+		WorkingBudgetTokens: rt.History.WorkingBudgetTokens, ModelBudgetTokens: rt.History.ModelBudgetTokens,
+		ContextWindowFraction: rt.History.ContextWindowFraction, RecentHistoryFraction: rt.History.RecentHistoryFraction, MaxRequestBytes: rt.History.MaxRequestBytes,
+		RecentTurns: rt.History.RecentTurns, RetrievalLimit: rt.History.RetrievalLimit, MinSimilarity: rt.History.MinSimilarity,
+	}
+	subagentContextFitter, err := history.NewIsolatedContextFitter(contextSettings)
+	if err != nil {
+		return err
+	}
 	toolRegistry, err := agent.NewToolRegistry(buildRuntimeTools(
 		baseToolList,
 		registry,
@@ -262,17 +271,14 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 		dumpWriter,
 		scheduleManager,
 		modelAdapter,
+		subagentContextFitter,
 	)...)
 	if err != nil {
 		return fmt.Errorf("build tool registry for agent %q: %w", rt.Name, err)
 	}
 
-	contextService, err := history.NewContextService(historyIndexer, history.ContextSettings{
-		WorkingBudgetTokens: rt.History.WorkingBudgetTokens, ModelBudgetTokens: rt.History.ModelBudgetTokens,
-		ContextWindowFraction: rt.History.ContextWindowFraction, RecentHistoryFraction: rt.History.RecentHistoryFraction, MaxRequestBytes: rt.History.MaxRequestBytes,
-		RecentTurns: rt.History.RecentTurns, RetrievalLimit: rt.History.RetrievalLimit, MinSimilarity: rt.History.MinSimilarity,
-		Tools: toolRegistry.Definitions(),
-	})
+	contextSettings.Tools = toolRegistry.Definitions()
+	contextService, err := history.NewContextService(historyIndexer, contextSettings)
 	if err != nil {
 		return err
 	}

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -40,5 +41,27 @@ func TestTokenEstimateCountsContentToolsAndMedia(t *testing.T) {
 	larger, err := RequestEstimatedTokens(media, nil)
 	if err != nil || larger != withMedia {
 		t.Fatal("base64 transport bytes counted as text tokens", err)
+	}
+}
+
+func TestTokenEstimateFallsBackWithoutDroppingTheBudget(t *testing.T) {
+	messages := []conversation.Message{
+		conversation.UserMessage(strings.Repeat("é日本語 ", 40)),
+	}
+	tools := []ToolDefinition{{Name: "read", Parameters: map[string]any{"type": "object"}}}
+	fallback, err := requestEstimatedTokens(messages, tools, nil)
+	if err != nil || fallback < len(conversation.TextValue(messages[0])) {
+		t.Fatalf("missing tokenizer did not produce a conservative estimate: %d, %v", fallback, err)
+	}
+	failed, err := requestEstimatedTokens(messages, tools, func(string) (int, error) {
+		return 0, errors.New("tokenizer unavailable")
+	})
+	if err != nil || failed != fallback {
+		t.Fatalf(
+			"tokenizer error did not use the byte fallback: got %d, want %d, err=%v",
+			failed,
+			fallback,
+			err,
+		)
 	}
 }

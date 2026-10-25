@@ -1,7 +1,7 @@
 package history
 
 import (
-	"fmt"
+	"math"
 	"strconv"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
@@ -14,40 +14,23 @@ func withContextWindow(
 	model agent.ModelContext,
 	limit int,
 ) ([]conversation.Message, int, error) {
-	if len(messages) == 0 || messages[0].Role != conversation.SystemRole {
-		messages = append([]conversation.Message{conversation.SystemMessage("")}, messages...)
+	base, err := agent.RequestEstimatedTokens(messages, tools)
+	if err != nil {
+		return nil, 0, err
 	}
-	partIndex := -1
-	for n, part := range messages[0].Parts {
-		if part.Type == conversation.TextPartType {
-			partIndex = n
-			break
-		}
+	// Reserve the whole standalone note, including its framing, plus slack for
+	// digit tokenization. The full request is counted once, without a fixed point.
+	allowance, err := agent.RequestEstimatedTokens([]conversation.Message{
+		conversation.UserMessage(renderContextWindow(model, limit, math.MaxInt)),
+	}, nil)
+	if err != nil {
+		return nil, 0, err
 	}
-	if partIndex < 0 {
-		partIndex = len(messages[0].Parts)
-		messages[0].Parts = append(messages[0].Parts, conversation.Text("", ""))
-	}
-	prefix := messages[0].Parts[partIndex].Text
-	estimate := 0
-	for range 8 {
-		messages[0].Parts[partIndex].Text = prefix + "\n\n" + renderContextWindow(
-			model,
-			limit,
-			estimate,
-		)
-		actual, err := agent.RequestEstimatedTokens(messages, tools)
-		if err != nil {
-			return nil, 0, err
-		}
-		if actual <= estimate {
-			return messages, estimate, nil
-		}
-		// The counter is part of the measured request. A small allowance keeps
-		// changing counter digits from making the displayed estimate too small.
-		estimate = actual + 8
-	}
-	return nil, 0, fmt.Errorf("context token metadata did not converge")
+	estimate := base + allowance + 64
+	return append(
+		messages,
+		conversation.UserMessage(renderContextWindow(model, limit, estimate)),
+	), estimate, nil
 }
 
 func renderContextWindow(model agent.ModelContext, limit, estimate int) string {
@@ -59,7 +42,7 @@ func renderContextWindow(model agent.ModelContext, limit, estimate int) string {
 		"model_context_tokens":    "unknown",
 		"output_reserve_tokens":   "unknown",
 		"safety_reserve_tokens":   "unknown",
-		"estimator":               "o200k_base_margin25",
+		"estimator":               agent.RequestTokenEstimator,
 	}
 	if model.Ref == "" {
 		attributes["model_ref"] = "unknown"
@@ -72,7 +55,7 @@ func renderContextWindow(model agent.ModelContext, limit, estimate int) string {
 	return agent.RenderPromptElement(
 		"context_window",
 		attributes,
-		"Input counts estimate the complete request, including instructions, history, the active conversation, tool definitions and this tag. Historical estimated_tokens counts describe the shown turn content. Remaining space is under the working input budget; the output reserve is separate. Counts are conservative estimates and provider usage may differ. These counters describe this model call.",
+		"Runtime context for this model call. Input counts include instructions, history, the active conversation, tools and an allowance for this note. Remaining space is under the working input budget; output reserve is separate. Counts are conservative estimates; UTF-8 bytes replace tokenization if unavailable. Provider usage may differ. Historical estimated_tokens counts describe the shown turn content.",
 	)
 }
 

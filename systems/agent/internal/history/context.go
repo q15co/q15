@@ -38,6 +38,40 @@ func NewContextService(indexer *Indexer, settings ContextSettings) (*ContextServ
 	if indexer == nil {
 		return nil, errors.New("history context requires an indexer")
 	}
+	settings, err := normalizeContextSettings(settings)
+	if err != nil {
+		return nil, err
+	}
+	return &ContextService{indexer: indexer, settings: settings}, nil
+}
+
+// NewIsolatedContextFitter applies the same limits without loading parent history.
+func NewIsolatedContextFitter(settings ContextSettings) (agent.RequestContextFitter, error) {
+	settings, err := normalizeContextSettings(settings)
+	if err != nil {
+		return nil, err
+	}
+	return func(ctx context.Context, model agent.ModelContext, messages []conversation.Message,
+		tools []agent.ToolDefinition, generatedStart int,
+	) ([]conversation.Message, error) {
+		if generatedStart < 0 || generatedStart > len(messages) {
+			return nil, errors.New("invalid isolated context boundary")
+		}
+		systemCount := 0
+		for systemCount < generatedStart && messages[systemCount].Role == conversation.SystemRole {
+			systemCount++
+		}
+		snapshot := contextSnapshot{
+			system:      conversation.CloneMessages(messages[:systemCount]),
+			systemCount: systemCount,
+			input:       conversation.CloneMessages(messages[systemCount:generatedStart]),
+			settings:    settings,
+		}
+		return snapshot.fitRequest(ctx, model, messages, tools, generatedStart)
+	}, nil
+}
+
+func normalizeContextSettings(settings ContextSettings) (ContextSettings, error) {
 	if settings.WorkingBudgetTokens == 0 {
 		settings.WorkingBudgetTokens = 64000
 	}
@@ -61,18 +95,18 @@ func NewContextService(indexer *Indexer, settings ContextSettings) (*ContextServ
 		settings.RetrievalLimit < 1 ||
 		settings.RetrievalLimit > 32 ||
 		settings.MaxRequestBytes < 1024 {
-		return nil, errors.New("invalid history context budget or tier limits")
+		return ContextSettings{}, errors.New("invalid history context budget or tier limits")
 	}
 	for _, fraction := range []float64{settings.ContextWindowFraction, settings.RecentHistoryFraction} {
 		if math.IsNaN(fraction) || math.IsInf(fraction, 0) || fraction <= 0 || fraction > 1 {
-			return nil, errors.New(
+			return ContextSettings{}, errors.New(
 				"history context fractions must be greater than zero and at most one",
 			)
 		}
 	}
 	settings.ModelBudgetTokens = cloneBudgets(settings.ModelBudgetTokens)
 	settings.Tools = slices.Clone(settings.Tools)
-	return &ContextService{indexer: indexer, settings: settings}, nil
+	return settings, nil
 }
 
 type contextGroup struct {
@@ -396,12 +430,13 @@ func (s *contextSnapshot) fit(
 	}
 	if emit {
 		log.Printf(
-			"q15: history context ref=%q canonical_bytes=%d max_bytes=%d estimated_tokens=%d limit_tokens=%d estimator=o200k_base_margin25 lexical_fallback=%t selected=%v",
+			"q15: history context ref=%q canonical_bytes=%d max_bytes=%d estimated_tokens=%d limit_tokens=%d estimator=%s lexical_fallback=%t selected=%v",
 			model.Ref,
 			size,
 			maxBytes,
 			tokens,
 			limit,
+			agent.RequestTokenEstimator,
 			s.lexicalFallback,
 			contextLabels(groups),
 		)

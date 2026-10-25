@@ -59,7 +59,7 @@ func TestContextFitsPastEvidenceBeforeShorteningCurrentRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	last := output[len(output)-1].Parts[0].Content
+	last := output[len(output)-2].Parts[0].Content
 	if last != string(raw) {
 		t.Fatal("fresh bounded history page was shortened to retain older tool evidence")
 	}
