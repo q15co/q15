@@ -260,8 +260,9 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 	}
 
 	contextService, err := history.NewContextService(historyIndexer, history.ContextSettings{
-		WorkingBudgetBytes: rt.History.WorkingBudgetBytes, ModelBudgetBytes: rt.History.ModelBudgetBytes,
-		RecentTurns: rt.History.RecentTurns, HorizonTurns: rt.History.HorizonTurns, RetrievalLimit: rt.History.RetrievalLimit, MinSimilarity: rt.History.MinSimilarity,
+		WorkingBudgetTokens: rt.History.WorkingBudgetTokens, ModelBudgetTokens: rt.History.ModelBudgetTokens,
+		ContextWindowFraction: rt.History.ContextWindowFraction, RecentHistoryFraction: rt.History.RecentHistoryFraction, MaxRequestBytes: rt.History.MaxRequestBytes,
+		RecentTurns: rt.History.RecentTurns, RetrievalLimit: rt.History.RetrievalLimit, MinSimilarity: rt.History.MinSimilarity,
 		Tools: toolRegistry.Definitions(),
 	})
 	if err != nil {

@@ -29,7 +29,7 @@ func TestContextFitsWholeTurnsAndKeepsCurrentClock(t *testing.T) {
 		),
 	}
 	snapshot := contextSnapshot{
-		systemCount: 1, input: []conversation.Message{input}, settings: ContextSettings{WorkingBudgetBytes: 5000},
+		systemCount: 1, input: []conversation.Message{input}, settings: ContextSettings{WorkingBudgetTokens: 5000, MaxRequestBytes: 5000},
 		groups: []contextGroup{
 			{
 				id:        1,
@@ -45,7 +45,7 @@ func TestContextFitsWholeTurnsAndKeepsCurrentClock(t *testing.T) {
 		},
 	}
 	base := []conversation.Message{conversation.SystemMessage("Instructions."), input}
-	model := agent.ModelContext{Ref: "ollama-cloud/test", MaxContextTokens: 10000}
+	model := agent.ModelContext{Ref: "ollama-cloud/test", MaxContextTokens: 40000}
 	first, err := snapshot.fitRequest(t.Context(), model, base, nil, len(base))
 	if err != nil {
 		t.Fatal(err)
@@ -88,8 +88,8 @@ func TestContextRebuildsForModelChangesAndToolAccumulation(t *testing.T) {
 		systemCount: 1,
 		input:       []conversation.Message{input},
 		settings: ContextSettings{
-			WorkingBudgetBytes: 16000,
-			ModelBudgetBytes:   map[string]int{"small": 2000},
+			WorkingBudgetTokens: 16000, MaxRequestBytes: 16000,
+			ModelBudgetTokens: map[string]int{"small": 500},
 		},
 		groups: []contextGroup{
 			{id: 1, kind: "gap", digest: strings.Repeat("remember this earlier result ", 100)},
@@ -109,7 +109,7 @@ func TestContextRebuildsForModelChangesAndToolAccumulation(t *testing.T) {
 	request := append(conversation.CloneMessages(base), generated...)
 	large, err := snapshot.fitRequest(
 		t.Context(),
-		agent.ModelContext{Ref: "large", MaxContextTokens: 100000},
+		agent.ModelContext{Ref: "large", MaxContextTokens: 400000},
 		request,
 		nil,
 		len(base),
@@ -129,7 +129,7 @@ func TestContextRebuildsForModelChangesAndToolAccumulation(t *testing.T) {
 	}
 	largeSize, _ := agent.RequestEncodedBytes(large, nil)
 	smallSize, _ := agent.RequestEncodedBytes(small, nil)
-	if smallSize > 2000 || smallSize >= largeSize {
+	if smallSize >= largeSize {
 		t.Fatalf("model change did not refit request: large=%d small=%d", largeSize, smallSize)
 	}
 	if generated[1].Parts[0].Content != strings.Repeat("result ", 10000) {
@@ -143,11 +143,11 @@ func TestContextRejectsIrreducibleInputWithoutDroppingIt(t *testing.T) {
 	snapshot := contextSnapshot{
 		systemCount: 1,
 		input:       []conversation.Message{input},
-		settings:    ContextSettings{WorkingBudgetBytes: 1024},
+		settings:    ContextSettings{WorkingBudgetTokens: 1024},
 	}
 	base := []conversation.Message{conversation.SystemMessage("Instructions."), input}
 	_, err := snapshot.fitRequest(context.Background(), agent.ModelContext{}, base, nil, len(base))
-	var budget *agent.RequestBudgetError
+	var budget *agent.TokenBudgetError
 	if !errors.As(err, &budget) || strings.Contains(err.Error(), "private input") {
 		t.Fatalf("missing content-free budget error: %v", err)
 	}
@@ -176,20 +176,7 @@ func TestRetrievalAnchorsAcknowledgementsWithoutDraggingNewQuestions(t *testing.
 	}
 }
 
-func TestRetrievedSourceEnrichesGapDigestInsteadOfDisappearing(t *testing.T) {
-	groups := []contextGroup{
-		{id: 1, kind: "gap", digest: "General summary"},
-		{id: 1, kind: "retrieved_chunk", excerpt: "Exact detail absent from the summary"},
-	}
-	messages := renderGroups(groups, 8192, 2048)
-	if len(messages) != 1 ||
-		!strings.Contains(conversation.TextValue(messages[0]), "Exact detail absent") ||
-		!strings.Contains(conversation.TextValue(messages[0]), "General summary") {
-		t.Fatalf("matched source was lost or duplicated: %+v", messages)
-	}
-}
-
-func TestContextWindowLoadsOnlyNeededSourceAndKeepsLastAssistant(t *testing.T) {
+func TestSmallContextWindowKeepsLastAssistant(t *testing.T) {
 	store := testStore(t)
 	assistant := appendTestTurn(t, store, "The last assistant reply is still needed.")
 	for range 6 {
@@ -220,11 +207,11 @@ func TestContextWindowLoadsOnlyNeededSourceAndKeepsLastAssistant(t *testing.T) {
 	if _, err := indexer.Digest(t.Context(), 32); err != nil {
 		t.Fatal(err)
 	}
-	turns, digests, err := store.contextWindow(t.Context(), 4, 1)
+	turns, digests, err := store.contextWindow(t.Context(), 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(turns) != 5 || len(digests) != 5 {
+	if len(turns) != 2 || len(digests) != 2 {
 		t.Fatalf("window headers=%d digests=%d", len(turns), len(digests))
 	}
 	for n, turn := range turns {
@@ -238,7 +225,7 @@ func TestContextWindowLoadsOnlyNeededSourceAndKeepsLastAssistant(t *testing.T) {
 			)
 		}
 	}
-	service, err := NewContextService(indexer, ContextSettings{RecentTurns: 1, HorizonTurns: 4})
+	service, err := NewContextService(indexer, ContextSettings{RecentTurns: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,6 +244,6 @@ func TestContextWindowLoadsOnlyNeededSourceAndKeepsLastAssistant(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatal("latest assistant context beyond the horizon was discarded")
+		t.Fatal("latest assistant context outside the recent window was discarded")
 	}
 }

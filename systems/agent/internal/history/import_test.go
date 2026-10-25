@@ -1,6 +1,7 @@
 package history
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -143,5 +144,80 @@ func TestImportFrozenSnapshot(t *testing.T) {
 	defer readonly.Close()
 	if _, err := readonly.Import(t.Context(), root, true); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRepeatedPreparedImportKeepsReadiness(t *testing.T) {
+	store := testStore(t)
+	id := int64(1<<40) + store.agentID
+	turns := []sourceTurn{
+		{
+			SchemaVersion: conversation.SchemaVersion,
+			Seq:           id,
+			CreatedAt:     time.Now().UTC(),
+			Messages: []conversation.Message{
+				conversation.UserMessage("Original imported source."),
+			},
+		},
+	}
+	root := sourceFixture(t, turns, id)
+	if _, err := store.Import(t.Context(), root, false); err != nil {
+		t.Fatal(err)
+	}
+	indexer, err := NewIndexer(
+		t.Context(),
+		store,
+		EmbeddingSpace{Provider: "fixture", Model: "prepared-repeat", Dimensions: 3},
+		&testEmbedder{},
+		DigestFunc(func(context.Context, string) (DigestResult, error) {
+			return DigestResult{
+				Body:     "An imported source.",
+				Provider: "fixture",
+				Model:    "summary",
+			}, nil
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := indexer.Chunk(t.Context(), 128); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := indexer.Digest(t.Context(), 128); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := indexer.Embed(t.Context(), 128); err != nil {
+		t.Fatal(err)
+	}
+	if err := indexer.PrepareCutover(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Import(t.Context(), root, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := indexer.RequireReady(t.Context(), t.TempDir()); err != nil {
+		t.Fatalf("idempotent import cleared readiness: %v", err)
+	}
+	coverage, err := store.Coverage(t.Context())
+	if err != nil || coverage.EmbeddedDigests != 1 || coverage.EmbeddedChunks == 0 {
+		t.Fatalf("status hides vectors: %+v %v", coverage, err)
+	}
+	turns = append(
+		turns,
+		sourceTurn{
+			SchemaVersion: conversation.SchemaVersion,
+			Seq:           id + 1,
+			CreatedAt:     time.Now().UTC(),
+			Messages: []conversation.Message{
+				conversation.UserMessage("A newly frozen source turn."),
+			},
+		},
+	)
+	expanded := sourceFixture(t, turns, id+1)
+	if _, err := store.Import(t.Context(), expanded, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := indexer.RequireReady(t.Context(), t.TempDir()); err == nil {
+		t.Fatal("expanded import retained stale readiness")
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"slices"
 	"strings"
 	"time"
@@ -15,13 +16,15 @@ import (
 
 // ContextSettings separates tunable working limits from catalog context ceilings.
 type ContextSettings struct {
-	WorkingBudgetBytes int
-	ModelBudgetBytes   map[string]int
-	RecentTurns        int
-	HorizonTurns       int
-	RetrievalLimit     int
-	MinSimilarity      float32
-	Tools              []agent.ToolDefinition
+	WorkingBudgetTokens   int
+	ModelBudgetTokens     map[string]int
+	RecentTurns           int
+	ContextWindowFraction float64
+	RecentHistoryFraction float64
+	MaxRequestBytes       int
+	RetrievalLimit        int
+	MinSimilarity         float32
+	Tools                 []agent.ToolDefinition
 }
 
 // ContextService prepares one immutable retrieval snapshot for each agent run.
@@ -35,41 +38,53 @@ func NewContextService(indexer *Indexer, settings ContextSettings) (*ContextServ
 	if indexer == nil {
 		return nil, errors.New("history context requires an indexer")
 	}
-	if settings.WorkingBudgetBytes == 0 {
-		settings.WorkingBudgetBytes = 256 * 1024
+	if settings.WorkingBudgetTokens == 0 {
+		settings.WorkingBudgetTokens = 64000
+	}
+	if settings.ContextWindowFraction == 0 {
+		settings.ContextWindowFraction = 0.25
+	}
+	if settings.RecentHistoryFraction == 0 {
+		settings.RecentHistoryFraction = 1.0 / 3
+	}
+	if settings.MaxRequestBytes == 0 {
+		settings.MaxRequestBytes = 4 * 1024 * 1024
 	}
 	if settings.RecentTurns == 0 {
-		settings.RecentTurns = 8
-	}
-	if settings.HorizonTurns == 0 {
-		settings.HorizonTurns = 40
+		settings.RecentTurns = 4
 	}
 	if settings.RetrievalLimit == 0 {
 		settings.RetrievalLimit = 6
 	}
-	if settings.WorkingBudgetBytes < 1024 || settings.RecentTurns < 1 ||
-		settings.HorizonTurns < settings.RecentTurns ||
-		settings.HorizonTurns > 500 ||
+	if settings.WorkingBudgetTokens < 1024 || settings.RecentTurns < 1 ||
+		settings.RecentTurns > 32 ||
 		settings.RetrievalLimit < 1 ||
-		settings.RetrievalLimit > 32 {
+		settings.RetrievalLimit > 32 ||
+		settings.MaxRequestBytes < 1024 {
 		return nil, errors.New("invalid history context budget or tier limits")
 	}
-	settings.ModelBudgetBytes = cloneBudgets(settings.ModelBudgetBytes)
+	for _, fraction := range []float64{settings.ContextWindowFraction, settings.RecentHistoryFraction} {
+		if math.IsNaN(fraction) || math.IsInf(fraction, 0) || fraction <= 0 || fraction > 1 {
+			return nil, errors.New(
+				"history context fractions must be greater than zero and at most one",
+			)
+		}
+	}
+	settings.ModelBudgetTokens = cloneBudgets(settings.ModelBudgetTokens)
 	settings.Tools = slices.Clone(settings.Tools)
 	return &ContextService{indexer: indexer, settings: settings}, nil
 }
 
 type contextGroup struct {
-	id            int64
-	createdAt     time.Time
-	kind          string
-	messages      []conversation.Message
-	digest        string
-	excerpt       string
-	matchedSource string
-	score         *float32
-	protected     bool
-	dropped       bool
+	id        int64
+	createdAt time.Time
+	kind      string
+	messages  []conversation.Message
+	digest    string
+	excerpt   string
+	score     *float32
+	protected bool
+	dropped   bool
 }
 
 type contextSnapshot struct {
@@ -87,7 +102,6 @@ func (s *ContextService) PrepareContext(
 ) (agent.PreparedContext, error) {
 	turns, byTurn, err := s.indexer.store.contextWindow(
 		ctx,
-		s.settings.HorizonTurns,
 		s.settings.RecentTurns,
 	)
 	if err != nil {
@@ -136,6 +150,7 @@ func (s *ContextService) PrepareContext(
 				Limit:          s.settings.RetrievalLimit,
 				ExcludeTurnIDs: recentIDs,
 				MinSimilarity:  s.settings.MinSimilarity,
+				SummariesOnly:  true,
 			},
 		)
 		if err != nil {
@@ -165,7 +180,8 @@ func (s *ContextService) PrepareContext(
 		false,
 	)
 	var budgetError *agent.RequestBudgetError
-	if errors.As(err, &budgetError) {
+	var tokenError *agent.TokenBudgetError
+	if errors.As(err, &budgetError) || errors.As(err, &tokenError) {
 		// The selected model may have a larger override. Fit each actual attempt before dispatch.
 		messages, err = initial, nil
 	}
@@ -251,63 +267,119 @@ func (s *contextSnapshot) fit(
 		conversation.CloneMessages(s.input),
 		conversation.CloneMessages(messages[generatedStart:])...)
 	limit := s.workingLimit(model)
+	maxBytes := s.settings.MaxRequestBytes
+	if maxBytes == 0 {
+		maxBytes = 4 * 1024 * 1024
+	}
 	toolCap, reasoningCap := 8192, 2048
-	materialize := func() ([]conversation.Message, int, error) {
+	compact := false
+	materialize := func() ([]conversation.Message, int, int, error) {
 		result := append(
 			conversation.CloneMessages(system),
 			renderGroups(groups, toolCap, reasoningCap)...)
-		result = append(result, capParts(active, toolCap, reasoningCap)...)
+		current := capParts(active, toolCap, reasoningCap)
+		if compact {
+			compactActiveEvidence(current)
+		}
+		result = append(result, current...)
 		size, err := agent.RequestEncodedBytes(result, tools)
-		return result, size, err
+		if err != nil {
+			return nil, 0, 0, err
+		}
+		if size > maxBytes {
+			return result, size, limit + 1, nil
+		}
+		tokens, err := agent.RequestEstimatedTokens(result, tools)
+		return result, size, tokens, err
 	}
-	result, size, err := materialize()
+	result, size, tokens, err := materialize()
 	if err != nil {
 		return nil, err
 	}
+	over := func() bool { return tokens > limit || size > maxBytes }
+	recentAllowance, err := s.recentAllowance(system, active, groups, tools, limit)
+	if err != nil {
+		return nil, err
+	}
+	recentSize := func() (int, error) {
+		var recent []contextGroup
+		for _, group := range groups {
+			if group.kind == "recent" || group.kind == "gap" {
+				recent = append(recent, group)
+			}
+		}
+		return historyTokens(renderGroups(recent, toolCap, reasoningCap))
+	}
 	for n := range groups {
-		if size <= limit {
+		recentTokens, err := recentSize()
+		if err != nil {
+			return nil, err
+		}
+		if recentTokens <= recentAllowance {
 			break
 		}
 		if groups[n].kind != "recent" || groups[n].protected {
 			continue
 		}
 		groups[n].kind = "gap"
-		result, size, err = materialize()
+		result, size, tokens, err = materialize()
 		if err != nil {
 			return nil, err
 		}
 	}
-	for size > limit && toolCap > 512 {
+	for over() && toolCap > 512 {
 		toolCap /= 2
 		reasoningCap = max(256, reasoningCap/2)
-		result, size, err = materialize()
+		result, size, tokens, err = materialize()
 		if err != nil {
 			return nil, err
 		}
 	}
-	for _, kind := range []string{"gap", "retrieved"} {
+	// Keyword-only matches have no comparable semantic confidence. They leave
+	// first, followed by weaker semantic matches and optional continuity summaries.
+	for _, tier := range []int{0, 1, 2} {
 		for n := range groups {
-			if size <= limit {
+			if !over() {
 				break
 			}
-			if !strings.HasPrefix(groups[n].kind, kind) {
+			group := &groups[n]
+			priority := groupPriority(group.kind) - 1
+			if strings.HasPrefix(group.kind, "retrieved") && group.score != nil {
+				priority = 1
+			}
+			if group.kind == "gap" {
+				priority = 2
+			}
+			if group.protected || priority != tier {
 				continue
 			}
-			groups[n].dropped = true
-			result, size, err = materialize()
+			group.dropped = true
+			result, size, tokens, err = materialize()
 			if err != nil {
 				return nil, err
 			}
 		}
 	}
-	if size > limit {
-		return nil, &agent.RequestBudgetError{Bytes: size, Limit: limit}
+	if over() {
+		compact = true
+		result, size, tokens, err = materialize()
+		if err != nil {
+			return nil, err
+		}
+	}
+	if size > maxBytes {
+		return nil, &agent.RequestBudgetError{Bytes: size, Limit: maxBytes}
+	}
+	if tokens > limit {
+		return nil, &agent.TokenBudgetError{EstimatedTokens: tokens, LimitTokens: limit}
 	}
 	if emit {
 		log.Printf(
-			"q15: history context ref=%q canonical_bytes=%d limit_bytes=%d lexical_fallback=%t selected=%v",
+			"q15: history context ref=%q canonical_bytes=%d max_bytes=%d estimated_tokens=%d limit_tokens=%d estimator=o200k_base_margin25 lexical_fallback=%t selected=%v",
 			model.Ref,
 			size,
+			maxBytes,
+			tokens,
 			limit,
 			s.lexicalFallback,
 			contextLabels(groups),
@@ -316,22 +388,107 @@ func (s *contextSnapshot) fit(
 	return result, nil
 }
 
+func historyTokens(messages []conversation.Message) (int, error) {
+	tokens, err := agent.RequestEstimatedTokens(messages, nil)
+	return max(0, tokens-160), err
+}
+
+func (s *contextSnapshot) recentAllowance(
+	system, active []conversation.Message,
+	groups []contextGroup,
+	tools []agent.ToolDefinition,
+	limit int,
+) (int, error) {
+	base := append(conversation.CloneMessages(system), capParts(active, 8192, 2048)...)
+	maxBytes := s.settings.MaxRequestBytes
+	if maxBytes == 0 {
+		maxBytes = 4 * 1024 * 1024
+	}
+	size, err := agent.RequestEncodedBytes(base, tools)
+	if err != nil {
+		return 0, err
+	}
+	if size > maxBytes {
+		return 0, nil
+	}
+	used, err := agent.RequestEstimatedTokens(base, tools)
+	if err != nil {
+		return 0, err
+	}
+	available := max(0, limit-used)
+	var retrieved []contextGroup
+	for _, group := range groups {
+		if strings.HasPrefix(group.kind, "retrieved") {
+			retrieved = append(retrieved, group)
+		}
+	}
+	retrievalTokens, err := historyTokens(renderGroups(retrieved, 8192, 2048))
+	fraction := s.settings.RecentHistoryFraction
+	if fraction == 0 {
+		fraction = 1.0 / 3
+	}
+	return max(int(float64(available)*fraction), available-retrievalTokens), err
+}
+
+func compactActiveEvidence(messages []conversation.Message) {
+	latestAssistant := -1
+	for n, message := range messages {
+		if message.Role == conversation.AssistantRole {
+			latestAssistant = n
+		}
+	}
+	for n := range messages {
+		if messages[n].Role == conversation.UserRole {
+			continue
+		}
+		for j := range messages[n].Parts {
+			part := &messages[n].Parts[j]
+			switch part.Type {
+			case conversation.ToolResultPartType:
+				if len(part.Content) > 192 {
+					part.Content = "[Tool executed. Result omitted to fit the context budget. Use a narrower query or pagination; do not repeat a mutation to recover its output.]"
+				}
+			case conversation.ToolCallPartType:
+				if len(part.Arguments) > 1024 {
+					part.Arguments = `{"omitted":"Tool already executed; arguments omitted to fit context. Do not repeat a mutation."}`
+				}
+			case conversation.TextPartType:
+				if n != latestAssistant && len(part.Text) > 512 {
+					part.Text = "[Earlier assistant text omitted to fit the context budget; original retained in history.]"
+				}
+			}
+		}
+	}
+}
+
 func (s *contextSnapshot) workingLimit(model agent.ModelContext) int {
-	limit := s.settings.WorkingBudgetBytes
-	if override := s.settings.ModelBudgetBytes[model.Ref]; override > 0 {
-		limit = override
+	ceiling := s.settings.WorkingBudgetTokens
+	if ceiling == 0 {
+		ceiling = 64000
 	}
-	// Match the catalog planner's conservative text allowance. This is a hard
-	// safety reserve, not an asserted quality threshold or a tokenizer count.
-	if model.MaxContextTokens > 0 {
-		responseReserve := min(
-			model.MaxContextTokens/4,
-			max(4096, min(model.MaxOutputTokens, 8192)),
-		)
-		framingReserve := model.MaxContextTokens / 8
-		limit = min(limit, model.MaxContextTokens-responseReserve-framingReserve)
+	if override := s.settings.ModelBudgetTokens[model.Ref]; override > 0 {
+		ceiling = override
 	}
-	return limit
+	fraction := s.settings.ContextWindowFraction
+	if fraction == 0 {
+		fraction = 0.25
+	}
+	if model.MaxContextTokens <= 0 {
+		return min(ceiling, 16000)
+	}
+	replyReserve := min(8192, model.MaxContextTokens/4)
+	if model.MaxOutputTokens > 0 {
+		replyReserve = min(replyReserve, model.MaxOutputTokens)
+	}
+	safetyReserve := max(1, model.MaxContextTokens/20)
+	return max(
+		1,
+		min(
+			ceiling,
+			int(float64(model.MaxContextTokens)*fraction),
+			model.MaxContextTokens-replyReserve-safetyReserve,
+		),
+	)
 }
 
 func renderGroups(groups []contextGroup, toolCap, reasoningCap int) []conversation.Message {
@@ -345,6 +502,8 @@ func renderGroups(groups []contextGroup, toolCap, reasoningCap int) []conversati
 		)
 		if group.score != nil {
 			label += fmt.Sprintf(" [cosine %.4f]", *group.score)
+		} else if strings.HasPrefix(group.kind, "retrieved") {
+			label += " [keyword match; semantic confidence unavailable]"
 		}
 		if group.kind == "recent" {
 			messages := capParts(group.messages, toolCap, reasoningCap)
@@ -361,13 +520,6 @@ func renderGroups(groups []contextGroup, toolCap, reasoningCap int) []conversati
 		bound := 4096
 		if group.kind == "gap" {
 			bound = 1024
-		}
-		if group.matchedSource != "" {
-			body = "Generated digest:\n" + body + "\nMatched original-message excerpt:\n" + boundedText(
-				group.matchedSource,
-				2048,
-			)
-			bound = 4096
 		}
 		result = append(
 			result,
@@ -404,9 +556,6 @@ func groupLabel(group contextGroup) string {
 	case "recent":
 		return "verbatim; shortened parts are marked"
 	case "gap":
-		if group.matchedSource != "" {
-			return "gap digest with retrieved source excerpt"
-		}
 		if group.digest != "" {
 			return "gap digest"
 		}
@@ -457,20 +606,6 @@ func selectedGroups(groups []contextGroup) []contextGroup {
 	var result []contextGroup
 	for _, group := range groups {
 		if !group.dropped && !seen[group.id] && groupPriority(group.kind) == preferred[group.id] {
-			if group.kind == "gap" {
-				for _, candidate := range groups {
-					if candidate.id == group.id && !candidate.dropped &&
-						candidate.kind == "retrieved_chunk" {
-						if group.digest != "" {
-							group.matchedSource = candidate.excerpt
-						} else {
-							group.excerpt = candidate.excerpt
-						}
-						group.score = candidate.score
-						break
-					}
-				}
-			}
 			result = append(result, group)
 			seen[group.id] = true
 		}

@@ -38,21 +38,50 @@ agent:
     embedding_batch_size: 8
     summary_provider: ollama-cloud
     summary_model: minimax-m3.1-flash
-    working_budget_bytes: 262144
-    model_budget_bytes:
-      ollama-cloud/deepseek-v4.1-flash: 131072
-    recent_turns: 8
-    horizon_turns: 40
+    working_budget_tokens: 64000
+    context_window_fraction: 0.25
+    recent_history_fraction: 0.3333333333333333
+    max_request_bytes: 4194304
+    model_budget_tokens:
+      ollama-cloud/deepseek-v4.1-flash: 48000
+    recent_turns: 4
     retrieval_limit: 6
     min_similarity: 0.35
 ```
 
-The per-model budget above is an example to tune, not a measured quality recommendation. The runtime
-uses the actual selected model's catalog context/output limits again on every provider attempt and
-tool step. Working budgets bound encoded canonical requests including tool definitions; they are
-conservative byte allowances, not exact tokenizer counts. A model's advertised context ceiling does
-not establish the point where its recall or reasoning quality degrades. No cloud recall benchmark is
-included. Start with a modest working budget and adjust from normal usage.
+The input token budget is the smaller of 25 percent of the selected model's discovered context
+window and 64,000 estimated tokens. It is also capped below the context window to leave room for an
+answer and counting uncertainty. Unknown context limits use a 16,000-token fallback. The fraction,
+ceiling and optional per-model ceilings are configurable; they describe an initial policy, not a
+measured model-quality optimum.
+
+Token estimates use the bundled o200k_base tokenizer over message text, tool schemas and framing,
+with a 25 percent margin and a separate media allowance. They are estimates for other model
+families, not exact provider tokenizer counts. Logs compare estimates with provider-reported input
+usage when available. `max_request_bytes` independently bounds the canonical encoded request. No
+additional model calls or cloud recall benchmark are used for calibration.
+
+Automatic context retains up to four recent turns and searches only generated summaries for relevant
+older work. There is no fixed wall of preceding summaries. Recent history receives one third of the
+remaining history allowance and relevance receives two thirds; unused space can be borrowed. Weak
+matches do not fill otherwise empty space. Whole recent turns can be represented by their summaries,
+and copied tool evidence is shortened before dispatch. Original stored messages remain intact.
+Keyword-only fallback matches are labelled and evicted before semantic matches and continuity. The
+complete fit is repeated for each actual model attempt and tool step.
+
+`history_search` still searches original messages and summaries by meaning and matching words.
+`history_read` pages a single source payload directly from SQL. Start with `turn_id`, then pass the
+returned `next` cursor (`part_id`, `field`, `offset`) with the same turn id. Text offsets count
+UTF-8 characters; base64 payload offsets count original bytes. `limit` is 1–4,096 units. Reasoning
+replay has a separate field and follows portable text automatically. There is no whole-turn JSON
+marshal. JSONB payloads preserve structured values and opaque signature/encrypted strings; JSON
+whitespace and object-key order are not preserved. The supported adapters consume JSON values or
+opaque string fields, rather than a signature over serialized JSON formatting.
+
+`q15 memory status` reports summaries, chunks, both vector counts, failures and the prepared space.
+An identical repeat import preserves readiness; an expanded frozen source requires preparation
+again. Summaries are rebuildable by prompt version; automated digest auditing remains outside this
+reset.
 
 For existing TEI deployments, `embedding_provider: openai` with an explicit TEI endpoint, model and
 dimensions is supported independently of the library binding. A different embedding model, dimension

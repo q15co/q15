@@ -74,7 +74,7 @@ func migrate(ctx context.Context, dsn string) error {
 		return err
 	}
 	provider, err := goose.NewProvider(goose.DialectPostgres, db, files,
-		goose.WithTableName("q15_memory_schema_version"), goose.WithSessionLocker(locker))
+		goose.WithTableName("public.q15_memory_schema_version"), goose.WithSessionLocker(locker))
 	if err != nil {
 		return err
 	}

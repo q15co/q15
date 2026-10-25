@@ -25,7 +25,7 @@ WITH digest_hits AS (
   FROM memory.chunk_embeddings e JOIN memory.chunks c ON c.id=e.chunk_id
   JOIN memory.chunk_runs r ON r.id=c.run_id JOIN memory.parts p ON p.id=r.part_id
   JOIN memory.messages m ON m.id=p.message_id JOIN memory.turns t ON t.id=m.turn_id
-  WHERE t.agent_id=$3 AND t.id <> ALL($4::bigint[]) AND e.model_id=$5 AND e.dimensions=1024
+  WHERE NOT $6::boolean AND t.agent_id=$3 AND t.id <> ALL($4::bigint[]) AND e.model_id=$5 AND e.dimensions=1024
   ORDER BY e.embedding::vector(1024) <=> $2::vector(1024) LIMIT $1
 ) SELECT kind, unit_id, turn_id, body, created_at, score FROM (SELECT kind, unit_id, turn_id, body, created_at, score FROM digest_hits UNION ALL SELECT kind, unit_id, turn_id, body, created_at, score FROM chunk_hits) hits
 ORDER BY score DESC, turn_id DESC, kind, unit_id LIMIT $1
@@ -37,6 +37,7 @@ type SearchDense1024Params struct {
 	AgentID        int64
 	ExcludeTurnIds []int64
 	ModelID        int64
+	SummariesOnly  bool
 }
 
 type SearchDense1024Row struct {
@@ -55,6 +56,7 @@ func (q *Queries) SearchDense1024(ctx context.Context, arg SearchDense1024Params
 		arg.AgentID,
 		arg.ExcludeTurnIds,
 		arg.ModelID,
+		arg.SummariesOnly,
 	)
 	if err != nil {
 		return nil, err
@@ -95,7 +97,7 @@ WITH digest_hits AS (
   FROM memory.chunk_embeddings e JOIN memory.chunks c ON c.id=e.chunk_id
   JOIN memory.chunk_runs r ON r.id=c.run_id JOIN memory.parts p ON p.id=r.part_id
   JOIN memory.messages m ON m.id=p.message_id JOIN memory.turns t ON t.id=m.turn_id
-  WHERE t.agent_id=$3 AND t.id <> ALL($4::bigint[]) AND e.model_id=$5 AND e.dimensions=768
+  WHERE NOT $6::boolean AND t.agent_id=$3 AND t.id <> ALL($4::bigint[]) AND e.model_id=$5 AND e.dimensions=768
   ORDER BY e.embedding::vector(768) <=> $2::vector(768) LIMIT $1
 ) SELECT kind, unit_id, turn_id, body, created_at, score FROM (SELECT kind, unit_id, turn_id, body, created_at, score FROM digest_hits UNION ALL SELECT kind, unit_id, turn_id, body, created_at, score FROM chunk_hits) hits
 ORDER BY score DESC, turn_id DESC, kind, unit_id LIMIT $1
@@ -107,6 +109,7 @@ type SearchDense768Params struct {
 	AgentID        int64
 	ExcludeTurnIds []int64
 	ModelID        int64
+	SummariesOnly  bool
 }
 
 type SearchDense768Row struct {
@@ -125,6 +128,7 @@ func (q *Queries) SearchDense768(ctx context.Context, arg SearchDense768Params) 
 		arg.AgentID,
 		arg.ExcludeTurnIds,
 		arg.ModelID,
+		arg.SummariesOnly,
 	)
 	if err != nil {
 		return nil, err

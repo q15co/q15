@@ -19,6 +19,7 @@ type SearchOptions struct {
 	ExcludeTurnIDs []int64
 	MinSimilarity  float32
 	Mode           string
+	SummariesOnly  bool
 }
 
 // SearchHit identifies whether the returned text is a digest or a source excerpt.
@@ -104,6 +105,7 @@ func (i *Indexer) Search(
 				AgentID:        i.store.agentID,
 				ExcludeTurnIds: options.ExcludeTurnIDs,
 				ResultLimit:    int32(options.Limit * 4),
+				SummariesOnly:  options.SummariesOnly,
 			},
 		)
 		if err != nil {
@@ -134,6 +136,7 @@ func (i *Indexer) denseSearch(
 		ModelID:        i.modelID,
 		ExcludeTurnIds: options.ExcludeTurnIDs,
 		ResultLimit:    int32(options.Limit * 4),
+		SummariesOnly:  options.SummariesOnly,
 	}
 	var results []historydb.SearchDenseRow
 	switch i.space.Dimensions {

@@ -128,7 +128,7 @@ func (i *Indexer) RunBatch(ctx context.Context, limit int) (int, error) {
 	}
 	defer conn.Release()
 	var locked bool
-	if err := conn.QueryRow(ctx, "SELECT pg_try_advisory_lock($1, $2)", int32(0x71313539), int32(i.store.agentID)).Scan(&locked); err != nil {
+	if err := conn.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", -i.store.agentID).Scan(&locked); err != nil {
 		return 0, err
 	}
 	if !locked {
@@ -137,7 +137,7 @@ func (i *Indexer) RunBatch(ctx context.Context, limit int) (int, error) {
 	defer func() {
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
-		if _, err := conn.Exec(cleanup, "SELECT pg_advisory_unlock($1, $2)", int32(0x71313539), int32(i.store.agentID)); err != nil {
+		if _, err := conn.Exec(cleanup, "SELECT pg_advisory_unlock($1)", -i.store.agentID); err != nil {
 			_ = conn.Conn().Close(cleanup)
 		}
 	}()

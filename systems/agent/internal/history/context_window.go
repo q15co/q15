@@ -11,7 +11,7 @@ import (
 
 func (s *Store) contextWindow(
 	ctx context.Context,
-	horizon, recent int,
+	recent int,
 ) ([]conversation.Turn, map[int64]string, error) {
 	tx, err := s.pool.BeginTx(
 		ctx,
@@ -24,7 +24,7 @@ func (s *Store) contextWindow(
 	q := historydb.New(tx)
 	headers, err := q.ListTurnHeaders(
 		ctx,
-		historydb.ListTurnHeadersParams{AgentID: s.agentID, PageLimit: int32(horizon)},
+		historydb.ListTurnHeadersParams{AgentID: s.agentID, PageLimit: int32(recent)},
 	)
 	if err != nil {
 		return nil, nil, err
@@ -48,28 +48,11 @@ func (s *Store) contextWindow(
 	for _, row := range rows {
 		digests[row.TurnID] = row.Body
 	}
-	// Summarized gap turns need only their header and digest; large tool bodies stay in Postgres.
-	var sourceHeaders []historydb.ListTurnHeadersRow
-	for n, header := range headers {
-		if n < recent || header.ID == assistant.ID || digests[header.ID] == "" {
-			sourceHeaders = append(sourceHeaders, header)
-		}
-	}
-	source, err := readTurns(ctx, q, sourceHeaders)
+	turns, err := readTurns(ctx, q, headers)
 	if err != nil {
 		return nil, nil, err
 	}
-	byID := make(map[int64]conversation.Turn, len(source))
-	for _, turn := range source {
-		byID[turn.Seq] = turn
-	}
-	turns := make([]conversation.Turn, len(headers))
-	for n, header := range headers {
-		turns[n] = byID[header.ID]
-		if turns[n].Seq == 0 {
-			turns[n] = conversation.Turn{Seq: header.ID, CreatedAt: header.CreatedAt.Time}
-		}
-	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return nil, nil, err
 	}

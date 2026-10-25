@@ -152,3 +152,104 @@ func TestInteractiveAndScheduledContextUsePostgres(t *testing.T) {
 		t.Fatal("runtime recreated file-backed history")
 	}
 }
+
+type fittedHistoryStore struct {
+	*history.Store
+	service *history.ContextService
+}
+
+func (s fittedHistoryStore) PrepareContext(
+	ctx context.Context,
+	system, input []conversation.Message,
+) (agent.PreparedContext, error) {
+	return s.service.PrepareContext(ctx, system, input)
+}
+
+type largeHistoryTool struct{ output string }
+
+func (largeHistoryTool) Definition() agent.ToolDefinition {
+	return agent.ToolDefinition{
+		Name:        "large_history_source",
+		Description: "Read a large fixture source.",
+		Parameters:  map[string]any{"type": "object"},
+	}
+}
+func (t largeHistoryTool) Run(context.Context, string) (string, error) { return t.output, nil }
+
+func TestPostgresKeepsLargeToolSourceWhileModelReplayFits(t *testing.T) {
+	dsn := os.Getenv("Q15_TEST_POSTGRES_URL")
+	if dsn == "" {
+		t.Skip("requires disposable Postgres")
+	}
+	store, err := history.Open(t.Context(), dsn, t.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	indexer, err := history.NewIndexer(
+		t.Context(),
+		store,
+		history.EmbeddingSpace{Provider: "fixture", Model: "large-source", Dimensions: 3},
+		historyFixtureEmbedder{},
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := history.NewContextService(
+		indexer,
+		history.ContextSettings{WorkingBudgetTokens: 2048},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := strings.Repeat("original large source output ", 40000)
+	tools, err := agent.NewToolRegistry(largeHistoryTool{output: original})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := &fakeModelClient{
+		results: []agent.ModelClientResult{
+			{
+				Messages: []conversation.Message{
+					conversation.AssistantMessage(
+						conversation.ToolCall("large-call", "large_history_source", `{}`),
+					),
+				},
+			},
+		},
+	}
+	loop := agent.NewLoop(
+		model,
+		tools,
+		[]string{"fixture"},
+		"Instructions.",
+		fittedHistoryStore{Store: store, service: service},
+		4,
+	)
+	if _, err := loop.Reply(t.Context(), conversation.UserMessage("inspect the large source"), nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(model.calls) != 2 {
+		t.Fatalf("model calls=%d", len(model.calls))
+	}
+	tokens, err := agent.RequestEstimatedTokens(model.calls[1].messages, model.calls[1].tools)
+	if err != nil || tokens > 2048 {
+		t.Fatalf("provider replay unbounded: %d %v", tokens, err)
+	}
+	page, err := store.ListTurns(t.Context(), 0, 1)
+	if err != nil || len(page.Turns) != 1 {
+		t.Fatal("completed source missing", err)
+	}
+	found := false
+	for _, m := range page.Turns[0].Messages {
+		for _, p := range m.Parts {
+			if p.Type == conversation.ToolResultPartType {
+				found = p.Content == original
+			}
+		}
+	}
+	if !found {
+		t.Fatal("bounded provider replay overwrote original stored tool output")
+	}
+}

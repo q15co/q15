@@ -465,6 +465,18 @@ func (e *Engine) completeWithObserver(
 			return modelRef, ModelClientResult{}, ctx.Err()
 		}
 		if err == nil {
+			if contextFitter != nil && result.Usage.InputTokens > 0 {
+				estimated, estimateErr := RequestEstimatedTokens(attemptMessages, tools)
+				if estimateErr == nil {
+					log.Printf(
+						"q15: context usage ref=%q estimated_input_tokens=%d actual_input_tokens=%d output_tokens=%d estimator=o200k_base_margin25",
+						modelRef,
+						estimated,
+						result.Usage.InputTokens,
+						result.Usage.OutputTokens,
+					)
+				}
+			}
 			log.Printf(
 				"q15: model turn=%d selected ref=%q attempt=%d/%d finish_reason=%q returned_messages=%d",
 				turn,

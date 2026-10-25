@@ -3,6 +3,7 @@ package history
 import (
 	"context"
 	"encoding/json"
+	"net/url"
 	"os"
 	"testing"
 	"time"
@@ -170,5 +171,26 @@ func TestJSONPayloadExceptions(t *testing.T) {
 	structured, raw := splitJSON([]byte(`{"value":42}`))
 	if raw != nil || string(structured) != `{"value":42}` {
 		t.Fatal("valid JSON was not stored as jsonb")
+	}
+}
+
+func TestMigrationVersionTableUsesExplicitSchema(t *testing.T) {
+	store := testStore(t)
+	dsn, err := url.Parse(os.Getenv("Q15_TEST_POSTGRES_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := dsn.Query()
+	query.Set("search_path", "memory,public")
+	dsn.RawQuery = query.Encode()
+	alternate, err := Open(t.Context(), dsn.String(), t.Name()+"-alternate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer alternate.Close()
+	var misplaced bool
+	if err := store.pool.QueryRow(t.Context(), "SELECT to_regclass('memory.q15_memory_schema_version') IS NOT NULL").Scan(&misplaced); err != nil ||
+		misplaced {
+		t.Fatal("migration version table followed search_path", err)
 	}
 }

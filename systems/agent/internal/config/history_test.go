@@ -1,6 +1,7 @@
 package config
 
 import (
+	"math"
 	"net/url"
 	"testing"
 )
@@ -27,14 +28,15 @@ func TestHistoryDefaultsAndIndependentModelBinding(t *testing.T) {
 		h.EmbeddingModel != "embeddinggemma-2:740m" ||
 		h.EmbeddingProvider != "ollama" ||
 		h.DatabaseURL == "" ||
-		h.WorkingBudgetBytes != 262144 {
+		h.WorkingBudgetTokens != 64000 || h.ContextWindowFraction != 0.25 || h.RecentTurns != 4 {
 		t.Fatal("history defaults or explicit binding differ")
 	}
-	cfg.Agent.History.ModelBudgetBytes = map[string]int{"cloud/small": 16000}
+	cfg.Agent.History.ModelBudgetTokens = map[string]int{"cloud/small": 16000}
 	cfg.Agent.History.EmbeddingProvider = "openai"
 	cfg.Agent.History.EmbeddingBaseURL = "http://tei:80"
 	h, err = cfg.ResolveHistory()
-	if err != nil || h.ModelBudgetBytes["cloud/small"] != 16000 || h.EmbeddingProvider != "openai" {
+	if err != nil || h.ModelBudgetTokens["cloud/small"] != 16000 ||
+		h.EmbeddingProvider != "openai" {
 		t.Fatal("history overrides failed", err)
 	}
 }
@@ -94,5 +96,18 @@ func TestHistoryLocalSummariesRequireExplicitBinding(t *testing.T) {
 	}
 	if h.SummaryBaseURL != "" {
 		t.Fatal("summary model silently inherited an arbitrary local provider")
+	}
+}
+
+func TestHistoryRejectsInvalidBudgetPolicy(t *testing.T) {
+	for _, bad := range []History{
+		{ContextWindowFraction: -0.1}, {ContextWindowFraction: 1.1}, {ContextWindowFraction: math.NaN()},
+		{RecentHistoryFraction: math.Inf(1)}, {RecentHistoryFraction: 1.1},
+		{WorkingBudgetTokens: 512}, {RecentTurns: 33}, {MaxRequestBytes: 512},
+	} {
+		cfg := Config{Agent: &Agent{Name: "fixture", History: bad}}
+		if _, err := cfg.ResolveHistory(); err == nil {
+			t.Fatalf("invalid policy accepted: %+v", bad)
+		}
 	}
 }

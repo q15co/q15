@@ -17,6 +17,7 @@ require (
 	github.com/q15co/q15/libs/exec-contract v0.0.0
 	github.com/q15co/q15/libs/proxy-contract v0.0.0
 	github.com/qdrant/go-client v1.17.1
+	github.com/tiktoken-go/tokenizer v0.10.0
 	github.com/yuin/goldmark v1.7.16
 	github.com/yuin/goldmark-meta v1.1.0
 	google.golang.org/genai v1.56.0
@@ -34,6 +35,7 @@ require (
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/buger/jsonparser v1.2.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
+	github.com/dlclark/regexp2/v2 v2.5.1 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect

@@ -218,7 +218,7 @@ WITH q AS (SELECT websearch_to_tsquery('simple', sqlc.arg(query)::text) AS terms
     ts_rank_cd(to_tsvector('simple', c.body), q.terms)::real
   FROM memory.chunks c JOIN memory.chunk_runs r ON r.id=c.run_id JOIN memory.parts p ON p.id=r.part_id
   JOIN memory.messages m ON m.id=p.message_id JOIN memory.turns t ON t.id=m.turn_id CROSS JOIN q
-  WHERE t.agent_id=sqlc.arg(agent_id) AND t.id <> ALL(sqlc.arg(exclude_turn_ids)::bigint[]) AND to_tsvector('simple', c.body) @@ q.terms
+  WHERE NOT sqlc.arg(summaries_only)::boolean AND t.agent_id=sqlc.arg(agent_id) AND t.id <> ALL(sqlc.arg(exclude_turn_ids)::bigint[]) AND to_tsvector('simple', c.body) @@ q.terms
 ) SELECT * FROM hits ORDER BY score DESC, turn_id DESC, kind, unit_id LIMIT sqlc.arg(result_limit);
 
 -- name: SearchDense :many
@@ -235,7 +235,7 @@ WITH digest_hits AS (
   FROM memory.chunk_embeddings e JOIN memory.chunks c ON c.id=e.chunk_id
   JOIN memory.chunk_runs r ON r.id=c.run_id JOIN memory.parts p ON p.id=r.part_id
   JOIN memory.messages m ON m.id=p.message_id JOIN memory.turns t ON t.id=m.turn_id
-  WHERE t.agent_id=sqlc.arg(agent_id) AND t.id <> ALL(sqlc.arg(exclude_turn_ids)::bigint[]) AND e.model_id=sqlc.arg(model_id)
+  WHERE NOT sqlc.arg(summaries_only)::boolean AND t.agent_id=sqlc.arg(agent_id) AND t.id <> ALL(sqlc.arg(exclude_turn_ids)::bigint[]) AND e.model_id=sqlc.arg(model_id)
   ORDER BY e.embedding <=> sqlc.arg(query_embedding)::vector LIMIT sqlc.arg(result_limit)
 ) SELECT * FROM (SELECT * FROM digest_hits UNION ALL SELECT * FROM chunk_hits) hits
 ORDER BY score DESC, turn_id DESC, kind, unit_id LIMIT sqlc.arg(result_limit);
@@ -249,7 +249,12 @@ INSERT INTO memory.bootstrap (agent_id, source_fingerprint, source_head, source_
 VALUES ($1, $2, $3, $4)
 ON CONFLICT (agent_id) DO UPDATE SET source_fingerprint = EXCLUDED.source_fingerprint,
 source_head = EXCLUDED.source_head, source_turns = EXCLUDED.source_turns, verified_at = clock_timestamp(),
-prepared_at = NULL, embedding_model_id = NULL, digest_prompt_version = NULL;
+prepared_at = CASE WHEN memory.bootstrap.source_fingerprint IS NOT DISTINCT FROM EXCLUDED.source_fingerprint
+  AND memory.bootstrap.source_head=EXCLUDED.source_head AND memory.bootstrap.source_turns=EXCLUDED.source_turns THEN memory.bootstrap.prepared_at END,
+embedding_model_id = CASE WHEN memory.bootstrap.source_fingerprint IS NOT DISTINCT FROM EXCLUDED.source_fingerprint
+  AND memory.bootstrap.source_head=EXCLUDED.source_head AND memory.bootstrap.source_turns=EXCLUDED.source_turns THEN memory.bootstrap.embedding_model_id END,
+digest_prompt_version = CASE WHEN memory.bootstrap.source_fingerprint IS NOT DISTINCT FROM EXCLUDED.source_fingerprint
+  AND memory.bootstrap.source_head=EXCLUDED.source_head AND memory.bootstrap.source_turns=EXCLUDED.source_turns THEN memory.bootstrap.digest_prompt_version END;
 
 -- name: InitializeEmpty :exec
 INSERT INTO memory.bootstrap (agent_id, source_head, source_turns)
@@ -276,6 +281,9 @@ LEFT JOIN memory.chunk_runs r ON r.part_id=p.id WHERE p.id=$1 FOR UPDATE OF p;
 SELECT (SELECT count(*) FROM memory.turns rt WHERE rt.agent_id=$1 AND rt.completed_at IS NOT NULL)::bigint AS turns,
  (SELECT count(*) FROM memory.turn_digests d JOIN memory.turns t ON t.id=d.turn_id WHERE t.agent_id=$1)::bigint AS digests,
  (SELECT count(*) FROM memory.digest_failures f JOIN memory.turns t ON t.id=f.turn_id WHERE t.agent_id=$1)::bigint AS digest_failures,
+ (SELECT count(*) FROM memory.chunks c JOIN memory.chunk_runs r ON r.id=c.run_id JOIN memory.parts p ON p.id=r.part_id JOIN memory.messages m ON m.id=p.message_id JOIN memory.turns t ON t.id=m.turn_id WHERE t.agent_id=$1)::bigint AS chunks,
+ (SELECT count(*) FROM memory.digest_embeddings de JOIN memory.turns t ON t.id=de.turn_id WHERE t.agent_id=$1 AND de.model_id=b.embedding_model_id)::bigint AS embedded_digests,
+ (SELECT count(*) FROM memory.chunk_embeddings ce JOIN memory.chunks c ON c.id=ce.chunk_id JOIN memory.chunk_runs r ON r.id=c.run_id JOIN memory.parts p ON p.id=r.part_id JOIN memory.messages m ON m.id=p.message_id JOIN memory.turns t ON t.id=m.turn_id WHERE t.agent_id=$1 AND ce.model_id=b.embedding_model_id)::bigint AS embedded_chunks,
  b.source_head, b.source_turns, b.verified_at, b.prepared_at, b.digest_prompt_version,
  e.provider AS embedding_provider, e.model AS embedding_model, e.dimensions
  FROM memory.agents a LEFT JOIN memory.bootstrap b ON b.agent_id=a.id
@@ -287,3 +295,34 @@ SELECT t.id, t.created_at FROM memory.turns t
 WHERE t.agent_id=$1 AND t.completed_at IS NOT NULL
 AND EXISTS (SELECT 1 FROM memory.messages m WHERE m.turn_id=t.id AND m.role='assistant')
 ORDER BY t.id DESC LIMIT 1;
+
+-- name: ReadSourcePage :one
+WITH selected AS (
+ SELECT p.id AS part_id, p.position AS part_position, p.kind, m.position AS message_position,
+ m.role, t.created_at, cl.instant, cl.utc_offset_seconds, cl.since_previous_ns,
+ coalesce(tc.call_id, tr.call_id, '')::text AS call_id,
+ coalesce(tc.tool_name, '')::text AS tool_name, coalesce(tr.is_error, false)::boolean AS is_error,
+ coalesce(pt.disposition,'')::text AS disposition, sd.job_id, sd.run_id, sd.channel, sd.chat_id, sd.delivered_at,
+ (re.replay IS NOT NULL OR re.raw_replay IS NOT NULL)::boolean AS has_replay,
+ CASE WHEN sqlc.arg(field)::text='replay' THEN re.replay::text
+ ELSE coalesce(pt.body, re.body, tr.body, tc.arguments::text,
+   CASE WHEN pm.part_id IS NOT NULL THEN json_build_object('media_kind',pm.media_kind,'media_ref',pm.media_ref,'data_url',pm.data_url)::text END, '') END AS body,
+ CASE WHEN sqlc.arg(field)::text='replay' THEN re.raw_replay
+ ELSE coalesce(pt.raw_body,re.raw_body,tr.raw_body,tc.raw_arguments) END AS raw_body,
+ coalesce((SELECT min(p2.id) FROM memory.parts p2 JOIN memory.messages m2 ON m2.id=p2.message_id WHERE m2.turn_id=t.id AND p2.id>p.id),0)::bigint AS next_part_id
+ FROM memory.parts p JOIN memory.messages m ON m.id=p.message_id JOIN memory.turns t ON t.id=m.turn_id
+ LEFT JOIN memory.message_clocks cl ON cl.message_id=m.id
+ LEFT JOIN memory.scheduled_deliveries sd ON sd.message_id=m.id
+ LEFT JOIN memory.part_text pt ON pt.part_id=p.id
+ LEFT JOIN memory.part_reasoning re ON re.part_id=p.id
+ LEFT JOIN memory.part_tool_calls tc ON tc.part_id=p.id
+ LEFT JOIN memory.part_tool_results tr ON tr.part_id=p.id
+ LEFT JOIN memory.part_media pm ON pm.part_id=p.id
+ WHERE t.id=sqlc.arg(turn_id) AND t.agent_id=sqlc.arg(agent_id) AND t.completed_at IS NOT NULL AND p.id>=sqlc.arg(part_id)
+ ORDER BY p.id LIMIT 1
+)
+SELECT part_id, part_position, kind, message_position, role, created_at, instant, utc_offset_seconds, since_previous_ns,
+ call_id, tool_name, is_error, disposition, job_id, run_id, channel, chat_id, delivered_at, has_replay, next_part_id,
+ coalesce(substring(body FROM sqlc.arg(page_offset)::integer+1 FOR sqlc.arg(page_limit)::integer+1),'')::text AS source,
+ substring(raw_body FROM sqlc.arg(page_offset)::integer+1 FOR sqlc.arg(page_limit)::integer+1)::bytea AS raw_source
+FROM selected;

@@ -30,9 +30,11 @@ agent:
     embedding_batch_size: 8
     summary_provider: ollama-cloud
     summary_model: minimax-m3.1-flash
-    working_budget_bytes: 262144
-    recent_turns: 8
-    horizon_turns: 40
+    working_budget_tokens: 64000
+    context_window_fraction: 0.25
+    recent_history_fraction: 0.3333333333333333
+    max_request_bytes: 4194304
+    recent_turns: 4
     retrieval_limit: 6
     min_similarity: 0.35
   tools:

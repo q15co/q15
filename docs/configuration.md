@@ -126,9 +126,11 @@ agent:
     embedding_dimensions: 768
     summary_provider: ollama-cloud
     summary_model: minimax-m3.1-flash
-    working_budget_bytes: 262144
-    recent_turns: 8
-    horizon_turns: 40
+    working_budget_tokens: 64000
+    context_window_fraction: 0.25
+    recent_history_fraction: 0.3333333333333333
+    max_request_bytes: 4194304
+    recent_turns: 4
   tools:
     web_search:
       brave_api_key_env: BRAVE_API_KEY
@@ -287,8 +289,8 @@ Notes:
 
 - each job also chooses a context profile: `minimal` (the default) receives trusted run
   identity/timing plus the isolated scheduled task, while `agent` adds the main agent's system
-  envelope, core and working memory, skill catalog, and bounded recent conversation. Context
-  selection does not add tool capabilities beyond the job's `allowed_tools`
+  envelope, core memory, skill catalog, and bounded conversation context. Context selection does not
+  add tool capabilities beyond the job's `allowed_tools`
 
 - `schedule_runs` queries owner-scoped archived run records and exact status aggregates. It is the
   source of truth for execution counts; transcript messages and notification text are not

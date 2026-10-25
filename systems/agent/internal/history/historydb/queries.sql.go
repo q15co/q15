@@ -866,6 +866,9 @@ const readCoverage = `-- name: ReadCoverage :one
 SELECT (SELECT count(*) FROM memory.turns rt WHERE rt.agent_id=$1 AND rt.completed_at IS NOT NULL)::bigint AS turns,
  (SELECT count(*) FROM memory.turn_digests d JOIN memory.turns t ON t.id=d.turn_id WHERE t.agent_id=$1)::bigint AS digests,
  (SELECT count(*) FROM memory.digest_failures f JOIN memory.turns t ON t.id=f.turn_id WHERE t.agent_id=$1)::bigint AS digest_failures,
+ (SELECT count(*) FROM memory.chunks c JOIN memory.chunk_runs r ON r.id=c.run_id JOIN memory.parts p ON p.id=r.part_id JOIN memory.messages m ON m.id=p.message_id JOIN memory.turns t ON t.id=m.turn_id WHERE t.agent_id=$1)::bigint AS chunks,
+ (SELECT count(*) FROM memory.digest_embeddings de JOIN memory.turns t ON t.id=de.turn_id WHERE t.agent_id=$1 AND de.model_id=b.embedding_model_id)::bigint AS embedded_digests,
+ (SELECT count(*) FROM memory.chunk_embeddings ce JOIN memory.chunks c ON c.id=ce.chunk_id JOIN memory.chunk_runs r ON r.id=c.run_id JOIN memory.parts p ON p.id=r.part_id JOIN memory.messages m ON m.id=p.message_id JOIN memory.turns t ON t.id=m.turn_id WHERE t.agent_id=$1 AND ce.model_id=b.embedding_model_id)::bigint AS embedded_chunks,
  b.source_head, b.source_turns, b.verified_at, b.prepared_at, b.digest_prompt_version,
  e.provider AS embedding_provider, e.model AS embedding_model, e.dimensions
  FROM memory.agents a LEFT JOIN memory.bootstrap b ON b.agent_id=a.id
@@ -876,6 +879,9 @@ type ReadCoverageRow struct {
 	Turns               int64
 	Digests             int64
 	DigestFailures      int64
+	Chunks              int64
+	EmbeddedDigests     int64
+	EmbeddedChunks      int64
 	SourceHead          *int64
 	SourceTurns         *int64
 	VerifiedAt          pgtype.Timestamptz
@@ -893,6 +899,9 @@ func (q *Queries) ReadCoverage(ctx context.Context, agentID int64) (ReadCoverage
 		&i.Turns,
 		&i.Digests,
 		&i.DigestFailures,
+		&i.Chunks,
+		&i.EmbeddedDigests,
+		&i.EmbeddedChunks,
 		&i.SourceHead,
 		&i.SourceTurns,
 		&i.VerifiedAt,
@@ -1178,6 +1187,109 @@ func (q *Queries) ReadParts(ctx context.Context, turnIds []int64) ([]ReadPartsRo
 	return items, nil
 }
 
+const readSourcePage = `-- name: ReadSourcePage :one
+WITH selected AS (
+ SELECT p.id AS part_id, p.position AS part_position, p.kind, m.position AS message_position,
+ m.role, t.created_at, cl.instant, cl.utc_offset_seconds, cl.since_previous_ns,
+ coalesce(tc.call_id, tr.call_id, '')::text AS call_id,
+ coalesce(tc.tool_name, '')::text AS tool_name, coalesce(tr.is_error, false)::boolean AS is_error,
+ coalesce(pt.disposition,'')::text AS disposition, sd.job_id, sd.run_id, sd.channel, sd.chat_id, sd.delivered_at,
+ (re.replay IS NOT NULL OR re.raw_replay IS NOT NULL)::boolean AS has_replay,
+ CASE WHEN $3::text='replay' THEN re.replay::text
+ ELSE coalesce(pt.body, re.body, tr.body, tc.arguments::text,
+   CASE WHEN pm.part_id IS NOT NULL THEN json_build_object('media_kind',pm.media_kind,'media_ref',pm.media_ref,'data_url',pm.data_url)::text END, '') END AS body,
+ CASE WHEN $3::text='replay' THEN re.raw_replay
+ ELSE coalesce(pt.raw_body,re.raw_body,tr.raw_body,tc.raw_arguments) END AS raw_body,
+ coalesce((SELECT min(p2.id) FROM memory.parts p2 JOIN memory.messages m2 ON m2.id=p2.message_id WHERE m2.turn_id=t.id AND p2.id>p.id),0)::bigint AS next_part_id
+ FROM memory.parts p JOIN memory.messages m ON m.id=p.message_id JOIN memory.turns t ON t.id=m.turn_id
+ LEFT JOIN memory.message_clocks cl ON cl.message_id=m.id
+ LEFT JOIN memory.scheduled_deliveries sd ON sd.message_id=m.id
+ LEFT JOIN memory.part_text pt ON pt.part_id=p.id
+ LEFT JOIN memory.part_reasoning re ON re.part_id=p.id
+ LEFT JOIN memory.part_tool_calls tc ON tc.part_id=p.id
+ LEFT JOIN memory.part_tool_results tr ON tr.part_id=p.id
+ LEFT JOIN memory.part_media pm ON pm.part_id=p.id
+ WHERE t.id=$4 AND t.agent_id=$5 AND t.completed_at IS NOT NULL AND p.id>=$6
+ ORDER BY p.id LIMIT 1
+)
+SELECT part_id, part_position, kind, message_position, role, created_at, instant, utc_offset_seconds, since_previous_ns,
+ call_id, tool_name, is_error, disposition, job_id, run_id, channel, chat_id, delivered_at, has_replay, next_part_id,
+ coalesce(substring(body FROM $1::integer+1 FOR $2::integer+1),'')::text AS source,
+ substring(raw_body FROM $1::integer+1 FOR $2::integer+1)::bytea AS raw_source
+FROM selected
+`
+
+type ReadSourcePageParams struct {
+	PageOffset int32
+	PageLimit  int32
+	Field      string
+	TurnID     int64
+	AgentID    int64
+	PartID     int64
+}
+
+type ReadSourcePageRow struct {
+	PartID           int64
+	PartPosition     int32
+	Kind             MemoryPartKind
+	MessagePosition  int32
+	Role             MemoryMessageRole
+	CreatedAt        pgtype.Timestamptz
+	Instant          pgtype.Timestamptz
+	UtcOffsetSeconds *int32
+	SincePreviousNs  *int64
+	CallID           string
+	ToolName         string
+	IsError          bool
+	Disposition      string
+	JobID            *string
+	RunID            *string
+	Channel          *string
+	ChatID           *string
+	DeliveredAt      pgtype.Timestamptz
+	HasReplay        bool
+	NextPartID       int64
+	Source           string
+	RawSource        []byte
+}
+
+func (q *Queries) ReadSourcePage(ctx context.Context, arg ReadSourcePageParams) (ReadSourcePageRow, error) {
+	row := q.db.QueryRow(ctx, readSourcePage,
+		arg.PageOffset,
+		arg.PageLimit,
+		arg.Field,
+		arg.TurnID,
+		arg.AgentID,
+		arg.PartID,
+	)
+	var i ReadSourcePageRow
+	err := row.Scan(
+		&i.PartID,
+		&i.PartPosition,
+		&i.Kind,
+		&i.MessagePosition,
+		&i.Role,
+		&i.CreatedAt,
+		&i.Instant,
+		&i.UtcOffsetSeconds,
+		&i.SincePreviousNs,
+		&i.CallID,
+		&i.ToolName,
+		&i.IsError,
+		&i.Disposition,
+		&i.JobID,
+		&i.RunID,
+		&i.Channel,
+		&i.ChatID,
+		&i.DeliveredAt,
+		&i.HasReplay,
+		&i.NextPartID,
+		&i.Source,
+		&i.RawSource,
+	)
+	return i, err
+}
+
 const readTurnHeader = `-- name: ReadTurnHeader :one
 SELECT id, created_at FROM memory.turns WHERE id = $1 AND agent_id = $2 AND completed_at IS NOT NULL
 `
@@ -1216,7 +1328,12 @@ INSERT INTO memory.bootstrap (agent_id, source_fingerprint, source_head, source_
 VALUES ($1, $2, $3, $4)
 ON CONFLICT (agent_id) DO UPDATE SET source_fingerprint = EXCLUDED.source_fingerprint,
 source_head = EXCLUDED.source_head, source_turns = EXCLUDED.source_turns, verified_at = clock_timestamp(),
-prepared_at = NULL, embedding_model_id = NULL, digest_prompt_version = NULL
+prepared_at = CASE WHEN memory.bootstrap.source_fingerprint IS NOT DISTINCT FROM EXCLUDED.source_fingerprint
+  AND memory.bootstrap.source_head=EXCLUDED.source_head AND memory.bootstrap.source_turns=EXCLUDED.source_turns THEN memory.bootstrap.prepared_at END,
+embedding_model_id = CASE WHEN memory.bootstrap.source_fingerprint IS NOT DISTINCT FROM EXCLUDED.source_fingerprint
+  AND memory.bootstrap.source_head=EXCLUDED.source_head AND memory.bootstrap.source_turns=EXCLUDED.source_turns THEN memory.bootstrap.embedding_model_id END,
+digest_prompt_version = CASE WHEN memory.bootstrap.source_fingerprint IS NOT DISTINCT FROM EXCLUDED.source_fingerprint
+  AND memory.bootstrap.source_head=EXCLUDED.source_head AND memory.bootstrap.source_turns=EXCLUDED.source_turns THEN memory.bootstrap.digest_prompt_version END
 `
 
 type RecordImportParams struct {
@@ -1261,7 +1378,7 @@ WITH digest_hits AS (
   FROM memory.chunk_embeddings e JOIN memory.chunks c ON c.id=e.chunk_id
   JOIN memory.chunk_runs r ON r.id=c.run_id JOIN memory.parts p ON p.id=r.part_id
   JOIN memory.messages m ON m.id=p.message_id JOIN memory.turns t ON t.id=m.turn_id
-  WHERE t.agent_id=$3 AND t.id <> ALL($4::bigint[]) AND e.model_id=$5
+  WHERE NOT $6::boolean AND t.agent_id=$3 AND t.id <> ALL($4::bigint[]) AND e.model_id=$5
   ORDER BY e.embedding <=> $2::vector LIMIT $1
 ) SELECT kind, unit_id, turn_id, body, created_at, score FROM (SELECT kind, unit_id, turn_id, body, created_at, score FROM digest_hits UNION ALL SELECT kind, unit_id, turn_id, body, created_at, score FROM chunk_hits) hits
 ORDER BY score DESC, turn_id DESC, kind, unit_id LIMIT $1
@@ -1273,6 +1390,7 @@ type SearchDenseParams struct {
 	AgentID        int64
 	ExcludeTurnIds []int64
 	ModelID        int64
+	SummariesOnly  bool
 }
 
 type SearchDenseRow struct {
@@ -1291,6 +1409,7 @@ func (q *Queries) SearchDense(ctx context.Context, arg SearchDenseParams) ([]Sea
 		arg.AgentID,
 		arg.ExcludeTurnIds,
 		arg.ModelID,
+		arg.SummariesOnly,
 	)
 	if err != nil {
 		return nil, err
@@ -1328,7 +1447,7 @@ WITH q AS (SELECT websearch_to_tsquery('simple', $2::text) AS terms), hits AS (
     ts_rank_cd(to_tsvector('simple', c.body), q.terms)::real
   FROM memory.chunks c JOIN memory.chunk_runs r ON r.id=c.run_id JOIN memory.parts p ON p.id=r.part_id
   JOIN memory.messages m ON m.id=p.message_id JOIN memory.turns t ON t.id=m.turn_id CROSS JOIN q
-  WHERE t.agent_id=$3 AND t.id <> ALL($4::bigint[]) AND to_tsvector('simple', c.body) @@ q.terms
+  WHERE NOT $5::boolean AND t.agent_id=$3 AND t.id <> ALL($4::bigint[]) AND to_tsvector('simple', c.body) @@ q.terms
 ) SELECT kind, unit_id, turn_id, body, created_at, score FROM hits ORDER BY score DESC, turn_id DESC, kind, unit_id LIMIT $1
 `
 
@@ -1337,6 +1456,7 @@ type SearchLexicalParams struct {
 	Query          string
 	AgentID        int64
 	ExcludeTurnIds []int64
+	SummariesOnly  bool
 }
 
 type SearchLexicalRow struct {
@@ -1354,6 +1474,7 @@ func (q *Queries) SearchLexical(ctx context.Context, arg SearchLexicalParams) ([
 		arg.Query,
 		arg.AgentID,
 		arg.ExcludeTurnIds,
+		arg.SummariesOnly,
 	)
 	if err != nil {
 		return nil, err

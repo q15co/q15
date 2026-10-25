@@ -11,6 +11,11 @@ Run the gate locally:
 make verify
 ```
 
+Postgres history tests run when `Q15_TEST_POSTGRES_URL` points to a disposable database. Run
+`make test-history-postgres` to create one automatically and exercise history constraints, indexing
+and runtime integration. Ordinary `make verify` skips these database tests when that variable is
+absent; CI supplies its own Postgres service. Never point tests at an agent's memory database.
+
 If your change touches the browser UI, also run `make test-web`. A pull request that arrives green
 gets reviewed much faster than one that arrives red.
 
