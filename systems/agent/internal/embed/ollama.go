@@ -15,15 +15,23 @@ import (
 
 // OllamaEmbedder uses the native embedding API with truncation explicitly disabled.
 type OllamaEmbedder struct {
-	endpoint   string
-	model      string
-	dimensions int
-	batchSize  int
-	client     *http.Client
+	endpoint    string
+	model       string
+	dimensions  int
+	batchSize   int
+	batchTokens int
+	client      *http.Client
+}
+
+type ollamaEmbeddingOptions struct {
+	NumBatch int `json:"num_batch"`
 }
 
 // NewOllamaEmbedder binds a local model independently of library-search settings.
-func NewOllamaEmbedder(baseURL, model string, dimensions, batchSize int) (*OllamaEmbedder, error) {
+func NewOllamaEmbedder(
+	baseURL, model string,
+	dimensions, batchSize, batchTokens int,
+) (*OllamaEmbedder, error) {
 	base, err := url.Parse(baseURL)
 	if err != nil || (base.Scheme != "http" && base.Scheme != "https") || base.Host == "" ||
 		base.RawQuery != "" ||
@@ -37,12 +45,19 @@ func NewOllamaEmbedder(baseURL, model string, dimensions, batchSize int) (*Ollam
 		batchSize > 128 {
 		return nil, errors.New("invalid Ollama embedding model, dimensions or batch size")
 	}
+	if batchTokens == 0 {
+		batchTokens = 8192
+	}
+	if batchTokens < 1 || batchTokens > 65536 {
+		return nil, errors.New("Ollama embedding token batch must be between 1 and 65536")
+	}
 	return &OllamaEmbedder{
-		endpoint:   base.JoinPath("api/embed").String(),
-		model:      model,
-		dimensions: dimensions,
-		batchSize:  batchSize,
-		client:     &http.Client{Timeout: 2 * time.Minute},
+		endpoint:    base.JoinPath("api/embed").String(),
+		model:       model,
+		dimensions:  dimensions,
+		batchSize:   batchSize,
+		batchTokens: batchTokens,
+		client:      &http.Client{Timeout: 2 * time.Minute},
 	}, nil
 }
 
@@ -78,11 +93,19 @@ func (e *OllamaEmbedder) EmbedDocuments(
 
 func (e *OllamaEmbedder) embed(ctx context.Context, input []string) ([][]float32, error) {
 	body, err := json.Marshal(struct {
-		Model      string   `json:"model"`
-		Input      []string `json:"input"`
-		Dimensions int      `json:"dimensions"`
-		Truncate   bool     `json:"truncate"`
-	}{e.model, input, e.dimensions, false})
+		Model      string                 `json:"model"`
+		Input      []string               `json:"input"`
+		Dimensions int                    `json:"dimensions"`
+		Truncate   bool                   `json:"truncate"`
+		Options    ollamaEmbeddingOptions `json:"options"`
+	}{
+		Model:      e.model,
+		Input:      input,
+		Dimensions: e.dimensions,
+		Truncate:   false,
+		// Non-causal embedding models need the whole input to fit in a physical batch.
+		Options: ollamaEmbeddingOptions{NumBatch: e.batchTokens},
+	})
 	if err != nil {
 		return nil, err
 	}

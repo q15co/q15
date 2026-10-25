@@ -124,6 +124,8 @@ agent:
     embedding_base_url: http://q15-ollama:11434
     embedding_model: embeddinggemma-2:740m
     embedding_dimensions: 768
+    embedding_batch_size: 8
+    embedding_batch_tokens: 8192
     summary_provider: ollama-cloud
     summary_model: minimax-m3.1-flash
     working_budget_tokens: 64000

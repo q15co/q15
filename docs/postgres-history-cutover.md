@@ -36,6 +36,7 @@ agent:
     embedding_model: embeddinggemma-2:740m
     embedding_dimensions: 768
     embedding_batch_size: 8
+    embedding_batch_tokens: 8192
     summary_provider: ollama-cloud
     summary_model: minimax-m3.1-flash
     working_budget_tokens: 64000
@@ -48,6 +49,13 @@ agent:
     retrieval_limit: 6
     min_similarity: 0.35
 ```
+
+`embedding_batch_size` limits the number of texts sent in each embedding request.
+`embedding_batch_tokens` sets native Ollama's `num_batch` processing capacity, defaulting to 8192
+tokens (configurable from 1 to 65,536). Non-causal embedding models need each complete input to fit
+within this capacity even when the model supports a larger context window. Increase it if Ollama
+rejects an input because its physical batch is too small; larger values can use more GPU memory.
+Inputs are never silently truncated. OpenAI-compatible embedding providers ignore this setting.
 
 The input token budget is the smaller of 25 percent of the selected model's discovered context
 window and 64,000 estimated tokens. It is also capped below the context window to leave room for an

@@ -19,6 +19,7 @@ type History struct {
 	EmbeddingModel        string         `yaml:"embedding_model"`
 	EmbeddingDimensions   int            `yaml:"embedding_dimensions"`
 	EmbeddingBatchSize    int            `yaml:"embedding_batch_size"`
+	EmbeddingBatchTokens  int            `yaml:"embedding_batch_tokens"`
 	SummaryProvider       string         `yaml:"summary_provider"`
 	SummaryModel          string         `yaml:"summary_model"`
 	WorkingBudgetTokens   int            `yaml:"working_budget_tokens"`
@@ -63,6 +64,9 @@ func (c Config) ResolveHistory() (HistoryRuntime, error) {
 	}
 	if h.EmbeddingBatchSize == 0 {
 		h.EmbeddingBatchSize = 8
+	}
+	if h.EmbeddingBatchTokens == 0 {
+		h.EmbeddingBatchTokens = 8192
 	}
 	if h.SummaryModel == "" {
 		h.SummaryModel = "minimax-m3.1-flash"
@@ -147,6 +151,7 @@ func (h History) validate() error {
 	}
 	if h.EmbeddingDimensions < 0 || h.EmbeddingDimensions > 2000 || h.EmbeddingBatchSize < 0 ||
 		h.EmbeddingBatchSize > 128 ||
+		h.EmbeddingBatchTokens < 0 || h.EmbeddingBatchTokens > 65536 ||
 		h.WorkingBudgetTokens < 0 ||
 		(h.WorkingBudgetTokens > 0 && h.WorkingBudgetTokens < 1024) ||
 		h.RecentTurns < 0 ||

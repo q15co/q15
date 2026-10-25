@@ -17,6 +17,7 @@ func NewEmbedder(ctx context.Context, settings Settings) (Embedder, error) {
 			settings.Model,
 			settings.Dimensions,
 			settings.BatchSize,
+			settings.BatchTokens,
 		)
 	case ProviderGemini:
 		return NewGeminiEmbedder(
