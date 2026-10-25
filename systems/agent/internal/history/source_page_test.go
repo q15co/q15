@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/q15co/q15/systems/agent/internal/conversation"
+	"github.com/q15co/q15/systems/agent/internal/history/historydb"
 )
 
 func TestHistoryReadPagesPayloadsAndReplayWithoutLoadingWholeTurn(t *testing.T) {
@@ -99,5 +100,86 @@ func TestHistoryReadPagesPayloadsAndReplayWithoutLoadingWholeTurn(t *testing.T) 
 		if _, err := tool.Run(t.Context(), arg); err == nil {
 			t.Fatal("unbounded cursor accepted")
 		}
+	}
+}
+
+func TestSourceCursorUsesMessagePositionsRatherThanIdentities(t *testing.T) {
+	store := testStore(t)
+	id, err := store.ReserveTurnSeq(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := store.pool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(t.Context()) }()
+	q := historydb.New(tx)
+	for _, fixture := range []struct {
+		position int32
+		role     historydb.MemoryMessageRole
+		body     string
+	}{
+		{1, historydb.MemoryMessageRoleAssistant, "assistant second"},
+		{0, historydb.MemoryMessageRoleUser, "user first"},
+	} {
+		messageID, err := q.InsertMessage(
+			t.Context(),
+			historydb.InsertMessageParams{
+				TurnID:   id,
+				Position: fixture.position,
+				Role:     fixture.role,
+			},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		partID, err := q.InsertPart(
+			t.Context(),
+			historydb.InsertPartParams{
+				MessageID: messageID,
+				Position:  0,
+				Kind:      historydb.MemoryPartKindText,
+			},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := q.InsertText(t.Context(), historydb.InsertTextParams{PartID: partID, Body: &fixture.body}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := q.CompleteTurn(t.Context(), historydb.CompleteTurnParams{ID: id, AgentID: store.agentID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	reader := historydb.New(store.pool)
+	first, err := reader.ReadSourcePage(
+		t.Context(),
+		historydb.ReadSourcePageParams{
+			TurnID:    id,
+			AgentID:   store.agentID,
+			Field:     "body",
+			PageLimit: 4096,
+		},
+	)
+	if err != nil || first.Source != "user first" {
+		t.Fatalf("first source %+v %v", first, err)
+	}
+	second, err := reader.ReadSourcePage(
+		t.Context(),
+		historydb.ReadSourcePageParams{
+			TurnID:    id,
+			AgentID:   store.agentID,
+			PartID:    first.NextPartID,
+			Field:     "body",
+			PageLimit: 4096,
+		},
+	)
+	if err != nil || second.Source != "assistant second" || second.NextPartID != 0 ||
+		second.PartID >= first.PartID {
+		t.Fatalf("second source %+v %v", second, err)
 	}
 }

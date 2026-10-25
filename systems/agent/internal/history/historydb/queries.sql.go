@@ -1200,7 +1200,7 @@ WITH selected AS (
    CASE WHEN pm.part_id IS NOT NULL THEN json_build_object('media_kind',pm.media_kind,'media_ref',pm.media_ref,'data_url',pm.data_url)::text END, '') END AS body,
  CASE WHEN $3::text='replay' THEN re.raw_replay
  ELSE coalesce(pt.raw_body,re.raw_body,tr.raw_body,tc.raw_arguments) END AS raw_body,
- coalesce((SELECT min(p2.id) FROM memory.parts p2 JOIN memory.messages m2 ON m2.id=p2.message_id WHERE m2.turn_id=t.id AND p2.id>p.id),0)::bigint AS next_part_id
+ coalesce((SELECT p2.id FROM memory.parts p2 JOIN memory.messages m2 ON m2.id=p2.message_id WHERE m2.turn_id=t.id AND (m2.position,p2.position)>(m.position,p.position) ORDER BY m2.position,p2.position LIMIT 1),0)::bigint AS next_part_id
  FROM memory.parts p JOIN memory.messages m ON m.id=p.message_id JOIN memory.turns t ON t.id=m.turn_id
  LEFT JOIN memory.message_clocks cl ON cl.message_id=m.id
  LEFT JOIN memory.scheduled_deliveries sd ON sd.message_id=m.id
@@ -1209,8 +1209,8 @@ WITH selected AS (
  LEFT JOIN memory.part_tool_calls tc ON tc.part_id=p.id
  LEFT JOIN memory.part_tool_results tr ON tr.part_id=p.id
  LEFT JOIN memory.part_media pm ON pm.part_id=p.id
- WHERE t.id=$4 AND t.agent_id=$5 AND t.completed_at IS NOT NULL AND p.id>=$6
- ORDER BY p.id LIMIT 1
+ WHERE t.id=$4 AND t.agent_id=$5 AND t.completed_at IS NOT NULL AND ($6::bigint=0 OR (m.position,p.position)>=(SELECT cm.position,cp.position FROM memory.parts cp JOIN memory.messages cm ON cm.id=cp.message_id WHERE cp.id=$6 AND cm.turn_id=t.id))
+ ORDER BY m.position,p.position LIMIT 1
 )
 SELECT part_id, part_position, kind, message_position, role, created_at, instant, utc_offset_seconds, since_previous_ns,
  call_id, tool_name, is_error, disposition, job_id, run_id, channel, chat_id, delivered_at, has_replay, next_part_id,
