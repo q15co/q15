@@ -8,10 +8,13 @@ COPY go.work go.work.sum ./
 COPY libs ./libs
 COPY systems ./systems
 
+ARG Q15_BUILD_COMMIT=unknown
+ARG Q15_BUILD_MODIFIED=unknown
+
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     cd /src/systems/agent && \
-    go build -o /out/q15-agent .
+    go build -ldflags "-X github.com/q15co/q15/systems/agent/internal/buildinfo.commit=${Q15_BUILD_COMMIT} -X github.com/q15co/q15/systems/agent/internal/buildinfo.modified=${Q15_BUILD_MODIFIED}" -o /out/q15-agent .
 
 FROM debian:bookworm-slim
 

@@ -14,6 +14,7 @@ import (
 
 	"github.com/q15co/q15/libs/exec-contract/execpb"
 	"github.com/q15co/q15/systems/agent/internal/agent"
+	"github.com/q15co/q15/systems/agent/internal/buildinfo"
 	"github.com/q15co/q15/systems/agent/internal/bus"
 	channelport "github.com/q15co/q15/systems/agent/internal/channel"
 	"github.com/q15co/q15/systems/agent/internal/channel/bridge"
@@ -51,6 +52,13 @@ type runtimeEnvironmentInfo struct {
 // then hands the assembled runtime to runRuntime, which marks it ready and runs
 // its workers until the context is canceled or one fails.
 func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.Registry) error {
+	build := buildinfo.Current()
+	log.Printf(
+		"q15: runtime event=build git_commit=%q source_modified=%q provenance=%q",
+		build.Commit,
+		build.Modified,
+		build.Source,
+	)
 	if err := clearRuntimeReady(runtimeReadyPath); err != nil {
 		return fmt.Errorf("clear stale runtime readiness: %w", err)
 	}

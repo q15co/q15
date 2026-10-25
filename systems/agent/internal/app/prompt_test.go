@@ -8,6 +8,7 @@ import (
 
 	"github.com/q15co/q15/libs/exec-contract/execpb"
 	"github.com/q15co/q15/systems/agent/internal/agent"
+	"github.com/q15co/q15/systems/agent/internal/buildinfo"
 	"github.com/q15co/q15/systems/agent/internal/bus"
 	"github.com/q15co/q15/systems/agent/internal/modelcatalog"
 	"github.com/q15co/q15/systems/agent/internal/turnctx"
@@ -47,6 +48,7 @@ func TestComposeSystemPromptIncludesRuntimeAndExecGuidance(t *testing.T) {
 	})
 
 	for _, want := range []string{
+		"<agent_build ",
 		"<runtime_environment>",
 		"- Runtime local timezone for user-facing dates and times: UTC+2 (UTC+02:00).",
 		"- Unless the user explicitly asks for another timezone, interpret and present dates and times in this runtime local timezone rather than UTC.",
@@ -82,6 +84,25 @@ func TestComposeSystemPromptIncludesRuntimeAndExecGuidance(t *testing.T) {
 
 	if strings.Index(prompt, "<runtime_environment>") < strings.Index(prompt, "Base prompt") {
 		t.Fatalf("runtime section should appear after base prompt:\n%s", prompt)
+	}
+}
+
+func TestAgentBuildPromptIdentifiesExecutableAndUnknownProvenance(t *testing.T) {
+	commit := strings.Repeat("a", 40)
+	known := renderAgentBuildPrompt(
+		buildinfo.Info{Commit: commit, Modified: "true", Source: "linked"},
+	)
+	for _, want := range []string{`git_commit="` + commit + `"`, `source_modified="true"`, `provenance="linked"`, "running q15-agent executable"} {
+		if !strings.Contains(known, want) {
+			t.Fatalf("build prompt missing %q: %s", want, known)
+		}
+	}
+	unknown := renderAgentBuildPrompt(
+		buildinfo.Info{Commit: "unknown", Modified: "unknown", Source: "unknown"},
+	)
+	if !strings.Contains(unknown, `git_commit="unknown"`) ||
+		!strings.Contains(unknown, "provenance was unavailable") {
+		t.Fatalf("unversioned build implied an exact revision: %s", unknown)
 	}
 }
 

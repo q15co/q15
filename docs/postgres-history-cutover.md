@@ -69,6 +69,20 @@ and copied tool evidence is shortened before dispatch. Original stored messages 
 Keyword-only fallback matches are labelled and evicted before semantic matches and continuity. The
 complete fit is repeated for each actual model attempt and tool step.
 
+Each request includes an `agent_build` tag identifying the running executable's Git commit and
+whether its source contained local changes. `make build-agent` embeds these values automatically;
+the image publishing workflow supplies them to the Docker build. Custom Docker builds can set
+`Q15_BUILD_COMMIT` and `Q15_BUILD_MODIFIED` as build arguments. Unavailable provenance is shown as
+`unknown`; the runtime never infers its version from the workspace checkout or conversation history.
+
+A `context_window` tag reports the actual attempt's model reference, estimated input tokens, working
+input budget, remaining budget, discovered model capacity, output reserve and safety reserve. It is
+rebuilt after each tool step and model change. The full request, including tool definitions and
+these counters, remains inside the configured limits. History labels also report token estimates for
+the shown turn content. Counts use the same conservative estimator as the fitter; provider-reported
+usage may differ. Unknown model capacity and reserves are labelled explicitly. Historical tags
+describe their original requests.
+
 `history_search` still searches original messages and summaries by meaning and matching words.
 `history_read` starts with the user's message, the final assistant answer and a paginated list of
 supporting tool results. Start with `turn_id`; copy returned `read`, `next` or `next_evidence`

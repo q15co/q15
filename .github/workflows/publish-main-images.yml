@@ -289,6 +289,9 @@ jobs:
           context: .
           file: ${{ matrix.dockerfile }}
           platforms: ${{ matrix.platform }}
+          build-args: |
+            Q15_BUILD_COMMIT=${{ github.sha }}
+            Q15_BUILD_MODIFIED=false
           labels: ${{ steps.meta.outputs.labels }}
           outputs: type=image,name=${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
           provenance: false

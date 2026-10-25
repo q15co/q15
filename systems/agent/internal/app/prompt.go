@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
+	"github.com/q15co/q15/systems/agent/internal/buildinfo"
 	"github.com/q15co/q15/systems/agent/internal/bus"
 	"github.com/q15co/q15/systems/agent/internal/channel/telegram"
 	"github.com/q15co/q15/systems/agent/internal/modelcatalog"
@@ -30,6 +31,7 @@ func composeSystemPrompt(
 	}
 
 	parts := []string{base}
+	parts = append(parts, renderAgentBuildPrompt(buildinfo.Current()))
 	if runtimeSection := renderRuntimeEnvironmentPrompt(agentName, info); runtimeSection != "" {
 		parts = append(parts, runtimeSection)
 	}
@@ -37,6 +39,12 @@ func composeSystemPrompt(
 		parts = append(parts, toolAdviceSection)
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+func renderAgentBuildPrompt(info buildinfo.Info) string {
+	return agent.RenderPromptElement("agent_build", map[string]string{
+		"git_commit": info.Commit, "source_modified": info.Modified, "provenance": info.Source,
+	}, "This identifies the running q15-agent executable. Use this commit when investigating harness behavior. source_modified=true includes local source changes; unknown means build provenance was unavailable. Historical build and context tags describe the requests that recorded them.")
 }
 
 // renderCurrentModelPrompt renders the per-turn current-model section: the live

@@ -7,6 +7,8 @@ BIN_DIR ?= bin
 COMPOSE_FILE ?= docker-compose.yml
 COMPOSE_PROJECT_NAME ?= q15-local
 AGENT_MOD_DIR ?= systems/agent
+Q15_BUILD_COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || printf unknown)
+Q15_BUILD_MODIFIED ?= $(shell if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then if test -n "$$(git status --porcelain)"; then printf true; else printf false; fi; else printf unknown; fi)
 EXEC_MOD_DIR ?= systems/exec
 PROXY_MOD_DIR ?= systems/proxy
 WEB_MOD_DIR ?= systems/web
@@ -32,7 +34,7 @@ build: build-agent build-q15 build-exec build-proxy build-web
 
 build-agent:
 	@mkdir -p $(BIN_DIR)
-	cd $(AGENT_MOD_DIR) && $(GO) build -o ../../$(BIN_DIR)/q15-agent .
+	cd $(AGENT_MOD_DIR) && $(GO) build -ldflags '-X github.com/q15co/q15/systems/agent/internal/buildinfo.commit=$(Q15_BUILD_COMMIT) -X github.com/q15co/q15/systems/agent/internal/buildinfo.modified=$(Q15_BUILD_MODIFIED)' -o ../../$(BIN_DIR)/q15-agent .
 
 build-q15:
 	@mkdir -p $(BIN_DIR)

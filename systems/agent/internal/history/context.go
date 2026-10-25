@@ -89,6 +89,7 @@ type contextGroup struct {
 
 type contextSnapshot struct {
 	groups          []contextGroup
+	system          []conversation.Message
 	input           []conversation.Message
 	systemCount     int
 	settings        ContextSettings
@@ -108,6 +109,7 @@ func (s *ContextService) PrepareContext(
 		return agent.PreparedContext{}, err
 	}
 	snapshot := &contextSnapshot{
+		system:      conversation.CloneMessages(system),
 		systemCount: len(system),
 		input:       conversation.CloneMessages(input),
 		settings:    s.settings,
@@ -262,7 +264,10 @@ func (s *contextSnapshot) fit(
 		return nil, errors.New("invalid active-run context boundary")
 	}
 	groups := slices.Clone(s.groups)
-	system := conversation.CloneMessages(messages[:s.systemCount])
+	system := s.system
+	if system == nil {
+		system = messages[:s.systemCount]
+	}
 	active := append(
 		conversation.CloneMessages(s.input),
 		conversation.CloneMessages(messages[generatedStart:])...)
@@ -275,9 +280,13 @@ func (s *contextSnapshot) fit(
 	activeToolCap := 8192
 	compact := false
 	materialize := func() ([]conversation.Message, int, int, error) {
+		history, err := renderGroups(groups, toolCap, reasoningCap)
+		if err != nil {
+			return nil, 0, 0, err
+		}
 		result := append(
 			conversation.CloneMessages(system),
-			renderGroups(groups, toolCap, reasoningCap)...)
+			history...)
 		current := capParts(active, activeToolCap, reasoningCap)
 		if compact {
 			compactActiveEvidence(current)
@@ -290,7 +299,11 @@ func (s *contextSnapshot) fit(
 		if size > maxBytes {
 			return result, size, limit + 1, nil
 		}
-		tokens, err := agent.RequestEstimatedTokens(result, tools)
+		result, tokens, err := withContextWindow(result, tools, model, limit)
+		if err != nil {
+			return nil, 0, 0, err
+		}
+		size, err = agent.RequestEncodedBytes(result, tools)
 		return result, size, tokens, err
 	}
 	result, size, tokens, err := materialize()
@@ -298,7 +311,7 @@ func (s *contextSnapshot) fit(
 		return nil, err
 	}
 	over := func() bool { return tokens > limit || size > maxBytes }
-	recentAllowance, err := s.recentAllowance(system, active, groups, tools, limit)
+	recentAllowance, err := s.recentAllowance(system, active, groups, tools, model, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -309,7 +322,7 @@ func (s *contextSnapshot) fit(
 				recent = append(recent, group)
 			}
 		}
-		return historyTokens(renderGroups(recent, toolCap, reasoningCap))
+		return renderedHistoryTokens(recent, toolCap, reasoningCap)
 	}
 	for n := range groups {
 		recentTokens, err := recentSize()
@@ -405,6 +418,7 @@ func (s *contextSnapshot) recentAllowance(
 	system, active []conversation.Message,
 	groups []contextGroup,
 	tools []agent.ToolDefinition,
+	model agent.ModelContext,
 	limit int,
 ) (int, error) {
 	base := append(conversation.CloneMessages(system), capParts(active, 8192, 2048)...)
@@ -419,7 +433,7 @@ func (s *contextSnapshot) recentAllowance(
 	if size > maxBytes {
 		return 0, nil
 	}
-	used, err := agent.RequestEstimatedTokens(base, tools)
+	_, used, err := withContextWindow(base, tools, model, limit)
 	if err != nil {
 		return 0, err
 	}
@@ -430,7 +444,7 @@ func (s *contextSnapshot) recentAllowance(
 			retrieved = append(retrieved, group)
 		}
 	}
-	retrievalTokens, err := historyTokens(renderGroups(retrieved, 8192, 2048))
+	retrievalTokens, err := renderedHistoryTokens(retrieved, 8192, 2048)
 	fraction := s.settings.RecentHistoryFraction
 	if fraction == 0 {
 		fraction = 1.0 / 3
@@ -484,10 +498,7 @@ func (s *contextSnapshot) workingLimit(model agent.ModelContext) int {
 	if model.MaxContextTokens <= 0 {
 		return min(ceiling, 16000)
 	}
-	replyReserve := min(8192, model.MaxContextTokens/4)
-	if model.MaxOutputTokens > 0 {
-		replyReserve = min(replyReserve, model.MaxOutputTokens)
-	}
+	replyReserve := outputReserve(model)
 	safetyReserve := max(1, model.MaxContextTokens/20)
 	return max(
 		1,
@@ -499,7 +510,10 @@ func (s *contextSnapshot) workingLimit(model agent.ModelContext) int {
 	)
 }
 
-func renderGroups(groups []contextGroup, toolCap, reasoningCap int) []conversation.Message {
+func renderGroups(
+	groups []contextGroup,
+	toolCap, reasoningCap int,
+) ([]conversation.Message, error) {
 	var result []conversation.Message
 	for _, group := range selectedGroups(groups) {
 		label := fmt.Sprintf(
@@ -516,6 +530,11 @@ func renderGroups(groups []contextGroup, toolCap, reasoningCap int) []conversati
 		if group.kind == "recent" {
 			messages := capParts(group.messages, toolCap, reasoningCap)
 			if len(messages) > 0 {
+				tokens, err := historyTokens(messages)
+				if err != nil {
+					return nil, err
+				}
+				label += fmt.Sprintf(" [estimated_tokens=%d]", tokens)
 				prependLabel(&messages[0], label)
 				result = append(result, messages...)
 			}
@@ -529,14 +548,29 @@ func renderGroups(groups []contextGroup, toolCap, reasoningCap int) []conversati
 		if group.kind == "gap" {
 			bound = 1024
 		}
+		body = boundedText(body, bound)
+		tokens, err := historyTokens([]conversation.Message{conversation.UserMessage(body)})
+		if err != nil {
+			return nil, err
+		}
 		result = append(
 			result,
 			conversation.UserMessage(
-				label+"\n<historical_context>\n"+boundedText(body, bound)+"\n</historical_context>",
+				label+"\n"+agent.RenderPromptElement("historical_context", map[string]string{
+					"turn_id": fmt.Sprint(group.id), "estimated_tokens": fmt.Sprint(tokens),
+				}, body),
 			),
 		)
 	}
-	return result
+	return result, nil
+}
+
+func renderedHistoryTokens(groups []contextGroup, toolCap, reasoningCap int) (int, error) {
+	messages, err := renderGroups(groups, toolCap, reasoningCap)
+	if err != nil {
+		return 0, err
+	}
+	return historyTokens(messages)
 }
 
 func groupPriority(kind string) int {
