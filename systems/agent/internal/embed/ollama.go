@@ -25,6 +25,7 @@ type OllamaEmbedder struct {
 
 type ollamaEmbeddingOptions struct {
 	NumBatch int `json:"num_batch"`
+	NumCtx   int `json:"num_ctx"`
 }
 
 // NewOllamaEmbedder binds a local model independently of library-search settings.
@@ -103,8 +104,8 @@ func (e *OllamaEmbedder) embed(ctx context.Context, input []string) ([][]float32
 		Input:      input,
 		Dimensions: e.dimensions,
 		Truncate:   false,
-		// Non-causal embedding models need the whole input to fit in a physical batch.
-		Options: ollamaEmbeddingOptions{NumBatch: e.batchTokens},
+		// Non-causal inputs must fit both the physical batch and the active context.
+		Options: ollamaEmbeddingOptions{NumBatch: e.batchTokens, NumCtx: e.batchTokens},
 	})
 	if err != nil {
 		return nil, err

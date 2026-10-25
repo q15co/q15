@@ -20,6 +20,7 @@ func TestOllamaEmbeddingsNeverSilentlyTruncate(t *testing.T) {
 			Truncate   *bool    `json:"truncate"`
 			Options    struct {
 				NumBatch int `json:"num_batch"`
+				NumCtx   int `json:"num_ctx"`
 			} `json:"options"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -30,6 +31,7 @@ func TestOllamaEmbeddingsNeverSilentlyTruncate(t *testing.T) {
 			body.Model != "embeddinggemma-2:740m" ||
 			body.Dimensions != 3 ||
 			body.Options.NumBatch != 8192 ||
+			body.Options.NumCtx != 8192 ||
 			len(body.Input) > 2 {
 			t.Errorf("invalid native embedding request: %+v", body)
 		}
@@ -79,6 +81,7 @@ func TestOllamaEmbeddingTokenBatchOverride(t *testing.T) {
 			Truncate *bool    `json:"truncate"`
 			Options  struct {
 				NumBatch int `json:"num_batch"`
+				NumCtx   int `json:"num_ctx"`
 			} `json:"options"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -88,6 +91,11 @@ func TestOllamaEmbeddingTokenBatchOverride(t *testing.T) {
 		}
 		if body.Options.NumBatch != 16384 {
 			w.WriteHeader(http.StatusRequestEntityTooLarge)
+			return
+		}
+		if body.Options.NumCtx != 16384 {
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(w, `{"error":"the input length exceeds the context length"}`)
 			return
 		}
 		if len(body.Input) != 1 || body.Input[0] != source || body.Truncate == nil ||
