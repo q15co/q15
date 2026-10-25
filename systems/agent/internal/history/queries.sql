@@ -13,6 +13,11 @@ WHERE id = $1 AND agent_id = $2 AND completed_at IS NULL;
 SELECT id, agent_id, created_at, completed_at FROM memory.turns
 WHERE id = $1 AND agent_id = $2 FOR UPDATE;
 
+-- Neighboring summaries need foreign-key key-share locks on this immutable turn.
+-- name: LockDigestTurn :one
+SELECT id, agent_id, created_at, completed_at FROM memory.turns
+WHERE id = $1 AND agent_id = $2 FOR NO KEY UPDATE;
+
 -- name: InsertImportedTurn :execrows
 INSERT INTO memory.turns (id, agent_id, created_at) OVERRIDING SYSTEM VALUE VALUES ($1, $2, $3)
 ON CONFLICT (id) DO NOTHING;

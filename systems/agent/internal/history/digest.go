@@ -149,7 +149,7 @@ func (i *Indexer) saveDigest(
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 	q := historydb.New(tx)
-	if _, err := q.LockTurn(ctx, historydb.LockTurnParams{ID: id, AgentID: i.store.agentID}); err != nil {
+	if _, err := q.LockDigestTurn(ctx, historydb.LockDigestTurnParams{ID: id, AgentID: i.store.agentID}); err != nil {
 		return err
 	}
 	prior, err := q.ReadDigest(ctx, id)

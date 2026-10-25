@@ -280,6 +280,36 @@ func TestChunkTextKeepsUTF8AndBoundedSource(t *testing.T) {
 	}
 }
 
+func TestDigestContextCanReferenceTurnBeingSummarized(t *testing.T) {
+	store := testStore(t)
+	earlier := appendTestTurn(t, store, "Earlier work.")
+	later := appendTestTurn(t, store, "Following work.")
+	blocker, err := store.pool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = blocker.Rollback(t.Context()) }()
+	if _, err := historydb.New(blocker).LockDigestTurn(t.Context(), historydb.LockDigestTurnParams{ID: earlier, AgentID: store.agentID}); err != nil {
+		t.Fatal(err)
+	}
+	indexer := &Indexer{store: store}
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	if err := indexer.saveDigest(ctx, later, []conversation.Turn{{Seq: earlier}}, [32]byte{}, DigestResult{Body: "Following summary.", Provider: "fixture", Model: "concurrent"}); err != nil {
+		t.Fatalf("summary provenance waited for another summary's turn lock: %v", err)
+	}
+	var contextID int64
+	if err := store.pool.QueryRow(t.Context(), "SELECT context_turn_id FROM memory.digest_context WHERE digest_turn_id=$1", later).Scan(&contextID); err != nil ||
+		contextID != earlier {
+		t.Fatalf("summary provenance missing: %d %v", contextID, err)
+	}
+	competing, stop := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer stop()
+	if err := indexer.saveDigest(competing, earlier, nil, [32]byte{}, DigestResult{Body: "Competing summary.", Provider: "fixture", Model: "concurrent"}); err == nil {
+		t.Fatal("another writer acquired the same summary's turn lock")
+	}
+}
+
 type wideEmbedder struct{ dimensions int }
 
 func (e wideEmbedder) EmbedQuery(context.Context, string) ([]float32, error) {

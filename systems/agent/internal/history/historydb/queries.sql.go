@@ -608,6 +608,29 @@ func (q *Queries) LockChunkPart(ctx context.Context, id int64) (LockChunkPartRow
 	return i, err
 }
 
+const lockDigestTurn = `-- name: LockDigestTurn :one
+SELECT id, agent_id, created_at, completed_at FROM memory.turns
+WHERE id = $1 AND agent_id = $2 FOR NO KEY UPDATE
+`
+
+type LockDigestTurnParams struct {
+	ID      int64
+	AgentID int64
+}
+
+// Neighboring summaries need foreign-key key-share locks on this immutable turn.
+func (q *Queries) LockDigestTurn(ctx context.Context, arg LockDigestTurnParams) (MemoryTurn, error) {
+	row := q.db.QueryRow(ctx, lockDigestTurn, arg.ID, arg.AgentID)
+	var i MemoryTurn
+	err := row.Scan(
+		&i.ID,
+		&i.AgentID,
+		&i.CreatedAt,
+		&i.CompletedAt,
+	)
+	return i, err
+}
+
 const lockTurn = `-- name: LockTurn :one
 SELECT id, agent_id, created_at, completed_at FROM memory.turns
 WHERE id = $1 AND agent_id = $2 FOR UPDATE
