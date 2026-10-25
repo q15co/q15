@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -17,6 +18,9 @@ func TestOllamaEmbeddingsNeverSilentlyTruncate(t *testing.T) {
 			Input      []string `json:"input"`
 			Dimensions int      `json:"dimensions"`
 			Truncate   *bool    `json:"truncate"`
+			Options    struct {
+				NumBatch int `json:"num_batch"`
+			} `json:"options"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Error(err)
@@ -25,6 +29,7 @@ func TestOllamaEmbeddingsNeverSilentlyTruncate(t *testing.T) {
 		if r.URL.Path != "/api/embed" || body.Truncate == nil || *body.Truncate ||
 			body.Model != "embeddinggemma-2:740m" ||
 			body.Dimensions != 3 ||
+			body.Options.NumBatch != 8192 ||
 			len(body.Input) > 2 {
 			t.Errorf("invalid native embedding request: %+v", body)
 		}
@@ -37,7 +42,7 @@ func TestOllamaEmbeddingsNeverSilentlyTruncate(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	embedder, err := NewOllamaEmbedder(server.URL, "embeddinggemma-2:740m", 3, 2)
+	embedder, err := NewOllamaEmbedder(server.URL, "embeddinggemma-2:740m", 3, 2, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,12 +61,50 @@ func TestOllamaEmbeddingFailureDoesNotExposeSource(t *testing.T) {
 		fmt.Fprint(w, "private source echoed by provider")
 	}))
 	defer server.Close()
-	embedder, err := NewOllamaEmbedder(server.URL, "fixture", 3, 1)
+	embedder, err := NewOllamaEmbedder(server.URL, "fixture", 3, 1, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, err = embedder.EmbedQuery(t.Context(), "private source")
 	if err == nil || err.Error() != "ollama embedding endpoint returned HTTP 400" {
 		t.Fatalf("unexpected safe failure: %v", err)
+	}
+}
+
+func TestOllamaEmbeddingTokenBatchOverride(t *testing.T) {
+	source := strings.Repeat("0x1234 ", 4096)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Input    []string `json:"input"`
+			Truncate *bool    `json:"truncate"`
+			Options  struct {
+				NumBatch int `json:"num_batch"`
+			} `json:"options"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if body.Options.NumBatch != 16384 {
+			w.WriteHeader(http.StatusRequestEntityTooLarge)
+			return
+		}
+		if len(body.Input) != 1 || body.Input[0] != source || body.Truncate == nil ||
+			*body.Truncate {
+			t.Error("source changed or truncation enabled")
+		}
+		fmt.Fprint(w, `{"embeddings":[[1,0,0]]}`)
+	}))
+	defer server.Close()
+	embedder, err := NewEmbedder(t.Context(), Settings{
+		Provider: ProviderOllama, BaseURL: server.URL, Model: "fixture",
+		Dimensions: 3, BatchSize: 1, BatchTokens: 16384,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := embedder.EmbedQuery(t.Context(), source); err != nil {
+		t.Fatal(err)
 	}
 }

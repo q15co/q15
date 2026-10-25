@@ -27,16 +27,18 @@ func TestHistoryDefaultsAndIndependentModelBinding(t *testing.T) {
 	if h.SummaryProvider != "cloud" || h.SummaryModel != "minimax-m3.1-flash" ||
 		h.EmbeddingModel != "embeddinggemma-2:740m" ||
 		h.EmbeddingProvider != "ollama" ||
+		h.EmbeddingBatchTokens != 8192 ||
 		h.DatabaseURL == "" ||
 		h.WorkingBudgetTokens != 64000 || h.ContextWindowFraction != 0.25 || h.RecentTurns != 4 {
 		t.Fatal("history defaults or explicit binding differ")
 	}
 	cfg.Agent.History.ModelBudgetTokens = map[string]int{"cloud/small": 16000}
 	cfg.Agent.History.EmbeddingProvider = "openai"
+	cfg.Agent.History.EmbeddingBatchTokens = 16384
 	cfg.Agent.History.EmbeddingBaseURL = "http://tei:80"
 	h, err = cfg.ResolveHistory()
 	if err != nil || h.ModelBudgetTokens["cloud/small"] != 16000 ||
-		h.EmbeddingProvider != "openai" {
+		h.EmbeddingProvider != "openai" || h.EmbeddingBatchTokens != 16384 {
 		t.Fatal("history overrides failed", err)
 	}
 }
@@ -104,6 +106,7 @@ func TestHistoryRejectsInvalidBudgetPolicy(t *testing.T) {
 		{ContextWindowFraction: -0.1}, {ContextWindowFraction: 1.1}, {ContextWindowFraction: math.NaN()},
 		{RecentHistoryFraction: math.Inf(1)}, {RecentHistoryFraction: 1.1},
 		{WorkingBudgetTokens: 512}, {RecentTurns: 33}, {MaxRequestBytes: 512},
+		{EmbeddingBatchTokens: -1}, {EmbeddingBatchTokens: 65537},
 	} {
 		cfg := Config{Agent: &Agent{Name: "fixture", History: bad}}
 		if _, err := cfg.ResolveHistory(); err == nil {

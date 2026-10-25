@@ -615,12 +615,13 @@ func newHistoryIndexer(
 	embedder, err := embed.NewEmbedder(
 		ctx,
 		embed.Settings{
-			Provider:   settings.EmbeddingProvider,
-			BaseURL:    settings.EmbeddingBaseURL,
-			APIKey:     settings.EmbeddingAPIKey,
-			Model:      settings.EmbeddingModel,
-			Dimensions: settings.EmbeddingDimensions,
-			BatchSize:  settings.EmbeddingBatchSize,
+			Provider:    settings.EmbeddingProvider,
+			BaseURL:     settings.EmbeddingBaseURL,
+			APIKey:      settings.EmbeddingAPIKey,
+			Model:       settings.EmbeddingModel,
+			Dimensions:  settings.EmbeddingDimensions,
+			BatchSize:   settings.EmbeddingBatchSize,
+			BatchTokens: settings.EmbeddingBatchTokens,
 		},
 	)
 	if err != nil {
