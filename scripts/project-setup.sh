@@ -36,6 +36,7 @@ required_tools=(
 	deadnix
 	statix
 	mdformat
+	sqlfluff
 	markdownlint
 )
 
@@ -270,9 +271,11 @@ install_python_env() {
 	"${TOOLS_PYTHON_DIR}/bin/python" -m pip install --quiet \
 		"mdformat==${PYTHON_MDFORMAT_VERSION}" \
 		"mdformat-gfm==${PYTHON_MDFORMAT_GFM_VERSION}" \
-		"mdformat-frontmatter==${PYTHON_MDFORMAT_FRONTMATTER_VERSION}"
+		"mdformat-frontmatter==${PYTHON_MDFORMAT_FRONTMATTER_VERSION}" \
+		"sqlfluff==${PYTHON_SQLFLUFF_VERSION}"
 
 	ln -snf ../python/bin/mdformat "${TOOLS_BIN_DIR}/mdformat"
+	ln -snf ../python/bin/sqlfluff "${TOOLS_BIN_DIR}/sqlfluff"
 }
 
 install_node_env() {
@@ -319,6 +322,21 @@ if manifest_is_current && have_expected_tools; then
 fi
 
 log "installing repo-local tools into ${TOOLS_DIR}"
+
+# Python-only changes can reuse the existing Go, Rust and browser toolchains.
+if [[ -f ${TOOLS_MANIFEST_STAMP} ]] && diff -q \
+	<(sed -E '/^(TOOLS_MANIFEST_VERSION|PYTHON_[A-Z_]+)=/d; /^export PYTHON_[A-Z_]+$/d; /^[[:space:]]*$/d' "${TOOLS_MANIFEST_STAMP}") \
+	<({
+		printf 'GO_REQUIRED_SERIES=%s\n' "$(go_required_series)"
+		cat "${VERSIONS_FILE}"
+	} | sed -E '/^(TOOLS_MANIFEST_VERSION|PYTHON_[A-Z_]+)=/d; /^export PYTHON_[A-Z_]+$/d; /^[[:space:]]*$/d') >/dev/null; then
+	install_python_env
+	if have_expected_tools; then
+		write_manifest_stamp
+		log "repo-local toolchain is ready"
+		exit 0
+	fi
+fi
 
 # Adding browser tooling does not require rebuilding unchanged Go/Rust tools.
 if [[ -f ${TOOLS_MANIFEST_STAMP} ]] && diff -q \

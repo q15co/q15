@@ -50,6 +50,13 @@ You keep the copyright to your work; contributing does not transfer it.
 ## Style
 
 - Go: match the surrounding code. `make fmt` and `make lint` are the arbiter, not taste.
+- SQL: the pinned SQLFluff formatter and linter use the Postgres dialect, a 100-character line
+  limit, uppercase keywords and lowercase identifiers, functions and types. Use
+  `make fmt FILES='path/to/query.sql'` and `make lint-changed FILES='path/to/query.sql'`. Write sqlc
+  named parameters as `sqlc.arg('parameter_name')`. Keep result columns in their intended order;
+  that order also defines generated Go row types. After changing history queries, run
+  `make memory-generate`. `make verify` checks all tracked SQL files and generated code;
+  `make test-sql` exercises the formatter and linter through the same public targets.
 - Documentation: plain language, second person, and no claim without a measurement behind it.
 - Tests: a fix is a fix when a test fails without it.
 

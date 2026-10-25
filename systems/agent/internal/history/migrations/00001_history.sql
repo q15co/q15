@@ -4,7 +4,9 @@ CREATE EXTENSION IF NOT EXISTS vector;
 
 CREATE TYPE memory.message_role AS ENUM ('user', 'assistant', 'tool');
 CREATE TYPE memory.part_kind AS ENUM ('text', 'reasoning', 'tool_call', 'tool_result', 'media');
-CREATE TYPE memory.media_kind AS ENUM ('image', 'audio', 'video', 'video_note', 'document', 'sticker', 'animation');
+CREATE TYPE memory.media_kind AS ENUM (
+    'image', 'audio', 'video', 'video_note', 'document', 'sticker', 'animation'
+);
 
 CREATE TABLE memory.agents (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -146,7 +148,9 @@ CREATE TABLE memory.digest_context (
     CHECK (context_turn_id IS NULL OR context_turn_id < digest_turn_id)
 );
 
-CREATE INDEX digest_context_source ON memory.digest_context (context_turn_id) WHERE context_turn_id IS NOT NULL;
+CREATE INDEX digest_context_source ON memory.digest_context (
+    context_turn_id
+) WHERE context_turn_id IS NOT NULL;
 
 CREATE TABLE memory.digest_failures (
     turn_id bigint PRIMARY KEY REFERENCES memory.turns (id) ON DELETE CASCADE,
@@ -199,10 +203,18 @@ CREATE TABLE memory.digest_embeddings (
     FOREIGN KEY (model_id, dimensions) REFERENCES memory.embedding_models (id, dimensions)
 );
 
-CREATE INDEX chunk_embeddings_768 ON memory.chunk_embeddings USING hnsw ((embedding::vector(768)) vector_cosine_ops) WHERE dimensions = 768;
-CREATE INDEX digest_embeddings_768 ON memory.digest_embeddings USING hnsw ((embedding::vector(768)) vector_cosine_ops) WHERE dimensions = 768;
-CREATE INDEX chunk_embeddings_1024 ON memory.chunk_embeddings USING hnsw ((embedding::vector(1024)) vector_cosine_ops) WHERE dimensions = 1024;
-CREATE INDEX digest_embeddings_1024 ON memory.digest_embeddings USING hnsw ((embedding::vector(1024)) vector_cosine_ops) WHERE dimensions = 1024;
+CREATE INDEX chunk_embeddings_768 ON memory.chunk_embeddings USING hnsw (
+    (embedding::vector(768)) vector_cosine_ops
+) WHERE dimensions = 768;
+CREATE INDEX digest_embeddings_768 ON memory.digest_embeddings USING hnsw (
+    (embedding::vector(768)) vector_cosine_ops
+) WHERE dimensions = 768;
+CREATE INDEX chunk_embeddings_1024 ON memory.chunk_embeddings USING hnsw (
+    (embedding::vector(1024)) vector_cosine_ops
+) WHERE dimensions = 1024;
+CREATE INDEX digest_embeddings_1024 ON memory.digest_embeddings USING hnsw (
+    (embedding::vector(1024)) vector_cosine_ops
+) WHERE dimensions = 1024;
 
 -- +goose StatementBegin
 CREATE FUNCTION memory.check_part_payload() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -221,11 +233,16 @@ BEGIN
         RETURN NULL;
     END IF;
     CASE target_kind
-        WHEN 'text' THEN SELECT EXISTS (SELECT 1 FROM memory.part_text WHERE part_id = target_id) INTO present;
-        WHEN 'reasoning' THEN SELECT EXISTS (SELECT 1 FROM memory.part_reasoning WHERE part_id = target_id) INTO present;
-        WHEN 'tool_call' THEN SELECT EXISTS (SELECT 1 FROM memory.part_tool_calls WHERE part_id = target_id) INTO present;
-        WHEN 'tool_result' THEN SELECT EXISTS (SELECT 1 FROM memory.part_tool_results WHERE part_id = target_id) INTO present;
-        WHEN 'media' THEN SELECT EXISTS (SELECT 1 FROM memory.part_media WHERE part_id = target_id) INTO present;
+        WHEN 'text' THEN
+            SELECT EXISTS (SELECT 1 FROM memory.part_text WHERE part_id = target_id) INTO present;
+        WHEN 'reasoning' THEN
+            SELECT EXISTS (SELECT 1 FROM memory.part_reasoning WHERE part_id = target_id) INTO present;
+        WHEN 'tool_call' THEN
+            SELECT EXISTS (SELECT 1 FROM memory.part_tool_calls WHERE part_id = target_id) INTO present;
+        WHEN 'tool_result' THEN
+            SELECT EXISTS (SELECT 1 FROM memory.part_tool_results WHERE part_id = target_id) INTO present;
+        WHEN 'media' THEN
+            SELECT EXISTS (SELECT 1 FROM memory.part_media WHERE part_id = target_id) INTO present;
     END CASE;
     IF NOT present THEN
         RAISE EXCEPTION 'part % has no % payload', target_id, target_kind USING ERRCODE = '23514';
@@ -235,12 +252,30 @@ END;
 $$;
 -- +goose StatementEnd
 
-CREATE CONSTRAINT TRIGGER part_payload AFTER INSERT OR UPDATE OR DELETE ON memory.parts DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION memory.check_part_payload();
-CREATE CONSTRAINT TRIGGER text_payload AFTER INSERT OR UPDATE OR DELETE ON memory.part_text DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION memory.check_part_payload();
-CREATE CONSTRAINT TRIGGER reasoning_payload AFTER INSERT OR UPDATE OR DELETE ON memory.part_reasoning DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION memory.check_part_payload();
-CREATE CONSTRAINT TRIGGER call_payload AFTER INSERT OR UPDATE OR DELETE ON memory.part_tool_calls DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION memory.check_part_payload();
-CREATE CONSTRAINT TRIGGER result_payload AFTER INSERT OR UPDATE OR DELETE ON memory.part_tool_results DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION memory.check_part_payload();
-CREATE CONSTRAINT TRIGGER media_payload AFTER INSERT OR UPDATE OR DELETE ON memory.part_media DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION memory.check_part_payload();
+CREATE CONSTRAINT TRIGGER part_payload
+AFTER INSERT OR UPDATE OR DELETE ON memory.parts
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION memory.check_part_payload();
+CREATE CONSTRAINT TRIGGER text_payload
+AFTER INSERT OR UPDATE OR DELETE ON memory.part_text
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION memory.check_part_payload();
+CREATE CONSTRAINT TRIGGER reasoning_payload
+AFTER INSERT OR UPDATE OR DELETE ON memory.part_reasoning
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION memory.check_part_payload();
+CREATE CONSTRAINT TRIGGER call_payload
+AFTER INSERT OR UPDATE OR DELETE ON memory.part_tool_calls
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION memory.check_part_payload();
+CREATE CONSTRAINT TRIGGER result_payload
+AFTER INSERT OR UPDATE OR DELETE ON memory.part_tool_results
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION memory.check_part_payload();
+CREATE CONSTRAINT TRIGGER media_payload
+AFTER INSERT OR UPDATE OR DELETE ON memory.part_media
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION memory.check_part_payload();
 
 -- +goose StatementBegin
 CREATE FUNCTION memory.guard_history() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -265,7 +300,8 @@ BEGIN
     END IF;
     SELECT completed_at INTO finished FROM memory.turns WHERE id = target_turn FOR SHARE;
     IF finished IS NOT NULL THEN
-        RAISE EXCEPTION 'turn % is complete; delete the turn to remove its history', target_turn USING ERRCODE = '23514';
+        RAISE EXCEPTION 'turn % is complete; delete the turn to remove its history', target_turn
+            USING ERRCODE = '23514';
     END IF;
     IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
     RETURN NEW;
@@ -275,8 +311,10 @@ $$;
 CREATE FUNCTION memory.guard_turn() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
     IF OLD.completed_at IS NOT NULL OR NEW.completed_at IS NULL
-       OR (NEW.id, NEW.agent_id, NEW.created_at) IS DISTINCT FROM (OLD.id, OLD.agent_id, OLD.created_at) THEN
-        RAISE EXCEPTION 'a turn may only transition from reserved to complete' USING ERRCODE = '23514';
+       OR (NEW.id, NEW.agent_id, NEW.created_at) IS DISTINCT FROM (OLD.id, OLD.agent_id, OLD.created_at)
+    THEN
+        RAISE EXCEPTION 'a turn may only transition from reserved to complete'
+            USING ERRCODE = '23514';
     END IF;
     IF NOT EXISTS (SELECT 1 FROM memory.messages WHERE turn_id = NEW.id) THEN
         RAISE EXCEPTION 'a completed turn requires messages' USING ERRCODE = '23514';
@@ -286,28 +324,54 @@ END;
 $$;
 -- +goose StatementEnd
 
-CREATE TRIGGER immutable_turn BEFORE UPDATE ON memory.turns FOR EACH ROW EXECUTE FUNCTION memory.guard_turn();
-CREATE TRIGGER immutable_message BEFORE INSERT OR UPDATE OR DELETE ON memory.messages FOR EACH ROW EXECUTE FUNCTION memory.guard_history();
-CREATE TRIGGER immutable_clock BEFORE INSERT OR UPDATE OR DELETE ON memory.message_clocks FOR EACH ROW EXECUTE FUNCTION memory.guard_history();
-CREATE TRIGGER immutable_delivery BEFORE INSERT OR UPDATE OR DELETE ON memory.scheduled_deliveries FOR EACH ROW EXECUTE FUNCTION memory.guard_history();
-CREATE TRIGGER immutable_part BEFORE INSERT OR UPDATE OR DELETE ON memory.parts FOR EACH ROW EXECUTE FUNCTION memory.guard_history();
-CREATE TRIGGER immutable_text BEFORE INSERT OR UPDATE OR DELETE ON memory.part_text FOR EACH ROW EXECUTE FUNCTION memory.guard_history();
-CREATE TRIGGER immutable_reasoning BEFORE INSERT OR UPDATE OR DELETE ON memory.part_reasoning FOR EACH ROW EXECUTE FUNCTION memory.guard_history();
-CREATE TRIGGER immutable_call BEFORE INSERT OR UPDATE OR DELETE ON memory.part_tool_calls FOR EACH ROW EXECUTE FUNCTION memory.guard_history();
-CREATE TRIGGER immutable_result BEFORE INSERT OR UPDATE OR DELETE ON memory.part_tool_results FOR EACH ROW EXECUTE FUNCTION memory.guard_history();
-CREATE TRIGGER immutable_media BEFORE INSERT OR UPDATE OR DELETE ON memory.part_media FOR EACH ROW EXECUTE FUNCTION memory.guard_history();
+CREATE TRIGGER immutable_turn
+BEFORE UPDATE ON memory.turns
+FOR EACH ROW EXECUTE FUNCTION memory.guard_turn();
+CREATE TRIGGER immutable_message
+BEFORE INSERT OR UPDATE OR DELETE ON memory.messages
+FOR EACH ROW EXECUTE FUNCTION memory.guard_history();
+CREATE TRIGGER immutable_clock
+BEFORE INSERT OR UPDATE OR DELETE ON memory.message_clocks
+FOR EACH ROW EXECUTE FUNCTION memory.guard_history();
+CREATE TRIGGER immutable_delivery
+BEFORE INSERT OR UPDATE OR DELETE ON memory.scheduled_deliveries
+FOR EACH ROW EXECUTE FUNCTION memory.guard_history();
+CREATE TRIGGER immutable_part
+BEFORE INSERT OR UPDATE OR DELETE ON memory.parts
+FOR EACH ROW EXECUTE FUNCTION memory.guard_history();
+CREATE TRIGGER immutable_text
+BEFORE INSERT OR UPDATE OR DELETE ON memory.part_text
+FOR EACH ROW EXECUTE FUNCTION memory.guard_history();
+CREATE TRIGGER immutable_reasoning
+BEFORE INSERT OR UPDATE OR DELETE ON memory.part_reasoning
+FOR EACH ROW EXECUTE FUNCTION memory.guard_history();
+CREATE TRIGGER immutable_call
+BEFORE INSERT OR UPDATE OR DELETE ON memory.part_tool_calls
+FOR EACH ROW EXECUTE FUNCTION memory.guard_history();
+CREATE TRIGGER immutable_result
+BEFORE INSERT OR UPDATE OR DELETE ON memory.part_tool_results
+FOR EACH ROW EXECUTE FUNCTION memory.guard_history();
+CREATE TRIGGER immutable_media
+BEFORE INSERT OR UPDATE OR DELETE ON memory.part_media
+FOR EACH ROW EXECUTE FUNCTION memory.guard_history();
 
 CREATE TABLE memory.bootstrap (
-    agent_id bigint PRIMARY KEY REFERENCES memory.agents(id) ON DELETE CASCADE,
+    agent_id bigint PRIMARY KEY REFERENCES memory.agents (id) ON DELETE CASCADE,
     source_fingerprint bytea CHECK (octet_length(source_fingerprint) = 32),
     source_head bigint NOT NULL CHECK (source_head >= 0),
     source_turns bigint NOT NULL CHECK (source_turns >= 0),
     verified_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     prepared_at timestamptz,
-    embedding_model_id bigint REFERENCES memory.embedding_models(id),
+    embedding_model_id bigint REFERENCES memory.embedding_models (id),
     digest_prompt_version text,
-    CHECK ((prepared_at IS NULL AND embedding_model_id IS NULL AND digest_prompt_version IS NULL)
-        OR (prepared_at IS NOT NULL AND embedding_model_id IS NOT NULL AND digest_prompt_version IS NOT NULL))
+    CHECK (
+        (prepared_at IS NULL AND embedding_model_id IS NULL AND digest_prompt_version IS NULL)
+        OR (
+            prepared_at IS NOT NULL
+            AND embedding_model_id IS NOT NULL
+            AND digest_prompt_version IS NOT NULL
+        )
+    )
 );
 
 -- +goose Down

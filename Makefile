@@ -90,11 +90,16 @@ test-history-runtime: project-setup
 test-history-postgres: project-setup
 	./scripts/test-history-postgres.sh
 
+.PHONY: test-sql
+test-sql: project-setup
+	./scripts/sql-tools-test.sh
+
 fmt: project-setup
 	FILES="$(FILES)" ./scripts/fmt.sh
 
 test:
 	./scripts/image-build-impact-test.sh
+	$(MAKE) test-sql
 	./scripts/check-ui-fixtures.sh
 	./scripts/compose-contract-test.sh
 	cd $(EXEC_CONTRACT_MOD_DIR) && CGO_ENABLED=0 $(GO) test ./...

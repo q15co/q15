@@ -13,22 +13,55 @@ import (
 
 const searchDense1024 = `-- name: SearchDense1024 :many
 WITH digest_hits AS (
-  SELECT 'digest'::text AS kind, d.turn_id AS unit_id, d.turn_id, d.body, t.created_at,
-    (1 - (e.embedding::vector(1024) <=> $2::vector(1024)))::real AS score
-  FROM memory.digest_embeddings e JOIN memory.turn_digests d ON d.turn_id=e.turn_id
-  JOIN memory.turns t ON t.id=d.turn_id
-  WHERE t.agent_id=$3 AND t.id <> ALL($4::bigint[]) AND e.model_id=$5 AND e.dimensions=1024
-  ORDER BY e.embedding::vector(1024) <=> $2::vector(1024) LIMIT $1
-), chunk_hits AS (
-  SELECT 'chunk'::text AS kind, c.id AS unit_id, t.id AS turn_id, c.body, t.created_at,
-    (1 - (e.embedding::vector(1024) <=> $2::vector(1024)))::real AS score
-  FROM memory.chunk_embeddings e JOIN memory.chunks c ON c.id=e.chunk_id
-  JOIN memory.chunk_runs r ON r.id=c.run_id JOIN memory.parts p ON p.id=r.part_id
-  JOIN memory.messages m ON m.id=p.message_id JOIN memory.turns t ON t.id=m.turn_id
-  WHERE NOT $6::boolean AND t.agent_id=$3 AND t.id <> ALL($4::bigint[]) AND e.model_id=$5 AND e.dimensions=1024
-  ORDER BY e.embedding::vector(1024) <=> $2::vector(1024) LIMIT $1
-) SELECT kind, unit_id, turn_id, body, created_at, score FROM (SELECT kind, unit_id, turn_id, body, created_at, score FROM digest_hits UNION ALL SELECT kind, unit_id, turn_id, body, created_at, score FROM chunk_hits) hits
-ORDER BY score DESC, turn_id DESC, kind, unit_id LIMIT $1
+    SELECT
+        'digest'::text AS kind,
+        d.turn_id AS unit_id,
+        d.turn_id,
+        d.body,
+        t.created_at,
+        (1 - (e.embedding::vector(1024) <=> $2::vector(1024)))::real
+            AS score
+    FROM memory.digest_embeddings AS e INNER JOIN memory.turn_digests AS d ON e.turn_id = d.turn_id
+    INNER JOIN memory.turns AS t ON d.turn_id = t.id
+    WHERE
+        t.agent_id = $3
+        AND t.id <> all($4::bigint[])
+        AND e.model_id = $5
+        AND e.dimensions = 1024
+    ORDER BY e.embedding::vector(1024) <=> $2::vector(1024)
+    LIMIT $1
+),
+
+chunk_hits AS (
+    SELECT
+        'chunk'::text AS kind,
+        c.id AS unit_id,
+        t.id AS turn_id,
+        c.body,
+        t.created_at,
+        (1 - (e.embedding::vector(1024) <=> $2::vector(1024)))::real
+            AS score
+    FROM memory.chunk_embeddings AS e INNER JOIN memory.chunks AS c ON e.chunk_id = c.id
+    INNER JOIN memory.chunk_runs AS r ON c.run_id = r.id
+    INNER JOIN memory.parts AS p ON r.part_id = p.id
+    INNER JOIN memory.messages AS m ON p.message_id = m.id
+    INNER JOIN memory.turns AS t ON m.turn_id = t.id
+    WHERE
+        NOT $6::boolean
+        AND t.agent_id = $3
+        AND t.id <> all($4::bigint[])
+        AND e.model_id = $5
+        AND e.dimensions = 1024
+    ORDER BY e.embedding::vector(1024) <=> $2::vector(1024)
+    LIMIT $1
+)
+
+SELECT kind, unit_id, turn_id, body, created_at, score FROM (
+    SELECT kind, unit_id, turn_id, body, created_at, score FROM digest_hits
+    UNION ALL
+    SELECT kind, unit_id, turn_id, body, created_at, score FROM chunk_hits
+) AS hits
+ORDER BY score DESC, turn_id DESC, kind ASC, unit_id ASC LIMIT $1
 `
 
 type SearchDense1024Params struct {
@@ -85,22 +118,53 @@ func (q *Queries) SearchDense1024(ctx context.Context, arg SearchDense1024Params
 
 const searchDense768 = `-- name: SearchDense768 :many
 WITH digest_hits AS (
-  SELECT 'digest'::text AS kind, d.turn_id AS unit_id, d.turn_id, d.body, t.created_at,
-    (1 - (e.embedding::vector(768) <=> $2::vector(768)))::real AS score
-  FROM memory.digest_embeddings e JOIN memory.turn_digests d ON d.turn_id=e.turn_id
-  JOIN memory.turns t ON t.id=d.turn_id
-  WHERE t.agent_id=$3 AND t.id <> ALL($4::bigint[]) AND e.model_id=$5 AND e.dimensions=768
-  ORDER BY e.embedding::vector(768) <=> $2::vector(768) LIMIT $1
-), chunk_hits AS (
-  SELECT 'chunk'::text AS kind, c.id AS unit_id, t.id AS turn_id, c.body, t.created_at,
-    (1 - (e.embedding::vector(768) <=> $2::vector(768)))::real AS score
-  FROM memory.chunk_embeddings e JOIN memory.chunks c ON c.id=e.chunk_id
-  JOIN memory.chunk_runs r ON r.id=c.run_id JOIN memory.parts p ON p.id=r.part_id
-  JOIN memory.messages m ON m.id=p.message_id JOIN memory.turns t ON t.id=m.turn_id
-  WHERE NOT $6::boolean AND t.agent_id=$3 AND t.id <> ALL($4::bigint[]) AND e.model_id=$5 AND e.dimensions=768
-  ORDER BY e.embedding::vector(768) <=> $2::vector(768) LIMIT $1
-) SELECT kind, unit_id, turn_id, body, created_at, score FROM (SELECT kind, unit_id, turn_id, body, created_at, score FROM digest_hits UNION ALL SELECT kind, unit_id, turn_id, body, created_at, score FROM chunk_hits) hits
-ORDER BY score DESC, turn_id DESC, kind, unit_id LIMIT $1
+    SELECT
+        'digest'::text AS kind,
+        d.turn_id AS unit_id,
+        d.turn_id,
+        d.body,
+        t.created_at,
+        (1 - (e.embedding::vector(768) <=> $2::vector(768)))::real AS score
+    FROM memory.digest_embeddings AS e INNER JOIN memory.turn_digests AS d ON e.turn_id = d.turn_id
+    INNER JOIN memory.turns AS t ON d.turn_id = t.id
+    WHERE
+        t.agent_id = $3
+        AND t.id <> all($4::bigint[])
+        AND e.model_id = $5
+        AND e.dimensions = 768
+    ORDER BY e.embedding::vector(768) <=> $2::vector(768)
+    LIMIT $1
+),
+
+chunk_hits AS (
+    SELECT
+        'chunk'::text AS kind,
+        c.id AS unit_id,
+        t.id AS turn_id,
+        c.body,
+        t.created_at,
+        (1 - (e.embedding::vector(768) <=> $2::vector(768)))::real AS score
+    FROM memory.chunk_embeddings AS e INNER JOIN memory.chunks AS c ON e.chunk_id = c.id
+    INNER JOIN memory.chunk_runs AS r ON c.run_id = r.id
+    INNER JOIN memory.parts AS p ON r.part_id = p.id
+    INNER JOIN memory.messages AS m ON p.message_id = m.id
+    INNER JOIN memory.turns AS t ON m.turn_id = t.id
+    WHERE
+        NOT $6::boolean
+        AND t.agent_id = $3
+        AND t.id <> all($4::bigint[])
+        AND e.model_id = $5
+        AND e.dimensions = 768
+    ORDER BY e.embedding::vector(768) <=> $2::vector(768)
+    LIMIT $1
+)
+
+SELECT kind, unit_id, turn_id, body, created_at, score FROM (
+    SELECT kind, unit_id, turn_id, body, created_at, score FROM digest_hits
+    UNION ALL
+    SELECT kind, unit_id, turn_id, body, created_at, score FROM chunk_hits
+) AS hits
+ORDER BY score DESC, turn_id DESC, kind ASC, unit_id ASC LIMIT $1
 `
 
 type SearchDense768Params struct {

@@ -1,0 +1,27 @@
+[sqlfluff]
+dialect = postgres
+templater = raw
+max_line_length = 100
+large_file_skip_byte_limit = 0
+warn_unused_ignores = True
+# Projection order defines sqlc's generated row and scan contracts.
+exclude_rules = structure.column_order
+
+[sqlfluff:rules:capitalisation.keywords]
+capitalisation_policy = upper
+
+[sqlfluff:rules:capitalisation.identifiers]
+extended_capitalisation_policy = lower
+
+[sqlfluff:rules:capitalisation.functions]
+extended_capitalisation_policy = lower
+
+[sqlfluff:rules:capitalisation.literals]
+capitalisation_policy = upper
+
+[sqlfluff:rules:capitalisation.types]
+extended_capitalisation_policy = lower
+
+[sqlfluff:rules:references.keywords]
+# These unreserved words are intentional domain column names.
+ignore_words = model,name,position,provider,role,source
