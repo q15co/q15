@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
+	"github.com/q15co/q15/systems/agent/internal/buildinfo"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
 )
 
@@ -36,7 +37,11 @@ func withContextWindow(
 }
 
 func renderContextWindow(model agent.ModelContext, limit, estimate int) string {
+	build := buildinfo.Current()
 	attributes := map[string]string{
+		"git_commit":              build.Commit,
+		"source_modified":         build.Modified,
+		"build_provenance":        build.Source,
 		"model_ref":               model.Ref,
 		"estimated_input_tokens":  strconv.Itoa(estimate),
 		"working_budget_tokens":   strconv.Itoa(limit),
@@ -57,7 +62,7 @@ func renderContextWindow(model agent.ModelContext, limit, estimate int) string {
 	return agent.RenderPromptElement(
 		"context_window",
 		attributes,
-		"Runtime context for this model call. Input counts include instructions, history, the active conversation, tools and an allowance for this note. Remaining space is under the working input budget; output reserve is separate. Counts are conservative estimates; UTF-8 bytes replace tokenization if unavailable. Provider usage may differ. Historical estimated_tokens counts describe the shown turn content.",
+		"Current runtime state for this model call. The build identifies the running executable. Use this note for the current build and token budget; version claims and counters in conversation history describe earlier requests. Input counts include instructions, history, the active conversation, tools and an allowance for this note. Remaining space is under the working input budget; output reserve is separate. Counts are conservative estimates; UTF-8 bytes replace tokenization if unavailable. Provider usage may differ. Historical estimated_tokens counts describe the shown turn content.",
 	)
 }
 

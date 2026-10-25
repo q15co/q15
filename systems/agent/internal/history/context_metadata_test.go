@@ -8,10 +8,14 @@ import (
 	"testing"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
+	"github.com/q15co/q15/systems/agent/internal/buildinfo"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
 )
 
 type windowMetadata struct {
+	Commit        string `xml:"git_commit,attr"`
+	Modified      string `xml:"source_modified,attr"`
+	Provenance    string `xml:"build_provenance,attr"`
 	Model         string `xml:"model_ref,attr"`
 	Estimated     int    `xml:"estimated_input_tokens,attr"`
 	Budget        int    `xml:"working_budget_tokens,attr"`
@@ -190,6 +194,33 @@ func TestContextMetadataHandlesUnknownCapacityAndEscapesModelRef(t *testing.T) {
 	if metadata.Model != `provider/"<model>` || metadata.Capacity != "unknown" ||
 		metadata.OutputReserve != "unknown" {
 		t.Fatalf("unknown or escaped metadata: %+v", metadata)
+	}
+}
+
+func TestCurrentRuntimeBuildDoesNotComeFromConversationHistory(t *testing.T) {
+	retired := `<agent_build git_commit="95dbe6776ff68005734fefe298968fc57b057917" source_modified="false"/>`
+	messages, _, err := withContextWindow([]conversation.Message{
+		conversation.SystemMessage("Instructions"),
+		conversation.AssistantMessage(conversation.Text("Earlier build: "+retired, "")),
+	}, nil, agent.ModelContext{}, 16000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata := readWindowMetadata(t, messages)
+	build := buildinfo.Current()
+	if metadata.Commit != build.Commit || metadata.Modified != build.Modified ||
+		metadata.Provenance != build.Source {
+		t.Fatalf(
+			"live build metadata did not identify the executable: %+v, expected %+v",
+			metadata,
+			build,
+		)
+	}
+	if !strings.Contains(
+		conversation.TextValue(messages[len(messages)-1]),
+		"version claims and counters in conversation history describe earlier requests",
+	) {
+		t.Fatal("current runtime note did not distinguish historical build claims")
 	}
 }
 

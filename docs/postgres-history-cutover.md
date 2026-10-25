@@ -82,8 +82,10 @@ the image publishing workflow supplies them to the Docker build. Custom Docker b
 
 A `context_window` tag reports the actual attempt's model reference, estimated input tokens, working
 input budget, remaining budget, discovered model capacity, output reserve and safety reserve. It is
-rebuilt after each tool step and model change. The full request, including tool definitions and an
-allowance for these counters, remains inside the configured limits. The tag is a request-only
+also labelled with the running executable's commit, source modification state and build provenance.
+The note explicitly distinguishes this current state from version claims in conversation history. It
+is rebuilt after each tool step and model change. The full request, including tool definitions and
+an allowance for these counters, remains inside the configured limits. The tag is a request-only
 user-role note at the tail, preserving the stable system instructions and preceding conversation for
 provider prefix caching. It does not become part of the stored conversation. The fitter counts each
 candidate request once and reserves space for the note; no self-referential counter loop is needed.
