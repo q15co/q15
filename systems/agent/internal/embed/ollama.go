@@ -49,7 +49,7 @@ func NewOllamaEmbedder(
 		batchTokens = 8192
 	}
 	if batchTokens < 1 || batchTokens > 65536 {
-		return nil, errors.New("Ollama embedding token batch must be between 1 and 65536")
+		return nil, errors.New("ollama embedding token batch must be between 1 and 65536")
 	}
 	return &OllamaEmbedder{
 		endpoint:    base.JoinPath("api/embed").String(),
