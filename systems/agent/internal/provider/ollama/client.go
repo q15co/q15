@@ -33,9 +33,18 @@ const (
 
 // Client adapts Ollama's native API to the agent model interface.
 type Client struct {
-	connection connection
-	chat       chatAPI
-	mediaStore q15media.Store
+	connection      connection
+	chat            chatAPI
+	mediaStore      q15media.Store
+	maxOutputTokens int
+	jsonOutput      bool
+}
+
+// WithJSONOutput returns a separate client with a bounded JSON completion contract.
+func (c *Client) WithJSONOutput(maxTokens int) *Client {
+	clone := *c
+	clone.maxOutputTokens, clone.jsonOutput = maxTokens, true
+	return &clone
 }
 
 var _ agent.ModelClient = (*Client)(nil)
@@ -145,6 +154,12 @@ func (c *Client) CompleteStreamWithReasoning(
 		Messages: reqMessages,
 		Stream:   &stream,
 		Tools:    reqTools,
+	}
+	if c.maxOutputTokens > 0 {
+		req.Options = map[string]any{"num_predict": c.maxOutputTokens}
+	}
+	if c.jsonOutput {
+		req.Format = json.RawMessage(`"json"`)
 	}
 
 	collector := newStreamCollector(onDelta, onReasoning)

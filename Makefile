@@ -7,6 +7,8 @@ BIN_DIR ?= bin
 COMPOSE_FILE ?= docker-compose.yml
 COMPOSE_PROJECT_NAME ?= q15-local
 AGENT_MOD_DIR ?= systems/agent
+Q15_BUILD_COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || printf unknown)
+Q15_BUILD_MODIFIED ?= $(shell if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then if test -n "$$(git status --porcelain)"; then printf true; else printf false; fi; else printf unknown; fi)
 EXEC_MOD_DIR ?= systems/exec
 PROXY_MOD_DIR ?= systems/proxy
 WEB_MOD_DIR ?= systems/web
@@ -32,7 +34,7 @@ build: build-agent build-q15 build-exec build-proxy build-web
 
 build-agent:
 	@mkdir -p $(BIN_DIR)
-	cd $(AGENT_MOD_DIR) && $(GO) build -o ../../$(BIN_DIR)/q15-agent .
+	cd $(AGENT_MOD_DIR) && $(GO) build -ldflags '-X github.com/q15co/q15/systems/agent/internal/buildinfo.commit=$(Q15_BUILD_COMMIT) -X github.com/q15co/q15/systems/agent/internal/buildinfo.modified=$(Q15_BUILD_MODIFIED)' -o ../../$(BIN_DIR)/q15-agent .
 
 build-q15:
 	@mkdir -p $(BIN_DIR)
@@ -69,11 +71,35 @@ ui-auth-test-server:
 project-setup:
 	./scripts/project-setup.sh
 
+.PHONY: memory-generate memory-check
+memory-generate: project-setup
+	$(TOOLS_BIN_DIR)/sqlc generate
+
+memory-check: project-setup
+	$(TOOLS_BIN_DIR)/sqlc diff
+
+.PHONY: test-history
+test-history: project-setup
+	cd $(AGENT_MOD_DIR) && CGO_ENABLED=0 $(GO) test $(TEST_FLAGS) ./internal/history/...
+
+.PHONY: test-history-runtime
+test-history-runtime: project-setup
+	cd $(AGENT_MOD_DIR) && CGO_ENABLED=0 $(GO) test $(TEST_FLAGS) ./internal/app/...
+
+.PHONY: test-history-postgres
+test-history-postgres: project-setup
+	./scripts/test-history-postgres.sh
+
+.PHONY: test-sql
+test-sql: project-setup
+	./scripts/sql-tools-test.sh
+
 fmt: project-setup
 	FILES="$(FILES)" ./scripts/fmt.sh
 
 test:
 	./scripts/image-build-impact-test.sh
+	$(MAKE) test-sql
 	./scripts/check-ui-fixtures.sh
 	./scripts/compose-contract-test.sh
 	cd $(EXEC_CONTRACT_MOD_DIR) && CGO_ENABLED=0 $(GO) test ./...
@@ -152,6 +178,7 @@ vulncheck: project-setup
 
 verify: project-setup
 	$(MAKE) protos-check
+	$(MAKE) memory-check
 	$(MAKE) lint
 	$(MAKE) test
 

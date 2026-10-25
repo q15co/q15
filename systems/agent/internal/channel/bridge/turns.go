@@ -3,12 +3,11 @@ package bridge
 import (
 	"github.com/q15co/q15/libs/chat-contract/chatpb"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
-	"github.com/q15co/q15/systems/agent/internal/memory"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // turnsToProto translates one transcript page into its contract response.
-func turnsToProto(page memory.TurnPage) *chatpb.ListTurnsResponse {
+func turnsToProto(page conversation.TurnPage) *chatpb.ListTurnsResponse {
 	response := &chatpb.ListTurnsResponse{
 		Turns:   make([]*chatpb.Turn, 0, len(page.Turns)),
 		HeadSeq: page.HeadSeq,
@@ -21,7 +20,7 @@ func turnsToProto(page memory.TurnPage) *chatpb.ListTurnsResponse {
 }
 
 // turnToProto translates one canonical transcript turn.
-func turnToProto(turn memory.Turn) *chatpb.Turn {
+func turnToProto(turn conversation.Turn) *chatpb.Turn {
 	out := &chatpb.Turn{
 		Seq:      turn.Seq,
 		Messages: make([]*chatpb.Message, 0, len(turn.Messages)),

@@ -6,9 +6,8 @@
 #
 # Interactive and decision models are runtime selections. The agent discovers
 # eligible defaults and persists them under /workspace/.q15/agent/selection.json.
-# Use switch_model (slot "interactive" or "decision") to switch them. Background
-# cognition jobs inherit the interactive model unless switch_cognition_model
-# targets a specific job. Their automatic decision stages are tracked in #373.
+# Use switch_model (slot "interactive" or "decision") to switch them.
+# History summaries use the explicit provider/model binding below.
 # Embeddings remain pinned to the tool's model and transport below; changing
 # either requires rebuilding the affected vector collections. Chat and decision
 # switches never change the embedding setup.
@@ -23,7 +22,21 @@ providers:
 
 agent:
   name: Q15
-  memory_recent_turns: 6
+  history:
+    database_url_env: Q15_DATABASE_URL
+    embedding_base_url: http://q15-ollama:11434
+    embedding_model: embeddinggemma-2:740m
+    embedding_dimensions: 768
+    embedding_batch_size: 8
+    summary_provider: ollama-cloud
+    summary_model: minimax-m3.1-flash
+    working_budget_tokens: 64000
+    context_window_fraction: 0.25
+    recent_history_fraction: 0.3333333333333333
+    max_request_bytes: 4194304
+    recent_turns: 4
+    retrieval_limit: 6
+    min_similarity: 0.35
   tools:
     web_search:
       brave_api_key_env: BRAVE_API_KEY

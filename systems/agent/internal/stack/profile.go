@@ -52,7 +52,10 @@ const (
 
 	// OllamaImage is the model server's image, pinned and qualified for the same
 	// reasons.
-	OllamaImage = "docker.io/ollama/ollama:0.40.3"
+	OllamaImage = "docker.io/ollama/ollama:0.40.7"
+
+	// PostgresImage supplies the conversation store and pgvector.
+	PostgresImage = "docker.io/pgvector/pgvector:0.8.7-pg17"
 
 	// DefaultChatModel is the model a stack pulls for chat: small enough to run
 	// without a GPU, because the install profile is the one somebody evaluates
@@ -392,6 +395,14 @@ func (p Profile) AgentConfig() (config.Config, error) {
 		Providers:     []config.Provider{provider},
 		Agent: &config.Agent{
 			Name: p.AgentName,
+			History: config.History{
+				DatabaseURLEnv:      "Q15_DATABASE_URL",
+				EmbeddingProvider:   p.historyEmbeddingProvider(),
+				EmbeddingBaseURL:    p.historyEmbeddingURL(),
+				EmbeddingModel:      p.Embeddings.Model,
+				EmbeddingDimensions: p.Embeddings.Dimensions,
+				EmbeddingBatchSize:  p.Embeddings.BatchSize,
+			},
 			Tools: config.Tools{
 				Embeddings: config.EmbeddingsTool{
 					QdrantURLEnv:    qdrantURLEnv,
@@ -408,6 +419,18 @@ func (p Profile) AgentConfig() (config.Config, error) {
 		},
 	}
 
+	if provider.Type == providertypes.Ollama {
+		cfg.Agent.History.SummaryProvider = provider.Name
+		cfg.Agent.History.SummaryModel = p.Chat.Model
+		if provider.BaseURL == "https://ollama.com" {
+			cfg.Agent.History.SummaryModel = "minimax-m3.1-flash"
+		}
+	} else {
+		cfg.Providers = append(cfg.Providers, config.Provider{Name: "ollama-cloud", Type: providertypes.Ollama, BaseURL: "https://ollama.com", KeyEnv: "OLLAMA_API_KEY"})
+		cfg.Agent.History.SummaryProvider = "ollama-cloud"
+		cfg.Agent.History.SummaryModel = "minimax-m3.1-flash"
+	}
+	cfg.Agent.History.EmbeddingAPIKeyEnv = p.Embeddings.KeyEnv
 	if err := cfg.Validate(); err != nil {
 		return config.Config{}, fmt.Errorf("stack: %w", err)
 	}
@@ -632,4 +655,17 @@ func validateTag(what, tag string) error {
 // resource name may start with.
 func isAlphaNumeric(b byte) bool {
 	return b >= 'a' && b <= 'z' || b >= '0' && b <= '9'
+}
+
+func (p Profile) historyEmbeddingProvider() string {
+	if p.Embeddings.Kind == SourceOpenAICompatible {
+		return "openai"
+	}
+	return "ollama"
+}
+func (p Profile) historyEmbeddingURL() string {
+	if p.Embeddings.Kind == SourceOpenAICompatible {
+		return p.EmbeddingsBaseURL()
+	}
+	return strings.TrimSuffix(p.EmbeddingsBaseURL(), "/v1")
 }

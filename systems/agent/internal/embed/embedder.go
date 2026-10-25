@@ -11,6 +11,13 @@ import (
 // keep working unchanged.
 func NewEmbedder(ctx context.Context, settings Settings) (Embedder, error) {
 	switch normalizeProvider(settings.Provider) {
+	case ProviderOllama:
+		return NewOllamaEmbedder(
+			settings.BaseURL,
+			settings.Model,
+			settings.Dimensions,
+			settings.BatchSize,
+		)
 	case ProviderGemini:
 		return NewGeminiEmbedder(
 			ctx,

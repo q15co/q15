@@ -75,6 +75,18 @@ type ModelUsage struct {
 	TotalTokens  int64
 }
 
+// ModelContext describes the catalog limits of one exact provider/model target.
+type ModelContext struct {
+	Ref              string
+	MaxContextTokens int
+	MaxOutputTokens  int
+}
+
+// ModelContextSource resolves metadata through the same route as the completion.
+type ModelContextSource interface {
+	ContextForModel(string) ModelContext
+}
+
 // ModelClientResult is the output of one model completion call.
 type ModelClientResult struct {
 	// Messages are the ordered canonical conversation.Message items returned by

@@ -80,7 +80,6 @@ func (f *failingModelClient) Complete(
 type fakeConversationStore struct {
 	loadMessages         []conversation.Message
 	coreMemory           CoreMemory
-	workingMemory        WorkingMemory
 	skillCatalog         SkillCatalog
 	lastUserTimestamp    time.Time
 	hasLastUserTimestamp bool
@@ -141,11 +140,6 @@ func (f *fakeConversationStore) LoadCoreMemory(ctx context.Context) (CoreMemory,
 	return f.coreMemory, nil
 }
 
-func (f *fakeConversationStore) LoadWorkingMemory(ctx context.Context) (WorkingMemory, error) {
-	_ = ctx
-	return f.workingMemory, nil
-}
-
 func (f *fakeConversationStore) LoadSkillCatalog(ctx context.Context) (SkillCatalog, error) {
 	_ = ctx
 	return f.skillCatalog, nil
@@ -192,7 +186,7 @@ func TestDefaultSystemPromptUsesStructuredPromptSections(t *testing.T) {
 		"<autonomy_and_persistence>",
 		"<execution_contract>",
 		"<core_memory_contract>",
-		"<working_memory_contract>",
+		"<history_contract>",
 		"Prefer doing the work over announcing intent",
 		"Do not present intent, plans, or assumptions as completed work",
 	} {
@@ -1147,15 +1141,6 @@ func TestLoopReply_IncludesOrderedSystemPrefix(t *testing.T) {
 				},
 			},
 		},
-		workingMemory: WorkingMemory{
-			RelativePath: "working/WORKING_MEMORY.md",
-			Content: strings.Join([]string{
-				"# Working Memory",
-				"",
-				"## Active Tasks",
-				"- Implement canonical working memory",
-			}, "\n"),
-		},
 		skillCatalog: SkillCatalog{
 			Entries: []SkillCatalogEntry{
 				{
@@ -1175,7 +1160,7 @@ func TestLoopReply_IncludesOrderedSystemPrefix(t *testing.T) {
 	}
 
 	call := model.callMsgs[0]
-	if got, want := len(call), 5; got != want {
+	if got, want := len(call), 4; got != want {
 		t.Fatalf("request messages len = %d, want %d", got, want)
 	}
 	if got := messageText(call[0]); got != DefaultSystemPrompt {
@@ -1187,20 +1172,10 @@ func TestLoopReply_IncludesOrderedSystemPrefix(t *testing.T) {
 	if got := messageText(call[2]); !strings.Contains(got, "<skill_catalog>") {
 		t.Fatalf("skill catalog message missing section:\n%s", got)
 	}
-	working := messageText(call[3])
-	for _, want := range []string{
-		"<working_memory path=\"working/WORKING_MEMORY.md\">",
-		"# Working Memory",
-		"Implement canonical working memory",
-	} {
-		if !strings.Contains(working, want) {
-			t.Fatalf("working memory message missing %q:\n%s", want, working)
-		}
+	if got := call[3].Role; got != conversation.UserRole {
+		t.Fatalf("call[3].Role = %q, want %q", got, conversation.UserRole)
 	}
-	if got := call[4].Role; got != conversation.UserRole {
-		t.Fatalf("call[4].Role = %q, want %q", got, conversation.UserRole)
-	}
-	if got := messageText(call[4]); got != "hello" {
+	if got := messageText(call[3]); got != "hello" {
 		t.Fatalf("user message = %q, want hello", got)
 	}
 }

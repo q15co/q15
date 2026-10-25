@@ -114,12 +114,43 @@ services:
         source: q15_tei_hf_cache
         target: /data
 
+  q15-postgres:
+    image: pgvector/pgvector:0.8.7-pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: q15
+      POSTGRES_DB: q15
+      POSTGRES_PASSWORD_FILE: /run/secrets/q15_postgres_password
+    secrets:
+      - q15_postgres_password
+    volumes:
+      - type: volume
+        source: q15_postgres_data
+        target: /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U q15 -d q15"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  q15-ollama:
+    image: ollama/ollama:0.40.7
+    restart: unless-stopped
+    volumes:
+      - type: volume
+        source: q15_ollama_models
+        target: /root/.ollama
+
   q15-agent:
     image: ghcr.io/q15co/q15-agent:${Q15_IMAGE_TAG:-stable}
     restart: unless-stopped
     init: true
     group_add: ["1000"]
     depends_on:
+      q15-postgres:
+        condition: service_healthy
+      q15-ollama:
+        condition: service_started
       q15-exec:
         condition: service_healthy
       q15-qdrant:
@@ -138,6 +169,11 @@ services:
       start_period: 60s
     environment:
       HOME: /root
+      PGHOST: q15-postgres
+      PGUSER: q15
+      PGDATABASE: q15
+      PGSSLMODE: disable
+      PGPASSWORD_FILE: /run/secrets/q15_postgres_password
       GODEBUG: updatemaxprocs=0
       GOMAXPROCS: "1"
       TZ: ${TZ:-UTC}
@@ -149,6 +185,8 @@ services:
       BRAVE_API_KEY_FILE: /run/q15-secrets/brave_api_key
       Q15_QDRANT_URL: http://q15-qdrant:6334
       Q15_EMBEDDINGS_BASE_URL: http://q15-tei:80
+    secrets:
+      - q15_postgres_password
     volumes:
       - type: bind
         source: ./agent-config.yaml
@@ -231,6 +269,8 @@ services:
       start_period: 20s
 
 volumes:
+  q15_postgres_data:
+  q15_ollama_models:
   q15_web_state:
   q15_bridge:
   q15_agent_state:
@@ -242,3 +282,7 @@ volumes:
   q15_skills:
   q15_workspace:
   q15_tei_hf_cache:
+
+secrets:
+  q15_postgres_password:
+    file: ./secrets/q15_postgres_password

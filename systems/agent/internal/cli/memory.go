@@ -2,145 +2,205 @@ package cli
 
 import (
 	"context"
-	"errors"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
-	"os"
 	"time"
 
 	"github.com/q15co/q15/systems/agent/internal/command"
 	"github.com/q15co/q15/systems/agent/internal/config"
-	"github.com/q15co/q15/systems/agent/internal/memory"
-	"github.com/q15co/q15/systems/agent/internal/memoryrepo"
+	"github.com/q15co/q15/systems/agent/internal/embed"
+	"github.com/q15co/q15/systems/agent/internal/history"
 )
 
-// runMemory is the read-only memory surface: reports drawn from the agent's
-// memory files on this host.
-//
-// Memory is files, so anything that can read the directory can report on it,
-// with no running agent and no podman. Nothing here writes into the root: the
-// verbs read through the store's load methods and never call Store.Init.
-//
-// The reports judge file sizes against the configuration defaults rather than
-// a loaded configuration. The rendered agent configuration's host path is an
-// internal detail of stack rendering (the install slice that writes it has
-// not landed), and resolving a loaded configuration would drag in the
-// container's environment indirections, which an operator's shell does not
-// carry. The fallback is the same defaults config resolution applies, and
-// every sized line of the report prints the limit it was judged against, so a
-// fallback is never silent.
 func runMemory(ctx context.Context, env command.Env, args []string) error {
 	if len(args) == 0 || asksForHelp(args[0]) {
 		writeMemoryUsage(env.Stdout)
 		return nil
 	}
-
 	switch args[0] {
-	case "status":
-		return runMemoryStatus(ctx, env, args[1:])
+	case "import", "status", "backfill":
 	default:
 		return command.Usagef("unknown memory command %q", args[0])
 	}
-}
-
-// writeMemoryUsage prints what the memory surface can do, and the one flag an
-// operator has to name correctly before any of it is readable.
-func writeMemoryUsage(w io.Writer) {
-	fmt.Fprint(w, `q15 memory reports on the agent's memory files on this host.
-
-Read-only surface: nothing here writes to the memory root, and no part of the
-report needs the stack to run.
-
-usage:
-  q15 memory status --memory-root PATH
-                                head seq, checkpoint lag and age, cognition job
-                                failures, file sizes against their budgets and
-                                caps, and the conversion ledger
-
---memory-root is required: the agent's /memory directory,
-the stack's memory volume, on this host. --stack and
---state-dir name the agent the way the other verbs do; the report still comes
-straight from the memory root.
-`)
-}
-
-// memoryFlags are the flags a memory verb takes: the stack flags every verb
-// shares, and the memory root the report reads.
-type memoryFlags struct {
-	stackFlags
-	memoryRoot string
-}
-
-// newMemoryFlagSet returns the flag set for one memory verb. The memory root
-// has no usable default: a stack's memory volume is not derivable from the
-// stack's state directory, and guessing a podman-internal path is exactly the
-// guess this verb refuses to make.
-func newMemoryFlagSet(name string, env command.Env, flags *memoryFlags) *flag.FlagSet {
-	fs := newStackFlagSet(name, env, &flags.stackFlags)
+	var f historyFlags
+	fs := flag.NewFlagSet("memory "+args[0], flag.ContinueOnError)
+	fs.SetOutput(env.Stderr)
+	fs.StringVar(&f.agent, "agent", "Q15", "configured agent name")
 	fs.StringVar(
-		&flags.memoryRoot,
-		"memory-root",
-		"",
-		"the agent's /memory directory, the stack's memory volume, on this host (required)",
+		&f.databaseEnv,
+		"database-env",
+		"Q15_DATABASE_URL",
+		"database connection environment variable (or its _FILE secret)",
 	)
-	return fs
-}
-
-// defaultStatusLimits returns the byte budgets the report judges sizes
-// against; see the note on runMemory for why they are the defaults.
-func defaultStatusLimits() memory.StatusLimits {
-	return memory.StatusLimits{
-		WorkingMemoryBudgetBytes: config.DefaultMemoryWorkingBudgetBytes,
-		OpenLoopsBudgetBytes:     config.DefaultMemoryOpenLoopsBudgetBytes,
-	}
-}
-
-// runMemoryStatus reports one memory root: head, checkpoint lag, job failures,
-// file sizes and the ledger. stdout carries the report and nothing else, and
-// the process does not fail because a report says something is wrong: a
-// stalled conversion is data, and whoever reads the report reacts to it.
-func runMemoryStatus(ctx context.Context, env command.Env, args []string) error {
-	flags := memoryFlags{}
-	fs := newMemoryFlagSet("memory status", env, &flags)
-	if err := fs.Parse(args); err != nil {
+	fs.StringVar(&f.memoryRoot, "memory-root", "", "frozen legacy memory root, for import only")
+	fs.StringVar(
+		&f.configPath,
+		"config",
+		"/etc/q15/agent/config.yaml",
+		"agent configuration, for backfill",
+	)
+	fs.BoolVar(&f.verify, "verify", false, "verify every imported turn without writing")
+	fs.BoolVar(&f.prepare, "prepare", false, "record cutover readiness after complete backfill")
+	fs.IntVar(&f.batches, "batches", 0, "maximum backfill batches; zero runs until idle")
+	fs.IntVar(
+		&f.summaryWorkers,
+		"summary-workers",
+		1,
+		"concurrent backfill summary requests (1 to 8)",
+	)
+	if err := fs.Parse(args[1:]); err != nil {
 		return command.AsUsage(err)
 	}
-	if fs.NArg() > 0 {
-		return command.Usagef("memory status takes no arguments, got %q", fs.Arg(0))
+	if fs.NArg() != 0 {
+		return command.Usagef("memory %s takes no positional arguments", args[0])
 	}
-	if flags.memoryRoot == "" {
+	if f.agent == "" || f.batches < 0 || f.summaryWorkers < 1 || f.summaryWorkers > 8 {
 		return command.Usagef(
-			"memory status needs --memory-root: the agent's /memory directory, the stack's memory volume, on this host",
+			"agent must be nonempty, batches nonnegative, and summary-workers between 1 and 8",
 		)
 	}
-
-	info, err := os.Stat(flags.memoryRoot)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf(
-				"memory status: --memory-root %s does not exist: it is the agent's /memory directory, the stack's memory volume, on this host",
-				flags.memoryRoot,
-			)
-		}
-		return fmt.Errorf("memory status: read --memory-root %s: %w", flags.memoryRoot, err)
+	if args[0] == "import" && f.memoryRoot == "" {
+		return command.Usagef("memory import requires --memory-root pointing to a frozen snapshot")
 	}
-	if !info.IsDir() {
-		return fmt.Errorf(
-			"memory status: --memory-root %s is a file, not the memory directory",
-			flags.memoryRoot,
+	if (f.verify && args[0] != "import") || (f.prepare && args[0] != "backfill") ||
+		(f.memoryRoot != "" && args[0] != "import") {
+		return command.Usagef(
+			"verify and memory-root belong to import; prepare belongs to backfill",
 		)
 	}
-
-	profile, err := flags.profile(env.Release)
+	dsn, err := config.ResolveDatabaseURL(f.databaseEnv)
 	if err != nil {
 		return err
 	}
-
-	store := memory.NewStore(memoryrepo.New(flags.memoryRoot, nil), profile.AgentName)
-	status, err := memory.CollectStatus(ctx, store, defaultStatusLimits(), time.Now())
-	if err != nil {
-		return fmt.Errorf("memory status: %w", err)
+	if args[0] == "backfill" {
+		return runHistoryBackfill(ctx, env, f, dsn)
 	}
-	return memory.RenderStatus(env.Stdout, status)
+	var store *history.Store
+	if args[0] == "status" || f.verify {
+		store, err = history.OpenReadOnly(ctx, dsn, f.agent)
+	} else {
+		store, err = history.Open(ctx, dsn, f.agent)
+	}
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	if args[0] == "import" {
+		report, err := store.Import(ctx, f.memoryRoot, f.verify)
+		if writeErr := json.NewEncoder(env.Stdout).Encode(report); writeErr != nil {
+			return writeErr
+		}
+		return err
+	}
+	status, err := store.Coverage(ctx)
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(env.Stdout).Encode(status)
+}
+
+type historyFlags struct {
+	agent, databaseEnv, memoryRoot, configPath string
+	verify, prepare                            bool
+	batches, summaryWorkers                    int
+}
+
+func runHistoryBackfill(ctx context.Context, env command.Env, f historyFlags, dsn string) error {
+	cfg, err := config.Load(f.configPath)
+	if err != nil {
+		return err
+	}
+	if cfg.Agent == nil || cfg.Agent.Name != f.agent {
+		return command.Usagef("--agent must match the agent in --config")
+	}
+	settings, err := cfg.ResolveHistory()
+	if err != nil {
+		return err
+	}
+	store, err := history.Open(ctx, dsn, f.agent)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	embedder, err := embed.NewEmbedder(
+		ctx,
+		embed.Settings{
+			Provider:   settings.EmbeddingProvider,
+			BaseURL:    settings.EmbeddingBaseURL,
+			APIKey:     settings.EmbeddingAPIKey,
+			Model:      settings.EmbeddingModel,
+			Dimensions: settings.EmbeddingDimensions,
+			BatchSize:  settings.EmbeddingBatchSize,
+		},
+	)
+	if err != nil {
+		return err
+	}
+	digester, err := history.NewOllamaDigester(
+		settings.SummaryBaseURL,
+		settings.SummaryAPIKey,
+		settings.SummaryProvider,
+		settings.SummaryModel,
+	)
+	if err != nil {
+		return err
+	}
+	indexer, err := history.NewIndexer(
+		ctx,
+		store,
+		history.EmbeddingSpace{
+			Provider:   settings.EmbeddingProvider,
+			Model:      settings.EmbeddingModel,
+			Dimensions: settings.EmbeddingDimensions,
+		},
+		embedder,
+		digester,
+	)
+	if err != nil {
+		return err
+	}
+	if err := indexer.SetDigestConcurrency(f.summaryWorkers); err != nil {
+		return err
+	}
+	for batch := 0; f.batches == 0 || batch < f.batches; batch++ {
+		batchCtx, cancel := context.WithTimeout(ctx, 4*time.Minute)
+		n, batchErr := indexer.RunBatch(batchCtx, 8)
+		cancel()
+		status, err := indexer.Status(ctx)
+		if err != nil {
+			return err
+		}
+		if err := json.NewEncoder(env.Stdout).Encode(status); err != nil {
+			return err
+		}
+		if batchErr != nil {
+			return fmt.Errorf(
+				"history backfill batch failed; completed work is saved, rerun to resume",
+			)
+		}
+		if n == 0 {
+			break
+		}
+	}
+	if f.prepare {
+		return indexer.PrepareCutover(ctx)
+	}
+	return nil
+}
+
+func writeMemoryUsage(w io.Writer) {
+	fmt.Fprint(w, `Postgres conversation history and resumable cutover preparation.
+
+usage:
+  q15 memory import --agent NAME --memory-root FROZEN_PATH [--verify]
+  q15 memory backfill --agent NAME --config PATH [--batches N] [--summary-workers N] [--prepare]
+  q15 memory status --agent NAME
+
+Connection: Q15_DATABASE_URL or Q15_DATABASE_URL_FILE; override its name with --database-env.
+Import is idempotent and verifies every turn. --verify and status are read-only.
+Backfill uses the explicitly configured Ollama summary model and embedding space.
+Stop the old agent before the final snapshot. Prepare must succeed before the new runtime starts.
+`)
 }

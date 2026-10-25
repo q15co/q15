@@ -163,6 +163,10 @@ is_go_file() {
 	[[ $1 == *.go ]]
 }
 
+is_sql_file() {
+	[[ $1 == *.sql ]]
+}
+
 # Shared extension dispatch. File hygiene already applies to every UI file.
 is_typescript_file() {
 	case "$1" in

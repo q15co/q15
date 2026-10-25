@@ -121,6 +121,21 @@ jobs:
     name: Pull Request Verify
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    services:
+      history-postgres:
+        image: pgvector/pgvector:0.8.7-pg17
+        env:
+          POSTGRES_PASSWORD: q15-history-ci
+          POSTGRES_DB: q15_history
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d q15_history"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      Q15_TEST_POSTGRES_URL: postgresql://postgres:q15-history-ci@127.0.0.1:5432/q15_history?sslmode=disable
     steps:
       - name: Checkout code
         uses: actions/checkout@v5

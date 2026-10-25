@@ -4,15 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
+	"github.com/q15co/q15/systems/agent/internal/buildinfo"
 	"github.com/q15co/q15/systems/agent/internal/bus"
 	"github.com/q15co/q15/systems/agent/internal/channel/telegram"
 	"github.com/q15co/q15/systems/agent/internal/modelcatalog"
-	"github.com/q15co/q15/systems/agent/internal/selectionstore"
 	"github.com/q15co/q15/systems/agent/internal/turnctx"
 )
 
@@ -32,6 +31,7 @@ func composeSystemPrompt(
 	}
 
 	parts := []string{base}
+	parts = append(parts, renderAgentBuildPrompt(buildinfo.Current()))
 	if runtimeSection := renderRuntimeEnvironmentPrompt(agentName, info); runtimeSection != "" {
 		parts = append(parts, runtimeSection)
 	}
@@ -41,14 +41,19 @@ func composeSystemPrompt(
 	return strings.Join(parts, "\n\n")
 }
 
+func renderAgentBuildPrompt(info buildinfo.Info) string {
+	return agent.RenderPromptElement("agent_build", map[string]string{
+		"git_commit": info.Commit, "source_modified": info.Modified, "provenance": info.Source,
+	}, "This identifies the running q15-agent executable. Use this commit when investigating harness behavior. source_modified=true includes local source changes; unknown means build provenance was unavailable. Historical build and context tags describe the requests that recorded them.")
+}
+
 // renderCurrentModelPrompt renders the per-turn current-model section: the live
-// interactive provider/model with discovery metadata, any cognition overrides,
+// interactive provider/model with discovery metadata,
 // and the change-model guidance. Discovered values are quoted so a malformed
 // provider/model id cannot inject prompt content.
 func renderCurrentModelPrompt(
 	registry *modelcatalog.Registry,
 	selection *modelcatalog.Selection,
-	store *selectionstore.Store,
 ) string {
 	if registry == nil || selection == nil {
 		return ""
@@ -80,10 +85,9 @@ func renderCurrentModelPrompt(
 		fmt.Sprintf("provider: %s", promptQuote(provider)),
 		modelLine,
 		renderRoleSelectionLine(registry, "decision"),
-		renderCognitionOverrides(store),
 		"",
 		"## Changing models",
-		"You are not locked to this model. Use `list_providers` and `list_models` to see alternatives with live metadata, then `switch_model` to change the interactive model, `switch_model` with slot \"decision\" to change the decision model, or `switch_cognition_model` to set the model for a specific background cognition job. Switch only when you have a specific reason (capability needed, larger context, fresher model, cost). Otherwise stay.",
+		"You are not locked to this model. Use `list_providers` and `list_models` to see alternatives with live metadata, then `switch_model` to change the interactive model, `switch_model` with slot \"decision\" to change the decision model. Switch only when you have a specific reason (capability needed, larger context, fresher model, cost). Otherwise stay.",
 	}, "\n")
 	body = strings.TrimSpace(body)
 	return agent.RenderPromptElement("current_model", nil, body)
@@ -114,11 +118,10 @@ func renderRoleSelectionLine(registry *modelcatalog.Registry, slot string) strin
 func buildInteractiveSystemTextHints(
 	registry *modelcatalog.Registry,
 	selection *modelcatalog.Selection,
-	store *selectionstore.Store,
 ) []agent.SystemTextSource {
 	return []agent.SystemTextSource{
 		func(context.Context) string {
-			return renderCurrentModelPrompt(registry, selection, store)
+			return renderCurrentModelPrompt(registry, selection)
 		},
 		renderResponseFormatPrompt,
 	}
@@ -133,35 +136,6 @@ func renderResponseFormatPrompt(ctx context.Context) string {
 		return ""
 	}
 	return telegram.ResponseFormatPrompt()
-}
-
-// renderCognitionOverrides renders per-job cognition model overrides. Jobs
-// without an explicit override inherit the interactive model and are omitted.
-func renderCognitionOverrides(store *selectionstore.Store) string {
-	if store == nil {
-		return ""
-	}
-	overrides := store.CognitionSelections()
-	if len(overrides) == 0 {
-		return ""
-	}
-	jobTypes := make([]string, 0, len(overrides))
-	for jobType := range overrides {
-		jobTypes = append(jobTypes, jobType)
-	}
-	sort.Strings(jobTypes)
-	lines := []string{"## Cognition model overrides"}
-	for _, jobType := range jobTypes {
-		override := overrides[jobType]
-		lines = append(lines, fmt.Sprintf(
-			"- %s: provider %s, model %s",
-			promptQuote(jobType),
-			promptQuote(override.Provider),
-			promptQuote(override.Model),
-		))
-	}
-	lines = append(lines, "- Jobs without an override inherit the current interactive model.")
-	return strings.Join(lines, "\n")
 }
 
 // promptQuote quotes a model-facing value as JSON so discovered fields with
@@ -288,50 +262,11 @@ func renderRuntimeEnvironmentPrompt(
 		lines = append(
 			lines,
 			fmt.Sprintf(
-				"- Persistent memory repo: %s",
+				"- Authored identity files: %s/core/*.md (injected each turn).",
 				info.MemoryDir,
 			),
-			fmt.Sprintf(
-				"- Core self-model files (auto-injected into prompt each turn): %s/core/*.md (seeded with AGENT.md, USER.md, SOUL.md)",
-				info.MemoryDir,
-			),
-			fmt.Sprintf(
-				"- Canonical working-memory file (auto-injected into prompt each turn): %s/working/WORKING_MEMORY.md",
-				info.MemoryDir,
-			),
-			fmt.Sprintf(
-				"- Additional persistent memory layers (tool-fetched, not auto-injected): %s/semantic, %s/history, %s/cognition",
-				info.MemoryDir,
-				info.MemoryDir,
-				info.MemoryDir,
-			),
-			fmt.Sprintf(
-				"- Canonical semantic-memory files are %s/semantic/facts.md, %s/semantic/preferences.md, and %s/semantic/projects.md.",
-				info.MemoryDir,
-				info.MemoryDir,
-				info.MemoryDir,
-			),
-			"- WORKING_MEMORY.md, OPEN_LOOPS.md, and LEDGER.md under the working layer are maintained only by cognition jobs. Read them for context; leave updates to those jobs.",
-			"- Use write_file, edit_file, or apply_patch for other memory mutations; exec sees the memory root read-only. If a cognition run reserves an editable target, retry that write after the run completes.",
-			"- When editing canonical semantic memory, preserve these exact H2 headings:",
-			"- facts.md: Confirmed Facts, Grounded Inferences",
-			"- preferences.md: User Preferences, Collaboration Preferences",
-			"- projects.md: Active Projects, Durable Project Knowledge",
-			"- Do not invent new top-level sections in canonical semantic memory; merge content into the existing headings instead.",
-			fmt.Sprintf(
-				"- WORKING_MEMORY.md and OPEN_LOOPS.md under %s/working are auto-injected; fetch other working files with file tools.",
-				info.MemoryDir,
-			),
-			fmt.Sprintf(
-				"- Transcript sequence bookkeeping lives under %s/history/state/head.json.",
-				info.MemoryDir,
-			),
-			fmt.Sprintf(
-				"- Auxiliary notebook files live under %s/notes/inbox, %s/notes/zettel, and %s/notes/maps using the built-in zettelkasten layout; they are never implicit prompt-visible working state.",
-				info.MemoryDir,
-				info.MemoryDir,
-				info.MemoryDir,
-			),
+			"- Conversation history, summaries and history search live in Postgres. Use history_search and history_read for older evidence.",
+			"- Use file tools to edit authored identity and notes; exec sees that filesystem read-only.",
 		)
 	}
 	if info.MediaDir != "" {

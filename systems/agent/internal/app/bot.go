@@ -14,15 +14,17 @@ import (
 
 	"github.com/q15co/q15/libs/exec-contract/execpb"
 	"github.com/q15co/q15/systems/agent/internal/agent"
+	"github.com/q15co/q15/systems/agent/internal/buildinfo"
 	"github.com/q15co/q15/systems/agent/internal/bus"
 	channelport "github.com/q15co/q15/systems/agent/internal/channel"
 	"github.com/q15co/q15/systems/agent/internal/channel/bridge"
 	"github.com/q15co/q15/systems/agent/internal/channel/telegram"
-	"github.com/q15co/q15/systems/agent/internal/cognition"
 	"github.com/q15co/q15/systems/agent/internal/config"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
 	"github.com/q15co/q15/systems/agent/internal/dump"
+	"github.com/q15co/q15/systems/agent/internal/embed"
 	"github.com/q15co/q15/systems/agent/internal/fileops"
+	"github.com/q15co/q15/systems/agent/internal/history"
 	q15media "github.com/q15co/q15/systems/agent/internal/media"
 	"github.com/q15co/q15/systems/agent/internal/memory"
 	"github.com/q15co/q15/systems/agent/internal/memoryrepo"
@@ -46,10 +48,17 @@ type runtimeEnvironmentInfo struct {
 }
 
 // runBot is the composition root: it builds the selection store, model adapter,
-// tools, system prompt, memory store, cognition controller and the transports,
+// tools, system prompt, memory store, history indexer and the transports,
 // then hands the assembled runtime to runRuntime, which marks it ready and runs
 // its workers until the context is canceled or one fails.
 func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.Registry) error {
+	build := buildinfo.Current()
+	log.Printf(
+		"q15: runtime event=build git_commit=%q source_modified=%q provenance=%q",
+		build.Commit,
+		build.Modified,
+		build.Source,
+	)
 	if err := clearRuntimeReady(runtimeReadyPath); err != nil {
 		return fmt.Errorf("clear stale runtime readiness: %w", err)
 	}
@@ -66,7 +75,6 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 	// Telegram-less runtime is refused there rather than run headless.
 	token := strings.TrimSpace(rt.TelegramToken)
 
-	jobs := cognitionJobs(rt)
 	selectionStore, err := selectionstore.Open(selectionstore.DefaultPath(rt.WorkspaceLocalDir))
 	if err != nil {
 		return fmt.Errorf("open model selection store: %w", err)
@@ -78,9 +86,6 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 	interactiveModelRefSource := func() []string {
 		return buildModelRefs(selection.CurrentModel(), registry)
 	}
-	cognitionRefResolver := newCognitionRefResolver(registry, selection, selectionStore)
-	cognitionContextResolver := newCognitionContextResolver(registry, cognitionRefResolver)
-	cognitionJobTypes := cognitionJobTypeNames(jobs)
 
 	executionClient, executionInfo, err := connectExecutionService(ctx, &rt.Execution)
 	if err != nil {
@@ -129,6 +134,18 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 	if err := memoryStore.Init(ctx); err != nil {
 		return fmt.Errorf("initialize memory store for agent %q: %w", rt.Name, err)
 	}
+	transcripts, err := history.Open(ctx, rt.History.DatabaseURL, rt.Name)
+	if err != nil {
+		return err
+	}
+	defer transcripts.Close()
+	historyIndexer, err := newHistoryIndexer(ctx, transcripts, rt.History)
+	if err != nil {
+		return err
+	}
+	if err := historyIndexer.RequireReady(ctx, rt.MemoryLocalDir); err != nil {
+		return err
+	}
 	skillManager, fileSettings := buildSkillManager(rt, runtimeInfo)
 	fileExec := q15skills.NewFileExecutor(
 		fileops.NewGuardedExecutor(fileSettings, memoryStore),
@@ -153,6 +170,7 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 	if err != nil {
 		return fmt.Errorf("configure tools for agent %q: %w", rt.Name, err)
 	}
+	baseToolList = append(baseToolList, history.NewTools(historyIndexer)...)
 	baseToolRegistry, err := agent.NewToolRegistry(baseToolList...)
 	if err != nil {
 		return fmt.Errorf("build base tool registry for agent %q: %w", rt.Name, err)
@@ -161,7 +179,7 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 	messageBus := bus.New(bus.DefaultBufferSize)
 	bridge, err := bridgeSettings{
 		listenTarget: rt.BridgeListenTarget,
-	}.newChatBridge(memoryStore, messageBus, mediaStore)
+	}.newChatBridge(transcripts, messageBus, mediaStore)
 	if err != nil {
 		return err
 	}
@@ -180,8 +198,9 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 		return fmt.Errorf("initialize schedule store for agent %q: %w", rt.Name, err)
 	}
 	store := &runtimeStore{
-		memory: memoryStore,
-		skills: skillManager,
+		memory:     memoryStore,
+		transcript: transcripts,
+		skills:     skillManager,
 	}
 	scheduledExecutor, err := newScheduledJobExecutor(
 		modelAdapter,
@@ -195,7 +214,7 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 					toolDefinitions,
 				),
 				store,
-				rt.MemoryRecentTurns,
+				rt.History.RecentTurns,
 			)
 		},
 	)
@@ -232,23 +251,39 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 	if err != nil {
 		return fmt.Errorf("configure schedule manager for agent %q: %w", rt.Name, err)
 	}
+	contextSettings := history.ContextSettings{
+		WorkingBudgetTokens: rt.History.WorkingBudgetTokens, ModelBudgetTokens: rt.History.ModelBudgetTokens,
+		ContextWindowFraction: rt.History.ContextWindowFraction, RecentHistoryFraction: rt.History.RecentHistoryFraction, MaxRequestBytes: rt.History.MaxRequestBytes,
+		RecentTurns: rt.History.RecentTurns, RetrievalLimit: rt.History.RetrievalLimit, MinSimilarity: rt.History.MinSimilarity,
+	}
+	subagentContextFitter, err := history.NewIsolatedContextFitter(contextSettings)
+	if err != nil {
+		return err
+	}
 	toolRegistry, err := agent.NewToolRegistry(buildRuntimeTools(
 		baseToolList,
 		registry,
 		selection,
 		selectionStore,
-		cognitionJobTypes,
 		baseToolRegistry,
 		mediaStore,
 		skillManager,
 		dumpWriter,
 		scheduleManager,
 		modelAdapter,
+		subagentContextFitter,
 	)...)
 	if err != nil {
 		return fmt.Errorf("build tool registry for agent %q: %w", rt.Name, err)
 	}
 
+	contextSettings.Tools = toolRegistry.Definitions()
+	contextService, err := history.NewContextService(historyIndexer, contextSettings)
+	if err != nil {
+		return err
+	}
+	store.contextService = contextService
+	transportWorkers = append(transportWorkers, historyIndexer.Run)
 	systemPrompt := composeSystemPrompt(
 		agent.DefaultSystemPromptForName(rt.Name),
 		rt.Name,
@@ -256,32 +291,15 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 		toolRegistry.Definitions(),
 	)
 
-	entryPoints := newRuntimeEntryPoints(runtimeEntryPointsConfig{
-		modelClient:               modelClient,
-		planner:                   modelAdapter,
-		tools:                     toolRegistry,
-		interactiveModelRefSource: interactiveModelRefSource,
-		cognitionRefResolver:      cognitionRefResolver,
-		cognitionContextResolver:  cognitionContextResolver,
-		interactivePrompt:         systemPrompt,
-		interactiveSystemTextHints: buildInteractiveSystemTextHints(
-			registry,
-			selection,
-			selectionStore,
-		),
-		interactiveStore: store,
-		controllerStore:  store,
-		loader:           store,
-		recentTurns:      rt.MemoryRecentTurns,
-	})
-	botAgent := entryPoints.NewInteractiveAgent()
-	cognitionController, err := entryPoints.NewCognitionController(jobs...)
-	if err != nil {
-		return fmt.Errorf("configure cognition controller for agent %q: %w", rt.Name, err)
-	}
-	if cognitionController != nil {
-		store.AddAppendObserver(cognitionController.NotifyStateChange)
-	}
+	botAgent := agent.NewLoopWithPlannerAndModelRefSource(
+		modelClient,
+		modelAdapter,
+		toolRegistry,
+		interactiveModelRefSource,
+		systemPrompt,
+		store,
+		rt.History.RecentTurns,
+		buildInteractiveSystemTextHints(registry, selection)...)
 	// The transports are assembled here, at the composition root, because that
 	// is where a transport's startup can fail and where the listener it bound
 	// has to be closed on the later failure paths. Inbound publishing is bound
@@ -331,7 +349,6 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 		transportWorkers:  transportWorkers,
 		botAgent:          botAgent,
 		scheduleManager:   scheduleManager,
-		cognition:         cognitionController,
 	})
 }
 
@@ -417,11 +434,10 @@ type runtimeInputs struct {
 	// transport has none of its own; the chat bridge's listener is one.
 	transportWorkers []runtimeWorker
 
-	// The workers. The agent and the scheduler are required; cognition joins
+	// The workers. The agent and the scheduler are required; history indexing joins
 	// them when it is configured.
 	botAgent        agent.Agent
 	scheduleManager *schedule.Manager
-	cognition       *cognition.Controller
 }
 
 // runRuntime marks the runtime ready and then runs its workers until the
@@ -457,7 +473,7 @@ func runRuntime(ctx context.Context, cancel context.CancelFunc, in runtimeInputs
 	log.Printf("q15: runtime event=ready")
 
 	// The worker set: one loops over inbound messages and runs the agent, one
-	// delivers outbound messages, one runs scheduled jobs. Cognition and any
+	// delivers outbound messages, one runs scheduled jobs. Indexing and any
 	// transport that needs a worker of its own join them when they are
 	// configured. runRuntimeWorkers returns on the first failure or on
 	// cancellation, then joins the rest.
@@ -471,9 +487,6 @@ func runRuntime(ctx context.Context, cancel context.CancelFunc, in runtimeInputs
 		func(workerCtx context.Context) error {
 			return in.scheduleManager.Run(workerCtx)
 		},
-	}
-	if in.cognition != nil {
-		workers = append(workers, in.cognition.Run)
 	}
 	workers = append(workers, in.transportWorkers...)
 
@@ -529,25 +542,6 @@ func (s bridgeSettings) newChatBridge(
 		return nil, err
 	}
 	return &chatBridge{server: server, endpoint: endpoint}, nil
-}
-
-// cognitionJobs registers the built-in background cognition jobs. The runtime
-// supplies the memory byte budgets: the semantic conversion registration takes
-// the working-memory one its overbudget state rule enforces, and the
-// working-memory consolidation registration takes the open-loops one its
-// open_loops_overbudget state rule enforces.
-func cognitionJobs(rt config.AgentRuntime) []cognition.JobRegistration {
-	return []cognition.JobRegistration{
-		cognition.NewVerificationReviewRegistration(),
-		cognition.NewSemanticMemoryExtractionRegistration(
-			rt.MemoryWorkingBudgetBytes,
-			rt.MemoryOpenLoopsBudgetBytes,
-		),
-		cognition.NewWorkingMemoryConsolidationRegistration(
-			rt.MemoryWorkingBudgetBytes,
-			rt.MemoryOpenLoopsBudgetBytes,
-		),
-	}
 }
 
 // telegramInboundMessage adapts a Telegram channel message to the bus shape.
@@ -611,4 +605,45 @@ func resolveRuntimeEnvironment(
 		ProxyEnabled:        info.GetProxyEnabled(),
 		ProxyPolicyRevision: strings.TrimSpace(info.GetProxyPolicyRevision()),
 	}, nil
+}
+
+func newHistoryIndexer(
+	ctx context.Context,
+	store *history.Store,
+	settings config.HistoryRuntime,
+) (*history.Indexer, error) {
+	embedder, err := embed.NewEmbedder(
+		ctx,
+		embed.Settings{
+			Provider:   settings.EmbeddingProvider,
+			BaseURL:    settings.EmbeddingBaseURL,
+			APIKey:     settings.EmbeddingAPIKey,
+			Model:      settings.EmbeddingModel,
+			Dimensions: settings.EmbeddingDimensions,
+			BatchSize:  settings.EmbeddingBatchSize,
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+	digester, err := history.NewOllamaDigester(
+		settings.SummaryBaseURL,
+		settings.SummaryAPIKey,
+		settings.SummaryProvider,
+		settings.SummaryModel,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return history.NewIndexer(
+		ctx,
+		store,
+		history.EmbeddingSpace{
+			Provider:   settings.EmbeddingProvider,
+			Model:      settings.EmbeddingModel,
+			Dimensions: settings.EmbeddingDimensions,
+		},
+		embedder,
+		digester,
+	)
 }

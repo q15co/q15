@@ -628,3 +628,93 @@ func TestEngineFailureLimitRetainsCause(t *testing.T) {
 		t.Fatalf("limit claimed an untried model failed: %v", err)
 	}
 }
+
+type contextAwareModel struct{ *fakeModelClient }
+
+func (contextAwareModel) ContextForModel(ref string) ModelContext {
+	return ModelContext{Ref: "fixture/" + ref, MaxContextTokens: 8192, MaxOutputTokens: 2048}
+}
+
+func TestEngineFitsEveryFallbackAndToolStepWithoutChangingSavedMessages(t *testing.T) {
+	calls := 0
+	client := contextAwareModel{
+		&fakeModelClient{
+			complete: func(_ context.Context, model string, messages []conversation.Message, _ []ToolDefinition) (ModelClientResult, error) {
+				calls++
+				if model == "first" {
+					return ModelClientResult{}, errors.New("provider offline")
+				}
+				if calls == 2 {
+					return toolCallResult("read-1", "read", `{}`), nil
+				}
+				if got := messages[len(messages)-1].Parts[0].Content; got != "fitted source" {
+					t.Fatalf("active tool result did not pass through fitter: %q", got)
+				}
+				return assistantResult("complete"), nil
+			},
+		},
+	}
+	registry, err := NewToolRegistry(
+		&testTool{
+			def: ToolDefinition{Name: "read"},
+			run: func(context.Context, string) (string, error) { return "canonical source", nil },
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := []conversation.Message{
+		conversation.SystemMessage("system"),
+		conversation.UserMessage("ok"),
+	}
+	var fitted []string
+	fitter := func(_ context.Context, model ModelContext, messages []conversation.Message, _ []ToolDefinition, start int, _ ...conversation.Message) ([]conversation.Message, error) {
+		fitted = append(fitted, model.Ref)
+		if start != len(original) || model.MaxOutputTokens != 2048 {
+			t.Fatalf("wrong model or generated boundary: %+v %d", model, start)
+		}
+		out := conversation.CloneMessages(messages)
+		for n := start; n < len(out); n++ {
+			for p := range out[n].Parts {
+				if out[n].Parts[p].Type == conversation.ToolResultPartType {
+					out[n].Parts[p].Content = "fitted source"
+				}
+			}
+		}
+		return out, nil
+	}
+	result, err := NewEngine(
+		client,
+		registry,
+		[]string{"first", "second"},
+	).Run(t.Context(), EngineRequest{Messages: original, UseTools: true, ContextFitter: fitter})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(fitted, ",") != "fixture/first,fixture/second,fixture/first,fixture/second" {
+		t.Fatalf("model attempts were not independently fitted: %v", fitted)
+	}
+	if result.FinalText != "complete" || result.Messages[1].Parts[0].Content != "canonical source" {
+		t.Fatalf("canonical generated transcript was changed: %+v", result)
+	}
+	if len(original) != 2 || messageText(original[1]) != "ok" {
+		t.Fatal("input mutated")
+	}
+}
+
+func TestEngineReportsSessionBudgetInsteadOfItsOwnTurnLimit(t *testing.T) {
+	model := &fakeModelClient{results: []ModelClientResult{{}}}
+	result, err := NewEngine(model, nil, []string{"child"}).Run(t.Context(), EngineRequest{
+		Messages:   []conversation.Message{conversation.UserMessage("Answer directly.")},
+		TurnBudget: NewTurnBudget(1),
+	})
+	var stopped *StopError
+	if !errors.As(err, &stopped) || stopped.Reason != StopReasonTurnBudgetExhausted ||
+		stopped.Detail != "turn budget exhausted (limit=1)" {
+		t.Fatalf("session limit was reported as the engine default: %v", err)
+	}
+	if result.ModelRef != "child" || strings.Contains(result.FinalText, "tool-call") ||
+		!strings.Contains(result.FinalText, "turn budget exhausted") {
+		t.Fatalf("incorrect stopped result: %+v", result)
+	}
+}

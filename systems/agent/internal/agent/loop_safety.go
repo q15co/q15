@@ -125,6 +125,11 @@ func formatStopSummary(
 	noProgressCount int,
 ) string {
 	switch reason {
+	case StopReasonTurnBudgetExhausted:
+		return fmt.Sprintf(
+			"Run stopped: turn budget exhausted (limit=%d). Progress up to this point has been saved.",
+			maxTurns,
+		)
 	case StopReasonToolLoopDetected:
 		return fmt.Sprintf(
 			"Run stopped by internal safety guard: detected repeated tool-call loop (repeat=%d, no_progress=%d). Progress up to this point has been saved.",

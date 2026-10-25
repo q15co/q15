@@ -183,7 +183,7 @@ func (l *Loop) Reply(
 
 	// Keep the canonical system prefix ordered from most stable to least stable
 	// so providers can reuse cached prefixes across working-memory changes.
-	messages, err := l.contextBuilder.Build(ctx, userMessage)
+	prepared, err := l.contextBuilder.Prepare(ctx, userMessage)
 	if err != nil {
 		emitRunEvent(ctx, observer, RunEvent{
 			Type: RunEventRunFailed,
@@ -192,7 +192,8 @@ func (l *Loop) Reply(
 		return ReplyResult{}, err
 	}
 	result, err := l.engine.Run(ctx, EngineRequest{
-		Messages:         messages,
+		Messages:         prepared.Messages,
+		ContextFitter:    prepared.FitRequest,
 		UseTools:         true,
 		SystemTextSource: l.renderSystemText,
 		Observer:         observer,

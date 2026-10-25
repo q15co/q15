@@ -11,7 +11,6 @@ import (
 
 	"github.com/q15co/q15/libs/chat-contract/chatpb"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
-	"github.com/q15co/q15/systems/agent/internal/memory"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -20,7 +19,7 @@ import (
 )
 
 type fakeTurnLister struct {
-	page      memory.TurnPage
+	page      conversation.TurnPage
 	err       error
 	head      int64
 	headErr   error
@@ -34,7 +33,7 @@ func (f *fakeTurnLister) ListTurns(
 	ctx context.Context,
 	afterSeq int64,
 	limit int,
-) (memory.TurnPage, error) {
+) (conversation.TurnPage, error) {
 	_ = ctx
 	f.calls++
 	f.afterSeq = afterSeq
@@ -80,9 +79,9 @@ func startChatService(t *testing.T, service *Service) chatpb.ChatServiceClient {
 	return chatpb.NewChatServiceClient(conn)
 }
 
-func fixtureBridgePage() memory.TurnPage {
-	return memory.TurnPage{
-		Turns: []memory.Turn{{
+func fixtureBridgePage() conversation.TurnPage {
+	return conversation.TurnPage{
+		Turns: []conversation.Turn{{
 			Seq:       11,
 			CreatedAt: time.Date(2026, time.April, 8, 12, 30, 0, 123456789, time.UTC),
 			Messages: []conversation.Message{
@@ -245,7 +244,7 @@ func TestServiceListTurnsTranscribesTurnsForClients(t *testing.T) {
 }
 
 func TestServiceListTurnsLeavesRequestDefaultsUntouched(t *testing.T) {
-	lister := &fakeTurnLister{page: memory.TurnPage{HeadSeq: 4}}
+	lister := &fakeTurnLister{page: conversation.TurnPage{HeadSeq: 4}}
 	client := startBridgeService(t, lister)
 
 	response, err := client.ListTurns(
@@ -281,7 +280,7 @@ func TestServiceListTurnsSurfacesListerFailure(t *testing.T) {
 }
 
 func TestServiceGetRuntimeInfoReportsHandshake(t *testing.T) {
-	lister := &fakeTurnLister{page: memory.TurnPage{HeadSeq: 12}, head: 12}
+	lister := &fakeTurnLister{page: conversation.TurnPage{HeadSeq: 12}, head: 12}
 	client := startBridgeService(t, lister)
 
 	response, err := client.GetRuntimeInfo(

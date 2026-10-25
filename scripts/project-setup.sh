@@ -28,6 +28,7 @@ required_tools=(
 	protoc-gen-go
 	protoc-gen-go-grpc
 	shfmt
+	sqlc
 	shellcheck
 	jq
 	yq
@@ -35,6 +36,7 @@ required_tools=(
 	deadnix
 	statix
 	mdformat
+	sqlfluff
 	markdownlint
 )
 
@@ -269,9 +271,11 @@ install_python_env() {
 	"${TOOLS_PYTHON_DIR}/bin/python" -m pip install --quiet \
 		"mdformat==${PYTHON_MDFORMAT_VERSION}" \
 		"mdformat-gfm==${PYTHON_MDFORMAT_GFM_VERSION}" \
-		"mdformat-frontmatter==${PYTHON_MDFORMAT_FRONTMATTER_VERSION}"
+		"mdformat-frontmatter==${PYTHON_MDFORMAT_FRONTMATTER_VERSION}" \
+		"sqlfluff==${PYTHON_SQLFLUFF_VERSION}"
 
 	ln -snf ../python/bin/mdformat "${TOOLS_BIN_DIR}/mdformat"
+	ln -snf ../python/bin/sqlfluff "${TOOLS_BIN_DIR}/sqlfluff"
 }
 
 install_node_env() {
@@ -319,6 +323,21 @@ fi
 
 log "installing repo-local tools into ${TOOLS_DIR}"
 
+# Python-only changes can reuse the existing Go, Rust and browser toolchains.
+if [[ -f ${TOOLS_MANIFEST_STAMP} ]] && diff -q \
+	<(sed -E '/^(TOOLS_MANIFEST_VERSION|PYTHON_[A-Z_]+)=/d; /^export PYTHON_[A-Z_]+$/d; /^[[:space:]]*$/d' "${TOOLS_MANIFEST_STAMP}") \
+	<({
+		printf 'GO_REQUIRED_SERIES=%s\n' "$(go_required_series)"
+		cat "${VERSIONS_FILE}"
+	} | sed -E '/^(TOOLS_MANIFEST_VERSION|PYTHON_[A-Z_]+)=/d; /^export PYTHON_[A-Z_]+$/d; /^[[:space:]]*$/d') >/dev/null; then
+	install_python_env
+	if have_expected_tools; then
+		write_manifest_stamp
+		log "repo-local toolchain is ready"
+		exit 0
+	fi
+fi
+
 # Adding browser tooling does not require rebuilding unchanged Go/Rust tools.
 if [[ -f ${TOOLS_MANIFEST_STAMP} ]] && diff -q \
 	<(sed -E '/^(TOOLS_MANIFEST_VERSION|NODE_VERSION|PNPM_VERSION)=/d; /^export (NODE_VERSION|PNPM_VERSION)$/d; /^[[:space:]]*$/d' "${TOOLS_MANIFEST_STAMP}") \
@@ -344,6 +363,7 @@ install_go_tool "github.com/bufbuild/buf/cmd/buf@${BUF_VERSION}"
 install_go_tool "google.golang.org/protobuf/cmd/protoc-gen-go@${PROTOC_GEN_GO_VERSION}"
 install_go_tool "google.golang.org/grpc/cmd/protoc-gen-go-grpc@${PROTOC_GEN_GO_GRPC_VERSION}"
 install_go_tool "mvdan.cc/sh/v3/cmd/shfmt@${SHFMT_VERSION}"
+install_go_tool "github.com/sqlc-dev/sqlc/cmd/sqlc@${SQLC_VERSION}"
 
 install_shellcheck
 install_jq

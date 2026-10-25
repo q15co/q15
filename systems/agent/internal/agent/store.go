@@ -38,41 +38,6 @@ type CoreMemoryStore interface {
 	LoadCoreMemory(ctx context.Context) (CoreMemory, error)
 }
 
-// WorkingMemory is the canonical prompt-visible active-state artifact.
-type WorkingMemory struct {
-	RelativePath string
-	Content      string
-}
-
-// WorkingMemoryStore can provide prompt-visible working memory for each reply.
-type WorkingMemoryStore interface {
-	LoadWorkingMemory(ctx context.Context) (WorkingMemory, error)
-}
-
-// OpenLoopsStore can provide the prompt-visible prospective open-loops text for
-// each reply.
-type OpenLoopsStore interface {
-	LoadOpenLoops(ctx context.Context) (string, error)
-}
-
-// SemanticMemory holds canonical durable extracted memory files that are
-// available to cognition jobs but are not auto-injected into reply prompts.
-type SemanticMemory struct {
-	Files []SemanticMemoryFile
-}
-
-// SemanticMemoryFile is one canonical semantic-memory markdown file.
-type SemanticMemoryFile struct {
-	RelativePath string
-	Content      string
-}
-
-// SemanticMemoryStore can provide canonical semantic memory for background
-// cognition jobs.
-type SemanticMemoryStore interface {
-	LoadSemanticMemory(ctx context.Context) (SemanticMemory, error)
-}
-
 // SkillCatalog describes dynamically available skills that may be loaded by
 // the model on demand.
 type SkillCatalog struct {

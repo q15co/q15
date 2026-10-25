@@ -28,13 +28,13 @@ func buildRuntimeTools(
 	registry *modelcatalog.Registry,
 	selection *modelcatalog.Selection,
 	selectionStore *selectionstore.Store,
-	cognitionJobTypes []string,
 	baseToolRegistry agent.ToolRegistry,
 	mediaStore q15media.Store,
 	skillManager *q15skills.Manager,
 	dumpWriter io.Writer,
 	scheduleManager *schedule.Manager,
 	modelAdapter *routedModelAdapter,
+	contextFitter agent.RequestContextFitter,
 ) []agent.Tool {
 	subAgentManager := subagent.NewManager(
 		registry,
@@ -45,6 +45,7 @@ func buildRuntimeTools(
 		mediaStore,
 		subagentSkillResolver{manager: skillManager},
 		dumpWriter,
+		contextFitter,
 	)
 	return append(
 		baseToolList,
@@ -52,7 +53,6 @@ func buildRuntimeTools(
 		tools.NewListModels(registry, selection),
 		tools.NewDecisionCheck(newRoutedDecisionAdapter(registry, modelAdapter.decisionClientFor)),
 		tools.NewSwitchModel(registry, selection, selectionStore),
-		tools.NewSwitchCognitionModel(registry, selectionStore, cognitionJobTypes),
 		subagent.NewSpawn(subAgentManager),
 		subagent.NewRead(subAgentManager),
 		subagent.NewWrite(subAgentManager),

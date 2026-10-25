@@ -75,12 +75,13 @@ func (e *scheduledJobExecutor) Execute(
 
 	engine := agent.NewEngine(modelClient, tools, []string{model.Ref})
 	engine.SetMaxTurns(job.MaxTurns)
-	messages, systemTextSource, err := e.buildContext(ctx, request, model, tools.Definitions())
+	prepared, systemTextSource, err := e.buildContext(ctx, request, model, tools.Definitions())
 	if err != nil {
 		return schedule.RunResult{Model: model}, err
 	}
 	result, err := engine.Run(ctx, agent.EngineRequest{
-		Messages:         messages,
+		Messages:         prepared.Messages,
+		ContextFitter:    prepared.FitRequest,
 		UseTools:         true,
 		SystemTextSource: systemTextSource,
 	})
@@ -98,12 +99,12 @@ func (e *scheduledJobExecutor) buildContext(
 	request schedule.RunRequest,
 	model schedule.ModelTarget,
 	toolDefinitions []agent.ToolDefinition,
-) ([]conversation.Message, agent.SystemTextSource, error) {
+) (agent.PreparedContext, agent.SystemTextSource, error) {
 	job := request.Job
 	runContext := scheduledRunContext(request, model)
 	switch job.ContextProfile {
 	case schedule.ContextProfileMinimal:
-		return []conversation.Message{
+		return agent.PreparedContext{Messages: []conversation.Message{
 			conversation.SystemMessage(strings.Join([]string{
 				"You are running an isolated scheduled job.",
 				"Complete only the stored task below and produce a concise result for the user.",
@@ -112,15 +113,20 @@ func (e *scheduledJobExecutor) buildContext(
 				runContext,
 			}, " ")),
 			conversation.UserMessage(job.Prompt),
-		}, nil, nil
+		}}, nil, nil
 	case schedule.ContextProfileAgent:
 		contextBuilder := e.newAgentContextBuilder(toolDefinitions)
 		if contextBuilder == nil {
-			return nil, nil, fmt.Errorf("build scheduled agent context: builder is nil")
+			return agent.PreparedContext{}, nil, fmt.Errorf(
+				"build scheduled agent context: builder is nil",
+			)
 		}
-		messages, err := contextBuilder.Build(ctx, conversation.UserMessage(job.Prompt))
+		prepared, err := contextBuilder.Prepare(ctx, conversation.UserMessage(job.Prompt))
 		if err != nil {
-			return nil, nil, fmt.Errorf("build scheduled agent context: %w", err)
+			return agent.PreparedContext{}, nil, fmt.Errorf(
+				"build scheduled agent context: %w",
+				err,
+			)
 		}
 		systemTextSource := func(sourceCtx context.Context) string {
 			return strings.Join([]string{
@@ -128,9 +134,9 @@ func (e *scheduledJobExecutor) buildContext(
 				runContext,
 			}, "\n\n")
 		}
-		return messages, systemTextSource, nil
+		return prepared, systemTextSource, nil
 	default:
-		return nil, nil, fmt.Errorf(
+		return agent.PreparedContext{}, nil, fmt.Errorf(
 			"unsupported scheduled job context profile %q",
 			job.ContextProfile,
 		)

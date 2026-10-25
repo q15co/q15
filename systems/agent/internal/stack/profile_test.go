@@ -397,6 +397,7 @@ func TestHostedProfileRendersNoModelContainers(t *testing.T) {
 		"q15-agent.container",
 		"q15-exec.container",
 		"q15-net.network",
+		"q15-postgres.container",
 		"q15-proxy.container",
 		"q15-web.container",
 	}

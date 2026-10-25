@@ -309,6 +309,8 @@ func formatReplyError(err error) string {
 	var stopErr *agent.StopError
 	if errors.As(err, &stopErr) {
 		switch stopErr.Reason {
+		case agent.StopReasonTurnBudgetExhausted:
+			return "I stopped this run after using its available model turns. Progress was saved."
 		case agent.StopReasonToolTurnLimit:
 			return "I stopped this run after reaching an internal tool-call safety limit. Progress was saved."
 		case agent.StopReasonToolLoopDetected:

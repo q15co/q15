@@ -11,7 +11,6 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/bus"
 	"github.com/q15co/q15/systems/agent/internal/channel/telegram"
-	"github.com/q15co/q15/systems/agent/internal/config"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
 	"github.com/q15co/q15/systems/agent/internal/modelcatalog"
 	"github.com/q15co/q15/systems/agent/internal/modelselection"
@@ -19,13 +18,6 @@ import (
 	q15tools "github.com/q15co/q15/systems/agent/internal/tools"
 	"github.com/q15co/q15/systems/agent/internal/turnctx"
 )
-
-func TestCognitionJobsRegistersBuiltInCognitionJobs(t *testing.T) {
-	jobs := cognitionJobs(config.AgentRuntime{})
-	if len(jobs) < 3 {
-		t.Fatalf("cognitionJobs() returned %d jobs, want at least 3", len(jobs))
-	}
-}
 
 func TestTelegramInboundMessagePreservesFields(t *testing.T) {
 	msg := telegram.IncomingMessage{
@@ -207,7 +199,7 @@ func TestSwitchModelUpdatesNextModelTurnPrompt(t *testing.T) {
 		"base",
 		nil,
 		0,
-		buildInteractiveSystemTextHints(registry, selection, store)...,
+		buildInteractiveSystemTextHints(registry, selection)...,
 	)
 
 	runCtx := turnctx.WithOrigin(context.Background(), turnctx.Origin{

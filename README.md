@@ -31,12 +31,13 @@ what it is not, and what it does not claim to be.
 - **A workspace that is not scratch space.** `/workspace` is a project tree that survives restarts,
   updates and redeployments. A new stack may start with it empty, and it is expected to stay
   attached.
-- **Memory that accumulates.** Identity, extracted knowledge, working state and the full turn
-  history live under `/memory` as files. Background jobs keep them current between conversations.
+- **Conversation memory in Postgres.** Original turns, summaries and search indexes provide bounded
+  context across conversations. Authored identity and skills remain files.
 - **Work while you are away.** Scheduled jobs run unattended, each with its own model pin, its own
   tool allow-list and its own turn budget.
 - **A model you can change at runtime.** Providers are declared in config and their rosters are
-  discovered; the interactive model, and the model behind each background job, are runtime state.
+  discovered; interactive and decision models are runtime selections; history models have explicit
+  bindings.
 
 ## Install
 

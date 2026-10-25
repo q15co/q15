@@ -20,6 +20,26 @@ type ContextStore interface {
 	LoadRecentMessages(context.Context, int) ([]conversation.Message, error)
 }
 
+// RequestContextFitter rebuilds a provider request for its actual selected model.
+// generatedStart separates the initial envelope from this run's generated messages.
+// Trailing instructions must be counted and kept after any added request metadata.
+type RequestContextFitter func(context.Context, ModelContext, []conversation.Message, []ToolDefinition, int, ...conversation.Message) ([]conversation.Message, error)
+
+// PreparedContext keeps a run's immutable history snapshot and request fitting together.
+type PreparedContext struct {
+	Messages   []conversation.Message
+	FitRequest RequestContextFitter
+}
+
+// ContextAssembler can retrieve history and fit it without changing the source transcript.
+type ContextAssembler interface {
+	PrepareContext(
+		context.Context,
+		[]conversation.Message,
+		[]conversation.Message,
+	) (PreparedContext, error)
+}
+
 // ContextBuilder assembles the shared prompt envelope used by interactive and
 // unattended agent runs. It deliberately does not execute or persist a turn.
 type ContextBuilder struct {
@@ -72,18 +92,26 @@ func (b *ContextBuilder) SystemText(ctx context.Context) string {
 	return strings.Join(parts, "\n\n")
 }
 
-// Build returns the canonical system, memory, skill, recent-history, and input
-// messages in provider-cache-friendly order.
+// Build returns the prepared prompt's canonical messages.
 func (b *ContextBuilder) Build(
 	ctx context.Context,
 	input ...conversation.Message,
 ) ([]conversation.Message, error) {
+	prepared, err := b.Prepare(ctx, input...)
+	return prepared.Messages, err
+}
+
+// Prepare assembles the stable system prefix and a run-specific history snapshot.
+func (b *ContextBuilder) Prepare(
+	ctx context.Context,
+	input ...conversation.Message,
+) (PreparedContext, error) {
 	systemMessages := []conversation.Message{systemMessage(b.SystemText(ctx))}
 	if b != nil && b.store != nil {
 		if coreStore, ok := b.store.(CoreMemoryStore); ok {
 			coreMemory, err := coreStore.LoadCoreMemory(ctx)
 			if err != nil {
-				return nil, fmt.Errorf("load core memory: %w", err)
+				return PreparedContext{}, fmt.Errorf("load core memory: %w", err)
 			}
 			if message, ok := injectCoreMemory(coreMemory); ok {
 				systemMessages = append(systemMessages, message)
@@ -92,29 +120,14 @@ func (b *ContextBuilder) Build(
 		if skillStore, ok := b.store.(SkillCatalogStore); ok {
 			skillCatalog, err := skillStore.LoadSkillCatalog(ctx)
 			if err != nil {
-				return nil, fmt.Errorf("load skill catalog: %w", err)
+				return PreparedContext{}, fmt.Errorf("load skill catalog: %w", err)
 			}
 			if message, ok := injectSkillCatalog(skillCatalog); ok {
 				systemMessages = append(systemMessages, message)
 			}
 		}
-		if workingStore, ok := b.store.(WorkingMemoryStore); ok {
-			workingMemory, err := workingStore.LoadWorkingMemory(ctx)
-			if err != nil {
-				return nil, fmt.Errorf("load working memory: %w", err)
-			}
-			if message, ok := injectWorkingMemory(workingMemory); ok {
-				systemMessages = append(systemMessages, message)
-			}
-		}
-		if openLoopsStore, ok := b.store.(OpenLoopsStore); ok {
-			openLoops, err := openLoopsStore.LoadOpenLoops(ctx)
-			if err != nil {
-				return nil, fmt.Errorf("load open loops: %w", err)
-			}
-			if message, ok := injectOpenLoops(openLoops); ok {
-				systemMessages = append(systemMessages, message)
-			}
+		if assembler, ok := b.store.(ContextAssembler); ok {
+			return assembler.PrepareContext(ctx, systemMessages, input)
 		}
 	}
 
@@ -123,7 +136,7 @@ func (b *ContextBuilder) Build(
 		var err error
 		recentMessages, err = b.store.LoadRecentMessages(ctx, b.recentTurns)
 		if err != nil {
-			return nil, fmt.Errorf("load recent messages: %w", err)
+			return PreparedContext{}, fmt.Errorf("load recent messages: %w", err)
 		}
 	}
 
@@ -135,5 +148,5 @@ func (b *ContextBuilder) Build(
 	messages = append(messages, copyMessages(systemMessages)...)
 	messages = append(messages, copyMessages(recentMessages)...)
 	messages = append(messages, copyMessages(input)...)
-	return messages, nil
+	return PreparedContext{Messages: messages}, nil
 }

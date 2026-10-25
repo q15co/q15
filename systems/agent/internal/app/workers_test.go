@@ -169,6 +169,12 @@ func TestBuildOutboundEndpointRegistryRejectsDuplicates(t *testing.T) {
 }
 
 func TestFormatReplyError_StopReasons(t *testing.T) {
+	t.Run("turn budget", func(t *testing.T) {
+		got := formatReplyError(&agent.StopError{Reason: agent.StopReasonTurnBudgetExhausted})
+		if got != "I stopped this run after using its available model turns. Progress was saved." {
+			t.Fatalf("incorrect turn budget explanation: %s", got)
+		}
+	})
 	t.Run("tool turn limit", func(t *testing.T) {
 		got := formatReplyError(&agent.StopError{
 			Reason: agent.StopReasonToolTurnLimit,

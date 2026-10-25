@@ -457,3 +457,35 @@ func mustStoreTestImage(t *testing.T) (*q15media.FileStore, string, []byte) {
 	}
 	return store, ref, rawImage
 }
+
+func TestBoundedJSONClientDoesNotChangeInteractiveRequests(t *testing.T) {
+	var requests []ollamaapi.ChatRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req ollamaapi.ChatRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Error(err)
+			return
+		}
+		requests = append(requests, req)
+		if err := json.NewEncoder(w).Encode(ollamaapi.ChatResponse{Message: ollamaapi.Message{Role: "assistant", Content: `{"summary":"Completed work."}`}, Done: true, DoneReason: "stop"}); err != nil {
+			t.Error(err)
+		}
+	}))
+	defer server.Close()
+	client, err := NewClient(server.URL, "fixture-key", nil, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary := client.WithJSONOutput(2048)
+	for _, selected := range []*Client{summary, client} {
+		if _, err := selected.Complete(t.Context(), "fixture", []conversation.Message{conversation.UserMessage("Summarize.")}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(requests) != 2 || string(requests[0].Format) != `"json"` ||
+		requests[0].Options["num_predict"] != float64(2048) ||
+		len(requests[1].Format) != 0 ||
+		len(requests[1].Options) != 0 {
+		t.Fatal("summary options leaked into interactive client")
+	}
+}

@@ -12,6 +12,7 @@ import (
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
+	"github.com/q15co/q15/systems/agent/internal/history"
 	q15media "github.com/q15co/q15/systems/agent/internal/media"
 	"github.com/q15co/q15/systems/agent/internal/modelcatalog"
 )
@@ -573,6 +574,7 @@ func newTestManagerWithModels(
 		nil,
 		nil,
 		nil,
+		newTestContextFitter(t),
 	)
 }
 
@@ -717,7 +719,17 @@ func newTestManagerWithResolver(
 		nil,
 		resolver,
 		nil,
+		newTestContextFitter(t),
 	)
+}
+
+func newTestContextFitter(t *testing.T) agent.RequestContextFitter {
+	t.Helper()
+	fitter, err := history.NewIsolatedContextFitter(history.ContextSettings{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fitter
 }
 
 func TestSpawnRunInjectsSkillBodyAndUnionsTools(t *testing.T) {
@@ -753,8 +765,7 @@ func TestSpawnRunInjectsSkillBodyAndUnionsTools(t *testing.T) {
 		t.Fatalf("model calls = %d, want 1", len(calls))
 	}
 	msg := calls[0]
-	// Base system message + delegated skills system message + user task = 3.
-	if got, want := len(msg), 3; got != want {
+	if got, want := len(msg), 5; got != want {
 		t.Fatalf("messages = %d, want %d", got, want)
 	}
 	// The delegated skills message must contain the skill body and metadata.
@@ -773,9 +784,8 @@ func TestSpawnRunInjectsSkillBodyAndUnionsTools(t *testing.T) {
 			t.Fatalf("delegated skills message missing %q:\n%s", want, delegated)
 		}
 	}
-	// User task message is last.
 	if msg[2].Role != conversation.UserRole {
-		t.Fatalf("last message role = %q, want %q", msg[2].Role, conversation.UserRole)
+		t.Fatalf("task message role = %q, want %q", msg[2].Role, conversation.UserRole)
 	}
 
 	// Tools exposed: explicit tools first (read_file), then skill-only (exec).
@@ -811,8 +821,7 @@ func TestSpawnRunNoSkillsPreservesNoToolDefault(t *testing.T) {
 		t.Fatalf("model calls = %d, want 1", len(calls))
 	}
 	msg := calls[0]
-	// No skills: exactly base system message + user task (no delegated_skills).
-	if got, want := len(msg), 2; got != want {
+	if got, want := len(msg), 4; got != want {
 		t.Fatalf("messages = %d, want %d (no skill injection expected)", got, want)
 	}
 	base := messageText(msg[0])

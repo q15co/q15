@@ -141,6 +141,15 @@ func (p Profile) hostPath(path, target string) mount {
 // anyway would start a container nothing talks to.
 func (p Profile) containers() []container {
 	containers := []container{
+		{service: "postgres", description: "q15 conversation database", image: PostgresImage,
+			environment: [][2]string{
+				{"POSTGRES_USER", "q15"},
+				{"POSTGRES_DB", "q15"},
+				{"POSTGRES_PASSWORD_FILE", secretsDirTarget + "/q15_postgres_password"},
+			},
+			secrets: []string{
+				"q15_postgres_password",
+			}, volumes: []mount{p.volume("postgres_data", "/var/lib/postgresql/data")}},
 		{
 			service:     "proxy",
 			description: "q15 egress proxy",
@@ -197,7 +206,7 @@ func (p Profile) containers() []container {
 
 	// The agent waits only for what is there: a requirement on a unit the
 	// renderer did not write is a stack that will not start.
-	agentRequires := []string{"exec"}
+	agentRequires := []string{"exec", "postgres"}
 	if p.runsVectorStore() {
 		agentRequires = append(agentRequires, "qdrant")
 	}
@@ -220,6 +229,10 @@ func (p Profile) containers() []container {
 		environment: append(
 			[][2]string{
 				{"HOME", "/root"},
+				{
+					"PGHOST",
+					p.resource("postgres"),
+				}, {"PGUSER", "q15"}, {"PGDATABASE", "q15"}, {"PGSSLMODE", "disable"}, {"PGPASSWORD_FILE", secretsDirTarget + "/q15_postgres_password"},
 				{"GODEBUG", "updatemaxprocs=0"},
 				{"GOMAXPROCS", "1"},
 				{"TZ", "UTC"},
@@ -240,7 +253,7 @@ func (p Profile) containers() []container {
 			p.hostPath("agent-config.yaml", agentConfigTarget).readOnlyMount(),
 			p.hostPath("auth", authDirTarget),
 		},
-		secrets:  p.credentialSecrets(),
+		secrets:  append(p.credentialSecrets(), "q15_postgres_password"),
 		requires: agentRequires,
 	})
 
@@ -375,6 +388,9 @@ func readOnlySuffix(m mount) string {
 // lower case, matching the name supplied to q15 secret set.
 func (p Profile) credentialPointers() [][2]string {
 	declared := []string{p.Chat.KeyEnv, p.Embeddings.KeyEnv, p.Vectors.KeyEnv}
+	if p.Chat.Kind == SourceOpenAICompatible {
+		declared = append(declared, "OLLAMA_API_KEY")
+	}
 	pointers := make([][2]string, 0, len(declared))
 	seen := make(map[string]bool, len(declared))
 	for _, keyEnv := range declared {

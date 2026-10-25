@@ -44,10 +44,8 @@ type EngineRequest struct {
 	Observer           RunObserver
 	// MaxFailedModelAttempts bounds provider failures across all turns. Zero is unlimited.
 	MaxFailedModelAttempts int
-	// MaxRequestBytes bounds canonical JSON input on every model turn, keeping a
-	// reply reserve of one eighth so a turn never starts unable to absorb its
-	// own reply and fresh evidence. Zero disables it.
-	MaxRequestBytes int
+	ContextFitter          RequestContextFitter
+	TurnBudget             *TurnBudget
 }
 
 // EngineResult captures the engine-produced messages and final outcome for one
@@ -135,8 +133,13 @@ func (e *Engine) Run(ctx context.Context, req EngineRequest) (EngineResult, erro
 	loopDetector := newToolLoopDetector()
 	emptyAssistantRetries := 0
 	failureBudget := modelFailureBudget{limit: req.MaxFailedModelAttempts}
+	var lastModelRef string
+	var lastTurn int
 
 	for turn := 0; turn < e.maxTurns; turn++ {
+		if req.TurnBudget != nil && req.TurnBudget.Remaining() == 0 {
+			break
+		}
 		requestMessages := copyMessages(messages)
 		requestMessages = applySystemTextSource(ctx, requestMessages, req.SystemTextSource)
 		requestStart := start + len(requestMessages) - len(messages)
@@ -146,38 +149,31 @@ func (e *Engine) Run(ctx context.Context, req EngineRequest) (EngineResult, erro
 				systemMessage(emptyResponseRetrySteeringPrompt),
 			)
 		}
-
-		size, err := fitRequestBudget(
-			requestMessages,
-			toolDefs,
-			requestTurnLimit(req.MaxRequestBytes),
-			requestStart,
-		)
-		if err != nil {
-			return EngineResult{Messages: copyMessages(messages[start:]), Turn: turn}, err
-		}
-		if req.MaxRequestBytes > 0 {
-			log.Printf(
-				"q15: model request turn=%d canonical_bytes=%d message_bytes=%d tool_definition_bytes=%d max_bytes=%d turn_max_bytes=%d",
-				turn,
-				size.total,
-				size.messages,
-				size.tools,
-				req.MaxRequestBytes,
-				requestTurnLimit(req.MaxRequestBytes),
-			)
+		requestTools := toolDefs
+		finalTurn := false
+		var requestTail []conversation.Message
+		if req.TurnBudget != nil {
+			var note conversation.Message
+			note, finalTurn = req.TurnBudget.next()
+			requestTail = []conversation.Message{note}
+			if finalTurn {
+				requestTools = nil
+			}
 		}
 
 		modelRef, result, err := e.completeWithObserver(
 			ctx,
 			requestMessages,
-			toolDefs,
-			req.RequireToolCalling && len(toolDefs) > 0,
+			requestTools,
+			req.RequireToolCalling && len(requestTools) > 0,
 			turn,
 			req.Observer,
 			&failureBudget,
-			size.total,
+			req.ContextFitter,
+			requestStart,
+			requestTail,
 		)
+		lastModelRef, lastTurn = modelRef, turn
 		if err != nil {
 			return EngineResult{
 				Messages: copyMessages(messages[start:]),
@@ -189,6 +185,16 @@ func (e *Engine) Run(ctx context.Context, req EngineRequest) (EngineResult, erro
 		resultMessages := conversation.NormalizeMessages(copyMessages(result.Messages))
 		toolCalls := resultToolCalls(resultMessages)
 		reply := finalReply(resultMessages, extractor)
+		if finalTurn && (len(toolCalls) > 0 ||
+			(strings.TrimSpace(reply.Text) == "" && len(reply.MediaRefs) == 0)) {
+			messages = append(messages, resultMessages...)
+			for _, call := range toolCalls {
+				messages = append(messages, toolResultMessage(call.ID, ToolResult{
+					Output: "Tool call not executed: tools are disabled on the final turn.",
+				}, true))
+			}
+			break
+		}
 		if len(toolCalls) == 0 && strings.TrimSpace(reply.Text) == "" &&
 			len(reply.MediaRefs) == 0 &&
 			emptyAssistantRetries < maxEmptyAssistantRetries {
@@ -202,6 +208,13 @@ func (e *Engine) Run(ctx context.Context, req EngineRequest) (EngineResult, erro
 		if len(toolCalls) == 0 {
 			finalMessages := extractor.Canonicalize(messages[start:])
 			reply = finalReply(finalMessages, extractor)
+			var finalErr error
+			if finalTurn && result.FinishReason != "" && result.FinishReason != "stop" {
+				finalErr = fmt.Errorf(
+					"final answer incomplete: provider finish reason %q",
+					result.FinishReason,
+				)
+			}
 			if strings.TrimSpace(reply.Text) == "" && len(reply.MediaRefs) == 0 {
 				reply.Text = "(assistant returned no text)"
 			}
@@ -212,20 +225,7 @@ func (e *Engine) Run(ctx context.Context, req EngineRequest) (EngineResult, erro
 				MediaRefs:   append([]string(nil), reply.MediaRefs...),
 				ModelRef:    modelRef,
 				Turn:        turn,
-			}, nil
-		}
-
-		// Preflight at the hard budget, not the reply-reserve-bound turn limit:
-		// defer before spending the pending tool executions when the reply would
-		// not fit at all. boundToolResult keeps every stored tool result within
-		// the same one-eighth arithmetic, so the next turn's turn-limit preflight
-		// only fires on irreducible accumulation.
-		if _, err := fitRequestBudget(copyMessages(messages), toolDefs, req.MaxRequestBytes, start); err != nil {
-			return EngineResult{
-				Messages: copyMessages(messages[start:]),
-				ModelRef: modelRef,
-				Turn:     turn,
-			}, err
+			}, finalErr
 		}
 
 		for _, call := range toolCalls {
@@ -248,14 +248,6 @@ func (e *Engine) Run(ctx context.Context, req EngineRequest) (EngineResult, erro
 				toolResult = ToolResult{Output: "tool error: " + err.Error()}
 			}
 
-			toolResult, err = boundToolResult(
-				messages,
-				toolDefs,
-				call,
-				toolResult,
-				err,
-				req.MaxRequestBytes,
-			)
 			output := toolResult.Output
 
 			emitRunEvent(ctx, req.Observer, RunEvent{
@@ -306,16 +298,22 @@ func (e *Engine) Run(ctx context.Context, req EngineRequest) (EngineResult, erro
 		}
 	}
 
+	stopReason, limit := StopReasonToolTurnLimit, e.maxTurns
+	detail := fmt.Sprintf("max tool-call turns reached (%d)", limit)
+	if req.TurnBudget != nil && req.TurnBudget.Remaining() == 0 {
+		stopReason, limit = StopReasonTurnBudgetExhausted, req.TurnBudget.limit
+		detail = fmt.Sprintf("turn budget exhausted (limit=%d)", limit)
+	}
 	stopSummary := formatStopSummary(
-		StopReasonToolTurnLimit,
-		e.maxTurns,
+		stopReason,
+		limit,
 		loopDetector.MaxRepeatCount(),
 		loopDetector.MaxNoProgressCount(),
 	)
 	messages = append(messages, assistantTextMessage(stopSummary, ""))
 	stopErr := &StopError{
-		Reason: StopReasonToolTurnLimit,
-		Detail: fmt.Sprintf("max tool-call turns reached (%d)", e.maxTurns),
+		Reason: stopReason,
+		Detail: detail,
 	}
 	finalMessages := extractor.Canonicalize(messages[start:])
 	reply := finalReply(finalMessages, extractor)
@@ -324,6 +322,8 @@ func (e *Engine) Run(ctx context.Context, req EngineRequest) (EngineResult, erro
 		FinalText:   stopSummary,
 		Attachments: conversation.CloneParts(reply.Attachments),
 		MediaRefs:   append([]string(nil), reply.MediaRefs...),
+		ModelRef:    lastModelRef,
+		Turn:        lastTurn,
 	}, stopErr
 }
 
@@ -389,11 +389,22 @@ func (e *Engine) completeWithObserver(
 	turn int,
 	observer RunObserver,
 	budget *modelFailureBudget,
-	inputBytes int,
+	contextFitter RequestContextFitter,
+	generatedStart int,
+	requestTail []conversation.Message,
 ) (string, ModelClientResult, error) {
 	modelRefs := normalizeModelRefs(e.modelRefSource())
 	if len(modelRefs) == 0 {
 		return "", ModelClientResult{}, fmt.Errorf("no models configured")
+	}
+	inputBytes := 0
+	if contextFitter == nil {
+		messages = append(copyMessages(messages), copyMessages(requestTail)...)
+		var err error
+		inputBytes, err = RequestEncodedBytes(messages, tools)
+		if err != nil {
+			return "", ModelClientResult{}, err
+		}
 	}
 
 	requirements := modelselection.InferRequirements(modelselection.Request{
@@ -437,11 +448,45 @@ func (e *Engine) completeWithObserver(
 			ModelRef: modelRef,
 		})
 
-		result, err := e.completeModel(ctx, modelRef, messages, tools, turn, observer)
+		attemptMessages := messages
+		if contextFitter != nil {
+			modelContext := ModelContext{Ref: modelRef}
+			if source, ok := e.modelClient.(ModelContextSource); ok {
+				modelContext = source.ContextForModel(modelRef)
+			}
+			attemptMessages, err = contextFitter(
+				ctx,
+				modelContext,
+				messages,
+				tools,
+				generatedStart,
+				requestTail...)
+			if err != nil {
+				attemptFailures = append(
+					attemptFailures,
+					ModelAttemptFailure{ModelRef: modelRef, Err: err},
+				)
+				continue
+			}
+		}
+		result, err := e.completeModel(ctx, modelRef, attemptMessages, tools, turn, observer)
 		if ctx.Err() != nil {
 			return modelRef, ModelClientResult{}, ctx.Err()
 		}
 		if err == nil {
+			if contextFitter != nil && result.Usage.InputTokens > 0 {
+				estimated, estimateErr := RequestEstimatedTokens(attemptMessages, tools)
+				if estimateErr == nil {
+					log.Printf(
+						"q15: context usage ref=%q estimated_input_tokens=%d actual_input_tokens=%d output_tokens=%d estimator=%s",
+						modelRef,
+						estimated,
+						result.Usage.InputTokens,
+						result.Usage.OutputTokens,
+						RequestTokenEstimator,
+					)
+				}
+			}
 			log.Printf(
 				"q15: model turn=%d selected ref=%q attempt=%d/%d finish_reason=%q returned_messages=%d",
 				turn,

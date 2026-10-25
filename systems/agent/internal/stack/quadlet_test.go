@@ -54,8 +54,9 @@ func TestUnitsMountSecretsThroughPodman(t *testing.T) {
 	if got := environment(t, proxy, "GITHUB_TOKEN_FILE"); got != "/run/secrets/github_token" {
 		t.Fatalf("GITHUB_TOKEN_FILE = %q, want the Podman secret path", got)
 	}
-	if got := units["q15-agent.container"]["Secret"]; len(got) != 0 {
-		t.Fatalf("keyless agent secrets = %v, want none", got)
+	if got := units["q15-agent.container"]["Secret"]; len(got) != 1 ||
+		got[0] != "q15_postgres_password,type=mount,uid=0,gid=0,mode=0400" {
+		t.Fatalf("keyless chat profile still needs its database secret: %v", got)
 	}
 	for name, unit := range units {
 		for _, mount := range unit["Mount"] {
@@ -77,6 +78,7 @@ func TestUnitsCoverTheStackAndCarryItsName(t *testing.T) {
 		"q15-exec.container",
 		"q15-net.network",
 		"q15-ollama.container",
+		"q15-postgres.container",
 		"q15-proxy.container",
 		"q15-qdrant.container",
 		"q15-web.container",
@@ -348,7 +350,7 @@ func TestAgentPreparesNoCredentialTheProfileDoesNotDeclare(t *testing.T) {
 
 	for _, entry := range units["q15-agent.container"]["Environment"] {
 		name, _, _ := strings.Cut(entry, "=")
-		if strings.HasSuffix(name, "_FILE") {
+		if strings.HasSuffix(name, "_FILE") && name != "PGPASSWORD_FILE" {
 			t.Fatalf("the agent unit prepares %s, which the profile does not declare", name)
 		}
 	}
@@ -403,6 +405,8 @@ func TestHostedProfilePreparesTheCredentialsItNames(t *testing.T) {
 		"q15_chat_api_key,type=mount,uid=0,gid=0,mode=0400",
 		"q15_embed_api_key,type=mount,uid=0,gid=0,mode=0400",
 		"qdrant_api_key,type=mount,uid=0,gid=0,mode=0400",
+		"ollama_api_key,type=mount,uid=0,gid=0,mode=0400",
+		"q15_postgres_password,type=mount,uid=0,gid=0,mode=0400",
 	}
 	if got := agent["Secret"]; strings.Join(got, "\n") != strings.Join(wantSecrets, "\n") {
 		t.Fatalf("agent secrets = %v, want %v", got, wantSecrets)

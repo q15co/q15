@@ -39,12 +39,7 @@ func TestDecisionModelSwitchesDoNotPersist(t *testing.T) {
 		selection.CurrentModel() != "chat" {
 		t.Fatalf("interactive selection changed: %+v", current)
 	}
-	if _, err := NewSwitchCognitionModel(registry, store, []string{"job"}).Run(context.Background(), `{"job_type":"job","provider":"provider","model":"decision"}`); err == nil {
-		t.Fatal("decision model selected for cognition chat")
-	}
-	if len(store.CognitionSelections()) != 0 {
-		t.Fatal("refused cognition selection was persisted")
-	}
+
 }
 
 func TestSwitchModelSlotPersistsPerSlot(t *testing.T) {
