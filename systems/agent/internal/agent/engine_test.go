@@ -668,7 +668,7 @@ func TestEngineFitsEveryFallbackAndToolStepWithoutChangingSavedMessages(t *testi
 		conversation.UserMessage("ok"),
 	}
 	var fitted []string
-	fitter := func(_ context.Context, model ModelContext, messages []conversation.Message, _ []ToolDefinition, start int) ([]conversation.Message, error) {
+	fitter := func(_ context.Context, model ModelContext, messages []conversation.Message, _ []ToolDefinition, start int, _ ...conversation.Message) ([]conversation.Message, error) {
 		fitted = append(fitted, model.Ref)
 		if start != len(original) || model.MaxOutputTokens != 2048 {
 			t.Fatalf("wrong model or generated boundary: %+v %d", model, start)
@@ -699,5 +699,22 @@ func TestEngineFitsEveryFallbackAndToolStepWithoutChangingSavedMessages(t *testi
 	}
 	if len(original) != 2 || messageText(original[1]) != "ok" {
 		t.Fatal("input mutated")
+	}
+}
+
+func TestEngineReportsSessionBudgetInsteadOfItsOwnTurnLimit(t *testing.T) {
+	model := &fakeModelClient{results: []ModelClientResult{{}}}
+	result, err := NewEngine(model, nil, []string{"child"}).Run(t.Context(), EngineRequest{
+		Messages:   []conversation.Message{conversation.UserMessage("Answer directly.")},
+		TurnBudget: NewTurnBudget(1),
+	})
+	var stopped *StopError
+	if !errors.As(err, &stopped) || stopped.Reason != StopReasonTurnBudgetExhausted ||
+		stopped.Detail != "turn budget exhausted (limit=1)" {
+		t.Fatalf("session limit was reported as the engine default: %v", err)
+	}
+	if result.ModelRef != "child" || strings.Contains(result.FinalText, "tool-call") ||
+		!strings.Contains(result.FinalText, "turn budget exhausted") {
+		t.Fatalf("incorrect stopped result: %+v", result)
 	}
 }

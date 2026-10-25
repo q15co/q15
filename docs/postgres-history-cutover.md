@@ -62,7 +62,9 @@ usage when available. `max_request_bytes` independently bounds the canonical enc
 additional model calls or cloud recall benchmark are used for calibration. If tokenizer
 initialization or counting fails, UTF-8 byte counts replace text token counts, with the same margin,
 framing and media allowances. This is a conservative fallback that retains both token and byte
-limits rather than failing a turn because its tokenizer is unavailable.
+limits rather than failing a turn because its tokenizer is unavailable. The context fitter owns both
+request limits. The inactive engine byte-limit option, its separate reply allowance and its
+tool-result truncation path have been removed.
 
 Automatic context retains up to four recent turns and searches only generated summaries for relevant
 older work. There is no fixed wall of preceding summaries. Recent history receives one third of the
@@ -97,10 +99,14 @@ Each delegated request also receives a request-only `turn_budget` note. One turn
 response and any tools it requests; remaining turns include the current request. `max_turns`
 defaults to 96 and is shared across queued follow-up messages. The last turn is reserved for a final
 answer: the provider receives no tool definitions, and the engine refuses any returned tool calls
-without executing them. A limit of one permits only a final answer. An empty final response stops
-without a retry. Near the limit the note asks the subagent to finish essential work and report what
-remains unfinished. Provider errors or output truncation can still prevent a normal completion;
-removing tools cannot force a remote provider to return a particular finish reason.
+without executing them. Each refused call receives an error result stating that it was not executed,
+so the recorded conversation retains matched calls and results. The turn-budget instruction follows
+the token metadata at the end of the request; both notes are included in fitting. Exhausted sessions
+report `turn_budget_exhausted` with their actual session limit. A limit of one permits only a final
+answer. An empty final response stops without a retry. Near the limit the note asks the subagent to
+finish essential work and report what remains unfinished. Provider errors or output truncation can
+still prevent a normal completion; removing tools cannot force a remote provider to return a
+particular finish reason.
 
 `history_search` still searches original messages and summaries by meaning and matching words.
 `history_read` starts with the user's message, the final assistant answer and a paginated list of

@@ -2,6 +2,7 @@ package subagent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -83,6 +84,9 @@ func TestSubagentBudgetsEvidenceAndReservesFinalAnswer(t *testing.T) {
 			strings.Count(body.String(), "<context_window ") != 1 {
 			t.Fatal("request retained stale runtime counters")
 		}
+		if !strings.Contains(conversation.TextValue(messages[len(messages)-1]), "<turn_budget ") {
+			t.Fatal("actionable turn instruction was not last in the request")
+		}
 		want := fmt.Sprintf(`remaining_turns="%d"`, 3-n)
 		if !messagesContainText(messages, want) {
 			t.Fatalf("call %d missing %s", n+1, want)
@@ -140,6 +144,7 @@ func TestSubagentFinalTurnNeverExecutesToolsOrRetriesEmptyReply(t *testing.T) {
 				return agent.ModelClientResult{Messages: []conversation.Message{
 					conversation.AssistantMessage(
 						conversation.ToolCall("unexpected", "read_file", `{}`),
+						conversation.ToolCall("unexpected-2", "read_file", `{}`),
 					),
 				}}, nil
 			}}
@@ -171,6 +176,36 @@ func TestSubagentFinalTurnNeverExecutesToolsOrRetriesEmptyReply(t *testing.T) {
 			if response == "length" &&
 				!strings.Contains(session.Read(0, 2000), "Unfinished answer") {
 				t.Fatal("incomplete final answer was lost instead of being reported with its error")
+			}
+			if response == "tool_call" || response == "empty" {
+				var stopped *agent.StopError
+				if !errors.As(session.err, &stopped) ||
+					stopped.Reason != agent.StopReasonTurnBudgetExhausted ||
+					!strings.Contains(stopped.Detail, "limit=1") {
+					t.Fatalf("incorrect final stop reason: %v", session.err)
+				}
+			}
+			if response == "tool_call" {
+				calls, refusals := map[string]int{}, map[string]int{}
+				for _, message := range session.snapshotMessages() {
+					for _, part := range message.Parts {
+						if part.Type == conversation.ToolCallPartType {
+							calls[part.ID]++
+						}
+						if part.Type == conversation.ToolResultPartType && part.IsError &&
+							strings.Contains(part.Content, "not executed") {
+							refusals[part.ToolCallID]++
+						}
+					}
+				}
+				if len(calls) != 2 || len(refusals) != 2 {
+					t.Fatal("refused tool calls were lost or left without results")
+				}
+				for id, count := range calls {
+					if count != 1 || refusals[id] != 1 {
+						t.Fatalf("unpaired refused call %s", id)
+					}
+				}
 			}
 		})
 	}

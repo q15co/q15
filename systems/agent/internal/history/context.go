@@ -52,7 +52,7 @@ func NewIsolatedContextFitter(settings ContextSettings) (agent.RequestContextFit
 		return nil, err
 	}
 	return func(ctx context.Context, model agent.ModelContext, messages []conversation.Message,
-		tools []agent.ToolDefinition, generatedStart int,
+		tools []agent.ToolDefinition, generatedStart int, tail ...conversation.Message,
 	) ([]conversation.Message, error) {
 		if generatedStart < 0 || generatedStart > len(messages) {
 			return nil, errors.New("invalid isolated context boundary")
@@ -67,7 +67,7 @@ func NewIsolatedContextFitter(settings ContextSettings) (agent.RequestContextFit
 			input:       conversation.CloneMessages(messages[systemCount:generatedStart]),
 			settings:    settings,
 		}
-		return snapshot.fitRequest(ctx, model, messages, tools, generatedStart)
+		return snapshot.fitRequest(ctx, model, messages, tools, generatedStart, tail...)
 	}, nil
 }
 
@@ -279,8 +279,9 @@ func (s *contextSnapshot) fitRequest(
 	messages []conversation.Message,
 	tools []agent.ToolDefinition,
 	generatedStart int,
+	tail ...conversation.Message,
 ) ([]conversation.Message, error) {
-	return s.fit(ctx, model, messages, tools, generatedStart, true)
+	return s.fit(ctx, model, messages, tools, generatedStart, true, tail...)
 }
 
 func (s *contextSnapshot) fit(
@@ -290,6 +291,7 @@ func (s *contextSnapshot) fit(
 	tools []agent.ToolDefinition,
 	generatedStart int,
 	emit bool,
+	tail ...conversation.Message,
 ) ([]conversation.Message, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -326,14 +328,14 @@ func (s *contextSnapshot) fit(
 			compactActiveEvidence(current)
 		}
 		result = append(result, current...)
-		size, err := agent.RequestEncodedBytes(result, tools)
+		size, err := agent.RequestEncodedBytes(append(result, tail...), tools)
 		if err != nil {
 			return nil, 0, 0, err
 		}
 		if size > maxBytes {
 			return result, size, limit + 1, nil
 		}
-		result, tokens, err := withContextWindow(result, tools, model, limit)
+		result, tokens, err := withContextWindow(result, tools, model, limit, tail...)
 		if err != nil {
 			return nil, 0, 0, err
 		}
@@ -345,7 +347,7 @@ func (s *contextSnapshot) fit(
 		return nil, err
 	}
 	over := func() bool { return tokens > limit || size > maxBytes }
-	recentAllowance, err := s.recentAllowance(system, active, groups, tools, model, limit)
+	recentAllowance, err := s.recentAllowance(system, active, groups, tools, model, limit, tail...)
 	if err != nil {
 		return nil, err
 	}
@@ -455,20 +457,21 @@ func (s *contextSnapshot) recentAllowance(
 	tools []agent.ToolDefinition,
 	model agent.ModelContext,
 	limit int,
+	tail ...conversation.Message,
 ) (int, error) {
 	base := append(conversation.CloneMessages(system), capParts(active, 8192, 2048)...)
 	maxBytes := s.settings.MaxRequestBytes
 	if maxBytes == 0 {
 		maxBytes = 4 * 1024 * 1024
 	}
-	size, err := agent.RequestEncodedBytes(base, tools)
+	size, err := agent.RequestEncodedBytes(append(base, tail...), tools)
 	if err != nil {
 		return 0, err
 	}
 	if size > maxBytes {
 		return 0, nil
 	}
-	_, used, err := withContextWindow(base, tools, model, limit)
+	_, used, err := withContextWindow(base, tools, model, limit, tail...)
 	if err != nil {
 		return 0, err
 	}

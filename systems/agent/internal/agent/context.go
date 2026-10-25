@@ -22,7 +22,8 @@ type ContextStore interface {
 
 // RequestContextFitter rebuilds a provider request for its actual selected model.
 // generatedStart separates the initial envelope from this run's generated messages.
-type RequestContextFitter func(context.Context, ModelContext, []conversation.Message, []ToolDefinition, int) ([]conversation.Message, error)
+// Trailing instructions must be counted and kept after any added request metadata.
+type RequestContextFitter func(context.Context, ModelContext, []conversation.Message, []ToolDefinition, int, ...conversation.Message) ([]conversation.Message, error)
 
 // PreparedContext keeps a run's immutable history snapshot and request fitting together.
 type PreparedContext struct {

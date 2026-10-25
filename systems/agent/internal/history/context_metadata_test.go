@@ -2,6 +2,8 @@ package history
 
 import (
 	"encoding/xml"
+	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -16,6 +18,51 @@ type windowMetadata struct {
 	Remaining     int    `xml:"remaining_budget_tokens,attr"`
 	Capacity      string `xml:"model_context_tokens,attr"`
 	OutputReserve string `xml:"output_reserve_tokens,attr"`
+}
+
+func TestContextCountsAndPreservesFinalInstructionsAfterMetadata(t *testing.T) {
+	input := conversation.UserMessage("Answer the question.")
+	system := conversation.SystemMessage("Stable instructions.")
+	snapshot := contextSnapshot{
+		system: []conversation.Message{system}, systemCount: 1,
+		input: []conversation.Message{input}, settings: ContextSettings{WorkingBudgetTokens: 1024},
+	}
+	base := []conversation.Message{system, input}
+	tail := conversation.UserMessage("Tools are disabled. Give your final answer now.")
+	result, err := snapshot.fitRequest(
+		t.Context(),
+		agent.ModelContext{},
+		base,
+		nil,
+		len(base),
+		tail,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(result[len(result)-1], tail) ||
+		!strings.Contains(conversation.TextValue(result[len(result)-2]), "<context_window ") {
+		t.Fatal("final instruction did not follow the context metadata")
+	}
+	metadata := readWindowMetadata(t, result)
+	measured, err := agent.RequestEstimatedTokens(result, nil)
+	if err != nil || metadata.Estimated < measured || metadata.Estimated > 1024 {
+		t.Fatalf(
+			"tail was not included in fitting: %+v measured=%d error=%v",
+			metadata,
+			measured,
+			err,
+		)
+	}
+	large := conversation.UserMessage(strings.Repeat("Irreducible final instructions. ", 2000))
+	_, err = snapshot.fitRequest(t.Context(), agent.ModelContext{}, base, nil, len(base), large)
+	var budget *agent.TokenBudgetError
+	if !errors.As(err, &budget) {
+		t.Fatalf("oversized tail was not rejected: %v", err)
+	}
+	if !reflect.DeepEqual(base, []conversation.Message{system, input}) {
+		t.Fatal("request fitting changed source messages")
+	}
 }
 
 func readWindowMetadata(t *testing.T, messages []conversation.Message) windowMetadata {

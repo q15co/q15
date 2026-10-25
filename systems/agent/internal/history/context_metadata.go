@@ -13,8 +13,9 @@ func withContextWindow(
 	tools []agent.ToolDefinition,
 	model agent.ModelContext,
 	limit int,
+	tail ...conversation.Message,
 ) ([]conversation.Message, int, error) {
-	base, err := agent.RequestEstimatedTokens(messages, tools)
+	base, err := agent.RequestEstimatedTokens(append(messages, tail...), tools)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -27,10 +28,11 @@ func withContextWindow(
 		return nil, 0, err
 	}
 	estimate := base + allowance + 64
-	return append(
+	result := append(
 		messages,
 		conversation.UserMessage(renderContextWindow(model, limit, estimate)),
-	), estimate, nil
+	)
+	return append(result, conversation.CloneMessages(tail)...), estimate, nil
 }
 
 func renderContextWindow(model agent.ModelContext, limit, estimate int) string {

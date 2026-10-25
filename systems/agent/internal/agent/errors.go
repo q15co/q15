@@ -15,6 +15,8 @@ const (
 	// StopReasonToolLoopDetected indicates repeated tool calls were detected with
 	// no meaningful progress.
 	StopReasonToolLoopDetected StopReason = "tool_loop_detected"
+	// StopReasonTurnBudgetExhausted indicates a session used all its model turns.
+	StopReasonTurnBudgetExhausted StopReason = "turn_budget_exhausted"
 )
 
 // StopError reports a controlled loop stop condition.
