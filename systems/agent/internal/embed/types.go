@@ -78,8 +78,8 @@ type Settings struct {
 	// BatchSize bounds per-request document batches; 0 uses the provider
 	// default.
 	BatchSize int
-	// BatchTokens sets Ollama's physical token batch capacity (num_batch),
-	// independently of the document count. Zero uses 8192; other providers ignore it.
+	// BatchTokens sets Ollama's physical batch and context capacities (num_batch,
+	// num_ctx), independently of the document count. Zero uses 8192; other providers ignore it.
 	BatchTokens int
 	// SyncBatchSize is the checkpoint granularity for sync: dirty documents
 	// are embedded, upserted, and durably recorded in the state file in
