@@ -166,6 +166,7 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 		mediaStore,
 		embeddingService,
 		rt.Tools.WebSearch.BraveAPIKey,
+		rt.Tools.WebSearch.OllamaAPIKey,
 	)
 	if err != nil {
 		return fmt.Errorf("configure tools for agent %q: %w", rt.Name, err)

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"strings"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/config"
@@ -77,6 +76,7 @@ func buildToolList(
 	mediaStore q15media.Store,
 	embeddingService *embed.Service,
 	braveAPIKey string,
+	ollamaAPIKey string,
 ) ([]agent.Tool, error) {
 	toolList := []agent.Tool{
 		tools.NewReadFile(fileExec),
@@ -106,14 +106,12 @@ func buildToolList(
 		)
 	}
 
-	braveAPIKey = strings.TrimSpace(braveAPIKey)
-	if braveAPIKey == "" {
-		return toolList, nil
-	}
-
-	webSearchTool, err := tools.NewBraveWebSearch(braveAPIKey)
+	webSearchTool, err := tools.NewWebSearch(braveAPIKey, ollamaAPIKey)
 	if err != nil {
 		return nil, err
+	}
+	if webSearchTool == nil {
+		return toolList, nil
 	}
 	return append(toolList, webSearchTool), nil
 }

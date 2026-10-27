@@ -129,6 +129,12 @@ func NewWebFetch() *web.Fetch {
 }
 
 // NewBraveWebSearch delegates to web.NewBraveWebSearch.
+// NewWebSearch builds the rotating web_search tool from whichever provider
+// keys are configured. Any single provider key is enough to enable it.
+func NewWebSearch(braveAPIKey, ollamaAPIKey string) (*web.MultiWebSearch, error) {
+	return web.NewMultiWebSearch(braveAPIKey, ollamaAPIKey)
+}
+
 func NewBraveWebSearch(apiKey string) (*web.BraveWebSearch, error) {
 	return web.NewBraveWebSearch(apiKey)
 }
