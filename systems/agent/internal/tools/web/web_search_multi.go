@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -112,8 +113,8 @@ func (m *MultiWebSearch) Providers() []string {
 		return nil
 	}
 	names := make([]string, 0, len(m.providers))
-	for _, p := range m.providers {
-		names = append(names, p.name)
+	for i := range m.providers {
+		names = append(names, m.providers[i].name)
 	}
 	return names
 }
@@ -183,7 +184,7 @@ func (m *MultiWebSearch) Run(ctx context.Context, arguments string) (string, err
 	m.next = (m.next + 1) % len(m.providers)
 	m.mu.Unlock()
 
-	failures := make([]string, 0, len(m.providers))
+	failures := make([]error, 0, len(m.providers))
 	for i := 0; i < len(m.providers); i++ {
 		p := &m.providers[(start+i)%len(m.providers)]
 		if err := p.wait(ctx); err != nil {
@@ -193,13 +194,14 @@ func (m *MultiWebSearch) Run(ctx context.Context, arguments string) (string, err
 		if err == nil {
 			return out, nil
 		}
-		failures = append(failures, fmt.Sprintf("%s: %v", p.name, err))
-		if ctx.Err() != nil {
+		failures = append(failures, fmt.Errorf("%s: %w", p.name, err))
+		if cerr := ctx.Err(); cerr != nil {
+			failures = append(failures, cerr)
 			break
 		}
 	}
 
-	return "", fmt.Errorf("all web search providers failed: %s", strings.Join(failures, "; "))
+	return "", fmt.Errorf("all web search providers failed: %w", errors.Join(failures...))
 }
 
 // OllamaWebSearch queries Ollama's hosted web search API.

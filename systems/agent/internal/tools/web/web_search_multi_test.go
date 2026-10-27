@@ -128,8 +128,11 @@ func TestOllamaWebSearchErrorStatus(t *testing.T) {
 // functions, so rotation and failover can be observed without network access.
 func recordingTool(providers ...*provider) *MultiWebSearch {
 	tool := &MultiWebSearch{maxRes: defaultWebSearchCount}
-	for _, p := range providers {
-		tool.providers = append(tool.providers, *p)
+	tool.providers = make([]provider, len(providers))
+	for i, p := range providers {
+		tool.providers[i].name = p.name
+		tool.providers[i].min = p.min
+		tool.providers[i].run = p.run
 	}
 	return tool
 }

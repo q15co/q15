@@ -36,6 +36,7 @@ func TestBuildToolListIncludesOnlyCurrentRuntimeTools(t *testing.T) {
 		mediaStore,
 		nil,
 		"",
+		"",
 	)
 	if err != nil {
 		t.Fatalf("buildToolList() error = %v", err)
@@ -97,6 +98,7 @@ func TestBuildToolListAppendsWebSearchWhenConfigured(t *testing.T) {
 		mediaStore,
 		nil,
 		"brave-key",
+		"",
 	)
 	if err != nil {
 		t.Fatalf("buildToolList() error = %v", err)
@@ -144,6 +146,7 @@ func TestBuildToolListAppendsEmbeddingToolsWhenConfigured(t *testing.T) {
 		},
 		mediaStore,
 		embed.NewService(embed.Settings{}, nil, nil, nil),
+		"",
 		"",
 	)
 	if err != nil {
