@@ -270,3 +270,52 @@ func TestMultiWebSearchNilToolIsSafe(t *testing.T) {
 		t.Fatalf("Providers on nil tool = %v", got)
 	}
 }
+
+func TestMultiWebSearchPrefersIdleProviderOverThrottledRotation(t *testing.T) {
+	t.Parallel()
+
+	var mu sync.Mutex
+	var ran []string
+
+	throttled := &provider{
+		name: "throttled",
+		min:  time.Hour,
+		run: func(context.Context, string, int) (string, error) {
+			mu.Lock()
+			ran = append(ran, "throttled")
+			mu.Unlock()
+			return "from throttled", nil
+		},
+	}
+	idle := &provider{
+		name: "idle",
+		min:  0,
+		run: func(context.Context, string, int) (string, error) {
+			mu.Lock()
+			ran = append(ran, "idle")
+			mu.Unlock()
+			return "from idle", nil
+		},
+	}
+
+	tool := recordingTool(throttled, idle)
+	// Book the throttled provider's slot so the rotation lands on a provider
+	// that cannot run for an hour.
+	if err := tool.providers[0].wait(context.Background()); err != nil {
+		t.Fatalf("priming throttle: %v", err)
+	}
+
+	out, err := tool.Run(context.Background(), `{"query":"idle"}`)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if out != "from idle" {
+		t.Fatalf("out = %q, want the idle provider's result", out)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(ran) != 1 || ran[0] != "idle" {
+		t.Fatalf("providers run = %v, want only idle", ran)
+	}
+}

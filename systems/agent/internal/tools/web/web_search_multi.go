@@ -55,6 +55,20 @@ func (p *provider) wait(ctx context.Context) error {
 	}
 }
 
+// waitRemaining reports how long until this provider may next run, without
+// booking a slot.
+func (p *provider) waitRemaining() time.Duration {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.last.IsZero() {
+		return 0
+	}
+	if remaining := p.min - time.Since(p.last); remaining > 0 {
+		return remaining
+	}
+	return 0
+}
+
 // MultiWebSearch round-robins searches across configured providers, throttles
 // each provider independently, and falls back to the next provider when one
 // errors so a rate-limited or misconfigured backend does not fail the tool.
@@ -184,9 +198,15 @@ func (m *MultiWebSearch) Run(ctx context.Context, arguments string) (string, err
 	m.next = (m.next + 1) % len(m.providers)
 	m.mu.Unlock()
 
+	// Under contention the provider the rotation lands on may be throttled
+	// while another is idle. Starting on the idle one keeps a rate-limited
+	// backend from consuming the caller's deadline; rotation order is kept for
+	// every other case, including the fallback walk below.
+	order := m.order(start)
+
 	failures := make([]error, 0, len(m.providers))
-	for i := 0; i < len(m.providers); i++ {
-		p := &m.providers[(start+i)%len(m.providers)]
+	for _, idx := range order {
+		p := &m.providers[idx]
 		if err := p.wait(ctx); err != nil {
 			return "", err
 		}
@@ -202,6 +222,22 @@ func (m *MultiWebSearch) Run(ctx context.Context, arguments string) (string, err
 	}
 
 	return "", fmt.Errorf("all web search providers failed: %w", errors.Join(failures...))
+}
+
+// order returns provider indexes starting at start, moving the first provider
+// that can run immediately to the front.
+func (m *MultiWebSearch) order(start int) []int {
+	order := make([]int, 0, len(m.providers))
+	for i := 0; i < len(m.providers); i++ {
+		order = append(order, (start+i)%len(m.providers))
+	}
+	for i, idx := range order {
+		if m.providers[idx].waitRemaining() <= 0 {
+			order[0], order[i] = order[i], order[0]
+			break
+		}
+	}
+	return order
 }
 
 // OllamaWebSearch queries Ollama's hosted web search API.
