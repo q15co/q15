@@ -312,7 +312,12 @@ func (o *OllamaWebSearch) Search(ctx context.Context, query string, count int) (
 		return "", fmt.Errorf("encode ollama search request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, o.baseURL, bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		o.baseURL,
+		bytes.NewReader(payload),
+	)
 	if err != nil {
 		return "", fmt.Errorf("create ollama search request: %w", err)
 	}
