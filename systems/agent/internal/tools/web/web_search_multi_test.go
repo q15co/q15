@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -317,5 +318,83 @@ func TestMultiWebSearchPrefersIdleProviderOverThrottledRotation(t *testing.T) {
 	defer mu.Unlock()
 	if len(ran) != 1 || ran[0] != "idle" {
 		t.Fatalf("providers run = %v, want only idle", ran)
+	}
+}
+
+func TestMultiWebSearchCoolsDownAFailingProvider(t *testing.T) {
+	t.Parallel()
+
+	calls := 0
+	brittle := &provider{
+		name: "brittle",
+		run: func(context.Context, string, int) (string, error) {
+			calls++
+			return "", fmt.Errorf("backend down")
+		},
+	}
+	tool := recordingTool(brittle)
+
+	for i := 0; i < providerFailureThreshold; i++ {
+		if _, err := tool.Run(context.Background(), `{"query":"x"}`); err == nil {
+			t.Fatalf("run %d: want an error", i)
+		}
+	}
+	if calls != providerFailureThreshold {
+		t.Fatalf("calls = %d, want %d", calls, providerFailureThreshold)
+	}
+
+	if _, err := tool.Run(context.Background(), `{"query":"x"}`); err == nil {
+		t.Fatal("cooled-down provider: want an error, got nil")
+	}
+	if calls != providerFailureThreshold {
+		t.Fatalf("cooling provider was called: %d calls", calls)
+	}
+
+	// Expire the cooldown and confirm the provider is retried.
+	tool.providers[0].mu.Lock()
+	tool.providers[0].cooldownUntil = time.Now().Add(-time.Second)
+	tool.providers[0].mu.Unlock()
+
+	if _, err := tool.Run(context.Background(), `{"query":"x"}`); err == nil {
+		t.Fatal("retried provider: want an error, got nil")
+	}
+	if calls != providerFailureThreshold+1 {
+		t.Fatalf("calls = %d after cooldown, want %d", calls, providerFailureThreshold+1)
+	}
+}
+
+func TestProviderWaitSerialisesConcurrentCallers(t *testing.T) {
+	t.Parallel()
+
+	spacing := 40 * time.Millisecond
+	p := &provider{name: "shared", min: spacing}
+
+	const callers = 3
+	returned := make([]time.Time, callers)
+	var wg sync.WaitGroup
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			if err := p.wait(context.Background()); err != nil {
+				t.Errorf("wait: %v", err)
+			}
+			returned[i] = time.Now()
+		}(i)
+	}
+	wg.Wait()
+
+	earliest, latest := returned[0], returned[0]
+	for _, ts := range returned[1:] {
+		if ts.Before(earliest) {
+			earliest = ts
+		}
+		if ts.After(latest) {
+			latest = ts
+		}
+	}
+	want := time.Duration(callers-1) * spacing
+	if got := latest.Sub(earliest); got < want-10*time.Millisecond {
+		t.Fatalf("concurrent waiters spread over %v, want at least %v", got, want)
 	}
 }

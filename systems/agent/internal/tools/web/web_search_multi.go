@@ -17,6 +17,13 @@ import (
 
 const ollamaWebSearchURL = "https://ollama.com/api/web_search"
 
+// Failure backoff: a provider that keeps failing is skipped for a cooldown so
+// a dead backend cannot tax every other call with a full client timeout.
+const (
+	providerFailureThreshold = 3
+	providerCooldown         = 60 * time.Second
+)
+
 // searchFunc performs one provider search and returns formatted results.
 type searchFunc func(ctx context.Context, query string, count int) (string, error)
 
@@ -28,6 +35,9 @@ type provider struct {
 
 	mu   sync.Mutex
 	last time.Time
+
+	fails         int
+	cooldownUntil time.Time
 }
 
 // wait blocks until this provider is allowed to run another request.
@@ -67,6 +77,32 @@ func (p *provider) waitRemaining() time.Duration {
 		return remaining
 	}
 	return 0
+}
+
+// available reports whether the provider is outside its failure cooldown.
+func (p *provider) available(now time.Time) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return !now.Before(p.cooldownUntil)
+}
+
+// recordSuccess clears the failure streak.
+func (p *provider) recordSuccess() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.fails = 0
+	p.cooldownUntil = time.Time{}
+}
+
+// recordFailure counts one failed request and starts a cooldown once the
+// streak reaches the threshold.
+func (p *provider) recordFailure() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.fails++
+	if p.fails >= providerFailureThreshold {
+		p.cooldownUntil = time.Now().Add(providerCooldown)
+	}
 }
 
 // MultiWebSearch round-robins searches across configured providers, throttles
@@ -207,13 +243,18 @@ func (m *MultiWebSearch) Run(ctx context.Context, arguments string) (string, err
 	failures := make([]error, 0, len(m.providers))
 	for _, idx := range order {
 		p := &m.providers[idx]
+		if !p.available(time.Now()) {
+			continue
+		}
 		if err := p.wait(ctx); err != nil {
 			return "", err
 		}
 		out, err := p.run(ctx, query, count)
 		if err == nil {
+			p.recordSuccess()
 			return out, nil
 		}
+		p.recordFailure()
 		failures = append(failures, fmt.Errorf("%s: %w", p.name, err))
 		if cerr := ctx.Err(); cerr != nil {
 			failures = append(failures, cerr)
@@ -221,6 +262,9 @@ func (m *MultiWebSearch) Run(ctx context.Context, arguments string) (string, err
 		}
 	}
 
+	if len(failures) == 0 {
+		return "", fmt.Errorf("every web search provider is cooling down after repeated failures")
+	}
 	return "", fmt.Errorf("all web search providers failed: %w", errors.Join(failures...))
 }
 
@@ -231,8 +275,9 @@ func (m *MultiWebSearch) order(start int) []int {
 	for i := 0; i < len(m.providers); i++ {
 		order = append(order, (start+i)%len(m.providers))
 	}
+	now := time.Now()
 	for i, idx := range order {
-		if m.providers[idx].waitRemaining() <= 0 {
+		if m.providers[idx].available(now) && m.providers[idx].waitRemaining() <= 0 {
 			order[0], order[i] = order[i], order[0]
 			break
 		}
