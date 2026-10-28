@@ -134,6 +134,8 @@ func NewWebSearch(braveAPIKey, ollamaAPIKey string) (*web.MultiWebSearch, error)
 	return web.NewMultiWebSearch(braveAPIKey, ollamaAPIKey)
 }
 
+// NewBraveWebSearch builds the Brave-backed web search provider used when a
+// Brave API key is configured.
 func NewBraveWebSearch(apiKey string) (*web.BraveWebSearch, error) {
 	return web.NewBraveWebSearch(apiKey)
 }

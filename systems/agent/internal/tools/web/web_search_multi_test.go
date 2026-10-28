@@ -148,7 +148,7 @@ func TestMultiWebSearchRoundRobinsStartProvider(t *testing.T) {
 		return &provider{
 			name: name,
 			min:  0,
-			run: func(_ context.Context, query string, _ int) (string, error) {
+			run: func(_ context.Context, _ string, _ int) (string, error) {
 				mu.Lock()
 				starts = append(starts, name)
 				mu.Unlock()
@@ -228,13 +228,13 @@ func TestMultiWebSearchAllProvidersFail(t *testing.T) {
 func TestMultiWebSearchThrottlesProviderSpacing(t *testing.T) {
 	t.Parallel()
 
-	const min = 60 * time.Millisecond
+	const spacing = 60 * time.Millisecond
 	var mu sync.Mutex
 	var stamps []time.Time
 
 	throttled := &provider{
 		name: "throttled",
-		min:  min,
+		min:  spacing,
 		run: func(context.Context, string, int) (string, error) {
 			mu.Lock()
 			stamps = append(stamps, time.Now())
