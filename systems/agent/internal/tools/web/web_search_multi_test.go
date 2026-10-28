@@ -255,8 +255,8 @@ func TestMultiWebSearchThrottlesProviderSpacing(t *testing.T) {
 	if len(stamps) != 2 {
 		t.Fatalf("expected 2 calls, got %d", len(stamps))
 	}
-	if gap := stamps[1].Sub(stamps[0]); gap < min {
-		t.Fatalf("provider calls not throttled: gap %s < %s", gap, min)
+	if gap := stamps[1].Sub(stamps[0]); gap < spacing {
+		t.Fatalf("provider calls not throttled: gap %s < %s", gap, spacing)
 	}
 }
 
