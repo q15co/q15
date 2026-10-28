@@ -259,10 +259,10 @@ Notes:
 
 - `agent.tools.web_search` is optional. Set `brave_api_key_env` and/or `ollama_api_key_env` to
   enable `web_search`; any single provider key is enough. Each name resolves through `NAME` or
-  `NAME_FILE`. Requests rotate across the configured providers and are throttled per provider
-  (Brave 1.1s to respect the free tier's ~1 request/second, Ollama 250ms). A provider that fails
-  three consecutive times is skipped for 60s so a dead backend does not cost every other call a
-  full client timeout.
+  `NAME_FILE`. Requests rotate across the configured providers and are throttled per provider (Brave
+  1.1s to respect the free tier's ~1 request/second, Ollama 250ms). A provider that fails three
+  consecutive times is skipped for 60s so a dead backend does not cost every other call a full
+  client timeout.
 
 - `agent.tools.embeddings` is optional; omit it to disable `embed_sources`, `embed_sync`,
   `embed_search`, and `embed_status`
