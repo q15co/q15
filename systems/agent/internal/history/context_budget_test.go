@@ -16,14 +16,14 @@ func TestContextUsesModelWindowThroughoutToolLoop(t *testing.T) {
 	base := []conversation.Message{conversation.SystemMessage("Instructions."), input}
 	snapshot := contextSnapshot{
 		systemCount: 1, input: []conversation.Message{input},
-		settings: ContextSettings{WorkingBudgetTokens: 64000},
+		settings: ContextSettings{InitialContextMaxTokens: 100000},
 		groups: []contextGroup{
 			{
 				id:     1,
 				kind:   "recent",
 				digest: "Earlier work was completed.",
 				messages: []conversation.Message{
-					conversation.UserMessage("OLD_SOURCE " + strings.Repeat("older ", 40000)),
+					conversation.UserMessage("OLD_SOURCE " + strings.Repeat("older ", 80000)),
 				},
 			},
 			{id: 2, kind: "recent", protected: true, messages: []conversation.Message{
@@ -51,7 +51,7 @@ func TestContextUsesModelWindowThroughoutToolLoop(t *testing.T) {
 				t.Fatalf("incorrect usable context: %+v", metadata)
 			}
 			if calls == 1 {
-				if metadata.Estimated <= 16000 || metadata.Estimated > 64000 {
+				if metadata.Estimated <= 16000 || metadata.Estimated > 100000 {
 					t.Fatalf(
 						"starting context did not use the actual model's assembly budget: %+v",
 						metadata,
@@ -71,7 +71,8 @@ func TestContextUsesModelWindowThroughoutToolLoop(t *testing.T) {
 			if !reflect.DeepEqual(messages[:len(first)], first) {
 				t.Fatal("accumulated work changed the starting context")
 			}
-			if metadata.Estimated <= 64000 || messages[len(messages)-2].Parts[0].Content != output {
+			if metadata.Estimated <= 100000 ||
+				messages[len(messages)-2].Parts[0].Content != output {
 				t.Fatal("active evidence was shortened even though it fits the model window")
 			}
 			if messages[len(messages)-3].Parts[0].Text != reasoning {
@@ -99,7 +100,7 @@ func TestContextUsesModelWindowThroughoutToolLoop(t *testing.T) {
 	}
 }
 
-func TestContextDefaultBytePolicyAllowsWindowSizedEvidence(t *testing.T) {
+func TestContextModelWindowAllowsLargeEncodedEvidence(t *testing.T) {
 	input := conversation.UserMessage("Inspect this result.")
 	base := []conversation.Message{conversation.SystemMessage("Instructions."), input}
 	output := strings.Repeat(" configuration", 400000)
@@ -109,33 +110,27 @@ func TestContextDefaultBytePolicyAllowsWindowSizedEvidence(t *testing.T) {
 			conversation.ToolResult("read", output, false),
 		}},
 	)
-	for _, maxBytes := range []int{0, 4 * 1024 * 1024} {
-		settings, err := normalizeContextSettings(ContextSettings{MaxRequestBytes: maxBytes})
-		if err != nil {
-			t.Fatal(err)
-		}
-		snapshot := contextSnapshot{
-			systemCount: 1,
-			input:       []conversation.Message{input},
-			settings:    settings,
-		}
-		result, err := snapshot.fitRequest(t.Context(), agent.ModelContext{
-			Ref: "p/large", MaxContextTokens: 1048576,
-		}, request, nil, len(base))
-		if err != nil {
-			t.Fatal(err)
-		}
-		size, err := agent.RequestEncodedBytes(result, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if maxBytes == 0 {
-			if size <= 4*1024*1024 || result[len(result)-2].Parts[0].Content != output {
-				t.Fatal("default byte policy shortened evidence below the model window")
-			}
-		} else if size > maxBytes {
-			t.Fatalf("explicit encoded byte cap was ignored: %d > %d", size, maxBytes)
-		}
+	settings, err := normalizeContextSettings(ContextSettings{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := contextSnapshot{
+		systemCount: 1,
+		input:       []conversation.Message{input},
+		settings:    settings,
+	}
+	result, err := snapshot.fitRequest(t.Context(), agent.ModelContext{
+		Ref: "p/large", MaxContextTokens: 1048576,
+	}, request, nil, len(base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	size, err := agent.RequestEncodedBytes(result, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if size <= 4*1024*1024 || result[len(result)-2].Parts[0].Content != output {
+		t.Fatal("evidence was shortened below the model window")
 	}
 	if request[len(request)-1].Parts[0].Content != output {
 		t.Fatal("fitting modified the original evidence")
@@ -143,10 +138,10 @@ func TestContextDefaultBytePolicyAllowsWindowSizedEvidence(t *testing.T) {
 }
 
 func TestContextMandatoryInputCanExceedAssemblyTarget(t *testing.T) {
-	input := conversation.UserMessage(strings.Repeat(" question", 60000))
+	input := conversation.UserMessage(strings.Repeat(" question", 90000))
 	base := []conversation.Message{conversation.SystemMessage("Instructions."), input}
 	snapshot := contextSnapshot{systemCount: 1, input: []conversation.Message{input},
-		settings: ContextSettings{WorkingBudgetTokens: 64000},
+		settings: ContextSettings{InitialContextMaxTokens: 100000},
 		groups:   []contextGroup{{id: 1, kind: "gap", digest: "Optional older work."}},
 	}
 	result, err := snapshot.fitRequest(t.Context(), agent.ModelContext{
@@ -156,7 +151,7 @@ func TestContextMandatoryInputCanExceedAssemblyTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(result[len(result)-2], input) ||
-		readWindowMetadata(t, result).Estimated <= 64000 {
+		readWindowMetadata(t, result).Estimated <= 100000 {
 		t.Fatal("mandatory input was constrained by the history assembly target")
 	}
 	_, err = snapshot.fitRequest(t.Context(), agent.ModelContext{
@@ -172,7 +167,7 @@ func TestContextModelGrowthKeepsStartingHistorySelection(t *testing.T) {
 	input := conversation.UserMessage("Continue.")
 	base := []conversation.Message{conversation.SystemMessage("Instructions."), input}
 	snapshot := contextSnapshot{systemCount: 1, input: []conversation.Message{input},
-		settings: ContextSettings{ModelBudgetTokens: map[string]int{"p/small": 1024}},
+		settings: ContextSettings{InitialContextMaxFraction: 0.125},
 		groups: []contextGroup{
 			{id: 1, kind: "recent", digest: "Older work summary.", messages: []conversation.Message{
 				conversation.UserMessage("OLD_SOURCE " + strings.Repeat("earlier ", 5000)),
@@ -199,7 +194,7 @@ func TestContextModelGrowthKeepsStartingHistorySelection(t *testing.T) {
 	}
 	if readWindowMetadata(t, first).Budget != 5735 ||
 		readWindowMetadata(t, second).Budget != 987956 {
-		t.Fatal("model change or assembly override constrained the runtime window")
+		t.Fatal("model change or initial caps constrained the runtime window")
 	}
 	output := strings.Repeat(" evidence", 10000)
 	request := append(conversation.CloneMessages(base),

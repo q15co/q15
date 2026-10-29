@@ -52,9 +52,7 @@ func TestSubagentBudgetsEvidenceAndReservesFinalAnswer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager.contextFitter, err = history.NewIsolatedContextFitter(history.ContextSettings{
-		MaxRequestBytes: 3500, ModelBudgetTokens: map[string]int{"p/child": 2048},
-	})
+	manager.contextFitter, err = history.NewIsolatedContextFitter(history.ContextSettings{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,10 +97,6 @@ func TestSubagentBudgetsEvidenceAndReservesFinalAnswer(t *testing.T) {
 			!messagesContainText(messages, `working_budget_tokens="14541"`) ||
 			!messagesContainText(messages, `model_ref="p/child"`) {
 			t.Fatalf("call %d exceeded discovered model budget: %d, %v", n+1, estimate, err)
-		}
-		bytes, err := agent.RequestEncodedBytes(messages, tools[n])
-		if err != nil || bytes > 3500 {
-			t.Fatalf("call %d exceeded byte budget: %d, %v", n+1, bytes, err)
 		}
 	}
 	if len(tools[0]) != 1 || len(tools[1]) != 1 || len(tools[2]) != 0 ||

@@ -5,31 +5,27 @@ import (
 	"math"
 	"net/url"
 	"os"
-	"strings"
 
 	"github.com/q15co/q15/systems/agent/internal/providertypes"
 )
 
 // History configures relational conversation context separately from library search.
 type History struct {
-	EmbeddingAPIKeyEnv    string         `yaml:"embedding_api_key_env"`
-	DatabaseURLEnv        string         `yaml:"database_url_env"`
-	EmbeddingBaseURL      string         `yaml:"embedding_base_url"`
-	EmbeddingProvider     string         `yaml:"embedding_provider"`
-	EmbeddingModel        string         `yaml:"embedding_model"`
-	EmbeddingDimensions   int            `yaml:"embedding_dimensions"`
-	EmbeddingBatchSize    int            `yaml:"embedding_batch_size"`
-	EmbeddingBatchTokens  int            `yaml:"embedding_batch_tokens"`
-	SummaryProvider       string         `yaml:"summary_provider"`
-	SummaryModel          string         `yaml:"summary_model"`
-	WorkingBudgetTokens   int            `yaml:"working_budget_tokens"`
-	ModelBudgetTokens     map[string]int `yaml:"model_budget_tokens"`
-	RecentTurns           int            `yaml:"recent_turns"`
-	ContextWindowFraction float64        `yaml:"context_window_fraction"`
-	RecentHistoryFraction float64        `yaml:"recent_history_fraction"`
-	MaxRequestBytes       int            `yaml:"max_request_bytes"`
-	RetrievalLimit        int            `yaml:"retrieval_limit"`
-	MinSimilarity         float32        `yaml:"min_similarity"`
+	EmbeddingAPIKeyEnv        string  `yaml:"embedding_api_key_env"`
+	DatabaseURLEnv            string  `yaml:"database_url_env"`
+	EmbeddingBaseURL          string  `yaml:"embedding_base_url"`
+	EmbeddingProvider         string  `yaml:"embedding_provider"`
+	EmbeddingModel            string  `yaml:"embedding_model"`
+	EmbeddingDimensions       int     `yaml:"embedding_dimensions"`
+	EmbeddingBatchSize        int     `yaml:"embedding_batch_size"`
+	EmbeddingBatchTokens      int     `yaml:"embedding_batch_tokens"`
+	SummaryProvider           string  `yaml:"summary_provider"`
+	SummaryModel              string  `yaml:"summary_model"`
+	InitialContextMaxTokens   int     `yaml:"initial_context_max_tokens"`
+	InitialContextMaxFraction float64 `yaml:"initial_context_max_fraction"`
+	RecentTurns               int     `yaml:"recent_turns"`
+	RetrievalLimit            int     `yaml:"retrieval_limit"`
+	MinSimilarity             float32 `yaml:"min_similarity"`
 }
 
 // HistoryRuntime contains resolved settings; credentials never belong in diagnostics.
@@ -71,14 +67,11 @@ func (c Config) ResolveHistory() (HistoryRuntime, error) {
 	if h.SummaryModel == "" {
 		h.SummaryModel = "minimax-m3.1-flash"
 	}
-	if h.WorkingBudgetTokens == 0 {
-		h.WorkingBudgetTokens = 64000
+	if h.InitialContextMaxTokens == 0 {
+		h.InitialContextMaxTokens = 100000
 	}
-	if h.ContextWindowFraction == 0 {
-		h.ContextWindowFraction = 0.25
-	}
-	if h.RecentHistoryFraction == 0 {
-		h.RecentHistoryFraction = 1.0 / 3
+	if h.InitialContextMaxFraction == 0 {
+		h.InitialContextMaxFraction = 0.25
 	}
 	if h.RecentTurns == 0 {
 		h.RecentTurns = 4
@@ -149,12 +142,10 @@ func (h History) validate() error {
 	if h.EmbeddingDimensions < 0 || h.EmbeddingDimensions > 2000 || h.EmbeddingBatchSize < 0 ||
 		h.EmbeddingBatchSize > 128 ||
 		h.EmbeddingBatchTokens < 0 || h.EmbeddingBatchTokens > 65536 ||
-		h.WorkingBudgetTokens < 0 ||
-		(h.WorkingBudgetTokens > 0 && h.WorkingBudgetTokens < 1024) ||
+		h.InitialContextMaxTokens < 0 ||
+		(h.InitialContextMaxTokens > 0 && h.InitialContextMaxTokens < 1024) ||
 		h.RecentTurns < 0 ||
 		h.RecentTurns > 32 ||
-		h.MaxRequestBytes < 0 ||
-		(h.MaxRequestBytes > 0 && h.MaxRequestBytes < 1024) ||
 		h.RetrievalLimit < 0 ||
 		h.RetrievalLimit > 32 ||
 		math.IsNaN(
@@ -163,17 +154,12 @@ func (h History) validate() error {
 		h.MinSimilarity > 1 {
 		return fmt.Errorf("agent.history contains invalid dimensions, context limits or similarity")
 	}
-	for _, fraction := range []float64{h.ContextWindowFraction, h.RecentHistoryFraction} {
-		if math.IsNaN(fraction) || math.IsInf(fraction, 0) || fraction < 0 || fraction > 1 {
-			return fmt.Errorf("agent.history fractions must be greater than zero and at most one")
-		}
-	}
-	for model, limit := range h.ModelBudgetTokens {
-		if !strings.Contains(model, "/") || limit < 1024 {
-			return fmt.Errorf(
-				"agent.history.model_budget_tokens requires qualified model names and budgets of at least 1024 tokens",
-			)
-		}
+	if fraction := h.InitialContextMaxFraction; math.IsNaN(fraction) || math.IsInf(fraction, 0) ||
+		fraction < 0 ||
+		fraction > 1 {
+		return fmt.Errorf(
+			"agent.history.initial_context_max_fraction must be greater than zero and at most one",
+		)
 	}
 	return nil
 }

@@ -29,7 +29,9 @@ func TestContextCountsAndPreservesFinalInstructionsAfterMetadata(t *testing.T) {
 	system := conversation.SystemMessage("Stable instructions.")
 	snapshot := contextSnapshot{
 		system: []conversation.Message{system}, systemCount: 1,
-		input: []conversation.Message{input}, settings: ContextSettings{WorkingBudgetTokens: 1024},
+		input: []conversation.Message{
+			input,
+		}, settings: ContextSettings{InitialContextMaxTokens: 1024},
 	}
 	base := []conversation.Message{system, input}
 	tail := conversation.UserMessage("Tools are disabled. Give your final answer now.")
@@ -100,7 +102,7 @@ func TestContextCountersIncludeTheirOwnCostAndRefreshPerModelStep(t *testing.T) 
 		system:      conversation.CloneMessages(system),
 		systemCount: 1,
 		input:       []conversation.Message{input},
-		settings:    ContextSettings{WorkingBudgetTokens: 64000},
+		settings:    ContextSettings{InitialContextMaxTokens: 64000},
 	}
 	base := append(conversation.CloneMessages(system), input)
 	tools := []agent.ToolDefinition{{Name: "inspect", Parameters: map[string]any{"type": "object"}}}

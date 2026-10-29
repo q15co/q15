@@ -16,15 +16,12 @@ import (
 
 // ContextSettings separates history assembly limits from model request ceilings.
 type ContextSettings struct {
-	WorkingBudgetTokens   int
-	ModelBudgetTokens     map[string]int
-	RecentTurns           int
-	ContextWindowFraction float64
-	RecentHistoryFraction float64
-	MaxRequestBytes       int
-	RetrievalLimit        int
-	MinSimilarity         float32
-	Tools                 []agent.ToolDefinition
+	InitialContextMaxTokens   int
+	InitialContextMaxFraction float64
+	RecentTurns               int
+	RetrievalLimit            int
+	MinSimilarity             float32
+	Tools                     []agent.ToolDefinition
 }
 
 // ContextService prepares one immutable retrieval snapshot for each agent run.
@@ -72,14 +69,11 @@ func NewIsolatedContextFitter(settings ContextSettings) (agent.RequestContextFit
 }
 
 func normalizeContextSettings(settings ContextSettings) (ContextSettings, error) {
-	if settings.WorkingBudgetTokens == 0 {
-		settings.WorkingBudgetTokens = 64000
+	if settings.InitialContextMaxTokens == 0 {
+		settings.InitialContextMaxTokens = 100000
 	}
-	if settings.ContextWindowFraction == 0 {
-		settings.ContextWindowFraction = 0.25
-	}
-	if settings.RecentHistoryFraction == 0 {
-		settings.RecentHistoryFraction = 1.0 / 3
+	if settings.InitialContextMaxFraction == 0 {
+		settings.InitialContextMaxFraction = 0.25
 	}
 	if settings.RecentTurns == 0 {
 		settings.RecentTurns = 4
@@ -87,22 +81,20 @@ func normalizeContextSettings(settings ContextSettings) (ContextSettings, error)
 	if settings.RetrievalLimit == 0 {
 		settings.RetrievalLimit = 6
 	}
-	if settings.WorkingBudgetTokens < 1024 || settings.RecentTurns < 1 ||
+	if settings.InitialContextMaxTokens < 1024 || settings.RecentTurns < 1 ||
 		settings.RecentTurns > 32 ||
 		settings.RetrievalLimit < 1 ||
-		settings.RetrievalLimit > 32 ||
-		settings.MaxRequestBytes < 0 ||
-		(settings.MaxRequestBytes > 0 && settings.MaxRequestBytes < 1024) {
+		settings.RetrievalLimit > 32 {
 		return ContextSettings{}, errors.New("invalid history context budget or tier limits")
 	}
-	for _, fraction := range []float64{settings.ContextWindowFraction, settings.RecentHistoryFraction} {
-		if math.IsNaN(fraction) || math.IsInf(fraction, 0) || fraction <= 0 || fraction > 1 {
-			return ContextSettings{}, errors.New(
-				"history context fractions must be greater than zero and at most one",
-			)
-		}
+	if fraction := settings.InitialContextMaxFraction; math.IsNaN(fraction) ||
+		math.IsInf(fraction, 0) ||
+		fraction <= 0 ||
+		fraction > 1 {
+		return ContextSettings{}, errors.New(
+			"history initial context fraction must be greater than zero and at most one",
+		)
 	}
-	settings.ModelBudgetTokens = cloneBudgets(settings.ModelBudgetTokens)
 	settings.Tools = slices.Clone(settings.Tools)
 	return settings, nil
 }
@@ -218,10 +210,9 @@ func (s *ContextService) PrepareContext(
 		len(initial),
 		true,
 	)
-	var budgetError *agent.RequestBudgetError
 	var tokenError *agent.TokenBudgetError
-	if errors.As(err, &budgetError) || errors.As(err, &tokenError) {
-		// The selected model may have a larger override. Fit each actual attempt before dispatch.
+	if errors.As(err, &tokenError) {
+		// The actual model may have a larger window. Fit each attempt before dispatch.
 		messages, err = initial, nil
 	}
 	if err != nil {
@@ -295,9 +286,8 @@ func (s *contextSnapshot) fitRequest(
 		s.initialReady = true
 	} else if !initialReady {
 		_, err := s.fit(ctx, model, messages[:generatedStart], tools, generatedStart, true, tail...)
-		var byteError *agent.RequestBudgetError
 		var tokenError *agent.TokenBudgetError
-		if errors.As(err, &byteError) || errors.As(err, &tokenError) {
+		if errors.As(err, &tokenError) {
 			// Mandatory input may exceed the assembly target while still fitting
 			// the model. In that case, leave out automatically selected history.
 			s.initialGroups, s.initialReady = nil, true
@@ -343,10 +333,6 @@ func (s *contextSnapshot) fit(
 	if assembling {
 		limit = s.assemblyLimit(model)
 	}
-	maxBytes := s.settings.MaxRequestBytes
-	if maxBytes == 0 {
-		maxBytes = math.MaxInt
-	}
 	toolCap, reasoningCap := 8192, 2048
 	activeToolCap, activeReasoningCap := 512, 256
 	for _, message := range active {
@@ -373,13 +359,6 @@ func (s *contextSnapshot) fit(
 			compactActiveEvidence(current)
 		}
 		result = append(result, current...)
-		size, err := agent.RequestEncodedBytes(append(result, tail...), tools)
-		if err != nil {
-			return nil, 0, 0, err
-		}
-		if size > maxBytes {
-			return result, size, limit + 1, nil
-		}
 		result, tokens, err := withContextWindow(
 			result,
 			tools,
@@ -389,14 +368,14 @@ func (s *contextSnapshot) fit(
 		if err != nil {
 			return nil, 0, 0, err
 		}
-		size, err = agent.RequestEncodedBytes(result, tools)
+		size, err := agent.RequestEncodedBytes(result, tools)
 		return result, size, tokens, err
 	}
 	result, size, tokens, err := materialize()
 	if err != nil {
 		return nil, err
 	}
-	over := func() bool { return tokens > limit || size > maxBytes }
+	over := func() bool { return tokens > limit }
 	recentAllowance := math.MaxInt
 	if assembling {
 		recentAllowance, err = s.recentAllowance(
@@ -485,9 +464,6 @@ func (s *contextSnapshot) fit(
 			return nil, err
 		}
 	}
-	if size > maxBytes {
-		return nil, &agent.RequestBudgetError{Bytes: size, Limit: maxBytes}
-	}
 	if tokens > limit {
 		return nil, &agent.TokenBudgetError{EstimatedTokens: tokens, LimitTokens: limit}
 	}
@@ -502,10 +478,9 @@ func (s *contextSnapshot) fit(
 		s.initialReady = true
 	} else {
 		log.Printf(
-			"q15: history context ref=%q canonical_bytes=%d max_bytes=%d estimated_tokens=%d limit_tokens=%d assembly_limit_tokens=%d estimator=%s lexical_fallback=%t selected=%v",
+			"q15: history context ref=%q canonical_bytes=%d estimated_tokens=%d limit_tokens=%d initial_context_limit_tokens=%d estimator=%s lexical_fallback=%t selected=%v",
 			model.Ref,
 			size,
-			s.settings.MaxRequestBytes,
 			tokens,
 			limit,
 			s.assemblyLimit(model),
@@ -531,17 +506,6 @@ func (s *contextSnapshot) recentAllowance(
 	tail ...conversation.Message,
 ) (int, error) {
 	base := append(conversation.CloneMessages(system), capParts(active, 8192, 2048)...)
-	maxBytes := s.settings.MaxRequestBytes
-	if maxBytes == 0 {
-		maxBytes = math.MaxInt
-	}
-	size, err := agent.RequestEncodedBytes(append(base, tail...), tools)
-	if err != nil {
-		return 0, err
-	}
-	if size > maxBytes {
-		return 0, nil
-	}
 	_, used, err := withContextWindow(base, tools, model, s.requestLimit(model), tail...)
 	if err != nil {
 		return 0, err
@@ -554,11 +518,7 @@ func (s *contextSnapshot) recentAllowance(
 		}
 	}
 	retrievalTokens, err := renderedHistoryTokens(retrieved, 8192, 2048)
-	fraction := s.settings.RecentHistoryFraction
-	if fraction == 0 {
-		fraction = 1.0 / 3
-	}
-	return max(int(float64(available)*fraction), available-retrievalTokens), err
+	return max(available/3, available-retrievalTokens), err
 }
 
 func compactActiveEvidence(messages []conversation.Message) {
@@ -593,11 +553,11 @@ func compactActiveEvidence(messages []conversation.Message) {
 }
 
 func (s *contextSnapshot) assemblyLimit(model agent.ModelContext) int {
-	ceiling := s.assemblyCeiling(model)
+	ceiling := s.initialTokenCap()
 	if model.MaxContextTokens <= 0 {
 		return min(ceiling, s.requestLimit(model))
 	}
-	fraction := s.settings.ContextWindowFraction
+	fraction := s.settings.InitialContextMaxFraction
 	if fraction == 0 {
 		fraction = 0.25
 	}
@@ -607,20 +567,17 @@ func (s *contextSnapshot) assemblyLimit(model agent.ModelContext) int {
 	)
 }
 
-func (s *contextSnapshot) assemblyCeiling(model agent.ModelContext) int {
-	ceiling := s.settings.WorkingBudgetTokens
+func (s *contextSnapshot) initialTokenCap() int {
+	ceiling := s.settings.InitialContextMaxTokens
 	if ceiling == 0 {
-		ceiling = 64000
-	}
-	if override := s.settings.ModelBudgetTokens[model.Ref]; override > 0 {
-		ceiling = override
+		ceiling = 100000
 	}
 	return ceiling
 }
 
 func (s *contextSnapshot) requestLimit(model agent.ModelContext) int {
 	if model.MaxContextTokens <= 0 {
-		return min(s.assemblyCeiling(model), 16000)
+		return min(s.initialTokenCap(), 16000)
 	}
 	replyReserve := outputReserve(model)
 	safetyReserve := max(1, model.MaxContextTokens/20)
@@ -783,12 +740,4 @@ func selectedGroups(groups []contextGroup) []contextGroup {
 		}
 	}
 	return result
-}
-
-func cloneBudgets(input map[string]int) map[string]int {
-	cloned := make(map[string]int, len(input))
-	for key, value := range input {
-		cloned[key] = value
-	}
-	return cloned
 }
