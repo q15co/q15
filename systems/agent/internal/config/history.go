@@ -80,9 +80,6 @@ func (c Config) ResolveHistory() (HistoryRuntime, error) {
 	if h.RecentHistoryFraction == 0 {
 		h.RecentHistoryFraction = 1.0 / 3
 	}
-	if h.MaxRequestBytes == 0 {
-		h.MaxRequestBytes = 4 * 1024 * 1024
-	}
 	if h.RecentTurns == 0 {
 		h.RecentTurns = 4
 	}

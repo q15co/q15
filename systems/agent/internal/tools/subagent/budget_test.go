@@ -95,8 +95,8 @@ func TestSubagentBudgetsEvidenceAndReservesFinalAnswer(t *testing.T) {
 			t.Fatal("subagent changed its cacheable system prefix")
 		}
 		estimate, err := agent.RequestEstimatedTokens(messages, tools[n])
-		if err != nil || estimate > 2048 ||
-			!messagesContainText(messages, `working_budget_tokens="2048"`) ||
+		if err != nil || estimate > 14541 ||
+			!messagesContainText(messages, `working_budget_tokens="14541"`) ||
 			!messagesContainText(messages, `model_ref="p/child"`) {
 			t.Fatalf("call %d exceeded discovered model budget: %d, %v", n+1, estimate, err)
 		}

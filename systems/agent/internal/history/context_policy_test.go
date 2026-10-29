@@ -68,28 +68,32 @@ func TestContextFitsPastEvidenceBeforeShorteningCurrentRead(t *testing.T) {
 	}
 }
 
-func TestWorkingBudgetUsesCatalogTokensAndReserves(t *testing.T) {
+func TestAssemblyAndRequestBudgetsUseCatalogTokensAndReserves(t *testing.T) {
 	snapshot := contextSnapshot{
 		settings: ContextSettings{WorkingBudgetTokens: 64000, ContextWindowFraction: 0.25},
 	}
 	for _, tc := range []struct {
-		name  string
-		model agent.ModelContext
-		want  int
+		name     string
+		model    agent.ModelContext
+		assembly int
+		request  int
 	}{
-		{"128k", agent.ModelContext{MaxContextTokens: 128000}, 32000},
-		{"million", agent.ModelContext{MaxContextTokens: 1000000}, 64000},
-		{"unknown", agent.ModelContext{}, 16000},
-		{"small", agent.ModelContext{MaxContextTokens: 8192}, 2048},
+		{"128k", agent.ModelContext{MaxContextTokens: 128000}, 32000, 113408},
+		{"million", agent.ModelContext{MaxContextTokens: 1048576}, 64000, 987956},
+		{"unknown", agent.ModelContext{}, 16000, 16000},
+		{"small", agent.ModelContext{MaxContextTokens: 8192}, 2048, 5735},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := snapshot.workingLimit(tc.model); got != tc.want {
-				t.Fatalf("tokens=%d want=%d", got, tc.want)
+			if got := snapshot.assemblyLimit(tc.model); got != tc.assembly {
+				t.Fatalf("assembly tokens=%d want=%d", got, tc.assembly)
+			}
+			if got := snapshot.requestLimit(tc.model); got != tc.request {
+				t.Fatalf("request tokens=%d want=%d", got, tc.request)
 			}
 		})
 	}
 	snapshot.settings.ContextWindowFraction = 1
-	if got := snapshot.workingLimit(agent.ModelContext{MaxContextTokens: 10000, MaxOutputTokens: 1000}); got != 8500 {
+	if got := snapshot.assemblyLimit(agent.ModelContext{MaxContextTokens: 10000, MaxOutputTokens: 1000}); got != 8500 {
 		t.Fatalf("reply and uncertainty reserves missing: %d", got)
 	}
 }

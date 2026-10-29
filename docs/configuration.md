@@ -131,7 +131,7 @@ agent:
     working_budget_tokens: 64000
     context_window_fraction: 0.25
     recent_history_fraction: 0.3333333333333333
-    max_request_bytes: 4194304
+    max_request_bytes: 0
     recent_turns: 4
   tools:
     web_search:

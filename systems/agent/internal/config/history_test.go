@@ -28,6 +28,7 @@ func TestHistoryDefaultsAndIndependentModelBinding(t *testing.T) {
 		h.EmbeddingModel != "embeddinggemma-2:740m" ||
 		h.EmbeddingProvider != "ollama" ||
 		h.EmbeddingBatchTokens != 8192 ||
+		h.MaxRequestBytes != 0 ||
 		h.DatabaseURL == "" ||
 		h.WorkingBudgetTokens != 64000 || h.ContextWindowFraction != 0.25 || h.RecentTurns != 4 {
 		t.Fatal("history defaults or explicit binding differ")

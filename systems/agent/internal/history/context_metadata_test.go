@@ -114,7 +114,7 @@ func TestContextCountersIncludeTheirOwnCostAndRefreshPerModelStep(t *testing.T) 
 		t.Fatal(err)
 	}
 	one := readWindowMetadata(t, first)
-	if one.Model != model.Ref || one.Budget != 32000 || one.Capacity != "128000" ||
+	if one.Model != model.Ref || one.Budget != 117504 || one.Capacity != "128000" ||
 		one.OutputReserve != "4096" ||
 		one.Remaining != one.Budget-one.Estimated {
 		t.Fatalf("incorrect model context counters: %+v", one)
@@ -170,7 +170,7 @@ func TestContextCountersIncludeTheirOwnCostAndRefreshPerModelStep(t *testing.T) 
 		t.Fatal(err)
 	}
 	three := readWindowMetadata(t, third)
-	if three.Model != "provider/small" || three.Budget != 4096 || three.Capacity != "16384" ||
+	if three.Model != "provider/small" || three.Budget != 14541 || three.Capacity != "16384" ||
 		three.OutputReserve != "1024" {
 		t.Fatalf("model switch retained stale counters: %+v", three)
 	}
