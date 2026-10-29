@@ -420,7 +420,8 @@ func truncateSnippet(snippet string, max int) string {
 	}
 	cut := max - 1
 	if cut < 1 {
-		cut = max
+		// max is 1: an ellipsis alone is the only value that fits the cap.
+		return "…"
 	}
 	for i := cut; i > cut/2 && i > 0; i-- {
 		if unicode.IsSpace(runes[i-1]) {

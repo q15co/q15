@@ -95,7 +95,7 @@ func TestNormaliseResultsDeduplicatesBeforeTruncating(t *testing.T) {
 		},
 	}
 
-	got := normaliseResults(results, 10)
+	got := normaliseResults(results, "", 10)
 	if len(got) != 2 {
 		t.Fatalf("normaliseResults() kept %d results, want 2: %+v", len(got), got)
 	}
@@ -108,7 +108,7 @@ func TestNormaliseResultsDeduplicatesBeforeTruncating(t *testing.T) {
 
 	// Truncation happens after dedupe, so a count of 2 is filled by two
 	// distinct sources rather than one source and its syndicated copy.
-	if trunc := normaliseResults(results, 2); len(trunc) != 2 {
+	if trunc := normaliseResults(results, "", 2); len(trunc) != 2 {
 		t.Fatalf("normaliseResults(count 2) kept %d results, want 2", len(trunc))
 	}
 }
@@ -117,12 +117,44 @@ func TestNormaliseResultsBoundsSnippetsFromAnyProvider(t *testing.T) {
 	t.Parallel()
 
 	huge := strings.Repeat("filler prose about nothing in particular. ", 400)
-	got := normaliseResults([]Result{{Title: "t", URL: "https://example.com", Snippet: huge}}, 1)
+	got := normaliseResults([]Result{{Title: "t", URL: "https://example.com", Snippet: huge}}, "", 1)
 	if len(got) != 1 {
 		t.Fatalf("kept %d results, want 1", len(got))
 	}
 	if n := len([]rune(got[0].Snippet)); n > maxExcerptRunes {
 		t.Fatalf("snippet is %d runes, want <= %d", n, maxExcerptRunes)
+	}
+}
+
+// TestNormaliseResultsWindowsAnOversizedSnippetByQuery covers the hole a third
+// adapter would otherwise reopen: an adapter that returns a document despite
+// the excerpt invariant must be re-windowed onto the matched passage, not onto
+// its leading text, which is navigation in every real page.
+func TestNormaliseResultsWindowsAnOversizedSnippetByQuery(t *testing.T) {
+	t.Parallel()
+
+	nav := strings.Repeat("On this page deployment licensing release history. ", 60)
+	filler := strings.Repeat("Appendix material repeats the deployment notes. ", 40)
+	buried := "The runes migration guide explains explicit reactivity and which compiler flags keep legacy syntax compiling. "
+	huge := nav + filler + buried + filler
+
+	got := normaliseResults(
+		[]Result{{Title: "Svelte runes", URL: "https://svelte.dev/docs/migration", Snippet: huge}},
+		"svelte runes migration guide",
+		1,
+	)
+	if len(got) != 1 {
+		t.Fatalf("kept %d results, want 1", len(got))
+	}
+	snippet := got[0].Snippet
+	if n := len([]rune(snippet)); n > maxExcerptRunes {
+		t.Fatalf("snippet is %d runes, want <= %d", n, maxExcerptRunes)
+	}
+	if !strings.Contains(snippet, "explicit reactivity") {
+		t.Fatalf("snippet lost the matched passage: %q", snippet)
+	}
+	if strings.Contains(snippet, "On this page") {
+		t.Fatalf("snippet starts from the nav block: %q", snippet)
 	}
 }
 

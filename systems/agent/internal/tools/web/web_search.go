@@ -390,7 +390,7 @@ func (s *Search) Run(ctx context.Context, arguments string) (string, error) {
 		results, err := p.provider.Search(ctx, SearchRequest{Query: query, Count: count})
 		if err == nil {
 			p.recordSuccess()
-			results = normaliseResults(results, count)
+			results = normaliseResults(results, query, count)
 			reason := attempt.reason
 			if priorCause != "" {
 				reason = fallbackReason(priorName, priorCause)
@@ -469,16 +469,21 @@ func (s *Search) order(start int) []selection {
 // than ten slots partly consumed by syndicated copies of one article. It
 // matches on the canonical URL, or on a near-identical title, because the same
 // article syndicated on two domains has two URLs and one title.
-func normaliseResults(results []Result, count int) []Result {
+func normaliseResults(results []Result, query string, count int) []Result {
 	if count <= 0 {
 		count = defaultWebSearchCount
 	}
+	terms := queryTerms(query)
 	kept := make([]Result, 0, min(count, len(results)))
 	seenURL := make(map[string]struct{}, len(results))
 	for _, result := range results {
 		result.Title = cleanText(result.Title)
 		result.URL = canonicalURL(result.URL)
-		result.Snippet = excerpt(result.Snippet, nil, maxExcerptRunes)
+		// Re-bound with the query terms, not a nil term set: an adapter that
+		// returns a document anyway is re-windowed onto its matched passage
+		// rather than onto its leading text, which is nav/TOC in every case
+		// this contract exists to fix.
+		result.Snippet = excerpt(result.Snippet, terms, maxExcerptRunes)
 
 		if result.URL != "" {
 			if _, duplicate := seenURL[result.URL]; duplicate {
