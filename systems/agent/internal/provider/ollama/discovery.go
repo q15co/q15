@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/q15co/q15/systems/agent/internal/modelcatalog"
 )
@@ -66,15 +67,26 @@ func (c *RosterClient) Discover(
 		if id == "" {
 			continue
 		}
-		show := c.fetchShow(ctx, base, p.APIKey, id)
 		models = append(models, modelcatalog.Model{
-			ProviderModel:  id,
-			Name:           id,
-			Capabilities:   show.capabilities,
-			ParameterCount: show.parameterCount,
-			Source:         modelcatalog.SourceOllama,
+			ProviderModel: id,
+			Name:          id,
+			Source:        modelcatalog.SourceOllama,
 		})
 	}
+	// Model details share the provider deadline with catalog enrichment.
+	var workers sync.WaitGroup
+	workerCount := min(4, len(models))
+	for worker := range workerCount {
+		workers.Go(func() {
+			for n := worker; n < len(models); n += workerCount {
+				show := c.fetchShow(ctx, base, p.APIKey, models[n].ProviderModel)
+				models[n].Capabilities = show.capabilities
+				models[n].ParameterCount = show.parameterCount
+				models[n].MaxContextTokens = show.maxContextTokens
+			}
+		})
+	}
+	workers.Wait()
 	return models, nil
 }
 
@@ -107,8 +119,9 @@ func (c *RosterClient) fetchTags(
 
 // showResult bundles the non-fatal data extracted from a single /api/show call.
 type showResult struct {
-	capabilities   modelcatalog.Capabilities
-	parameterCount int64
+	capabilities     modelcatalog.Capabilities
+	parameterCount   int64
+	maxContextTokens int
 }
 
 // fetchShow queries POST /api/show for one model and returns capabilities plus
@@ -154,9 +167,16 @@ func (c *RosterClient) fetchShow(
 	if v, ok := body.ModelInfo["general.parameter_count"]; ok {
 		_ = json.Unmarshal(v, &params)
 	}
+	var architecture string
+	_ = json.Unmarshal(body.ModelInfo["general.architecture"], &architecture)
+	var contextTokens int
+	if architecture != "" {
+		_ = json.Unmarshal(body.ModelInfo[architecture+".context_length"], &contextTokens)
+	}
 	return showResult{
-		capabilities:   capabilitiesFromOllamaShow(body.Capabilities),
-		parameterCount: params,
+		capabilities:     capabilitiesFromOllamaShow(body.Capabilities),
+		parameterCount:   params,
+		maxContextTokens: max(0, contextTokens),
 	}
 }
 

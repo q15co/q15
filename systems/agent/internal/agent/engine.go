@@ -462,6 +462,14 @@ func (e *Engine) completeWithObserver(
 				generatedStart,
 				requestTail...)
 			if err != nil {
+				log.Printf(
+					"q15: model turn=%d ref=%q attempt=%d/%d context fitting failed: %v",
+					turn,
+					modelRef,
+					attempt+1,
+					len(plan.EligibleRefs),
+					err,
+				)
 				attemptFailures = append(
 					attemptFailures,
 					ModelAttemptFailure{ModelRef: modelRef, Err: err},
