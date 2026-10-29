@@ -47,6 +47,11 @@ func runSecret(ctx context.Context, env command.Env, args []string) error {
 // read.
 func runSecretDriver(ctx context.Context, env command.Env, args []string) error {
 	env = env.WithDefaults()
+	// systemd-run sends READY=1 to an inherited socket. This helper must not
+	// complete Podman's startup notification before the container is healthy.
+	if err := env.UnsetEnv("NOTIFY_SOCKET"); err != nil {
+		return fmt.Errorf("secret-driver: isolate readiness notification: %w", err)
+	}
 
 	flags := secretFlags{}
 	fs := newSecretFlagSet("secret-driver", env, &flags)

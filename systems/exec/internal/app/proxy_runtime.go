@@ -12,9 +12,15 @@ import (
 
 	"github.com/q15co/q15/libs/proxy-contract/proxypb"
 	"github.com/q15co/q15/systems/exec/internal/proxyclient"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
-const proxyAdminConnectTimeout = 5 * time.Second
+const (
+	proxyAdminConnectTimeout = time.Minute
+	proxyAdminAttemptTimeout = 5 * time.Second
+	proxyAdminRetryInterval  = 250 * time.Millisecond
+)
 
 var systemCABundleCandidates = []string{
 	"SSL_CERT_FILE",
@@ -52,7 +58,7 @@ func bootstrapProxyRuntime(
 	}
 	defer client.Close()
 
-	info, err := client.GetRuntimeInfo(connectCtx)
+	info, err := waitForProxyRuntime(connectCtx, client.GetRuntimeInfo)
 	if err != nil {
 		return proxySessionProfile{}, func() {}, fmt.Errorf("get proxy runtime info: %w", err)
 	}
@@ -70,6 +76,36 @@ func bootstrapProxyRuntime(
 		PolicyRevision: strings.TrimSpace(info.GetPolicyRevision()),
 		Env:            buildProxyEnv(info, caPath),
 	}, cleanup, nil
+}
+
+func waitForProxyRuntime(
+	ctx context.Context,
+	getInfo func(context.Context) (*proxypb.GetRuntimeInfoResponse, error),
+) (*proxypb.GetRuntimeInfoResponse, error) {
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		attemptCtx, cancel := context.WithTimeout(ctx, proxyAdminAttemptTimeout)
+		info, err := getInfo(attemptCtx)
+		cancel()
+		if err == nil {
+			return info, nil
+		}
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("%v: %w", err, ctx.Err())
+		}
+		if status.Code(err) != codes.Unavailable && status.Code(err) != codes.DeadlineExceeded {
+			return nil, err
+		}
+		timer := time.NewTimer(proxyAdminRetryInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, fmt.Errorf("%v: %w", err, ctx.Err())
+		case <-timer.C:
+		}
+	}
 }
 
 func writeProxyCABundle(caPEM []byte) (string, func(), error) {

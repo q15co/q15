@@ -3,6 +3,8 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -56,6 +58,52 @@ func driverEnv(
 
 func driverArgs(dir, verb string) []string {
 	return []string{"secret-driver", "--seal", string(secret.KindFile), testStoreDirFlag, dir, verb}
+}
+
+func TestSecretDriverDoesNotPassNotificationSocketToHelpers(t *testing.T) {
+	t.Setenv("NOTIFY_SOCKET", "/test/container-notify.sock")
+	t.Setenv(secret.SecretIDEnv, "fixture-id")
+	var stdout bytes.Buffer
+	calls := 0
+	env := command.Env{
+		Stdout: &stdout,
+		Exec: func(ctx context.Context, program string, _ []string, stdin io.Reader, out, stderr io.Writer) error {
+			if program == "sh" {
+				_, err := io.WriteString(out, "/test/systemd-creds\n")
+				return err
+			}
+			calls++
+			return command.DefaultExec(ctx, "/bin/sh", []string{"-ec",
+				`test -z "${NOTIFY_SOCKET+x}"; test "$SECRET_ID" = fixture-id; printf fixture-value`,
+			}, stdin, out, stderr)
+		},
+	}
+	err := Run(context.Background(), env, []string{
+		"secret-driver", "--store-dir", t.TempDir(), "lookup",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 || stdout.String() != "fixture-value" {
+		t.Fatalf("helper calls=%d, stdout=%q", calls, stdout.String())
+	}
+}
+
+func TestSecretDriverFailsBeforeHelpersIfNotificationIsolationFails(t *testing.T) {
+	want := errors.New("cannot unset environment")
+	env := command.Env{
+		UnsetEnv: func(string) error { return want },
+		Exec: func(context.Context, string, []string, io.Reader, io.Writer, io.Writer) error {
+			t.Fatal("started helper after notification isolation failed")
+			return nil
+		},
+	}
+	if err := Run(context.Background(), env, []string{"secret-driver", "list"}); !errors.Is(
+		err,
+		want,
+	) {
+		t.Fatalf("error = %v, want %v", err, want)
+	}
 }
 
 // TestSecretDriverIsReachableButUnlisted pins both halves of a hidden verb: it

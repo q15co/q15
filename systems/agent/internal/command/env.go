@@ -36,6 +36,8 @@ type Env struct {
 	// their secret identifier in SECRET_ID, so this is how they read it without
 	// reaching os.Getenv.
 	LookupEnv func(name string) (string, bool)
+	// UnsetEnv removes a variable from this process before it starts helpers.
+	UnsetEnv func(name string) error
 	// IsTerminal reports whether standard input is a terminal, which is the one
 	// question standing between a hidden prompt and reading a value from a pipe.
 	IsTerminal func() bool
@@ -60,6 +62,9 @@ func (e Env) WithDefaults() Env {
 	}
 	if e.LookupEnv == nil {
 		e.LookupEnv = DefaultLookupEnv
+	}
+	if e.UnsetEnv == nil {
+		e.UnsetEnv = DefaultUnsetEnv
 	}
 	if e.IsTerminal == nil {
 		e.IsTerminal = DefaultIsTerminal

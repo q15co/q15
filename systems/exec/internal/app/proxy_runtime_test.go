@@ -2,14 +2,19 @@ package app
 
 import (
 	"context"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/q15co/q15/libs/proxy-contract/proxypb"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type testProxyInfoServer struct {
@@ -142,11 +147,77 @@ func TestBootstrapProxyRuntimeFailsWhenUnavailable(t *testing.T) {
 	addr := listener.Addr().String()
 	listener.Close()
 
-	_, cleanup, err := bootstrapProxyRuntime(context.Background(), addr)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	_, cleanup, err := bootstrapProxyRuntime(ctx, addr)
 	cleanup()
-	if err == nil {
-		t.Fatalf("expected bootstrapProxyRuntime() error")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("bootstrapProxyRuntime() error = %v, want deadline exceeded", err)
 	}
+}
+
+func TestWaitForProxyRuntimeRetriesTransientFailures(t *testing.T) {
+	for _, code := range []codes.Code{codes.Unavailable, codes.DeadlineExceeded} {
+		t.Run(code.String(), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				calls := 0
+				want := &proxypb.GetRuntimeInfoResponse{AdvertiseProxyUrl: "http://proxy:8080"}
+				info, err := waitForProxyRuntime(
+					context.Background(),
+					func(ctx context.Context) (*proxypb.GetRuntimeInfoResponse, error) {
+						calls++
+						if calls == 1 {
+							if code == codes.DeadlineExceeded {
+								<-ctx.Done()
+								return nil, status.Error(code, "slow startup")
+							}
+							return nil, status.Error(code, "starting")
+						}
+						return want, nil
+					},
+				)
+				if err != nil || info != want || calls != 2 {
+					t.Fatalf("info=%v, error=%v, calls=%d", info, err, calls)
+				}
+			})
+		})
+	}
+}
+
+func TestWaitForProxyRuntimeStopsOnPermanentError(t *testing.T) {
+	calls := 0
+	want := status.Error(codes.PermissionDenied, "denied")
+	_, err := waitForProxyRuntime(
+		context.Background(),
+		func(context.Context) (*proxypb.GetRuntimeInfoResponse, error) {
+			calls++
+			return nil, want
+		},
+	)
+	if err != want || calls != 1 {
+		t.Fatalf("error=%v, calls=%d", err, calls)
+	}
+}
+
+func TestWaitForProxyRuntimeCancellation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		calls := 0
+		go func() {
+			time.Sleep(100 * time.Millisecond)
+			cancel()
+		}()
+		_, err := waitForProxyRuntime(
+			ctx,
+			func(context.Context) (*proxypb.GetRuntimeInfoResponse, error) {
+				calls++
+				return nil, status.Error(codes.Unavailable, "starting")
+			},
+		)
+		if !errors.Is(err, context.Canceled) || calls != 1 {
+			t.Fatalf("error=%v, calls=%d", err, calls)
+		}
+	})
 }
 
 func TestBuildProxyEnvSetsNodeUseEnvProxy(t *testing.T) {
