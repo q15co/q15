@@ -198,7 +198,7 @@ func TestPostgresKeepsLargeToolSourceWhileModelReplayFits(t *testing.T) {
 	}
 	service, err := history.NewContextService(
 		indexer,
-		history.ContextSettings{WorkingBudgetTokens: 2048},
+		history.ContextSettings{InitialContextMaxTokens: 2048},
 	)
 	if err != nil {
 		t.Fatal(err)

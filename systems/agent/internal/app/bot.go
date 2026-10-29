@@ -252,9 +252,9 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 		return fmt.Errorf("configure schedule manager for agent %q: %w", rt.Name, err)
 	}
 	contextSettings := history.ContextSettings{
-		WorkingBudgetTokens: rt.History.WorkingBudgetTokens, ModelBudgetTokens: rt.History.ModelBudgetTokens,
-		ContextWindowFraction: rt.History.ContextWindowFraction, RecentHistoryFraction: rt.History.RecentHistoryFraction, MaxRequestBytes: rt.History.MaxRequestBytes,
-		RecentTurns: rt.History.RecentTurns, RetrievalLimit: rt.History.RetrievalLimit, MinSimilarity: rt.History.MinSimilarity,
+		InitialContextMaxTokens:   rt.History.InitialContextMaxTokens,
+		InitialContextMaxFraction: rt.History.InitialContextMaxFraction,
+		RecentTurns:               rt.History.RecentTurns, RetrievalLimit: rt.History.RetrievalLimit, MinSimilarity: rt.History.MinSimilarity,
 	}
 	subagentContextFitter, err := history.NewIsolatedContextFitter(contextSettings)
 	if err != nil {

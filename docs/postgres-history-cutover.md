@@ -39,12 +39,8 @@ agent:
     embedding_batch_tokens: 8192
     summary_provider: ollama-cloud
     summary_model: minimax-m3.1-flash
-    working_budget_tokens: 64000
-    context_window_fraction: 0.25
-    recent_history_fraction: 0.3333333333333333
-    max_request_bytes: 4194304
-    model_budget_tokens:
-      ollama-cloud/deepseek-v4.1-flash: 48000
+    initial_context_max_tokens: 100000
+    initial_context_max_fraction: 0.25
     recent_turns: 4
     retrieval_limit: 6
     min_similarity: 0.35
@@ -58,22 +54,44 @@ a larger context window. Increase this setting if Ollama rejects an input becaus
 too small; larger values can use more GPU memory. Inputs are never silently truncated.
 OpenAI-compatible embedding providers ignore this setting.
 
-The input token budget is the smaller of 25 percent of the selected model's discovered context
-window and 64,000 estimated tokens. It is also capped below the context window to leave room for an
-answer and counting uncertainty. Unknown context limits use a 16,000-token fallback. The fraction,
-ceiling and optional per-model ceilings are configurable; they describe an initial policy, not a
-measured model-quality optimum.
+Both initial-context settings cap the same starting request, in different units:
+
+- `initial_context_max_tokens` caps its estimated token count (default 100,000).
+- `initial_context_max_fraction` caps its share of the selected model's discovered context window
+  (default 0.25).
+
+The starting target is the smallest of those two caps and the model's usable input capacity. With
+these defaults, a 1,048,576-token model starts with at most 100,000 estimated tokens, a
+128,000-token model with at most 32,000, and an 8,192-token model with at most 2,048. These are
+ceilings: relevant history can use less space. Counts include instructions, tool definitions, the
+user message and request metadata.
+
+History is selected for the first model attempt and stays fixed throughout that user turn. A new
+user message starts a new assembly. Mandatory instructions, tool definitions and user input are
+preserved even when they exceed the assembly target, provided they fit the model window; optional
+history is left out in that case.
+
+When upgrading, rename `working_budget_tokens` to `initial_context_max_tokens` and
+`context_window_fraction` to `initial_context_max_fraction`. Remove `model_budget_tokens`,
+`recent_history_fraction` and `max_request_bytes`. Retired keys are rejected by configuration
+loading. Omit the two new settings to use the defaults above, or set both explicitly to tune
+starting context.
+
+Every provider request can use the selected model's full context window minus an output reserve of
+up to 8,192 tokens and a five-percent safety reserve. A model's smaller output limit reduces the
+output reserve. These reserves also bound assembly for small models. The assembly target does not
+limit subsequent model/tool steps, and current-turn tool results and reasoning text remain intact
+while they fit. Unknown model capacity uses the smaller of the assembly ceiling and 16,000 tokens as
+a conservative fallback.
 
 Token estimates use the bundled o200k_base tokenizer over message text, tool schemas and framing,
 with a 25 percent margin and a separate media allowance. They are estimates for other model
 families, not exact provider tokenizer counts. Logs compare estimates with provider-reported input
-usage when available. `max_request_bytes` independently bounds the canonical encoded request. No
-additional model calls or cloud recall benchmark are used for calibration. If tokenizer
-initialization or counting fails, UTF-8 byte counts replace text token counts, with the same margin,
-framing and media allowances. This is a conservative fallback that retains both token and byte
-limits rather than failing a turn because its tokenizer is unavailable. The context fitter owns both
-request limits. The inactive engine byte-limit option, its separate reply allowance and its
-tool-result truncation path have been removed.
+usage when available. Encoded request bytes are measured for diagnostics; request fitting is
+controlled by the model's token capacity. No additional model calls or cloud recall benchmark are
+used for calibration. If tokenizer initialization or counting fails, UTF-8 byte counts replace text
+token counts, with the same margin, framing and media allowances. The fallback continues to enforce
+the token ceiling rather than failing a turn because its tokenizer is unavailable.
 
 Automatic context retains up to four recent turns and searches only generated summaries for relevant
 older work. There is no fixed wall of preceding summaries. Recent history receives one third of the
@@ -81,7 +99,9 @@ remaining history allowance and relevance receives two thirds; unused space can 
 matches do not fill otherwise empty space. Whole recent turns can be represented by their summaries,
 and copied tool evidence is shortened before dispatch. Original stored messages remain intact.
 Keyword-only fallback matches are labelled and evicted before semantic matches and continuity. The
-complete fit is repeated for each actual model attempt and tool step.
+assembled history is reused for each model attempt and tool step. Only actual model-window pressure
+triggers further history trimming or shortening of current-turn evidence. If the request still
+cannot fit, it fails before dispatch. There is no active-run summarization.
 
 Each request includes an `agent_build` tag identifying the running executable's Git commit and
 whether its source contained local changes. `make build-agent` embeds these values automatically;
@@ -90,21 +110,22 @@ the image publishing workflow supplies them to the Docker build. Custom Docker b
 `unknown`; the runtime never infers its version from the workspace checkout or conversation history.
 
 A `context_window` tag reports the actual attempt's model reference, estimated input tokens, working
-input budget, remaining budget, discovered model capacity, output reserve and safety reserve. It is
-also labelled with the running executable's commit, source modification state and build provenance.
-The note explicitly distinguishes this current state from version claims in conversation history. It
-is rebuilt after each tool step and model change. The full request, including tool definitions and
-an allowance for these counters, remains inside the configured limits. The tag is a request-only
-user-role note at the tail, preserving the stable system instructions and preceding conversation for
-provider prefix caching. It does not become part of the stored conversation. The fitter counts each
-candidate request once and reserves space for the note; no self-referential counter loop is needed.
-History labels also report token estimates for the shown turn content. Provider-reported usage may
-differ. Unknown model capacity and reserves are labelled explicitly.
+input capacity, remaining capacity, discovered model capacity, output reserve and safety reserve.
+The usable input capacity is the window-derived request ceiling, rather than the assembly target. It
+is also labelled with the running executable's commit, source modification state and build
+provenance. The note explicitly distinguishes this current state from version claims in conversation
+history. It is rebuilt after each tool step and model change. The full request, including tool
+definitions and an allowance for these counters, remains inside the configured limits. The tag is a
+request-only user-role note at the tail, preserving the stable system instructions and preceding
+conversation for provider prefix caching. It does not become part of the stored conversation. The
+fitter counts each candidate request once and reserves space for the note; no self-referential
+counter loop is needed. History labels also report token estimates for the shown turn content.
+Provider-reported usage may differ. Unknown model capacity and reserves are labelled explicitly.
 
-Delegated subagents use the same configured token and byte budgets, fitted against their own model's
-catalog limits. Their context contains the delegated task, skills and their own work; parent history
-is not loaded automatically. Full tool results remain in the session transcript, while the provider
-copy is shortened as needed.
+Delegated subagents use their own model's full usable context window. Their context contains the
+delegated task, skills and their own work; parent history is not loaded automatically. Full tool
+results remain in the session transcript, while the provider copy is shortened only under actual
+capacity pressure.
 
 Each delegated request also receives a request-only `turn_budget` note. One turn is one model
 response and any tools it requests; remaining turns include the current request. The note also

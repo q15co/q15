@@ -29,7 +29,9 @@ func TestContextCountsAndPreservesFinalInstructionsAfterMetadata(t *testing.T) {
 	system := conversation.SystemMessage("Stable instructions.")
 	snapshot := contextSnapshot{
 		system: []conversation.Message{system}, systemCount: 1,
-		input: []conversation.Message{input}, settings: ContextSettings{WorkingBudgetTokens: 1024},
+		input: []conversation.Message{
+			input,
+		}, settings: ContextSettings{InitialContextMaxTokens: 1024},
 	}
 	base := []conversation.Message{system, input}
 	tail := conversation.UserMessage("Tools are disabled. Give your final answer now.")
@@ -100,7 +102,7 @@ func TestContextCountersIncludeTheirOwnCostAndRefreshPerModelStep(t *testing.T) 
 		system:      conversation.CloneMessages(system),
 		systemCount: 1,
 		input:       []conversation.Message{input},
-		settings:    ContextSettings{WorkingBudgetTokens: 64000},
+		settings:    ContextSettings{InitialContextMaxTokens: 64000},
 	}
 	base := append(conversation.CloneMessages(system), input)
 	tools := []agent.ToolDefinition{{Name: "inspect", Parameters: map[string]any{"type": "object"}}}
@@ -114,7 +116,7 @@ func TestContextCountersIncludeTheirOwnCostAndRefreshPerModelStep(t *testing.T) 
 		t.Fatal(err)
 	}
 	one := readWindowMetadata(t, first)
-	if one.Model != model.Ref || one.Budget != 32000 || one.Capacity != "128000" ||
+	if one.Model != model.Ref || one.Budget != 117504 || one.Capacity != "128000" ||
 		one.OutputReserve != "4096" ||
 		one.Remaining != one.Budget-one.Estimated {
 		t.Fatalf("incorrect model context counters: %+v", one)
@@ -170,7 +172,7 @@ func TestContextCountersIncludeTheirOwnCostAndRefreshPerModelStep(t *testing.T) 
 		t.Fatal(err)
 	}
 	three := readWindowMetadata(t, third)
-	if three.Model != "provider/small" || three.Budget != 4096 || three.Capacity != "16384" ||
+	if three.Model != "provider/small" || three.Budget != 14541 || three.Capacity != "16384" ||
 		three.OutputReserve != "1024" {
 		t.Fatalf("model switch retained stale counters: %+v", three)
 	}

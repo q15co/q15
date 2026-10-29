@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/q15co/q15/systems/agent/internal/modelcatalog"
 )
@@ -70,9 +72,9 @@ func TestOllamaClient_DiscoverSuccess(t *testing.T) {
 			},
 		})
 	})
-	showCalls := 0
+	var showCalls atomic.Int32
 	mux.HandleFunc("/api/show", func(w http.ResponseWriter, r *http.Request) {
-		showCalls++
+		showCalls.Add(1)
 		if r.Header.Get("Authorization") != "Bearer test-key" {
 			t.Errorf("missing Authorization on /api/show")
 		}
@@ -107,8 +109,8 @@ func TestOllamaClient_DiscoverSuccess(t *testing.T) {
 	if len(models) != 2 {
 		t.Fatalf("expected 2 models, got %d", len(models))
 	}
-	if showCalls != 2 {
-		t.Fatalf("expected 2 /api/show calls, got %d", showCalls)
+	if showCalls.Load() != 2 {
+		t.Fatalf("expected 2 /api/show calls, got %d", showCalls.Load())
 	}
 
 	byID := map[string]modelcatalog.Model{}
@@ -162,6 +164,128 @@ func TestOllamaClient_ShowErrorFallbackToTextOnly(t *testing.T) {
 	}
 	if models[0].Capabilities.ToolCalling || models[0].Capabilities.ImageInput {
 		t.Errorf("expected only Text, got %+v", models[0].Capabilities)
+	}
+}
+
+func TestOllamaDiscoveryUsesNativeContextWindow(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		architecture string
+		context      any
+		want         int
+	}{
+		{"gpt oss", "gptoss", 131072, 131072},
+		{"deepseek", "deepseek_v41", 1048576, 1048576},
+		{"missing architecture", "", 131072, 0},
+		{"missing context", "gptoss", nil, 0},
+		{"invalid context", "gptoss", "unknown", 0},
+		{"fractional context", "gptoss", 1.5, 0},
+		{"negative context", "gptoss", -1, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(
+				http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.URL.Path == "/api/tags" {
+						_, _ = w.Write([]byte(`{"models":[{"name":"fixture"}]}`))
+						return
+					}
+					info := map[string]any{
+						"general.architecture":  tc.architecture,
+						"tokenizer.ggml.tokens": []string{"example"},
+					}
+					if tc.context != nil {
+						info["gptoss.context_length"] = tc.context
+						if tc.architecture != "" {
+							info[tc.architecture+".context_length"] = tc.context
+						}
+					}
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"capabilities": []string{"completion", "tools"}, "model_info": info,
+					})
+				}),
+			)
+			defer server.Close()
+			models, err := NewRosterClient(server.Client()).Discover(
+				t.Context(), modelcatalog.Provider{BaseURL: server.URL},
+			)
+			if err != nil || len(models) != 1 {
+				t.Fatalf("roster = %+v, %v", models, err)
+			}
+			if models[0].MaxContextTokens != tc.want || !models[0].Capabilities.ToolCalling {
+				t.Fatalf("native context = %d, want %d; tools = %v",
+					models[0].MaxContextTokens, tc.want, models[0].Capabilities.ToolCalling)
+			}
+		})
+	}
+}
+
+func TestOllamaDiscoveryBoundsConcurrentShowRequestsAndPreservesOrder(t *testing.T) {
+	ids := []string{"one", "two", "three", "four", "five", "six", "seven", "eight"}
+	started := make(chan struct{}, len(ids))
+	release := make(chan struct{})
+	var released atomic.Bool
+	unblock := func() {
+		if released.CompareAndSwap(false, true) {
+			close(release)
+		}
+	}
+	defer unblock()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/tags" {
+			var tags []ollamaTagsModel
+			for _, id := range ids {
+				tags = append(tags, ollamaTagsModel{Name: id})
+			}
+			_ = json.NewEncoder(w).Encode(ollamaTagsResponse{Models: tags})
+			return
+		}
+		started <- struct{}{}
+		select {
+		case <-release:
+		case <-r.Context().Done():
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"capabilities": []string{"completion", "tools"},
+			"model_info": map[string]any{
+				"general.architecture": "gptoss", "gptoss.context_length": 131072,
+			},
+		})
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	var models []modelcatalog.Model
+	var err error
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		models, err = NewRosterClient(
+			server.Client(),
+		).Discover(ctx, modelcatalog.Provider{BaseURL: server.URL})
+	}()
+	for range 4 {
+		select {
+		case <-started:
+		case <-ctx.Done():
+			t.Fatal("four model detail requests did not run concurrently")
+		}
+	}
+	select {
+	case <-started:
+		t.Fatal("more than four model detail requests ran concurrently")
+	default:
+	}
+	unblock()
+	<-done
+	if err != nil || len(models) != len(ids) {
+		t.Fatalf("roster = %+v, %v", models, err)
+	}
+	for n, model := range models {
+		if model.ProviderModel != ids[n] || model.MaxContextTokens != 131072 {
+			t.Fatalf("model %d = %s, context %d; want %s, context 131072",
+				n, model.ProviderModel, model.MaxContextTokens, ids[n])
+		}
 	}
 }
 

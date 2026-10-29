@@ -3,6 +3,7 @@ package config
 import (
 	"math"
 	"net/url"
+	"strings"
 	"testing"
 )
 
@@ -29,15 +30,16 @@ func TestHistoryDefaultsAndIndependentModelBinding(t *testing.T) {
 		h.EmbeddingProvider != "ollama" ||
 		h.EmbeddingBatchTokens != 8192 ||
 		h.DatabaseURL == "" ||
-		h.WorkingBudgetTokens != 64000 || h.ContextWindowFraction != 0.25 || h.RecentTurns != 4 {
+		h.InitialContextMaxTokens != 100000 || h.InitialContextMaxFraction != 0.25 || h.RecentTurns != 4 {
 		t.Fatal("history defaults or explicit binding differ")
 	}
-	cfg.Agent.History.ModelBudgetTokens = map[string]int{"cloud/small": 16000}
+	cfg.Agent.History.InitialContextMaxTokens = 32000
+	cfg.Agent.History.InitialContextMaxFraction = 0.5
 	cfg.Agent.History.EmbeddingProvider = "openai"
 	cfg.Agent.History.EmbeddingBatchTokens = 16384
 	cfg.Agent.History.EmbeddingBaseURL = "http://tei:80"
 	h, err = cfg.ResolveHistory()
-	if err != nil || h.ModelBudgetTokens["cloud/small"] != 16000 ||
+	if err != nil || h.InitialContextMaxTokens != 32000 || h.InitialContextMaxFraction != 0.5 ||
 		h.EmbeddingProvider != "openai" || h.EmbeddingBatchTokens != 16384 {
 		t.Fatal("history overrides failed", err)
 	}
@@ -103,14 +105,54 @@ func TestHistoryLocalSummariesRequireExplicitBinding(t *testing.T) {
 
 func TestHistoryRejectsInvalidBudgetPolicy(t *testing.T) {
 	for _, bad := range []History{
-		{ContextWindowFraction: -0.1}, {ContextWindowFraction: 1.1}, {ContextWindowFraction: math.NaN()},
-		{RecentHistoryFraction: math.Inf(1)}, {RecentHistoryFraction: 1.1},
-		{WorkingBudgetTokens: 512}, {RecentTurns: 33}, {MaxRequestBytes: 512},
+		{InitialContextMaxFraction: -0.1}, {InitialContextMaxFraction: 1.1}, {InitialContextMaxFraction: math.NaN()},
+		{InitialContextMaxFraction: math.Inf(1)},
+		{InitialContextMaxTokens: -1}, {InitialContextMaxTokens: 512}, {RecentTurns: 33},
 		{EmbeddingBatchTokens: -1}, {EmbeddingBatchTokens: 65537},
 	} {
 		cfg := Config{Agent: &Agent{Name: "fixture", History: bad}}
 		if _, err := cfg.ResolveHistory(); err == nil {
 			t.Fatalf("invalid policy accepted: %+v", bad)
 		}
+	}
+}
+
+func TestHistoryParsesInitialContextCapsAndRejectsRetiredKeys(t *testing.T) {
+	const prefix = `providers:
+  - name: fixture
+    type: ollama
+agent:
+  name: fixture
+  history:
+`
+	cfg, err := Parse(
+		[]byte(
+			prefix + "    initial_context_max_tokens: 100000\n    initial_context_max_fraction: 0.25\n",
+		),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Agent.History.InitialContextMaxTokens != 100000 ||
+		cfg.Agent.History.InitialContextMaxFraction != 0.25 {
+		t.Fatal("initial context caps did not retain their units")
+	}
+	for key, value := range map[string]string{
+		"working_budget_tokens":   "64000",
+		"context_window_fraction": "0.25",
+		"model_budget_tokens":     "{cloud/model: 64000}",
+		"recent_history_fraction": "0.3333333333333333",
+		"max_request_bytes":       "0",
+	} {
+		t.Run(key, func(t *testing.T) {
+			_, err := Parse(
+				[]byte(
+					prefix + "    " + key + ": " + value + "\n",
+				),
+			)
+			if err == nil || !strings.Contains(err.Error(), key) {
+				t.Fatalf("retired key was not rejected explicitly: %v", err)
+			}
+		})
 	}
 }

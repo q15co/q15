@@ -57,14 +57,19 @@ whether it is generated. Recent turns are excluded from retrieval, and overlappi
 results are deduplicated. Short acknowledgements use nearby conversation context for retrieval.
 `history_search` finds older evidence and `history_read` pages original turn JSON.
 
-Before each provider attempt, including model fallback and subsequent tool steps, the runtime fits
-an immutable history snapshot to that model's working budget and catalog ceiling. It accounts for
-encoded messages and tool definitions, reserves response/framing room, shortens marked tool-output
-and reasoning excerpts, collapses older turns to summaries, and removes optional history. It keeps
-the current request, saved clock metadata, latest assistant context and complete tool pairs. An
-irreducible request fails before dispatch. These are conservative encoded-byte budgets, not exact
-provider token counts or a universal model-quality threshold. Per-model working budgets can be
-configured without changing stored history; there is no cloud recall benchmark in this slice.
+At the start of each user turn, the runtime selects history within the token and fraction caps for
+initial context, counting instructions, tool definitions and user input. It shortens copied
+historical tool-output and reasoning excerpts, represents older turns with stored summaries, and
+removes optional history as needed. The first actual model attempt fixes that selection for the run.
+
+Subsequent model/tool steps can grow into the selected model's full context window, with output and
+safety reserves. Each provider attempt, including model fallback, checks that window. Current-turn
+evidence stays intact while it fits; further history trimming and evidence shortening occur only
+under actual capacity pressure. Saved user clocks and complete tool pairs remain intact, and an
+irreducible request fails before dispatch. Runtime counters describe the usable window rather than
+the assembly target. Token counts are conservative estimates with a margin, rather than exact
+provider counts. Stored originals are unchanged; there is no active-run summarization or cloud
+recall benchmark in this slice.
 
 Library and document search retain their existing Qdrant collections and embedding bindings.
 Conversation embeddings have a separate explicit space: provider, model, dimensions and prompt

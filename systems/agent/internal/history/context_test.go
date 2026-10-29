@@ -29,7 +29,7 @@ func TestContextFitsWholeTurnsAndKeepsCurrentClock(t *testing.T) {
 		),
 	}
 	snapshot := contextSnapshot{
-		systemCount: 1, input: []conversation.Message{input}, settings: ContextSettings{WorkingBudgetTokens: 5000, MaxRequestBytes: 5000},
+		systemCount: 1, input: []conversation.Message{input}, settings: ContextSettings{InitialContextMaxTokens: 5000},
 		groups: []contextGroup{
 			{
 				id:        1,
@@ -54,9 +54,9 @@ func TestContextFitsWholeTurnsAndKeepsCurrentClock(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(first, second) {
 		t.Fatal("identical snapshot did not produce identical requests", err)
 	}
-	size, err := agent.RequestEncodedBytes(first, nil)
-	if err != nil || size > 5000 {
-		t.Fatalf("request bytes = %d, %v", size, err)
+	tokens, err := agent.RequestEstimatedTokens(first, nil)
+	if err != nil || tokens > 5000 {
+		t.Fatalf("initial context tokens = %d, %v", tokens, err)
 	}
 	last := first[len(first)-2]
 	if conversation.TextValue(last) != "ok" || last.UserTemporal == nil ||
@@ -88,8 +88,7 @@ func TestContextRebuildsForModelChangesAndToolAccumulation(t *testing.T) {
 		systemCount: 1,
 		input:       []conversation.Message{input},
 		settings: ContextSettings{
-			WorkingBudgetTokens: 16000, MaxRequestBytes: 16000,
-			ModelBudgetTokens: map[string]int{"small": 1024},
+			InitialContextMaxTokens: 16000,
 		},
 		groups: []contextGroup{
 			{id: 1, kind: "gap", digest: strings.Repeat("remember this earlier result ", 100)},
@@ -143,7 +142,7 @@ func TestContextRejectsIrreducibleInputWithoutDroppingIt(t *testing.T) {
 	snapshot := contextSnapshot{
 		systemCount: 1,
 		input:       []conversation.Message{input},
-		settings:    ContextSettings{WorkingBudgetTokens: 1024},
+		settings:    ContextSettings{InitialContextMaxTokens: 1024},
 	}
 	base := []conversation.Message{conversation.SystemMessage("Instructions."), input}
 	_, err := snapshot.fitRequest(context.Background(), agent.ModelContext{}, base, nil, len(base))

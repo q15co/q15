@@ -24,7 +24,7 @@ func TestContextFitsPastEvidenceBeforeShorteningCurrentRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	snapshot := contextSnapshot{
-		systemCount: 1, input: []conversation.Message{input}, settings: ContextSettings{WorkingBudgetTokens: 2048},
+		systemCount: 1, input: []conversation.Message{input}, settings: ContextSettings{InitialContextMaxTokens: 2048},
 		groups: []contextGroup{
 			{id: 1, kind: "recent", protected: true, messages: []conversation.Message{
 				conversation.UserMessage("Previous work"),
@@ -68,29 +68,46 @@ func TestContextFitsPastEvidenceBeforeShorteningCurrentRead(t *testing.T) {
 	}
 }
 
-func TestWorkingBudgetUsesCatalogTokensAndReserves(t *testing.T) {
+func TestAssemblyAndRequestBudgetsUseCatalogTokensAndReserves(t *testing.T) {
 	snapshot := contextSnapshot{
-		settings: ContextSettings{WorkingBudgetTokens: 64000, ContextWindowFraction: 0.25},
+		settings: ContextSettings{InitialContextMaxTokens: 100000, InitialContextMaxFraction: 0.25},
 	}
 	for _, tc := range []struct {
-		name  string
-		model agent.ModelContext
-		want  int
+		name     string
+		model    agent.ModelContext
+		assembly int
+		request  int
 	}{
-		{"128k", agent.ModelContext{MaxContextTokens: 128000}, 32000},
-		{"million", agent.ModelContext{MaxContextTokens: 1000000}, 64000},
-		{"unknown", agent.ModelContext{}, 16000},
-		{"small", agent.ModelContext{MaxContextTokens: 8192}, 2048},
+		{"128k", agent.ModelContext{MaxContextTokens: 128000}, 32000, 113408},
+		{"million", agent.ModelContext{MaxContextTokens: 1048576}, 100000, 987956},
+		{"unknown", agent.ModelContext{}, 16000, 16000},
+		{"small", agent.ModelContext{MaxContextTokens: 8192}, 2048, 5735},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := snapshot.workingLimit(tc.model); got != tc.want {
-				t.Fatalf("tokens=%d want=%d", got, tc.want)
+			if got := snapshot.assemblyLimit(tc.model); got != tc.assembly {
+				t.Fatalf("assembly tokens=%d want=%d", got, tc.assembly)
+			}
+			if got := snapshot.requestLimit(tc.model); got != tc.request {
+				t.Fatalf("request tokens=%d want=%d", got, tc.request)
 			}
 		})
 	}
-	snapshot.settings.ContextWindowFraction = 1
-	if got := snapshot.workingLimit(agent.ModelContext{MaxContextTokens: 10000, MaxOutputTokens: 1000}); got != 8500 {
+	snapshot.settings.InitialContextMaxFraction = 1
+	if got := snapshot.assemblyLimit(agent.ModelContext{MaxContextTokens: 10000, MaxOutputTokens: 1000}); got != 8500 {
 		t.Fatalf("reply and uncertainty reserves missing: %d", got)
+	}
+	model := agent.ModelContext{MaxContextTokens: 1048576}
+	snapshot.settings.InitialContextMaxFraction = 0.125
+	snapshot.settings.InitialContextMaxTokens = 200000
+	if got := snapshot.assemblyLimit(model); got != 131072 {
+		t.Fatalf("fraction cap did not bind: %d", got)
+	}
+	snapshot.settings.InitialContextMaxTokens = 100000
+	if got := snapshot.assemblyLimit(model); got != 100000 {
+		t.Fatalf("token cap did not bind: %d", got)
+	}
+	if got := snapshot.requestLimit(model); got != 987956 {
+		t.Fatalf("initial caps changed ongoing capacity: %d", got)
 	}
 }
 
@@ -171,7 +188,7 @@ func TestTightContextDropsKeywordMatchesBeforeContinuity(t *testing.T) {
 	snapshot := contextSnapshot{
 		systemCount: 1,
 		input:       []conversation.Message{input},
-		settings:    ContextSettings{WorkingBudgetTokens: 1024},
+		settings:    ContextSettings{InitialContextMaxTokens: 1024},
 		groups: []contextGroup{
 			{id: 1, kind: "gap", digest: "Keep this continuity summary."},
 			{
@@ -201,7 +218,7 @@ func TestManyActiveToolResultsDegradeWithoutChangingSource(t *testing.T) {
 	snapshot := contextSnapshot{
 		systemCount: 1,
 		input:       []conversation.Message{input},
-		settings:    ContextSettings{WorkingBudgetTokens: 1500},
+		settings:    ContextSettings{InitialContextMaxTokens: 1500},
 	}
 	base := []conversation.Message{conversation.SystemMessage("Instructions"), input}
 	active := []conversation.Message{}
@@ -237,7 +254,7 @@ func TestManyActiveToolResultsDegradeWithoutChangingSource(t *testing.T) {
 	}
 }
 
-func TestHistoryShareChangesRecentVersusTopicSelection(t *testing.T) {
+func TestInitialContextBalancesRecentAndRelevantHistory(t *testing.T) {
 	input := conversation.UserMessage("continue this task")
 	groups := []contextGroup{
 		{
@@ -267,19 +284,18 @@ func TestHistoryShareChangesRecentVersusTopicSelection(t *testing.T) {
 	base := []conversation.Message{conversation.SystemMessage("Instructions"), input}
 	for _, tc := range []struct {
 		name         string
-		share        float64
+		limit        int
 		wantOriginal bool
 		wantTopic    bool
 	}{
-		{"prefer topic", 0.1, false, true}, {"prefer recency", 0.9, true, false},
+		{"tight context", 2600, false, true}, {"ample context", 6000, true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			snapshot := contextSnapshot{
 				systemCount: 1,
 				input:       []conversation.Message{input},
 				settings: ContextSettings{
-					WorkingBudgetTokens:   2600,
-					RecentHistoryFraction: tc.share,
+					InitialContextMaxTokens: tc.limit,
 				},
 				groups: groups,
 			}
@@ -293,7 +309,10 @@ func TestHistoryShareChangesRecentVersusTopicSelection(t *testing.T) {
 			}
 			if strings.Contains(text.String(), "OLD_ORIGINAL") != tc.wantOriginal ||
 				strings.Contains(text.String(), "RETRIEVED_TOPIC") != tc.wantTopic {
-				t.Fatalf("history share did not change selection: %s", text.String())
+				t.Fatalf(
+					"initial context budget did not balance history selection: %s",
+					text.String(),
+				)
 			}
 			if !strings.Contains(text.String(), "Latest task context") {
 				t.Fatal("current work lost")
