@@ -78,26 +78,30 @@ type throttledProvider struct {
 
 // wait blocks until this provider is allowed to run another request.
 func (p *throttledProvider) wait(ctx context.Context) error {
-	p.mu.Lock()
-	delay := time.Duration(0)
-	if !p.last.IsZero() {
-		if remaining := p.min - time.Since(p.last); remaining > 0 {
-			delay = remaining
+	for {
+		p.mu.Lock()
+		if err := ctx.Err(); err != nil {
+			p.mu.Unlock()
+			return err
 		}
-	}
-	p.last = time.Now().Add(delay)
-	p.mu.Unlock()
+		delay := time.Duration(0)
+		if !p.last.IsZero() {
+			delay = p.min - time.Since(p.last)
+		}
+		if delay <= 0 {
+			p.last = time.Now()
+			p.mu.Unlock()
+			return nil
+		}
+		p.mu.Unlock()
 
-	if delay <= 0 {
-		return nil
-	}
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
 	}
 }
 
@@ -258,6 +262,9 @@ func (s *Search) Run(ctx context.Context, arguments string) (string, error) {
 
 	failures := make([]error, 0, len(s.providers))
 	for _, idx := range order {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		p := &s.providers[idx]
 		if !p.available(time.Now()) {
 			continue
@@ -270,12 +277,12 @@ func (s *Search) Run(ctx context.Context, arguments string) (string, error) {
 			p.recordSuccess()
 			return out, nil
 		}
-		p.recordFailure()
 		failures = append(failures, fmt.Errorf("%s: %w", p.provider.Name(), err))
 		if cerr := ctx.Err(); cerr != nil {
 			failures = append(failures, cerr)
 			break
 		}
+		p.recordFailure()
 	}
 
 	if len(failures) == 0 {

@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -439,4 +441,87 @@ func TestThrottledProviderWaitSerialisesConcurrentCallers(t *testing.T) {
 	if got := latest.Sub(earliest); got < want-10*time.Millisecond {
 		t.Fatalf("concurrent waiters spread over %v, want at least %v", got, want)
 	}
+}
+
+func TestThrottledProviderCancellationDoesNotReserveSlots(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		p := &throttledProvider{min: time.Second}
+		start := time.Now()
+		if err := p.wait(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+		if err := p.wait(ctx); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("canceled wait: %v", err)
+		}
+
+		ctx, cancel = context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := p.wait(ctx); err != nil {
+			t.Fatalf("canceled caller delayed the next request: %v", err)
+		}
+		if elapsed := time.Since(start); elapsed != time.Second {
+			t.Fatalf("next request after %v, want 1s", elapsed)
+		}
+	})
+}
+
+func TestSearchCanceledBeforeRequest(t *testing.T) {
+	t.Parallel()
+
+	calls := 0
+	tool := recordingTool(t, fakeProvider{
+		name: "healthy",
+		run: func(context.Context, string, int) (string, error) {
+			calls++
+			return "ok", nil
+		},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := tool.Run(ctx, `{"query":"canceled"}`); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run() error = %v, want context cancellation", err)
+	}
+	if calls != 0 {
+		t.Fatalf("canceled request called provider %d times", calls)
+	}
+}
+
+func TestSearchCallerCancellationDoesNotCoolDownProvider(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		calls := 0
+		tool := recordingTool(t, fakeProvider{
+			name: "healthy",
+			run: func(ctx context.Context, _ string, _ int) (string, error) {
+				calls++
+				if ctx.Done() != nil {
+					<-ctx.Done()
+					return "", ctx.Err()
+				}
+				return "ok", nil
+			},
+		})
+		for i := 0; i < providerFailureThreshold; i++ {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			_, err := tool.Run(ctx, `{"query":"short deadline"}`)
+			cancel()
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("Run() error = %v, want caller deadline", err)
+			}
+		}
+
+		out, err := tool.Run(context.Background(), `{"query":"healthy"}`)
+		if err != nil || out != "ok" {
+			t.Fatalf("healthy provider unavailable after canceled calls: %q, %v", out, err)
+		}
+		if calls != providerFailureThreshold+1 {
+			t.Fatalf("calls = %d, want %d", calls, providerFailureThreshold+1)
+		}
+	})
 }

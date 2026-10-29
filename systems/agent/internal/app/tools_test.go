@@ -75,46 +75,59 @@ func TestBuildRuntimeToolsIncludesDecisionCheck(t *testing.T) {
 func TestBuildToolListAppendsWebSearchWhenConfigured(t *testing.T) {
 	t.Parallel()
 
-	fileExec := &stubFileExecutor{}
-	mediaStore, err := q15media.NewFileStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("NewFileStore() error = %v", err)
-	}
-	toolList, err := buildToolList(toolDeps{
-		execClient: &stubExecutionService{},
-		fileExec:   fileExec,
-		fileSettings: fileops.Settings{
-			WorkspaceLocalDir:   t.TempDir(),
-			WorkspaceRuntimeDir: "/workspace",
-			MemoryLocalDir:      t.TempDir(),
-			MemoryRuntimeDir:    "/memory",
-			SkillsLocalDir:      t.TempDir(),
-			SkillsRuntimeDir:    "/skills",
-		},
-		mediaStore: mediaStore,
-		webSearch:  config.WebSearchToolRuntime{BraveAPIKey: "brave-key"},
-	})
-	if err != nil {
-		t.Fatalf("buildToolList() error = %v", err)
-	}
+	for _, provider := range []struct {
+		name string
+		cfg  config.WebSearchToolRuntime
+	}{
+		{name: "brave", cfg: config.WebSearchToolRuntime{BraveAPIKey: "brave-key"}},
+		{name: "ollama", cfg: config.WebSearchToolRuntime{OllamaAPIKey: "ollama-key"}},
+		{name: "both", cfg: config.WebSearchToolRuntime{BraveAPIKey: "brave-key", OllamaAPIKey: "ollama-key"}},
+	} {
+		t.Run(provider.name, func(t *testing.T) {
+			t.Parallel()
 
-	if got, want := toolNames(toolList), []string{
-		"read_file",
-		"write_file",
-		"edit_file",
-		"apply_patch",
-		"validate_skill",
-		"exec",
-		"exec_list",
-		"exec_read",
-		"exec_write",
-		"exec_kill",
-		"load_image",
-		"attach_media",
-		"web_fetch",
-		"web_search",
-	}; !equalStrings(got, want) {
-		t.Fatalf("tool names = %v, want %v", got, want)
+			fileExec := &stubFileExecutor{}
+			mediaStore, err := q15media.NewFileStore(t.TempDir())
+			if err != nil {
+				t.Fatalf("NewFileStore() error = %v", err)
+			}
+			toolList, err := buildToolList(toolDeps{
+				execClient: &stubExecutionService{},
+				fileExec:   fileExec,
+				fileSettings: fileops.Settings{
+					WorkspaceLocalDir:   t.TempDir(),
+					WorkspaceRuntimeDir: "/workspace",
+					MemoryLocalDir:      t.TempDir(),
+					MemoryRuntimeDir:    "/memory",
+					SkillsLocalDir:      t.TempDir(),
+					SkillsRuntimeDir:    "/skills",
+				},
+				mediaStore: mediaStore,
+				webSearch:  provider.cfg,
+			})
+			if err != nil {
+				t.Fatalf("buildToolList() error = %v", err)
+			}
+
+			if got, want := toolNames(toolList), []string{
+				"read_file",
+				"write_file",
+				"edit_file",
+				"apply_patch",
+				"validate_skill",
+				"exec",
+				"exec_list",
+				"exec_read",
+				"exec_write",
+				"exec_kill",
+				"load_image",
+				"attach_media",
+				"web_fetch",
+				"web_search",
+			}; !equalStrings(got, want) {
+				t.Fatalf("tool names = %v, want %v", got, want)
+			}
+		})
 	}
 }
 
