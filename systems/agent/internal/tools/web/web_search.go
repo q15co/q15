@@ -274,11 +274,17 @@ func (s *Search) Providers() []string {
 // Definition returns the tool schema exposed to the model.
 func (s *Search) Definition() agent.ToolDefinition {
 	return agent.ToolDefinition{
-		Name:        "web_search",
-		Description: "Search the web for current information and return titles, URLs, and snippets. Requests rotate across the configured providers.",
+		Name: "web_search",
+		Description: fmt.Sprintf(
+			"Search the web for current information. Returns up to count distinct sources, each as a numbered title, a canonical URL and an excerpt of at most %d characters. The first line names the backend that answered and why, for example \"brave (rotation) · 3 results\".",
+			maxSnippetChars,
+		),
 		PromptGuidance: []string{
 			"Use for discovery when the question depends on current web information.",
-			"Keep queries concise: keyword phrases work best; full paragraphs are rejected or truncated by providers.",
+			"Keep queries concise: keyword phrases work best; queries over 400 characters or 50 words are rejected.",
+			"Each result is a title line, an indented URL line and an indented excerpt. The excerpt is at most snippet_chars characters, cut at a word boundary and marked with an ellipsis; it is a window on the matched part of the page, not the page.",
+			"The header is provenance, not a quality score: rotation, idle, and fallback after <backend>: throttled say why that backend answered.",
+			"A header ending in \"0 results\" means the backend found nothing for the query, which is a normal outcome; a failed search returns an error instead.",
 			"After choosing a result, use web_fetch on the selected URL when you need the page contents.",
 		},
 		Parameters: map[string]any{
@@ -291,9 +297,15 @@ func (s *Search) Definition() agent.ToolDefinition {
 				},
 				"count": map[string]any{
 					"type":        "integer",
-					"description": "Number of results to return (1-10)",
+					"description": "Number of distinct results to return (1-10)",
 					"minimum":     1,
 					"maximum":     maxWebSearchCount,
+				},
+				"snippet_chars": map[string]any{
+					"type":        "integer",
+					"description": fmt.Sprintf("Characters of excerpt per result (default %d, maximum %d)", defaultSnippetChars, maxSnippetChars),
+					"minimum":     1,
+					"maximum":     maxSnippetChars,
 				},
 			},
 			"required": []string{"query"},
@@ -308,8 +320,9 @@ func (s *Search) Run(ctx context.Context, arguments string) (string, error) {
 	}
 
 	var args struct {
-		Query string `json:"query"`
-		Count *int   `json:"count"`
+		Query        string `json:"query"`
+		Count        *int   `json:"count"`
+		SnippetChars *int   `json:"snippet_chars"`
 	}
 	if err := json.Unmarshal([]byte(arguments), &args); err != nil {
 		return "", fmt.Errorf("invalid arguments JSON: %w", err)
@@ -332,6 +345,22 @@ func (s *Search) Run(ctx context.Context, arguments string) (string, error) {
 	}
 
 	snippetChars := defaultSnippetChars
+	if args.SnippetChars != nil {
+		snippetChars = *args.SnippetChars
+		// A caller asking for more than the excerpt bound is told the bound
+		// rather than silently clamped: silently ignoring a request is the
+		// failure mode this output contract exists to remove.
+		if snippetChars > maxSnippetChars {
+			return "", fmt.Errorf(
+				"snippet_chars is %d, maximum is %d",
+				snippetChars,
+				maxSnippetChars,
+			)
+		}
+		if snippetChars < 1 {
+			return "", fmt.Errorf("snippet_chars must be at least 1")
+		}
+	}
 
 	s.mu.Lock()
 	start := s.next
@@ -492,18 +521,21 @@ func renderResults(provider, reason string, requested int, results []Result, sni
 		fmt.Fprintf(&b, "requested %d\n", requested)
 	}
 
+	// The notice is reserved inside the ceiling, so the rendered response never
+	// exceeds maxRenderBytes however many results the provider sent.
+	notice := fmt.Sprintf("output truncated at %d bytes\n", maxRenderBytes)
 	written := 0
 	for i, result := range results {
 		block := renderResult(i+1, result, snippetChars)
-		if b.Len()+len(block) > maxRenderBytes {
+		if b.Len()+len(block)+len(notice) > maxRenderBytes {
 			if written == 0 {
 				// Nothing but the header fitted: keep a bounded slice of this
 				// block rather than dropping the only result silently.
-				b.WriteString(truncateBytes(block, maxRenderBytes-b.Len()-32))
+				b.WriteString(truncateBytes(block, maxRenderBytes-b.Len()-len(notice)-2))
 				b.WriteString("\n")
 				written++
 			}
-			fmt.Fprintf(&b, "output truncated at %d bytes\n", maxRenderBytes)
+			b.WriteString(notice)
 			break
 		}
 		b.WriteString(block)
