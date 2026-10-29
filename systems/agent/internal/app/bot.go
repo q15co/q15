@@ -158,16 +158,15 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 	if embeddingService != nil {
 		defer embeddingService.Close()
 	}
-	baseToolList, err := buildToolList(
-		executionClient,
-		fileExec,
-		skillManager,
-		fileSettings,
-		mediaStore,
-		embeddingService,
-		rt.Tools.WebSearch.BraveAPIKey,
-		rt.Tools.WebSearch.OllamaAPIKey,
-	)
+	baseToolList, err := buildToolList(toolDeps{
+		execClient:       executionClient,
+		fileExec:         fileExec,
+		skillManager:     skillManager,
+		fileSettings:     fileSettings,
+		mediaStore:       mediaStore,
+		embeddingService: embeddingService,
+		webSearch:        rt.Tools.WebSearch,
+	})
 	if err != nil {
 		return fmt.Errorf("configure tools for agent %q: %w", rt.Name, err)
 	}

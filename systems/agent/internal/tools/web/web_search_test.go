@@ -13,27 +13,55 @@ import (
 	"time"
 )
 
-func TestNewMultiWebSearchRequiresAnyProvider(t *testing.T) {
+func TestNewProvidersResolvesConfiguredProviders(t *testing.T) {
 	t.Parallel()
 
-	if tool, err := NewMultiWebSearch("", ""); err != nil || tool != nil {
-		t.Fatalf("expected nil tool with no keys, got %v, %v", tool, err)
+	providers, err := NewProviders(SearchConfig{})
+	if err != nil {
+		t.Fatalf("no keys: unexpected error: %v", err)
+	}
+	if len(providers) != 0 {
+		t.Fatalf("no keys: providers = %v, want none", providers)
 	}
 
-	tool, err := NewMultiWebSearch("brave-key", "")
+	providers, err = NewProviders(SearchConfig{BraveAPIKey: "brave-key"})
 	if err != nil {
 		t.Fatalf("brave-only: unexpected error: %v", err)
 	}
-	if got := tool.Providers(); len(got) != 1 || got[0] != "brave" {
-		t.Fatalf("brave-only providers = %v", got)
+	if len(providers) != 1 || providers[0].Name() != "brave" {
+		t.Fatalf("brave-only providers = %v", providers)
 	}
 
-	tool, err = NewMultiWebSearch("", "ollama-key")
+	providers, err = NewProviders(SearchConfig{OllamaAPIKey: "ollama-key"})
 	if err != nil {
 		t.Fatalf("ollama-only: unexpected error: %v", err)
 	}
-	if got := tool.Providers(); len(got) != 1 || got[0] != "ollama" {
-		t.Fatalf("ollama-only providers = %v", got)
+	if len(providers) != 1 || providers[0].Name() != "ollama" {
+		t.Fatalf("ollama-only providers = %v", providers)
+	}
+
+	providers, err = NewProviders(SearchConfig{BraveAPIKey: "b", OllamaAPIKey: "o"})
+	if err != nil {
+		t.Fatalf("both: unexpected error: %v", err)
+	}
+	if len(providers) != 2 || providers[0].Name() != "brave" || providers[1].Name() != "ollama" {
+		t.Fatalf("both providers = %v", providers)
+	}
+}
+
+func TestNewSearchRequiresAProvider(t *testing.T) {
+	t.Parallel()
+
+	if tool, err := NewSearch(nil); err == nil || tool != nil {
+		t.Fatalf("expected an error and no tool, got %v, %v", tool, err)
+	}
+
+	tool, err := NewSearch([]Provider{fakeProvider{name: "a"}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := tool.Providers(); len(got) != 1 || got[0] != "a" {
+		t.Fatalf("providers = %v", got)
 	}
 }
 
@@ -125,30 +153,48 @@ func TestOllamaWebSearchErrorStatus(t *testing.T) {
 	}
 }
 
-// recordingTool builds a MultiWebSearch whose providers are driven by injected
-// functions, so rotation and failover can be observed without network access.
-func recordingTool(providers ...*provider) *MultiWebSearch {
-	tool := &MultiWebSearch{maxRes: defaultWebSearchCount}
-	tool.providers = make([]provider, len(providers))
-	for i, p := range providers {
-		tool.providers[i].name = p.name
-		tool.providers[i].min = p.min
-		tool.providers[i].run = p.run
+// fakeProvider implements Provider with an injected search function so
+// rotation, throttling, and failover can be observed without network access.
+type fakeProvider struct {
+	name string
+	min  time.Duration
+	run  func(ctx context.Context, query string, count int) (string, error)
+}
+
+func (f fakeProvider) Name() string               { return f.name }
+func (f fakeProvider) MinInterval() time.Duration { return f.min }
+
+func (f fakeProvider) Search(ctx context.Context, query string, count int) (string, error) {
+	if f.run == nil {
+		return "from " + f.name, nil
+	}
+	return f.run(ctx, query, count)
+}
+
+// recordingTool builds a Search over injected providers.
+func recordingTool(t *testing.T, providers ...fakeProvider) *Search {
+	t.Helper()
+	list := make([]Provider, 0, len(providers))
+	for _, p := range providers {
+		list = append(list, p)
+	}
+	tool, err := NewSearch(list)
+	if err != nil {
+		t.Fatalf("NewSearch() error = %v", err)
 	}
 	return tool
 }
 
-func TestMultiWebSearchRoundRobinsStartProvider(t *testing.T) {
+func TestSearchRoundRobinsStartProvider(t *testing.T) {
 	t.Parallel()
 
 	var mu sync.Mutex
 	var starts []string
 
-	makeProvider := func(name string) *provider {
-		return &provider{
+	makeProvider := func(name string) fakeProvider {
+		return fakeProvider{
 			name: name,
-			min:  0,
-			run: func(_ context.Context, _ string, _ int) (string, error) {
+			run: func(context.Context, string, int) (string, error) {
 				mu.Lock()
 				starts = append(starts, name)
 				mu.Unlock()
@@ -157,7 +203,7 @@ func TestMultiWebSearchRoundRobinsStartProvider(t *testing.T) {
 		}
 	}
 
-	tool := recordingTool(makeProvider("a"), makeProvider("b"))
+	tool := recordingTool(t, makeProvider("a"), makeProvider("b"))
 	for i := 0; i < 3; i++ {
 		if _, err := tool.Run(context.Background(), `{"query":"rotation"}`); err != nil {
 			t.Fatalf("run %d: %v", i, err)
@@ -175,25 +221,23 @@ func TestMultiWebSearchRoundRobinsStartProvider(t *testing.T) {
 	}
 }
 
-func TestMultiWebSearchFallsBackOnProviderError(t *testing.T) {
+func TestSearchFallsBackOnProviderError(t *testing.T) {
 	t.Parallel()
 
-	failing := &provider{
+	failing := fakeProvider{
 		name: "failing",
-		min:  0,
 		run: func(context.Context, string, int) (string, error) {
 			return "", context.DeadlineExceeded
 		},
 	}
-	healthy := &provider{
+	healthy := fakeProvider{
 		name: "healthy",
-		min:  0,
 		run: func(context.Context, string, int) (string, error) {
 			return "results from healthy", nil
 		},
 	}
 
-	tool := recordingTool(failing, healthy)
+	tool := recordingTool(t, failing, healthy)
 	out, err := tool.Run(context.Background(), `{"query":"failover"}`)
 	if err != nil {
 		t.Fatalf("expected failover to succeed: %v", err)
@@ -203,36 +247,35 @@ func TestMultiWebSearchFallsBackOnProviderError(t *testing.T) {
 	}
 }
 
-func TestMultiWebSearchAllProvidersFail(t *testing.T) {
+func TestSearchAllProvidersFail(t *testing.T) {
 	t.Parallel()
 
+	fail := func(context.Context, string, int) (string, error) {
+		return "", fmt.Errorf("down")
+	}
 	tool := recordingTool(
-		&provider{name: "one", min: 0, run: func(context.Context, string, int) (string, error) {
-			return "", context.DeadlineExceeded
-		}},
-		&provider{name: "two", min: 0, run: func(context.Context, string, int) (string, error) {
-			return "", context.Canceled
-		}},
+		t,
+		fakeProvider{name: "a", run: fail},
+		fakeProvider{name: "b", run: fail},
 	)
 
-	_, err := tool.Run(context.Background(), `{"query":"all fail"}`)
-	if err == nil {
-		t.Fatal("expected an error when every provider fails")
+	_, err := tool.Run(context.Background(), `{"query":"x"}`)
+	if err == nil || !strings.Contains(err.Error(), "all web search providers failed") {
+		t.Fatalf("Run() error = %v", err)
 	}
-	msg := err.Error()
-	if !strings.Contains(msg, "one") || !strings.Contains(msg, "two") {
-		t.Fatalf("error should name every provider: %v", err)
+	if !strings.Contains(err.Error(), "a:") || !strings.Contains(err.Error(), "b:") {
+		t.Fatalf("error should name both providers: %v", err)
 	}
 }
 
-func TestMultiWebSearchThrottlesProviderSpacing(t *testing.T) {
+func TestSearchThrottlesEachProvider(t *testing.T) {
 	t.Parallel()
 
-	const spacing = 60 * time.Millisecond
+	spacing := 60 * time.Millisecond
 	var mu sync.Mutex
 	var stamps []time.Time
 
-	throttled := &provider{
+	throttled := fakeProvider{
 		name: "throttled",
 		min:  spacing,
 		run: func(context.Context, string, int) (string, error) {
@@ -243,7 +286,7 @@ func TestMultiWebSearchThrottlesProviderSpacing(t *testing.T) {
 		},
 	}
 
-	tool := recordingTool(throttled)
+	tool := recordingTool(t, throttled)
 	for i := 0; i < 2; i++ {
 		if _, err := tool.Run(context.Background(), `{"query":"spacing"}`); err != nil {
 			t.Fatalf("run %d: %v", i, err)
@@ -260,10 +303,10 @@ func TestMultiWebSearchThrottlesProviderSpacing(t *testing.T) {
 	}
 }
 
-func TestMultiWebSearchNilToolIsSafe(t *testing.T) {
+func TestSearchNilToolIsSafe(t *testing.T) {
 	t.Parallel()
 
-	var tool *MultiWebSearch
+	var tool *Search
 	if _, err := tool.Run(context.Background(), `{"query":"x"}`); err == nil {
 		t.Fatal("expected error from nil tool")
 	}
@@ -272,13 +315,13 @@ func TestMultiWebSearchNilToolIsSafe(t *testing.T) {
 	}
 }
 
-func TestMultiWebSearchPrefersIdleProviderOverThrottledRotation(t *testing.T) {
+func TestSearchPrefersIdleProviderOverThrottledRotation(t *testing.T) {
 	t.Parallel()
 
 	var mu sync.Mutex
 	var ran []string
 
-	throttled := &provider{
+	throttled := fakeProvider{
 		name: "throttled",
 		min:  time.Hour,
 		run: func(context.Context, string, int) (string, error) {
@@ -288,9 +331,8 @@ func TestMultiWebSearchPrefersIdleProviderOverThrottledRotation(t *testing.T) {
 			return "from throttled", nil
 		},
 	}
-	idle := &provider{
+	idle := fakeProvider{
 		name: "idle",
-		min:  0,
 		run: func(context.Context, string, int) (string, error) {
 			mu.Lock()
 			ran = append(ran, "idle")
@@ -299,7 +341,7 @@ func TestMultiWebSearchPrefersIdleProviderOverThrottledRotation(t *testing.T) {
 		},
 	}
 
-	tool := recordingTool(throttled, idle)
+	tool := recordingTool(t, throttled, idle)
 	// Book the throttled provider's slot so the rotation lands on a provider
 	// that cannot run for an hour.
 	if err := tool.providers[0].wait(context.Background()); err != nil {
@@ -321,18 +363,18 @@ func TestMultiWebSearchPrefersIdleProviderOverThrottledRotation(t *testing.T) {
 	}
 }
 
-func TestMultiWebSearchCoolsDownAFailingProvider(t *testing.T) {
+func TestSearchCoolsDownAFailingProvider(t *testing.T) {
 	t.Parallel()
 
 	calls := 0
-	brittle := &provider{
+	brittle := fakeProvider{
 		name: "brittle",
 		run: func(context.Context, string, int) (string, error) {
 			calls++
 			return "", fmt.Errorf("backend down")
 		},
 	}
-	tool := recordingTool(brittle)
+	tool := recordingTool(t, brittle)
 
 	for i := 0; i < providerFailureThreshold; i++ {
 		if _, err := tool.Run(context.Background(), `{"query":"x"}`); err == nil {
@@ -363,11 +405,11 @@ func TestMultiWebSearchCoolsDownAFailingProvider(t *testing.T) {
 	}
 }
 
-func TestProviderWaitSerialisesConcurrentCallers(t *testing.T) {
+func TestThrottledProviderWaitSerialisesConcurrentCallers(t *testing.T) {
 	t.Parallel()
 
 	spacing := 40 * time.Millisecond
-	p := &provider{name: "shared", min: spacing}
+	p := &throttledProvider{min: spacing}
 
 	const callers = 3
 	returned := make([]time.Time, callers)

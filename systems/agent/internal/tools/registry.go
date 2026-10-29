@@ -128,10 +128,21 @@ func NewWebFetch() *web.Fetch {
 	return web.NewFetch()
 }
 
-// NewWebSearch builds the rotating web_search tool from whichever provider
-// keys are configured. Any single provider key is enough to enable it.
-func NewWebSearch(braveAPIKey, ollamaAPIKey string) (*web.MultiWebSearch, error) {
-	return web.NewMultiWebSearch(braveAPIKey, ollamaAPIKey)
+// SearchProvider is one web search backend (Brave, Ollama, ...).
+type SearchProvider = web.Provider
+
+// WebSearchConfig is the resolved web_search configuration: one field per
+// supported provider, empty when that provider is not configured.
+type WebSearchConfig = web.SearchConfig
+
+// NewSearchProviders delegates to web.NewProviders.
+func NewSearchProviders(cfg WebSearchConfig) ([]SearchProvider, error) {
+	return web.NewProviders(cfg)
+}
+
+// NewWebSearch delegates to web.NewSearch.
+func NewWebSearch(providers []SearchProvider) (*web.Search, error) {
+	return web.NewSearch(providers)
 }
 
 // NewBraveWebSearch builds the Brave-backed web search provider used when a

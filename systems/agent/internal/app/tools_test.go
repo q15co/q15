@@ -7,6 +7,7 @@ import (
 
 	"github.com/q15co/q15/libs/exec-contract/execpb"
 	"github.com/q15co/q15/systems/agent/internal/agent"
+	"github.com/q15co/q15/systems/agent/internal/config"
 	"github.com/q15co/q15/systems/agent/internal/embed"
 	"github.com/q15co/q15/systems/agent/internal/execution"
 	"github.com/q15co/q15/systems/agent/internal/fileops"
@@ -21,11 +22,10 @@ func TestBuildToolListIncludesOnlyCurrentRuntimeTools(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewFileStore() error = %v", err)
 	}
-	toolList, err := buildToolList(
-		&stubExecutionService{},
-		fileExec,
-		nil,
-		fileops.Settings{
+	toolList, err := buildToolList(toolDeps{
+		execClient: &stubExecutionService{},
+		fileExec:   fileExec,
+		fileSettings: fileops.Settings{
 			WorkspaceLocalDir:   t.TempDir(),
 			WorkspaceRuntimeDir: "/workspace",
 			MemoryLocalDir:      t.TempDir(),
@@ -33,11 +33,8 @@ func TestBuildToolListIncludesOnlyCurrentRuntimeTools(t *testing.T) {
 			SkillsLocalDir:      t.TempDir(),
 			SkillsRuntimeDir:    "/skills",
 		},
-		mediaStore,
-		nil,
-		"",
-		"",
-	)
+		mediaStore: mediaStore,
+	})
 	if err != nil {
 		t.Fatalf("buildToolList() error = %v", err)
 	}
@@ -83,11 +80,10 @@ func TestBuildToolListAppendsWebSearchWhenConfigured(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewFileStore() error = %v", err)
 	}
-	toolList, err := buildToolList(
-		&stubExecutionService{},
-		fileExec,
-		nil,
-		fileops.Settings{
+	toolList, err := buildToolList(toolDeps{
+		execClient: &stubExecutionService{},
+		fileExec:   fileExec,
+		fileSettings: fileops.Settings{
 			WorkspaceLocalDir:   t.TempDir(),
 			WorkspaceRuntimeDir: "/workspace",
 			MemoryLocalDir:      t.TempDir(),
@@ -95,11 +91,9 @@ func TestBuildToolListAppendsWebSearchWhenConfigured(t *testing.T) {
 			SkillsLocalDir:      t.TempDir(),
 			SkillsRuntimeDir:    "/skills",
 		},
-		mediaStore,
-		nil,
-		"brave-key",
-		"",
-	)
+		mediaStore: mediaStore,
+		webSearch:  config.WebSearchToolRuntime{BraveAPIKey: "brave-key"},
+	})
 	if err != nil {
 		t.Fatalf("buildToolList() error = %v", err)
 	}
@@ -132,11 +126,10 @@ func TestBuildToolListAppendsEmbeddingToolsWhenConfigured(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewFileStore() error = %v", err)
 	}
-	toolList, err := buildToolList(
-		&stubExecutionService{},
-		fileExec,
-		nil,
-		fileops.Settings{
+	toolList, err := buildToolList(toolDeps{
+		execClient: &stubExecutionService{},
+		fileExec:   fileExec,
+		fileSettings: fileops.Settings{
 			WorkspaceLocalDir:   t.TempDir(),
 			WorkspaceRuntimeDir: "/workspace",
 			MemoryLocalDir:      t.TempDir(),
@@ -144,11 +137,9 @@ func TestBuildToolListAppendsEmbeddingToolsWhenConfigured(t *testing.T) {
 			SkillsLocalDir:      t.TempDir(),
 			SkillsRuntimeDir:    "/skills",
 		},
-		mediaStore,
-		embed.NewService(embed.Settings{}, nil, nil, nil),
-		"",
-		"",
-	)
+		mediaStore:       mediaStore,
+		embeddingService: embed.NewService(embed.Settings{}, nil, nil, nil),
+	})
 	if err != nil {
 		t.Fatalf("buildToolList() error = %v", err)
 	}
