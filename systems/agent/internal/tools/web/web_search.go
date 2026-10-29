@@ -361,6 +361,7 @@ func (s *Search) Run(ctx context.Context, arguments string) (string, error) {
 		results, err := p.provider.Search(ctx, SearchRequest{Query: query, Count: count})
 		if err == nil {
 			p.recordSuccess()
+			results = normaliseResults(results, count)
 			reason := attempt.reason
 			if priorCause != "" {
 				reason = fallbackReason(priorName, priorCause)
@@ -428,6 +429,52 @@ func (s *Search) order(start int) []selection {
 		plan[i].reason = fallbackReason(plan[i-1].name, cause)
 	}
 	return plan
+}
+
+// normaliseResults is the one place the shared post-processing lives: URLs
+// canonicalised (adapters return absolute URLs), snippets re-bounded to the
+// excerpt invariant, duplicates dropped, and only then the list truncated to
+// count.
+//
+// Dedupe runs before truncation so count: 10 means ten distinct sources rather
+// than ten slots partly consumed by syndicated copies of one article. It
+// matches on the canonical URL, or on a near-identical title, because the same
+// article syndicated on two domains has two URLs and one title.
+func normaliseResults(results []Result, count int) []Result {
+	if count <= 0 {
+		count = defaultWebSearchCount
+	}
+	kept := make([]Result, 0, min(count, len(results)))
+	seenURL := make(map[string]struct{}, len(results))
+	for _, result := range results {
+		result.Title = cleanText(result.Title)
+		result.URL = canonicalURL(result.URL)
+		result.Snippet = excerpt(result.Snippet, nil, maxExcerptRunes)
+
+		if result.URL != "" {
+			if _, duplicate := seenURL[result.URL]; duplicate {
+				continue
+			}
+		}
+		duplicate := false
+		for _, existing := range kept {
+			if sameTitle(existing.Title, result.Title) {
+				duplicate = true
+				break
+			}
+		}
+		if duplicate {
+			continue
+		}
+		if result.URL != "" {
+			seenURL[result.URL] = struct{}{}
+		}
+		kept = append(kept, result)
+		if len(kept) >= count {
+			break
+		}
+	}
+	return kept
 }
 
 // renderResults builds the one output shape every provider is rendered with:
