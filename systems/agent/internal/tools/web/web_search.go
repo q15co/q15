@@ -548,7 +548,6 @@ func renderResults(
 				// block rather than dropping the only result silently.
 				b.WriteString(truncateBytes(block, maxRenderBytes-b.Len()-len(notice)-2))
 				b.WriteString("\n")
-				written++
 			}
 			b.WriteString(notice)
 			break

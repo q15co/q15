@@ -61,7 +61,7 @@ func queryTerms(query string) []string {
 	fields := strings.Fields(strings.ToLower(query))
 	terms := make([]string, 0, len(fields))
 	for _, field := range fields {
-		field = strings.Trim(field, `"'()[]{}<>:;,.!?/\\|-_*`)
+		field = strings.Trim(field, `"'()[]{}<>:;,.!?/\|-_*`)
 		if len([]rune(field)) < 2 {
 			continue
 		}
@@ -90,9 +90,9 @@ func queryTerms(query string) []string {
 // returned just because it comes first. Leading text is only returned when no
 // query term occurs anywhere in the document, in which case no window is
 // better informed than the first one. An ellipsis marks each cut edge.
-func excerpt(text string, terms []string, max int) string {
-	if max <= 0 {
-		max = maxExcerptRunes
+func excerpt(text string, terms []string, limit int) string {
+	if limit <= 0 {
+		limit = maxExcerptRunes
 	}
 	text = cleanText(text)
 	if text == "" {
@@ -100,15 +100,15 @@ func excerpt(text string, terms []string, max int) string {
 	}
 
 	runes := []rune(text)
-	if len(runes) <= max {
+	if len(runes) <= limit {
 		return text
 	}
 
 	// Reserve room for the ellipses inside the budget so the return value
-	// never exceeds max runes.
-	size := max - 2
+	// never exceeds limit runes.
+	size := limit - 2
 	if size < 1 {
-		size = max
+		size = limit
 	}
 
 	start, end := bestWindow(runes, terms, size)
@@ -418,19 +418,19 @@ func isDocumentURL(raw string) bool {
 	return false
 }
 
-// truncateSnippet cuts a snippet to at most max runes at a word boundary,
+// truncateSnippet cuts a snippet to at most limit runes at a word boundary,
 // marking the cut with an ellipsis.
-func truncateSnippet(snippet string, max int) string {
-	if max <= 0 {
+func truncateSnippet(snippet string, limit int) string {
+	if limit <= 0 {
 		return ""
 	}
 	runes := []rune(snippet)
-	if len(runes) <= max {
+	if len(runes) <= limit {
 		return snippet
 	}
-	cut := max - 1
+	cut := limit - 1
 	if cut < 1 {
-		// max is 1: an ellipsis alone is the only value that fits the cap.
+		// limit is 1: an ellipsis alone is the only value that fits the cap.
 		return "…"
 	}
 	for i := cut; i > cut/2 && i > 0; i-- {
