@@ -123,7 +123,10 @@ func TestBraveWebSearchSearchMapsGoldenPayload(t *testing.T) {
 	}
 	tool := braveTestProvider(t, payload)
 
-	results, err := tool.Search(context.Background(), SearchRequest{Query: "go 1.26 release", Count: 2})
+	results, err := tool.Search(
+		context.Background(),
+		SearchRequest{Query: "go 1.26 release", Count: 2},
+	)
 	if err != nil {
 		t.Fatalf("Search() error = %v", err)
 	}

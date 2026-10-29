@@ -392,7 +392,17 @@ func defaultPort(scheme string) string {
 // rather than a page. Documents stay in the result set: the extension is the
 // only reliable signal and dropping them would hide legitimate sources, so
 // they are marked instead.
-var documentExtensions = []string{".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".rtf", ".epub"}
+var documentExtensions = []string{
+	".pdf",
+	".doc",
+	".docx",
+	".ppt",
+	".pptx",
+	".xls",
+	".xlsx",
+	".rtf",
+	".epub",
+}
 
 // isDocumentURL reports whether a URL points at a document.
 func isDocumentURL(raw string) bool {

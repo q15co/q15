@@ -102,7 +102,10 @@ func TestOllamaWebSearchRequestAndResponse(t *testing.T) {
 	}
 	provider.baseURL = srv.URL
 
-	results, err := provider.Search(context.Background(), SearchRequest{Query: "golang testing", Count: 5})
+	results, err := provider.Search(
+		context.Background(),
+		SearchRequest{Query: "golang testing", Count: 5},
+	)
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}
@@ -133,7 +136,10 @@ func TestOllamaWebSearchRequestAndResponse(t *testing.T) {
 	if results[1].Title != "" {
 		t.Errorf("blank title became %q, want empty", results[1].Title)
 	}
-	if out := renderResults("ollama", "rotation", 5, results, defaultSnippetChars); !strings.Contains(out, "(untitled)") {
+	if out := renderResults("ollama", "rotation", 5, results, defaultSnippetChars); !strings.Contains(
+		out,
+		"(untitled)",
+	) {
 		t.Errorf("expected placeholder title for blank title:\n%s", out)
 	}
 }

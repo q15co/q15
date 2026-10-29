@@ -302,10 +302,14 @@ func (s *Search) Definition() agent.ToolDefinition {
 					"maximum":     maxWebSearchCount,
 				},
 				"snippet_chars": map[string]any{
-					"type":        "integer",
-					"description": fmt.Sprintf("Characters of excerpt per result (default %d, maximum %d)", defaultSnippetChars, maxSnippetChars),
-					"minimum":     1,
-					"maximum":     maxSnippetChars,
+					"type": "integer",
+					"description": fmt.Sprintf(
+						"Characters of excerpt per result (default %d, maximum %d)",
+						defaultSnippetChars,
+						maxSnippetChars,
+					),
+					"minimum": 1,
+					"maximum": maxSnippetChars,
 				},
 			},
 			"required": []string{"query"},
@@ -436,7 +440,8 @@ func (s *Search) order(start int) []selection {
 	now := time.Now()
 	promoted := false
 	for i, attempt := range plan {
-		if s.providers[attempt.index].available(now) && s.providers[attempt.index].waitRemaining() <= 0 {
+		if s.providers[attempt.index].available(now) &&
+			s.providers[attempt.index].waitRemaining() <= 0 {
 			plan[0], plan[i] = plan[i], plan[0]
 			promoted = i != 0
 			break
@@ -514,7 +519,12 @@ func normaliseResults(results []Result, query string, count int) []Result {
 // renderResults builds the one output shape every provider is rendered with:
 // an attribution header naming the backend and the reason it answered, then one
 // numbered block per result with the URL and snippet indented under it.
-func renderResults(provider, reason string, requested int, results []Result, snippetChars int) string {
+func renderResults(
+	provider, reason string,
+	requested int,
+	results []Result,
+	snippetChars int,
+) string {
 	var b strings.Builder
 
 	header := provider

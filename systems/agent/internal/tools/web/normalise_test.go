@@ -117,7 +117,11 @@ func TestNormaliseResultsBoundsSnippetsFromAnyProvider(t *testing.T) {
 	t.Parallel()
 
 	huge := strings.Repeat("filler prose about nothing in particular. ", 400)
-	got := normaliseResults([]Result{{Title: "t", URL: "https://example.com", Snippet: huge}}, "", 1)
+	got := normaliseResults(
+		[]Result{{Title: "t", URL: "https://example.com", Snippet: huge}},
+		"",
+		1,
+	)
 	if len(got) != 1 {
 		t.Fatalf("kept %d results, want 1", len(got))
 	}

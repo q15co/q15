@@ -99,12 +99,18 @@ func hugeOllamaContent() string {
 		b.WriteString("\n")
 	}
 	for b.Len() < 70000 {
-		b.WriteString("Unrelated configuration prose covers deployment, licensing and release history. ")
+		b.WriteString(
+			"Unrelated configuration prose covers deployment, licensing and release history. ",
+		)
 	}
 	b.WriteString("The runes migration guide explains how each component switches from implicit ")
-	b.WriteString("reactivity to explicit runes, and which compiler flags keep the legacy syntax compiling.\n")
+	b.WriteString(
+		"reactivity to explicit runes, and which compiler flags keep the legacy syntax compiling.\n",
+	)
 	for b.Len() < 81920 {
-		b.WriteString("Appendix material repeats the deployment notes without mentioning the topic. ")
+		b.WriteString(
+			"Appendix material repeats the deployment notes without mentioning the topic. ",
+		)
 	}
 	return b.String()
 }
@@ -145,7 +151,8 @@ func TestOllamaWebSearchBoundsHugeContent(t *testing.T) {
 	if !strings.Contains(snippet, "explicit runes") {
 		t.Fatalf("Snippet lost the buried passage: %q", snippet)
 	}
-	if strings.Contains(snippet, "On this page") || strings.Contains(snippet, "deprecated overload") {
+	if strings.Contains(snippet, "On this page") ||
+		strings.Contains(snippet, "deprecated overload") {
 		t.Fatalf("Snippet contains the leading nav/TOC block: %q", snippet)
 	}
 }
