@@ -13,6 +13,11 @@ func DefaultLookupEnv(name string) (string, bool) {
 	return os.LookupEnv(name)
 }
 
+// DefaultUnsetEnv changes only this process's environment, never its parent's.
+func DefaultUnsetEnv(name string) error {
+	return os.Unsetenv(name)
+}
+
 // DefaultIsTerminal reports whether the process's standard input is a
 // terminal. It is the default for Env.IsTerminal.
 //

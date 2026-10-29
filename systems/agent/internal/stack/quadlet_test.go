@@ -2,14 +2,135 @@ package stack
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"go.yaml.in/yaml/v3"
 )
+
+func TestQuadletHealthchecksMatchCompose(t *testing.T) {
+	raw, err := os.ReadFile("../../../../docker-compose.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var compose struct {
+		Services map[string]struct {
+			Healthcheck struct {
+				Test        []string `yaml:"test"`
+				Interval    string   `yaml:"interval"`
+				Timeout     string   `yaml:"timeout"`
+				Retries     int      `yaml:"retries"`
+				StartPeriod string   `yaml:"start_period"`
+			} `yaml:"healthcheck"`
+		} `yaml:"services"`
+	}
+	if err := yaml.Unmarshal(raw, &compose); err != nil {
+		t.Fatal(err)
+	}
+	for _, profile := range []Profile{testProfile(), hostedProfile()} {
+		units := rendered(t, profile)
+		for name, unit := range units {
+			if !strings.HasSuffix(name, ".container") {
+				continue
+			}
+			service := "q15-" + strings.TrimSuffix(
+				strings.TrimPrefix(name, profile.ResourceName()+"-"),
+				".container",
+			)
+			health := compose.Services[service].Healthcheck
+			if len(health.Test) == 0 {
+				if len(unit["HealthCmd"]) != 0 || len(unit["ExecStartPost"]) != 0 ||
+					len(unit["Notify"]) != 0 {
+					t.Fatalf("%s has a health gate without a Compose probe", name)
+				}
+				continue
+			}
+			command := single(t, unit, "HealthCmd")
+			if health.Test[0] == "CMD-SHELL" {
+				if command != health.Test[1] {
+					t.Fatalf("%s health command = %q, want %q", name, command, health.Test[1])
+				}
+			} else {
+				var args []string
+				if err := json.Unmarshal([]byte(command), &args); err != nil || strings.Join(args, "\n") != strings.Join(health.Test, "\n") {
+					t.Fatalf("%s health command = %q, want %v (error=%v)", name, command, health.Test, err)
+				}
+			}
+			want := map[string]string{
+				"HealthInterval": health.Interval, "HealthTimeout": health.Timeout,
+				"HealthRetries": fmt.Sprint(health.Retries), "Notify": "healthy",
+				"TimeoutStartSec": "15min", "RestartSec": "10s",
+			}
+			if health.StartPeriod != "" {
+				want["HealthStartPeriod"] = health.StartPeriod
+			}
+			for key, value := range want {
+				if got := single(t, unit, key); got != value {
+					t.Fatalf("%s %s = %q, want %q", name, key, got, value)
+				}
+			}
+			gate := single(t, unit, "ExecStartPost")
+			if !strings.Contains(
+				gate,
+				"podman healthcheck run "+single(t, unit, "ContainerName")+" ",
+			) {
+				t.Fatalf("%s gate checks a different container: %s", name, gate)
+			}
+		}
+	}
+}
+
+func TestQuadletStartupGateWaitsForHealth(t *testing.T) {
+	dir := t.TempDir()
+	probe := "#!/bin/sh\nprintf 'probe\\n' >> attempts\ntest -f healthy\n"
+	if err := os.WriteFile(filepath.Join(dir, "podman"), []byte(probe), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	unit := rendered(t, testProfile())["q15-agent.container"]
+	gate := single(t, unit, "ExecStartPost")
+	script := strings.TrimSuffix(strings.TrimPrefix(gate, "/bin/sh -ec '"), "'")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "/bin/sh", "-ec", script)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"))
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	finished := make(chan error, 1)
+	go func() { finished <- cmd.Wait() }()
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "attempts")); err == nil {
+			break
+		}
+		select {
+		case err := <-finished:
+			t.Fatalf("gate finished before the container was healthy: %v", err)
+		case <-ctx.Done():
+			t.Fatal("gate did not run the health probe")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	select {
+	case err := <-finished:
+		t.Fatalf("gate finished while unhealthy: %v", err)
+	default:
+	}
+	if err := os.WriteFile(filepath.Join(dir, "healthy"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-finished; err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestBindMountsAreReadOnlyAtConfiguredPaths(t *testing.T) {
 	units := rendered(t, testProfile())

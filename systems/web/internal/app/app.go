@@ -12,14 +12,21 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/q15co/q15/libs/chat-contract/chatpb"
 	"github.com/q15co/q15/systems/web/internal/assets"
 	"github.com/q15co/q15/systems/web/internal/auth"
 	"github.com/q15co/q15/systems/web/internal/bridge"
 	"github.com/q15co/q15/systems/web/internal/gate"
 	"github.com/q15co/q15/systems/web/internal/server"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
-const bridgeConnectTimeout = 5 * time.Second
+const (
+	bridgeConnectTimeout = time.Minute
+	bridgeAttemptTimeout = 5 * time.Second
+	bridgeRetryInterval  = 250 * time.Millisecond
+)
 
 // Config supplies process paths and the fixed public origin.
 type Config struct {
@@ -32,8 +39,7 @@ type Config struct {
 	TLSKey    string
 }
 
-// Run validates args and starts the web tier. The supervisor retries startup
-// when the agent is not ready; a protocol mismatch always fails hard.
+// Run validates args and starts the web tier after a bounded bridge handshake.
 func Run(args []string) error {
 	if len(args) == 1 && args[0] == "--healthcheck" {
 		return healthcheck(os.Getenv("Q15_WEB_LISTEN"))
@@ -185,13 +191,40 @@ func connectBridge(ctx context.Context, target string) (*bridge.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	info, err := client.GetRuntimeInfo(connectCtx)
-	if err == nil {
-		err = bridge.CheckVersion(info)
-	}
+	err = waitForBridge(connectCtx, client.GetRuntimeInfo)
 	if err != nil {
 		_ = client.Close()
 		return nil, fmt.Errorf("chat bridge handshake: %w", err)
 	}
 	return client, nil
+}
+
+func waitForBridge(
+	ctx context.Context,
+	getInfo func(context.Context) (*chatpb.GetRuntimeInfoResponse, error),
+) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		attemptCtx, cancel := context.WithTimeout(ctx, bridgeAttemptTimeout)
+		info, err := getInfo(attemptCtx)
+		cancel()
+		if err == nil {
+			return bridge.CheckVersion(info)
+		}
+		if ctx.Err() != nil {
+			return fmt.Errorf("%v: %w", err, ctx.Err())
+		}
+		if status.Code(err) != codes.Unavailable && status.Code(err) != codes.DeadlineExceeded {
+			return err
+		}
+		timer := time.NewTimer(bridgeRetryInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return fmt.Errorf("%v: %w", err, ctx.Err())
+		case <-timer.C:
+		}
+	}
 }

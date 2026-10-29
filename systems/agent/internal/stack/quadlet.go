@@ -51,10 +51,18 @@ type container struct {
 	publishPorts []string
 	// requires are the services this one needs running first.
 	requires []string
+	health   healthcheck
 	// enabled is true for the one unit the stack hangs off at boot: enabling it
 	// is what makes the whole stack come back after a reboot, because the rest
 	// are pulled in as its requirements.
 	enabled bool
+}
+
+type healthcheck struct {
+	command     string
+	interval    string
+	retries     int
+	startPeriod string
 }
 
 // Units renders the profile as the units a stack consists of: one container unit
@@ -142,6 +150,7 @@ func (p Profile) hostPath(path, target string) mount {
 func (p Profile) containers() []container {
 	containers := []container{
 		{service: "postgres", description: "q15 conversation database", image: PostgresImage,
+			health: healthcheck{command: "pg_isready -U q15 -d q15", interval: "5s", retries: 20},
 			environment: [][2]string{
 				{"POSTGRES_USER", "q15"},
 				{"POSTGRES_DB", "q15"},
@@ -154,6 +163,10 @@ func (p Profile) containers() []container {
 			service:     "proxy",
 			description: "q15 egress proxy",
 			image:       p.image("proxy"),
+			health: healthcheck{
+				command:  "bash -ec ': >/dev/tcp/127.0.0.1/50052; : >/dev/tcp/127.0.0.1/18080'",
+				interval: "10s", retries: 5, startPeriod: "10s",
+			},
 			environment: [][2]string{
 				{"GITHUB_TOKEN_FILE", secretsDirTarget + "/" + githubTokenFile},
 			},
@@ -169,6 +182,10 @@ func (p Profile) containers() []container {
 			service:     "exec",
 			description: "q15 command execution",
 			image:       p.image("exec"),
+			health: healthcheck{
+				command:  "bash -ec ': >/dev/tcp/127.0.0.1/50051'",
+				interval: "10s", retries: 5, startPeriod: "60s",
+			},
 			environment: [][2]string{
 				{"TZ", "UTC"},
 			},
@@ -188,6 +205,10 @@ func (p Profile) containers() []container {
 			service:     "qdrant",
 			description: "q15 vector store",
 			image:       p.VectorStoreImage,
+			health: healthcheck{
+				command:  "bash -ec ': >/dev/tcp/127.0.0.1/6334'",
+				interval: "10s", retries: 5, startPeriod: "20s",
+			},
 			volumes: []mount{
 				p.volume("qdrant_storage", "/qdrant/storage"),
 			},
@@ -218,6 +239,10 @@ func (p Profile) containers() []container {
 		service:     "agent",
 		description: "q15 agent",
 		image:       p.image("agent"),
+		health: healthcheck{
+			command:  "test -s /tmp/q15-agent-ready && kill -0 1",
+			interval: "10s", retries: 5, startPeriod: "60s",
+		},
 		// The bridge socket is owned by the host user's group, and the agent
 		// writes into it, so it needs that group inside the container.
 		groupAdd: []string{"1000"},
@@ -261,6 +286,10 @@ func (p Profile) containers() []container {
 		service:     "web",
 		description: "q15 browser client",
 		image:       p.image("web"),
+		health: healthcheck{
+			command:  `["CMD", "/usr/local/bin/q15-web", "--healthcheck"]`,
+			interval: "10s", retries: 5, startPeriod: "20s",
+		},
 		// The web tier holds no credential and owns no writable data outside
 		// its own state, so it runs as the unprivileged image user in the
 		// host user's group, which is what lets it use the bridge socket.
@@ -317,6 +346,19 @@ func (p Profile) renderContainer(c container) []byte {
 	fmt.Fprintf(&b, "ContainerName=%s\n", p.resource(c.service))
 	fmt.Fprintf(&b, "Image=%s\n", c.image)
 	fmt.Fprintf(&b, "Network=%s\n", p.networkUnitName())
+	if c.health.command != "" {
+		fmt.Fprintf(&b, "HealthCmd=%s\n", c.health.command)
+		fmt.Fprintf(
+			&b,
+			"HealthInterval=%s\nHealthTimeout=3s\nHealthRetries=%d\n",
+			c.health.interval,
+			c.health.retries,
+		)
+		if c.health.startPeriod != "" {
+			fmt.Fprintf(&b, "HealthStartPeriod=%s\n", c.health.startPeriod)
+		}
+		b.WriteString("Notify=healthy\n")
+	}
 	for _, m := range c.volumes {
 		fmt.Fprintf(&b, "Volume=%s\n", formatMount(m))
 	}
@@ -345,7 +387,17 @@ func (p Profile) renderContainer(c container) []byte {
 
 	// systemd owns the restart policy; podman's own --restart is deliberately not
 	// used, because two restarters would fight over the same container.
-	b.WriteString("\n[Service]\nRestart=always\n")
+	b.WriteString("\n[Service]\nRestart=always\nRestartSec=10s\nTimeoutStartSec=15min\n")
+	if c.health.command != "" {
+		// NotifyAccess=all also accepts notifications from secret helpers. A
+		// health probe in start-post keeps After= dependencies waiting even if
+		// a helper sends READY=1 before Podman creates the container.
+		fmt.Fprintf(
+			&b,
+			"ExecStartPost=/bin/sh -ec 'until podman healthcheck run %s >/dev/null 2>&1; do sleep 1; done'\n",
+			p.resource(c.service),
+		)
+	}
 
 	if c.enabled {
 		b.WriteString("\n[Install]\nWantedBy=default.target\n")
