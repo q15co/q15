@@ -200,7 +200,7 @@ func TestBraveWebSearchRunFormatsResults(t *testing.T) {
 	}
 
 	wantContains := []string{
-		"2 results",
+		"brave (rotation) · 2 results",
 		"1. Go 1.26 Released",
 		"   https://go.dev/blog/1.26",
 		"   Release notes",
@@ -223,7 +223,7 @@ func TestBraveWebSearchRunNoResults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if !strings.Contains(got, "brave") || !strings.Contains(got, "0 results") {
+	if !strings.Contains(got, "brave (rotation) · 0 results") {
 		t.Fatalf("Run() = %q, want an attributed zero-result header", got)
 	}
 	if strings.Contains(got, "No results for:") {

@@ -263,6 +263,79 @@ func TestSearchFallsBackOnProviderError(t *testing.T) {
 	if !strings.Contains(out, "result from healthy") {
 		t.Fatalf("out = %q, want the healthy provider's result", out)
 	}
+	if header := firstLine(out); header != "healthy (fallback after failing: failed) · 1 results" {
+		t.Fatalf("header = %q, want the failed predecessor named", header)
+	}
+}
+
+// firstLine returns the attribution header of a rendered response.
+func firstLine(out string) string {
+	if i := strings.IndexByte(out, '\n'); i >= 0 {
+		return out[:i]
+	}
+	return out
+}
+
+func TestSearchAttributesRotation(t *testing.T) {
+	t.Parallel()
+
+	tool := recordingTool(t, fakeProvider{name: "a"}, fakeProvider{name: "b"})
+	out, err := tool.Run(context.Background(), `{"query":"rotation"}`)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if header := firstLine(out); header != "a (rotation) · 1 results" {
+		t.Fatalf("header = %q, want rotation", header)
+	}
+}
+
+func TestSearchAttributesIdlePromotion(t *testing.T) {
+	t.Parallel()
+
+	tool := recordingTool(
+		t,
+		fakeProvider{name: "slow", min: time.Hour},
+		fakeProvider{name: "idle"},
+	)
+	// Book the rotation target's slot so it cannot run for an hour, which is
+	// what makes order() promote the idle provider.
+	if err := tool.providers[0].wait(context.Background()); err != nil {
+		t.Fatalf("priming throttle: %v", err)
+	}
+
+	out, err := tool.Run(context.Background(), `{"query":"idle"}`)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if header := firstLine(out); header != "idle (idle) · 1 results" {
+		t.Fatalf("header = %q, want idle promotion", header)
+	}
+}
+
+func TestSearchAttributesFallbackAfterThrottledProvider(t *testing.T) {
+	t.Parallel()
+
+	tool := recordingTool(
+		t,
+		fakeProvider{name: "cooling", min: time.Hour},
+		fakeProvider{name: "spaced", min: 5 * time.Millisecond},
+	)
+	// The rotation target is in failure cooldown, and the only other provider
+	// is inside its spacing window, so nothing can be promoted to the front.
+	tool.providers[0].mu.Lock()
+	tool.providers[0].cooldownUntil = time.Now().Add(time.Hour)
+	tool.providers[0].mu.Unlock()
+	if err := tool.providers[1].wait(context.Background()); err != nil {
+		t.Fatalf("priming throttle: %v", err)
+	}
+
+	out, err := tool.Run(context.Background(), `{"query":"fallback"}`)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if header := firstLine(out); header != "spaced (fallback after cooling: throttled) · 1 results" {
+		t.Fatalf("header = %q, want the throttled predecessor named", header)
+	}
 }
 
 func TestSearchAllProvidersFail(t *testing.T) {

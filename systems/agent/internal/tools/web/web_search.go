@@ -202,6 +202,31 @@ func (p *throttledProvider) recordFailure() {
 	}
 }
 
+// Attribution reasons. Every selection path in Run maps to one of these, so
+// the header names the path actually taken rather than a guess: a stale timer
+// makes rotation order invisible from the outside, and mislabelling exactly the
+// calls that are hardest to reproduce is worse than saying nothing.
+const (
+	reasonRotation  = "rotation"
+	reasonIdle      = "idle"
+	reasonThrottled = "throttled"
+	reasonFailed    = "failed"
+)
+
+// selection is one planned provider attempt: the provider index, its name, and
+// the reason it was chosen.
+type selection struct {
+	index  int
+	name   string
+	reason string
+}
+
+// fallbackReason names the provider that did not answer and why, so the
+// attribution line reads "brave (fallback after ollama: throttled)".
+func fallbackReason(name, cause string) string {
+	return fmt.Sprintf("fallback after %s: %s", name, cause)
+}
+
 // Search is the web_search tool: it round-robins requests across the
 // configured providers, throttles each provider independently, and falls back
 // to the next provider when one errors so a rate-limited or misconfigured
@@ -317,15 +342,17 @@ func (s *Search) Run(ctx context.Context, arguments string) (string, error) {
 	// while another is idle. Starting on the idle one keeps a rate-limited
 	// backend from consuming the caller's deadline; rotation order is kept for
 	// every other case, including the fallback walk below.
-	order := s.order(start)
+	plan := s.order(start)
 
 	failures := make([]error, 0, len(s.providers))
-	for _, idx := range order {
+	priorName, priorCause := "", ""
+	for _, attempt := range plan {
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
-		p := &s.providers[idx]
+		p := &s.providers[attempt.index]
 		if !p.available(time.Now()) {
+			priorName, priorCause = attempt.name, reasonThrottled
 			continue
 		}
 		if err := p.wait(ctx); err != nil {
@@ -334,9 +361,13 @@ func (s *Search) Run(ctx context.Context, arguments string) (string, error) {
 		results, err := p.provider.Search(ctx, SearchRequest{Query: query, Count: count})
 		if err == nil {
 			p.recordSuccess()
+			reason := attempt.reason
+			if priorCause != "" {
+				reason = fallbackReason(priorName, priorCause)
+			}
 			return renderResults(
 				p.provider.Name(),
-				"",
+				reason,
 				count,
 				results,
 				snippetChars,
@@ -348,6 +379,7 @@ func (s *Search) Run(ctx context.Context, arguments string) (string, error) {
 			break
 		}
 		p.recordFailure()
+		priorName, priorCause = attempt.name, reasonFailed
 	}
 
 	if len(failures) == 0 {
@@ -356,21 +388,46 @@ func (s *Search) Run(ctx context.Context, arguments string) (string, error) {
 	return "", fmt.Errorf("all web search providers failed: %w", errors.Join(failures...))
 }
 
-// order returns provider indexes starting at start, moving the first provider
-// that can run immediately to the front.
-func (s *Search) order(start int) []int {
-	order := make([]int, 0, len(s.providers))
+// order returns the attempt plan starting at start, moving the first provider
+// that can run immediately to the front, and labels every entry with the reason
+// it was selected.
+//
+// The head is "rotation" when the rotation target can run and "idle" when a
+// provider was promoted over it. Every later entry is a "fallback after ..."
+// naming its predecessor, because reaching it means the predecessor did not
+// answer.
+func (s *Search) order(start int) []selection {
+	plan := make([]selection, 0, len(s.providers))
 	for i := 0; i < len(s.providers); i++ {
-		order = append(order, (start+i)%len(s.providers))
+		idx := (start + i) % len(s.providers)
+		plan = append(plan, selection{index: idx, name: s.providers[idx].provider.Name()})
 	}
+
 	now := time.Now()
-	for i, idx := range order {
-		if s.providers[idx].available(now) && s.providers[idx].waitRemaining() <= 0 {
-			order[0], order[i] = order[i], order[0]
+	promoted := false
+	for i, attempt := range plan {
+		if s.providers[attempt.index].available(now) && s.providers[attempt.index].waitRemaining() <= 0 {
+			plan[0], plan[i] = plan[i], plan[0]
+			promoted = i != 0
 			break
 		}
 	}
-	return order
+
+	if plan[0].index == start && !promoted {
+		plan[0].reason = reasonRotation
+	} else {
+		plan[0].reason = reasonIdle
+	}
+
+	for i := 1; i < len(plan); i++ {
+		prior := &s.providers[plan[i-1].index]
+		cause := reasonFailed
+		if !prior.available(now) || prior.waitRemaining() > 0 {
+			cause = reasonThrottled
+		}
+		plan[i].reason = fallbackReason(plan[i-1].name, cause)
+	}
+	return plan
 }
 
 // renderResults builds the one output shape every provider is rendered with:
