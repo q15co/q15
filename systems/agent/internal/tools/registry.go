@@ -128,7 +128,25 @@ func NewWebFetch() *web.Fetch {
 	return web.NewFetch()
 }
 
-// NewBraveWebSearch delegates to web.NewBraveWebSearch.
+// SearchProvider is one web search backend (Brave, Ollama, ...).
+type SearchProvider = web.Provider
+
+// WebSearchConfig is the resolved web_search configuration: one field per
+// supported provider, empty when that provider is not configured.
+type WebSearchConfig = web.SearchConfig
+
+// NewSearchProviders delegates to web.NewProviders.
+func NewSearchProviders(cfg WebSearchConfig) ([]SearchProvider, error) {
+	return web.NewProviders(cfg)
+}
+
+// NewWebSearch delegates to web.NewSearch.
+func NewWebSearch(providers []SearchProvider) (*web.Search, error) {
+	return web.NewSearch(providers)
+}
+
+// NewBraveWebSearch builds the Brave-backed web search provider used when a
+// Brave API key is configured.
 func NewBraveWebSearch(apiKey string) (*web.BraveWebSearch, error) {
 	return web.NewBraveWebSearch(apiKey)
 }

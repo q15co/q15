@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"strings"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/config"
@@ -66,52 +65,62 @@ func buildRuntimeTools(
 	)
 }
 
+// toolDeps carries the dependencies buildToolList assembles the base tool
+// list from: constructed services plus the resolved web_search configuration.
+type toolDeps struct {
+	execClient       execution.Service
+	fileExec         tools.FileToolExecutor
+	skillManager     *q15skills.Manager
+	fileSettings     fileops.Settings
+	mediaStore       q15media.Store
+	embeddingService *embed.Service
+	webSearch        config.WebSearchToolRuntime
+}
+
 // buildToolList assembles the base agent tools (file ops, exec, media, skills,
 // web, and optional embeddings/web_search) that every agent exposes before the
-// runtime-only model-selection and sub-agent tools are appended.
-func buildToolList(
-	execClient execution.Service,
-	fileExec tools.FileToolExecutor,
-	skillManager *q15skills.Manager,
-	fileSettings fileops.Settings,
-	mediaStore q15media.Store,
-	embeddingService *embed.Service,
-	braveAPIKey string,
-) ([]agent.Tool, error) {
+// runtime-only model-selection and sub-agent tools are appended. web_search is
+// registered only when at least one provider is configured.
+func buildToolList(deps toolDeps) ([]agent.Tool, error) {
 	toolList := []agent.Tool{
-		tools.NewReadFile(fileExec),
-		tools.NewWriteFile(fileExec),
-		tools.NewEditFile(fileExec),
-		tools.NewApplyPatch(fileExec),
-		tools.NewValidateSkill(skillManager),
-		tools.NewExec(execClient),
-		tools.NewExecList(execClient),
-		tools.NewExecRead(execClient),
-		tools.NewExecWrite(execClient),
-		tools.NewExecKill(execClient),
-		tools.NewLoadImage(fileSettings, mediaStore),
-		tools.NewAttachMedia(fileSettings, mediaStore),
+		tools.NewReadFile(deps.fileExec),
+		tools.NewWriteFile(deps.fileExec),
+		tools.NewEditFile(deps.fileExec),
+		tools.NewApplyPatch(deps.fileExec),
+		tools.NewValidateSkill(deps.skillManager),
+		tools.NewExec(deps.execClient),
+		tools.NewExecList(deps.execClient),
+		tools.NewExecRead(deps.execClient),
+		tools.NewExecWrite(deps.execClient),
+		tools.NewExecKill(deps.execClient),
+		tools.NewLoadImage(deps.fileSettings, deps.mediaStore),
+		tools.NewAttachMedia(deps.fileSettings, deps.mediaStore),
 		tools.NewWebFetch(),
 	}
 
-	if embeddingService != nil {
-		embedJobs := embed.NewSyncJobManager(embeddingService)
+	if deps.embeddingService != nil {
+		embedJobs := embed.NewSyncJobManager(deps.embeddingService)
 		toolList = append(
 			toolList,
-			tools.NewEmbedSources(embeddingService),
+			tools.NewEmbedSources(deps.embeddingService),
 			tools.NewEmbedSync(embedJobs),
-			tools.NewEmbedSearch(embeddingService),
-			tools.NewEmbedStatus(embeddingService),
+			tools.NewEmbedSearch(deps.embeddingService),
+			tools.NewEmbedStatus(deps.embeddingService),
 			tools.NewEmbedJob(embedJobs),
 		)
 	}
 
-	braveAPIKey = strings.TrimSpace(braveAPIKey)
-	if braveAPIKey == "" {
+	providers, err := tools.NewSearchProviders(tools.WebSearchConfig{
+		BraveAPIKey:  deps.webSearch.BraveAPIKey,
+		OllamaAPIKey: deps.webSearch.OllamaAPIKey,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(providers) == 0 {
 		return toolList, nil
 	}
-
-	webSearchTool, err := tools.NewBraveWebSearch(braveAPIKey)
+	webSearchTool, err := tools.NewWebSearch(providers)
 	if err != nil {
 		return nil, err
 	}

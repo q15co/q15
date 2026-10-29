@@ -16,7 +16,9 @@ import (
 )
 
 const (
-	braveSearchURL           = "https://api.search.brave.com/res/v1/web/search"
+	braveSearchURL = "https://api.search.brave.com/res/v1/web/search"
+	// braveSearchMinInterval spaces requests: the free tier allows ~1 request/second.
+	braveSearchMinInterval   = 1100 * time.Millisecond
 	defaultWebSearchCount    = 5
 	maxWebSearchCount        = 10
 	maxBraveSearchQueryChars = 400
@@ -110,6 +112,21 @@ func (b *BraveWebSearch) Run(ctx context.Context, arguments string) (string, err
 		count = clamp(*args.Count, 1, maxWebSearchCount)
 	}
 
+	return b.Search(ctx, query, count)
+}
+
+// Name implements Provider.
+func (b *BraveWebSearch) Name() string {
+	return "brave"
+}
+
+// MinInterval implements Provider.
+func (b *BraveWebSearch) MinInterval() time.Duration {
+	return braveSearchMinInterval
+}
+
+// Search runs one Brave query and formats the result list.
+func (b *BraveWebSearch) Search(ctx context.Context, query string, count int) (string, error) {
 	searchURL, err := url.Parse(b.baseURL)
 	if err != nil {
 		return "", fmt.Errorf("invalid brave search base url: %w", err)

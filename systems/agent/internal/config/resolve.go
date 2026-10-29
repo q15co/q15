@@ -40,6 +40,10 @@ func (c Config) ResolveAgentRuntime() (*AgentRuntime, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve brave API key for agent %q: %w", agentCfg.Name, err)
 	}
+	ollamaAPIKey, err := agentCfg.OllamaAPIKey()
+	if err != nil {
+		return nil, fmt.Errorf("resolve ollama API key for agent %q: %w", agentCfg.Name, err)
+	}
 	embeddingsRuntime, err := agentCfg.EmbeddingsRuntime()
 	if err != nil {
 		return nil, fmt.Errorf("resolve embeddings config for agent %q: %w", agentCfg.Name, err)
@@ -58,7 +62,8 @@ func (c Config) ResolveAgentRuntime() (*AgentRuntime, error) {
 		Execution:         ExecutionRuntime{ServiceAddress: runtimeExecutionServiceAddr},
 		Tools: ToolsRuntime{
 			WebSearch: WebSearchToolRuntime{
-				BraveAPIKey: braveAPIKey,
+				BraveAPIKey:  braveAPIKey,
+				OllamaAPIKey: ollamaAPIKey,
 			},
 			Embeddings: embeddingsRuntime,
 			Schedule:   scheduleRuntime,

@@ -72,6 +72,23 @@ func (a Agent) BraveAPIKey() (string, error) {
 	return value, nil
 }
 
+// OllamaAPIKey resolves the optional Ollama API key used for hosted web search.
+func (a Agent) OllamaAPIKey() (string, error) {
+	envName := strings.TrimSpace(a.Tools.WebSearch.OllamaAPIKeyEnv)
+	if envName == "" {
+		return "", nil
+	}
+
+	value, ok, err := lookupSecretEnvValue(envName)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", fmt.Errorf("env var %q or %q is required", envName, envName+"_FILE")
+	}
+	return value, nil
+}
+
 // EmbeddingsRuntime resolves optional embeddings configuration. It stays
 // disabled unless any embeddings field is set. Provider defaults to Gemini so
 // existing configurations keep working unchanged; the openai provider targets

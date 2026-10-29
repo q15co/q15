@@ -89,7 +89,8 @@ type Tools struct {
 
 // WebSearchTool defines optional web_search settings.
 type WebSearchTool struct {
-	BraveAPIKeyEnv string `yaml:"brave_api_key_env"`
+	BraveAPIKeyEnv  string `yaml:"brave_api_key_env"`
+	OllamaAPIKeyEnv string `yaml:"ollama_api_key_env"`
 }
 
 // EmbeddingsTool defines optional embedding source/search tool settings.
@@ -155,7 +156,8 @@ type ToolsRuntime struct {
 
 // WebSearchToolRuntime is the resolved runtime configuration for web_search.
 type WebSearchToolRuntime struct {
-	BraveAPIKey string
+	BraveAPIKey  string
+	OllamaAPIKey string
 }
 
 // EmbeddingsToolRuntime is the resolved runtime configuration for embedding tools.
