@@ -4,9 +4,32 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
+	"time"
 )
+
+// braveTestProvider wires a Brave provider at a test server serving payload.
+func braveTestProvider(t *testing.T, payload []byte) *BraveWebSearch {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Subscription-Token") != "test-key" {
+			t.Errorf("missing/incorrect brave token header")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(payload)
+	}))
+	t.Cleanup(server.Close)
+
+	tool, err := NewBraveWebSearch("test-key")
+	if err != nil {
+		t.Fatalf("NewBraveWebSearch() error = %v", err)
+	}
+	tool.baseURL = server.URL
+	tool.client = server.Client()
+	return tool
+}
 
 func TestBraveWebSearchDefinition(t *testing.T) {
 	tool, err := NewBraveWebSearch("test-key")
@@ -93,6 +116,51 @@ func TestBraveWebSearchRunErrorsBeforeRequestOnTooLongQuery(t *testing.T) {
 	}
 }
 
+func TestBraveWebSearchSearchMapsGoldenPayload(t *testing.T) {
+	payload, err := os.ReadFile("testdata/brave_search.json")
+	if err != nil {
+		t.Fatalf("read golden payload: %v", err)
+	}
+	tool := braveTestProvider(t, payload)
+
+	results, err := tool.Search(context.Background(), SearchRequest{Query: "go 1.26 release", Count: 2})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("Search() returned %d results, want 2", len(results))
+	}
+
+	want := []Result{
+		{
+			Title:     "Go 1.26 Released & Available",
+			URL:       "https://go.dev/blog/go1.26?utm_source=newsletter&utm_medium=email#top",
+			Snippet:   "Go 1.26 adds generic type aliases and a faster toolchain.",
+			Published: time.Date(2026, 2, 10, 15, 4, 5, 0, time.UTC),
+		},
+		{
+			Title:   "Go 1.26 release notes",
+			URL:     "https://go.dev/doc/go1.26/",
+			Snippet: "The release notes for Go 1.26.",
+		},
+	}
+	for i, w := range want {
+		got := results[i]
+		if got.Title != w.Title {
+			t.Fatalf("results[%d].Title = %q, want %q", i, got.Title, w.Title)
+		}
+		if got.URL != w.URL {
+			t.Fatalf("results[%d].URL = %q, want %q", i, got.URL, w.URL)
+		}
+		if got.Snippet != w.Snippet {
+			t.Fatalf("results[%d].Snippet = %q, want %q", i, got.Snippet, w.Snippet)
+		}
+		if !got.Published.Equal(w.Published) {
+			t.Fatalf("results[%d].Published = %v, want %v", i, got.Published, w.Published)
+		}
+	}
+}
+
 func TestBraveWebSearchRunFormatsResults(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("X-Subscription-Token") != "test-key" {
@@ -103,6 +171,9 @@ func TestBraveWebSearchRunFormatsResults(t *testing.T) {
 		}
 		if got := r.URL.Query().Get("count"); got != "2" {
 			t.Fatalf("count = %q, want %q", got, "2")
+		}
+		if got := r.URL.Query().Get("text_decorations"); got != "false" {
+			t.Fatalf("text_decorations = %q, want %q", got, "false")
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
@@ -129,10 +200,10 @@ func TestBraveWebSearchRunFormatsResults(t *testing.T) {
 	}
 
 	wantContains := []string{
-		"Results for: golang news",
+		"2 results",
 		"1. Go 1.26 Released",
-		"https://go.dev/blog/1.26",
-		"Release notes",
+		"   https://go.dev/blog/1.26",
+		"   Release notes",
 		"2. Golang Weekly",
 	}
 	for _, want := range wantContains {
@@ -140,25 +211,23 @@ func TestBraveWebSearchRunFormatsResults(t *testing.T) {
 			t.Fatalf("Run() output missing %q\noutput:\n%s", want, got)
 		}
 	}
+	if strings.Contains(got, "Results for:") {
+		t.Fatalf("Run() still echoes the query\noutput:\n%s", got)
+	}
 }
 
 func TestBraveWebSearchRunNoResults(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"web":{"results":[]}}`))
-	}))
-	defer server.Close()
-
-	tool, _ := NewBraveWebSearch("test-key")
-	tool.baseURL = server.URL
-	tool.client = server.Client()
+	tool := braveTestProvider(t, []byte(`{"web":{"results":[]}}`))
 
 	got, err := tool.Run(context.Background(), `{"query":"nothing"}`)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if got != "No results for: nothing" {
-		t.Fatalf("Run() = %q, want %q", got, "No results for: nothing")
+	if !strings.Contains(got, "brave") || !strings.Contains(got, "0 results") {
+		t.Fatalf("Run() = %q, want an attributed zero-result header", got)
+	}
+	if strings.Contains(got, "No results for:") {
+		t.Fatalf("Run() = %q, want the empty shape, not a query echo", got)
 	}
 }
 
