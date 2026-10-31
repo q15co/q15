@@ -6,7 +6,27 @@ import (
 	"unicode"
 )
 
-var documentListMarker = regexp.MustCompile(`^(?:[-+*•●]|\p{N}+[.)])\s+`)
+var (
+	documentListMarker = regexp.MustCompile(`^(?:[-+*•●]|\p{N}+[.)])\s+`)
+	summarySeparator   = regexp.MustCompile(`\s+[·›»|]\s+`)
+)
+
+// Provider summaries can contain only breadcrumbs or index links. Keep any
+// explanatory sentences in a separated summary, and leave the source available
+// without an excerpt when the provider supplied no prose.
+func summaryExcerpt(title, text string, terms []string) string {
+	text = cleanText(text)
+	if parts := summarySeparator.Split(text, -1); len(parts) > 1 {
+		var prose []string
+		for _, part := range parts {
+			if hasProseSentence(part) {
+				prose = append(prose, part)
+			}
+		}
+		text = strings.Join(prose, "\n\n")
+	}
+	return documentExcerpt(title, text, terms)
+}
 
 // documentExcerpt retains paragraph boundaries until navigation, tables and
 // fenced code have been excluded. Flattening first makes a query-dense TOC
@@ -90,7 +110,14 @@ func documentFence(line string) string {
 
 func hasProseSentence(text string) bool {
 	runes := []rune(text)
+	hasLetter := false
 	for i, r := range runes {
+		if unicode.IsLetter(r) {
+			hasLetter = true
+		}
+		if !hasLetter {
+			continue
+		}
 		switch r {
 		case '。', '！', '？':
 			return true

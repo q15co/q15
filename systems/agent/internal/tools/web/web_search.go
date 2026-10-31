@@ -534,13 +534,14 @@ func renderResults(
 	headerBudget := len(
 		fmt.Sprintf("%s · %d results\nrequested %d\n", header, len(results), requested),
 	)
-	notice := fmt.Sprintf("output truncated at %d bytes\n", maxRenderBytes)
+	notice := "results omitted: %d (output limit: %d bytes)\n"
+	noticeBudget := len(fmt.Sprintf(notice, len(results), maxRenderBytes))
 	var body strings.Builder
 	written := 0
 	for i, result := range results {
 		block := renderResult(i+1, result, snippetChars)
-		if headerBudget+body.Len()+len(block)+len(notice) > maxRenderBytes {
-			body.WriteString(notice)
+		if headerBudget+body.Len()+len(block)+noticeBudget > maxRenderBytes {
+			fmt.Fprintf(&body, notice, len(results)-written, maxRenderBytes)
 			break
 		}
 		body.WriteString(block)

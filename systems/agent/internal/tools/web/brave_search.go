@@ -74,9 +74,8 @@ func (b *BraveWebSearch) MinInterval() time.Duration {
 }
 
 // Search runs one Brave query and returns its results in the shared shape.
-// Brave's description field is already a summary, so the excerpt path is close
-// to a no-op on it; it is still applied so that markup, entities and whitespace
-// are normalised the same way every other adapter's text is.
+// Brave's description field may contain prose, breadcrumbs or an incomplete
+// PDF bullet. Only the supplied text is available for excerpt selection.
 func (b *BraveWebSearch) Search(ctx context.Context, req SearchRequest) ([]Result, error) {
 	if b == nil {
 		return nil, fmt.Errorf("brave web search is not configured")
@@ -145,11 +144,10 @@ func (b *BraveWebSearch) Search(ctx context.Context, req SearchRequest) ([]Resul
 	results := make([]Result, 0, len(parsed.Web.Results))
 	for _, item := range parsed.Web.Results {
 		title := cleanText(item.Title)
-		body := stripTitleEcho(title, cleanText(item.Description))
 		results = append(results, Result{
 			Title:     title,
 			URL:       strings.TrimSpace(item.URL),
-			Snippet:   excerpt(body, terms, maxExcerptRunes),
+			Snippet:   summaryExcerpt(title, item.Description, terms),
 			Published: parsePublishedTime(item.PageAge),
 		})
 	}

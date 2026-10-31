@@ -289,20 +289,46 @@ func TestRenderResultsCountsOnlyCompleteResultsWithinBudget(t *testing.T) {
 		{Title: "First", URL: "https://example.com/first", Snippet: "matched passage"},
 		{Title: strings.Repeat("大", maxRenderBytes), URL: "https://example.com/oversized"},
 	}
-	for _, results := range [][]Result{results, results[1:]} {
-		out := renderResults("ollama", reasonRotation, len(results), results, defaultSnippetChars)
+	cases := []struct {
+		results []Result
+		written int
+		omitted int
+	}{
+		{results: results, written: 1, omitted: 1},
+		{results: results[1:], written: 0, omitted: 1},
+		{
+			results: append(
+				append([]Result{}, results...),
+				Result{Title: "Third", URL: "https://example.com/third"},
+			),
+			written: 1,
+			omitted: 2,
+		},
+	}
+	for _, tc := range cases {
+		out := renderResults(
+			"ollama",
+			reasonRotation,
+			len(tc.results),
+			tc.results,
+			defaultSnippetChars,
+		)
 		if len(out) > maxRenderBytes {
 			t.Fatalf("output is %d bytes, maximum %d", len(out), maxRenderBytes)
 		}
-		want := fmt.Sprintf("ollama (rotation) · %d results", len(results)-1)
+		want := fmt.Sprintf("ollama (rotation) · %d results", tc.written)
 		if header := firstLine(out); header != want {
 			t.Errorf("header = %q, want %q", header, want)
 		}
-		if !strings.Contains(out, fmt.Sprintf("requested %d", len(results))) {
+		if !strings.Contains(out, fmt.Sprintf("requested %d", len(tc.results))) {
 			t.Error("output does not report the requested result count")
 		}
-		if strings.Contains(out, "大") || !strings.Contains(out, "output truncated") {
-			t.Error("output should drop the oversized result and report truncation")
+		if strings.Contains(out, "大") ||
+			!strings.Contains(
+				out,
+				fmt.Sprintf("results omitted: %d (output limit: 16384 bytes)", tc.omitted),
+			) {
+			t.Error("output should drop the oversized result and count the omitted results")
 		}
 	}
 }

@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -161,6 +162,72 @@ func TestBraveWebSearchSearchMapsGoldenPayload(t *testing.T) {
 		if !got.Published.Equal(w.Published) {
 			t.Fatalf("results[%d].Published = %v, want %v", i, got.Published, w.Published)
 		}
+	}
+}
+
+func TestBraveWebSearchOmitsNavigationSummaries(t *testing.T) {
+	cases := []struct {
+		name        string
+		description string
+		want        string
+	}{
+		{
+			name:        "year index",
+			description: "令和4年分の確定申告に関する手引き等 · 令和3年分の確定申告に関する手引き等 · 所得税（確定申告書等作成コーナー） ·",
+		},
+		{
+			name:        "breadcrumb with trailing ellipsis",
+			description: "ホーム &middot; 税の情報・手続・用紙 &middot; 確定申告に関する手引き等 &middot; ...",
+		},
+		{
+			name:        "incomplete PDF bullet",
+			description: "• 確定申告書、付表、計算書等は国税庁ホームページからダウンロードで",
+		},
+		{
+			name:        "prose after breadcrumbs",
+			description: "ホーム · 所得税 · 申告書の提出方法を説明しています。必要書類を準備してください。",
+			want:        "申告書の提出方法を説明しています。必要書類を準備してください。",
+		},
+		{
+			name:        "English breadcrumb separators",
+			description: "Home › Guides › Learn how to migrate components with explicit runes.",
+			want:        "Learn how to migrate components with explicit runes.",
+		},
+		{
+			name:        "plain unpunctuated summary",
+			description: "Replace implicit reactivity with runes",
+			want:        "Replace implicit reactivity with runes",
+		},
+		{
+			name:        "complete Japanese bullet",
+			description: "• 申告書は国税庁ホームページからダウンロードできます。",
+			want:        "申告書は国税庁ホームページからダウンロードできます。",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			payload, err := json.Marshal(
+				map[string]any{"web": map[string]any{"results": []map[string]string{{
+					"title": "Guide", "url": "https://example.com/guide", "description": tc.description,
+				}}}},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			results, err := braveTestProvider(
+				t,
+				payload,
+			).Search(context.Background(), SearchRequest{Query: "確定申告 runes", Count: 1})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(results) != 1 || results[0].URL != "https://example.com/guide" {
+				t.Fatalf("lost source: %+v", results)
+			}
+			if results[0].Snippet != tc.want {
+				t.Errorf("Snippet = %q, want %q", results[0].Snippet, tc.want)
+			}
+		})
 	}
 }
 
