@@ -6,18 +6,15 @@
   flex: none;
 }
 .composer {
-  border: 1px solid color-mix(in srgb, var(--muted) 80%, transparent);
+  border: 1px solid var(--hairline);
   background: var(--surface);
-  border-radius: var(--space-4);
+  border-radius: var(--radius-lg);
   overflow: hidden;
-  box-shadow: 0 6px 25px color-mix(in srgb, var(--crust) 7%, transparent);
-  transition:
-    border-color var(--motion-normal),
-    box-shadow var(--motion-normal);
+  transition: border-color var(--motion-fast);
 }
 .composer:focus-within {
-  border-color: color-mix(in srgb, var(--primary) 55%, var(--border));
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 10%, transparent);
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
 }
 .composer textarea {
   display: block;
@@ -28,7 +25,7 @@
   outline: none;
   padding: var(--space-4) var(--space-5) var(--space-2);
   font-size: var(--font-md);
-  line-height: var(--leading-ui);
+  line-height: var(--leading-body);
   resize: none;
   min-height: 56px;
   max-height: min(12rem, 30dvh);
@@ -58,7 +55,7 @@
   display: inline-flex;
 }
 .composerButtons button[type="submit"] {
-  border-radius: 0.625rem;
+  border-radius: var(--radius-md);
 }
 .composerFooter {
   color: var(--muted-foreground);
@@ -103,7 +100,7 @@
 .attachmentTray {
   padding: var(--space-4);
   background: var(--sidebar);
-  border-bottom: 1px solid var(--muted);
+  border-bottom: 1px solid var(--hairline);
 }
 .attachmentHeader {
   display: flex;
@@ -119,9 +116,9 @@
   place-items: center;
   min-width: var(--space-5);
   padding: 0 var(--space-1);
-  border-radius: var(--space-1);
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--blue) 15%, transparent);
-  color: var(--blue);
+  color: var(--foreground);
 }
 .attachments {
   display: grid;
@@ -136,14 +133,15 @@
   scrollbar-width: thin;
 }
 .attachmentCard {
+  --muted-foreground: var(--foreground);
   display: grid;
   grid-template-columns: var(--space-10) minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-2);
   min-width: 0;
-  border: 1px solid var(--muted);
-  border-radius: var(--space-3);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
   background: var(--surface);
 }
 .fileIcon {
@@ -152,7 +150,7 @@
   width: var(--space-10);
   height: var(--space-10);
   background: var(--background);
-  border-radius: var(--space-2);
+  border-radius: var(--radius-md);
 }
 .fileIcon svg {
   width: var(--space-6);
@@ -176,9 +174,16 @@
   color: var(--muted-foreground);
 }
 .removeAttachment:hover {
-  color: var(--destructive);
+  color: var(--status-error-text);
   background: color-mix(in srgb, var(--destructive) 12%, transparent);
 }
 .removeAttachment:focus-visible {
   outline-offset: -4px;
+}
+
+.composerToolbar,
+.composerFooter,
+.attachmentTray {
+  font-variation-settings: var(--font-machine);
+  line-height: var(--leading-ui);
 }

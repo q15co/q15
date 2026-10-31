@@ -2,8 +2,11 @@ import babel from "@rolldown/plugin-babel";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import { defineConfig } from "vite-plus";
 
+import { checkBrand } from "./build/brand";
 import { shell } from "./build/shell";
 import { lint } from "./lint/config";
+
+checkBrand(import.meta.dirname);
 
 export default defineConfig({
   plugins: [react(), babel({ presets: [reactCompilerPreset({ target: "19" })] }), shell()],

@@ -165,6 +165,9 @@ and that is the machine register: headings, labels, status, code, sidebar chrome
 the two registers are visibly related rather than merely adjacent, which is the visual form of q15's
 voice rule.
 
+CASL stays at the font default of 0. The app does not animate font variation axes. The compact
+welcome uses `heading-lg`; the full welcome uses `display`.
+
 Sizes are set in `rem` so that a browser font preference is honoured and the interface scales
 instead of clipping. Spacing does not scale with them; controls grow from minimum heights instead.
 
@@ -255,8 +258,8 @@ Mauve at the same 2px it always is, and focus order follows the reading order. P
 are additions, never the only path.
 
 Density is deliberate. Rows are 32px at `chrome-md`, 24px for dense lists, 44px minimum for anything
-that is a touch target. An empty conversation is not filled with suggestions; it holds one line of
-orientation and the composer.
+that is a touch target. The initial welcome retains its fixed quick-send actions. Other empty
+transcript states hold one line of orientation and the composer.
 
 ```yaml
 spacing:
@@ -290,8 +293,8 @@ of one is not either. Depth is a tone step plus a hairline, and that is the only
 
 An overlay, whether a menu, a dialog or a tooltip, is Mantle plus a hairline plus the same radius as
 the surface it covers. It does not get a darker border to separate it, and it does not get a glow to
-lift it. On Latte the sequence inverts: overlays step *lighter* toward white, because the light
-flavour's depth runs the other way.
+lift it. On Latte the luminance sequence inverts: Base is the light canvas, Mantle is a darker pane,
+and Control is darker again. Overlays use Mantle in both flavours.
 
 Fills do not change on hover. A hovered control moves its hairline to Overlay 1, a pressed control
 swaps its ink from Base to Crust, and a focused control gains the Mauve ring. That keeps interaction
@@ -305,7 +308,7 @@ Motion never carries information that is not also present when motion is off.
 
 ## Shapes
 
-Four radii. Not six, and never a spacing token used as a radius.
+Four nonzero radii, plus `none`. Never a spacing token used as a radius.
 
 | Token  | Value   | Applies to                                          |
 | ------ | ------- | --------------------------------------------------- |
@@ -320,9 +323,6 @@ because it is a container, but its contents are never rounded, and neither is a 
 diagram or the duck. A radius never scales with size: a 44px button and a 12px tag each take their
 own token, and nothing is a proportion of anything else.
 
-The current application uses 5, 8, 9, 10, 11.2, 12 and 16px radii, several of them borrowed from
-spacing tokens. The four values above are the target, not a description of that drift.
-
 ```yaml
 rounded:
   none: 0
@@ -333,6 +333,20 @@ rounded:
 ```
 
 ## Components
+
+The browser modules implement these names:
+
+| Design component                                     | Browser module / selector                                                           |
+| ---------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `composer`                                           | `composer.module.css` / `.composer`                                                 |
+| `message-user`, `message-agent`                      | `message.module.css` / `.userMessage .messageBody`, `.messageBody`                  |
+| `tool-call`, `tool-call-active`                      | `activity.module.css` / `.tool`, `.tool[data-running]`                              |
+| `code-block`                                         | `markdown.module.css` / `.markdown pre`; `toolcall.module.css` / `.shell`, `.block` |
+| `sidebar-row`, `sidebar-row-active`                  | `app.module.css` / `.navItem`, `.navActive`                                         |
+| `input`                                              | `login.module.css` / `.enrollment textarea`; `composer.module.css` / `textarea`     |
+| `button-primary`, `button-secondary`, `button-ghost` | `ui/button.module.css` / `.default`, `.outline`, `.ghost`                           |
+| `status-pill-*`                                      | `activity.module.css` / `.status[data-status]`; message, media and app error labels |
+| `tooltip`                                            | Native browser `title` affordances; no custom tooltip surface                       |
 
 Each component is written once per flavour. The `-latte` variant is the same component in the light
 palette, not a tint of the dark one.

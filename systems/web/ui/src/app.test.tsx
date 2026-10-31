@@ -138,7 +138,7 @@ describe("app lifecycle and interaction", () => {
     act(() => required(events[0]).connection("offline"));
     expect(screen.getByText("Disconnected. Refresh to reconnect.")).toBeDefined();
     act(() => required(events[0]).connection("reconnecting"));
-    expect(screen.getByText("Reconnecting to q15…")).toBeDefined();
+    expect(screen.getByText("Reconnecting to q15")).toBeDefined();
     emit("notice", { code: "status", text: "Agent is preparing" });
     expect(screen.getByText("Agent is preparing").closest('[role="status"]')).not.toBeNull();
     emit("error", { code: "bridge_unavailable", ref: "" });

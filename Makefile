@@ -123,6 +123,10 @@ lint: project-setup
 	./scripts/check-ui-fixtures.sh
 	./scripts/check-install-key.sh
 
+.PHONY: ui-assets
+ui-assets:
+	python3 scripts/sync-ui-brand.py
+
 ui-install: project-setup
 	./scripts/check-ui-tool-versions.sh
 	cd $(UI_DIR) && $(PNPM) install --frozen-lockfile
@@ -234,6 +238,7 @@ help:
 	@echo "  test-agent    Test the agent (optional TEST_FLAGS)"
 	@echo "  test-web      Test the browser tier (optional TEST_FLAGS)"
 	@echo "  ui-install    Install the pinned browser dependencies with the frozen lockfile"
+	@echo "  ui-assets     Regenerate web artwork from brand/svg (requires rsvg-convert)"
 	@echo "  ui-dev        Start the Vite+ React development server"
 	@echo "  ui-build      Build the PWA into the Go embedded bundle directory"
 	@echo "  ui-lint       Check browser formatting, lint, and TypeScript with Oxc"

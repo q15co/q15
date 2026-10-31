@@ -84,12 +84,12 @@ test("host enrollment, passkey sign-in, protected data and logout use the real g
     !("options" in options)
   )
     throw new Error("Invalid enrollment options");
-  await page.getByText("Enroll from Hermes", { exact: true }).click();
-  await page.getByLabel("Options from Hermes").fill(JSON.stringify(options.options));
+  await page.getByText("Enroll on the host", { exact: true }).click();
+  await page.getByLabel("Options from the host").fill(JSON.stringify(options.options));
   await page.getByRole("button", { name: "Create device credential" }).click();
-  await expect(page.getByLabel("Response to paste into Hermes")).not.toHaveValue("");
+  await expect(page.getByLabel("Response to paste into the host")).not.toHaveValue("");
   const attestation: unknown = JSON.parse(
-    await page.getByLabel("Response to paste into Hermes").inputValue(),
+    await page.getByLabel("Response to paste into the host").inputValue(),
   );
   await admin("/enroll/finish", { id: options.id, response: attestation });
   const substitutedKey = generateKeyPairSync("ec", { namedCurve: "prime256v1" })

@@ -252,55 +252,32 @@ accessibility rules. Buttons use the same module approach; there is no separate 
 framework. Keep responsive rules beside the component they affect and use the shared tokens for both
 themes.
 
-Shared typography tokens define a small scale, in `rem` so browser font preferences apply:
+The source of truth is [`brand/DESIGN.md`](../../../brand/DESIGN.md). Component names and module
+selectors are mapped there. The UI uses the guide's hairlines, surface levels, fixed radius scale,
+and machine/prose registers in both themes. Latte status labels use Text over a status tint or
+beside a colored dot. Selection has its own translucent token and inherits the selected text.
 
-| Token                       | Default size | Role                                             |
-| --------------------------- | ------------ | ------------------------------------------------ |
-| `--font-xs`                 | 12px         | Timestamps, status and secondary labels          |
-| `--font-sm`                 | 14px         | Controls, navigation, commentary and tool output |
-| `--font-md`                 | 16px         | Messages, introductory text and the composer     |
-| `--font-lg` / `--font-xl`   | 20px / 24px  | Page and Markdown headings                       |
-| `--font-2xl` / `--font-3xl` | 32px / 40px  | Compact / desktop welcome heading                |
+The welcome and sidebar use the generated lockup; compact headers use the square mark. Both themes
+are bundled inline so sign-in never requires an unsigned artwork request. Public icons and the
+component SVGs are generated from `brand/svg/`:
 
-Body copy uses a 1.65 line height; controls use 1.5 and headings 1.25. Message and composer widths
-share a 48rem maximum. Spacing tokens follow a 4px scale and stay compact as text grows; controls
-use minimum heights and grow with their content. Drafts scroll internally after reaching the smaller
-of 12rem or 30% of the viewport height.
+```bash
+make ui-assets # Requires rsvg-convert (librsvg)
+```
 
-The app shell provides the named `app` size container. Component modules switch to compact layouts
-below 48rem, including when a larger browser font preference increases that threshold. Short
-viewports hide the composer footer to preserve room for messages. Browser tests cover doubled text,
-keyboard access, narrow screens and long drafts alongside chat behavior.
+The Vite configuration checks the source and output SHA-256 digests before lint, tests, development
+or builds, including Docker builds. A changed SVG or stale copy fails with the regeneration command.
+The PNGs are transparent renders of the Mocha mark and declare only the `any` icon purpose: the
+artwork has not been padded for a maskable safe zone.
 
-Theme tokens in `src/styles.css` use the official
-[Catppuccin palette](https://github.com/catppuccin/palette) values for Mocha and Latte. The app
-follows the system's initial preference and remembers the user's choice. The
-[Catppuccin style guide](https://github.com/catppuccin/catppuccin/blob/main/docs/style-guide.md)
-defines their roles: Base for the canvas, Mantle for secondary panes, Surface 0 for controls, Text
-for body copy, Subtext for labels, Blue for links and pills, and Green/Yellow/Red for status.
-Selections use Overlay 2 at 25% opacity and the text cursor uses Rosewater. Pill and warning text
-keeps the Text color over an accent tint so the Latte palette remains legible. Small Latte labels
-use Subtext 1, and copy on Surface 0 uses Text to preserve contrast.
-[Recursive](https://www.recursive.design/) is bundled locally with its full variation axes:
-proportional body text and monospace code/tool output. No font or theme asset needs a third-party
-request at runtime.
+Shared typography uses 12/14/16/20/24/40px levels in rem. Body copy uses `MONO 0` and a 1.65 line
+height; headings and chrome use `MONO 1`. CASL stays at its default. The compact welcome uses 24px,
+and the full welcome uses 40px. Message and composer widths share a 48rem maximum. Spacing follows a
+4px scale, and controls grow from minimum heights as browser font preferences change.
 
-Motion uses lazily loaded Motion animation/gesture features and colocated CSS. The welcome reveals
-in stages with a slow decorative orbit; controls have spring feedback, live messages enter gently,
-and tool statuses and send/queue icons ease between states. Native disclosures animate their height
-where `interpolate-size` and `::details-content` are supported and open instantly elsewhere. History
-does not animate on entry, and message links open disclosures instantly before scrolling. A content
-resize observer keeps readers at the bottom only while they are following the latest message.
-
-Active work floats gently above a breathing pastel glow: Mauve for thinking and Blue for tool calls.
-Progress remains visible with the accordion closed. Motion animates Recursive's Casual, Weight and
-Slant axes on short activity labels, the welcome heading and control hover/focus. The Monospace axis
-stays at Sans and cursive alternates stay off, preserving label widths and legibility. Transcript
-copy, code and input text keep their reading styles. Effects settle when work ends and become static
-when reduced motion is enabled.
-
-Theme changes use a circular native View Transition from the theme button, with an immediate
-fallback. `prefers-reduced-motion` disables entrance, gesture, disclosure, decoration, theme and
-smooth-scroll effects; changing that preference while the app is open also takes effect. Browser
-regressions cover that behavior, theme fallback, keyboard disclosures and scroll stability during
-live updates.
+The app shell provides the named `app` size container. Modules fold navigation below 48rem. Short
+viewports hide the composer footer; long drafts scroll within the composer. Browser tests cover both
+themes at 390px and 1280px, doubled text, keyboard access, disclosures and scroll stability. Motion
+is limited to short welcome reveals and user interactions; the mark and working status stay still.
+Reduced motion disables transitions and reveals, including when the preference changes while the app
+is open. Theme changes retain the native View Transition with an immediate fallback.

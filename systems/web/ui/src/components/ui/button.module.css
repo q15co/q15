@@ -4,7 +4,10 @@
   align-items: center;
   justify-content: center;
   gap: var(--space-2);
-  border-radius: 12px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-md);
+  font-variation-settings: var(--font-machine);
+  line-height: var(--leading-ui);
   font-size: var(--font-sm);
   font-weight: 500;
   white-space: nowrap;
@@ -12,9 +15,10 @@
     background-color var(--motion-fast),
     color var(--motion-fast);
 }
-:where(.button:disabled) {
+.button:disabled {
   pointer-events: none;
-  opacity: 0.4;
+  background: var(--surface);
+  color: var(--disabled);
 }
 :where(.button) svg {
   pointer-events: none;
@@ -27,21 +31,23 @@
   color: var(--primary-foreground);
 }
 :where(.default:hover) {
-  background: color-mix(in srgb, var(--primary) 85%, transparent);
+  background: var(--primary);
 }
 :where(.ghost) {
   color: var(--muted-foreground);
 }
 :where(.ghost:hover) {
-  background: var(--accent);
   color: var(--foreground);
 }
 :where(.outline) {
-  border: 1px solid var(--border);
-  background: var(--background);
+  border: 1px solid var(--hairline);
+  background: var(--surface);
 }
-:where(.outline:hover) {
-  background: var(--accent);
+:where(.button:hover) {
+  border-color: var(--disabled);
+}
+:where(.default:active) {
+  color: var(--crust);
 }
 :where(.sizedefault) {
   min-height: 44px;

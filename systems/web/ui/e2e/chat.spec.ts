@@ -686,7 +686,7 @@ test("live work stays closed by default and tool updates preserve the reader's c
     }),
   );
   const activity = page.locator("[data-agent-activity]");
-  await expect(page.getByText("Thinking…", { exact: true })).toBeVisible();
+  await expect(page.getByText("Thinking", { exact: true })).toBeVisible();
   await expect(activity).not.toHaveAttribute("open");
   required(deliver)(
     frame("delta", {
@@ -707,7 +707,7 @@ test("live work stays closed by default and tool updates preserve the reader's c
       seq: "2",
     }),
   );
-  await expect(page.getByText("Using tools…", { exact: true })).toBeVisible();
+  await expect(page.getByText("Using tools", { exact: true })).toBeVisible();
   await expect(activity).not.toHaveAttribute("open");
   await expect(page.getByText("Running command", { exact: true })).toBeHidden();
   await activity.locator(":scope > summary").press("Enter");
@@ -867,15 +867,14 @@ test("motion follows a changed accessibility preference and themes have a native
       }),
   );
   expect(afterRapidToggle).toBe("mocha");
-  await expect
-    .poll(() =>
-      page.evaluate(
-        () =>
-          document.getAnimations().filter((a) => a.effect?.getTiming().iterations === Infinity)
-            .length,
-      ),
-    )
-    .toBeGreaterThan(0);
+  expect(
+    await page.evaluate(
+      () =>
+        document
+          .getAnimations()
+          .filter((animation) => animation.effect?.getTiming().iterations === Infinity).length,
+    ),
+  ).toBe(0);
   await page.emulateMedia({ reducedMotion: "reduce" });
   await expect.poll(() => page.evaluate(() => document.getAnimations().length)).toBe(0);
   // Reduced motion must bypass the snapshot effect, including on theme changes.
@@ -907,7 +906,7 @@ test("motion follows a changed accessibility preference and themes have a native
             .length,
       ),
     )
-    .toBeGreaterThan(0);
+    .toBe(0);
   await page.evaluate(() =>
     Object.defineProperty(document, "startViewTransition", { value: undefined }),
   );
@@ -1081,9 +1080,7 @@ for (const viewport of [
     await page.screenshot({ path: `test-results/answer-top-${viewport.name}.png` });
   });
 
-test("working status uses one surface and a stationary pulse that respects reduced motion", async ({
-  page,
-}) => {
+test("working status stays still in both motion preferences", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "no-preference" });
   let deliver: ((value: Frame) => void) | undefined;
   await backend(page, undefined, (send) => {
@@ -1095,7 +1092,7 @@ test("working status uses one surface and a stationary pulse that respects reduc
   await page.getByLabel("Send message", { exact: true }).click();
   const activity = page.locator("[data-agent-activity]");
   const summary = activity.locator(":scope > summary");
-  const label = summary.getByText("Thinking…", { exact: true });
+  const label = summary.getByText("Thinking", { exact: true });
   const icon = summary.locator("svg").first();
   await expect(activity).not.toHaveAttribute("open");
   await expect(activity).toHaveAttribute("data-phase", "thinking");
@@ -1104,9 +1101,7 @@ test("working status uses one surface and a stationary pulse that respects reduc
     width: node.getBoundingClientRect().width,
     top: node.getBoundingClientRect().top,
   }));
-  await expect
-    .poll(() => icon.evaluate((node) => Number(getComputedStyle(node).opacity)))
-    .toBeLessThan(0.9);
+  await expect(icon).toHaveCSS("opacity", "1");
   expect(await label.evaluate((node) => getComputedStyle(node).fontVariationSettings)).toBe(
     before.axes,
   );
@@ -1121,7 +1116,7 @@ test("working status uses one surface and a stationary pulse that respects reduc
   await expect
     .poll(() => label.locator("..").evaluate((node) => getComputedStyle(node).transform))
     .toBe("none");
-  await expect(summary).toHaveCSS("border-top-width", "0px");
+  await expect(summary).toHaveCSS("border-top-width", "1px");
   await expect(summary).toHaveCSS("box-shadow", "none");
   expect(await summary.evaluate((node) => getComputedStyle(node, "::before").content)).toBe("none");
   await page.screenshot({ path: "test-results/activity-thinking.png" });
@@ -1146,7 +1141,7 @@ test("working status uses one surface and a stationary pulse that respects reduc
   required(deliver)(frame("delta", { msg, kind: "tool_call", text: "", call, seq: "1" }));
   await expect(activity).toHaveAttribute("data-phase", "tool");
   await expect(activity).not.toHaveAttribute("open");
-  await expect(page.getByText("Using tools…", { exact: true })).toBeVisible();
+  await expect(page.getByText("Using tools", { exact: true })).toBeVisible();
   await page.screenshot({ path: "test-results/activity-tools.png" });
   await page.getByRole("button", { name: /Switch to .* theme/u }).click();
   await page.setViewportSize({ width: 390, height: 844 });
@@ -1160,7 +1155,7 @@ test("working status uses one surface and a stationary pulse that respects reduc
             .length,
       ),
     )
-    .toBeGreaterThan(0);
+    .toBe(0);
   await summary.press("Enter");
   await expect(page.getByText("Running command", { exact: true })).toBeVisible();
   required(deliver)(
@@ -1404,3 +1399,155 @@ test("uploads on send, renders a resized image and preserves sealed media across
   await expect(page.getByText("report.pdf", { exact: true })).toBeVisible();
   expect(uploads).toBe(1);
 });
+
+for (const theme of ["mocha", "latte"]) {
+  for (const width of [390, 1280]) {
+    test(`design system: ${theme} at ${width}px`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await page.emulateMedia({
+        colorScheme: theme === "mocha" ? "dark" : "light",
+        reducedMotion: "reduce",
+      });
+      await backend(page);
+      await page.goto("/");
+      await expect(page.getByRole("heading", { name: "Start a conversation" })).toBeVisible();
+      await expect(page.getByRole("img", { name: "q15", exact: true }).last()).toBeVisible();
+      await page.evaluate(() => document.fonts.ready);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+        true,
+      );
+      const heading = page.getByRole("heading", { name: "Start a conversation" });
+      await expect(heading).toHaveCSS("font-variation-settings", '"MONO" 1');
+      await expect(heading).toHaveCSS("font-size", width === 390 ? "24px" : "40px");
+      await expect(page.getByLabel("Message q15")).toHaveCSS("font-variation-settings", '"MONO" 0');
+      await expect(page.getByRole("button", { name: "Send message", exact: true })).toBeDisabled();
+      await page.getByLabel("Message q15").focus();
+      await expect(page.getByLabel("Message q15").locator("..")).toHaveCSS("outline-width", "2px");
+      await page.screenshot({ path: `test-results/design-${theme}-${width}-welcome.png` });
+      if (width === 390) {
+        await page.getByLabel("Open navigation").click();
+        await page.screenshot({ path: `test-results/design-${theme}-${width}-sidebar.png` });
+        await page.getByRole("complementary").getByLabel("Close navigation").click();
+      }
+
+      const history: Page = {
+        turns: [
+          {
+            seq: "1",
+            created_at: "2026-10-31T12:00:00Z",
+            messages: [
+              {
+                ordinal: 0,
+                role: "user",
+                parts: [{ ordinal: 0, part_type: "text", text: "Check the local stack" }],
+              },
+              {
+                ordinal: 1,
+                role: "assistant",
+                parts: [
+                  {
+                    ordinal: 0,
+                    part_type: "tool_call",
+                    tool_call: {
+                      id: "ok",
+                      name: "exec",
+                      arguments: '{"command":"docker compose ps"}',
+                    },
+                  },
+                  {
+                    ordinal: 1,
+                    part_type: "tool_result",
+                    tool_call_id: "ok",
+                    content: "Services are healthy",
+                  },
+                  {
+                    ordinal: 2,
+                    part_type: "tool_call",
+                    tool_call: {
+                      id: "failed",
+                      name: "web_fetch",
+                      arguments: '{"url":"https://example.invalid"}',
+                    },
+                  },
+                  {
+                    ordinal: 3,
+                    part_type: "tool_result",
+                    tool_call_id: "failed",
+                    is_error: true,
+                    content: "Page unavailable. Check the URL and try again.",
+                  },
+                  {
+                    ordinal: 4,
+                    part_type: "tool_call",
+                    tool_call: { id: "waiting", name: "exec", arguments: '{"command":"pwd"}' },
+                  },
+                ],
+              },
+              {
+                ordinal: 2,
+                role: "assistant",
+                parts: [
+                  {
+                    ordinal: 0,
+                    part_type: "text",
+                    text: "The local stack is running.\n\n```sh\ndocker compose ps\n```",
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+        head_seq: "1",
+        has_more: false,
+      };
+      await backend(page, history);
+      await page.reload();
+      const activity = page.locator("[data-agent-activity] > summary");
+      await activity.click();
+      await expect(page.getByText("Completed", { exact: true })).toBeVisible();
+      await expect(page.getByText("Failed", { exact: true })).toBeVisible();
+      for (const label of ["Completed", "Failed", "No result"]) {
+        const status = page.getByText(label, { exact: true });
+        const contrast = await status.evaluate((node) => {
+          // The function runs in the browser, so it cannot use a Node-scope helper.
+          // oxlint-disable-next-line unicorn/consistent-function-scoping
+          const luminance = (rgb: string) => {
+            const channels =
+              rgb
+                .match(/\d+/gu)
+                ?.slice(0, 3)
+                .map((value) => {
+                  const n = Number(value) / 255;
+                  return n <= 0.04045 ? n / 12.92 : ((n + 0.055) / 1.055) ** 2.4;
+                }) ?? [];
+            return (
+              (channels[0] ?? 0) * 0.2126 +
+              (channels[1] ?? 0) * 0.7152 +
+              (channels[2] ?? 0) * 0.0722
+            );
+          };
+          let background = "";
+          let element: Element | null = node;
+          while (element !== null) {
+            background = getComputedStyle(element).backgroundColor;
+            if (background !== "rgba(0, 0, 0, 0)") break;
+            element = element.parentElement;
+          }
+          const fg = luminance(getComputedStyle(node).color);
+          const bg = luminance(background);
+          return (Math.max(fg, bg) + 0.05) / (Math.min(fg, bg) + 0.05);
+        });
+        expect(contrast).toBeGreaterThanOrEqual(4.5);
+        await expect(status).toHaveCSS("font-variation-settings", '"MONO" 1');
+      }
+      await page.screenshot({ path: `test-results/design-${theme}-${width}-transcript.png` });
+      await page.route("http://127.0.0.1:4173/auth/session", (route) =>
+        route.fulfill({ status: 401 }),
+      );
+      await page.reload();
+      await expect(page.getByRole("heading", { name: "Sign in to q15" })).toBeVisible();
+      await page.evaluate(() => document.fonts.ready);
+      await page.screenshot({ path: `test-results/design-${theme}-${width}-login.png` });
+    });
+  }
+}

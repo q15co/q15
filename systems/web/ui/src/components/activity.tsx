@@ -186,8 +186,8 @@ export function TurnView({
   const status = messages.findLast((m) => (m.status ?? "") !== "")?.status;
   const label = working
     ? usingTool
-      ? "Using tools…"
-      : "Thinking…"
+      ? "Using tools"
+      : "Thinking"
     : status === "aborted"
       ? "Work stopped"
       : status === "failed"
@@ -271,7 +271,7 @@ export function TurnView({
                   ),
                 )}
                 {working && activity.length === 0 && (
-                  <span className={styles.noResult}>q15 is thinking…</span>
+                  <span className={styles.noResult}>Waiting for response</span>
                 )}
               </div>
             </details>

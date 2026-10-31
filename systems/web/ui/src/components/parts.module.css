@@ -1,8 +1,8 @@
 .partCard {
   --subtext: var(--foreground);
   margin: var(--space-2) 0 var(--space-3);
-  border: 1px solid var(--border);
-  border-radius: 9px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
   background: var(--surface);
   overflow: hidden;
 }
@@ -26,7 +26,7 @@
   transform: rotate(180deg);
 }
 .partCard .partContent {
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--hairline);
   padding: var(--space-3) var(--space-4);
   margin: 0;
   white-space: pre-wrap;
@@ -39,7 +39,7 @@
   color: var(--primary);
 }
 .partDivider {
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--hairline);
 }
 .reasoning .partContent {
   color: var(--foreground);
@@ -72,9 +72,9 @@
   display: flex;
   align-items: flex-start;
   gap: var(--space-3);
-  border: 1px solid var(--border);
+  border: 1px solid var(--hairline);
   padding: var(--space-4);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
 }
 .mediaReference strong {
   display: block;
@@ -84,4 +84,10 @@
   display: block;
   font-size: var(--font-sm);
   color: var(--muted-foreground);
+}
+
+.partCard summary,
+.mediaReference {
+  font-variation-settings: var(--font-machine);
+  line-height: var(--leading-ui);
 }

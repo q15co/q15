@@ -4,49 +4,16 @@
   padding-bottom: var(--space-6);
 }
 .welcomeMark {
-  position: relative;
-  display: grid;
-  place-items: center;
-  width: var(--space-12);
-  height: var(--space-12);
   margin-bottom: var(--space-6);
-  border: 1px solid color-mix(in srgb, var(--primary) 30%, var(--border));
-  border-radius: var(--space-4);
-  color: var(--primary);
-  background: var(--surface);
-}
-.welcomeMark > svg {
-  width: var(--space-6);
-  height: var(--space-6);
-  animation: sparkle 5s ease-in-out infinite;
-}
-.orbit,
-.satellite {
-  position: absolute;
-  pointer-events: none;
-  border-radius: 50%;
-}
-.orbit {
-  inset: -8px;
-  border: 1px dashed color-mix(in srgb, var(--primary) 25%, transparent);
-  animation: orbit 30s linear infinite;
-}
-.satellite {
-  width: 5px;
-  height: 5px;
-  top: 2px;
-  right: 9px;
-  background: var(--blue);
-  box-shadow: 0 0 10px color-mix(in srgb, var(--blue) 40%, transparent);
 }
 .welcome h1 {
   color: var(--foreground);
   font-size: var(--font-3xl);
-  font-weight: 500;
-  line-height: var(--leading-heading);
-  letter-spacing: -0.035em;
+  font-weight: 600;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
   margin: 0 0 var(--space-6);
-  font-variation-settings: "CASL" 0.5;
+  font-variation-settings: var(--font-machine);
 }
 .suggestions {
   display: grid;
@@ -59,8 +26,8 @@
   gap: var(--space-3);
   min-height: var(--space-12);
   padding: var(--space-3) var(--space-4);
-  border: 1px solid var(--border);
-  border-radius: 0.625rem;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-md);
   background: var(--surface);
   text-align: left;
   font-size: var(--font-sm);
@@ -74,28 +41,15 @@
 }
 .suggestions button:not(:disabled):hover {
   color: var(--foreground);
-  border-color: var(--primary);
-}
-@keyframes sparkle {
-  0%,
-  100% {
-    transform: translateY(0) rotate(-4deg);
-  }
-  50% {
-    transform: translateY(-3px) rotate(4deg);
-  }
-}
-@keyframes orbit {
-  to {
-    transform: rotate(360deg);
-  }
+  border-color: var(--disabled);
 }
 @container app (max-width: 48rem) {
   .welcome {
     margin-top: var(--space-6);
   }
   .welcome h1 {
-    font-size: var(--font-2xl);
+    font-size: var(--font-xl);
+    line-height: var(--leading-heading);
   }
   .welcomeMark {
     margin-bottom: var(--space-5);
@@ -105,4 +59,9 @@
   .welcome {
     margin-top: var(--space-4);
   }
+}
+
+.suggestions {
+  font-variation-settings: var(--font-machine);
+  line-height: var(--leading-ui);
 }

@@ -132,7 +132,7 @@ describe("composer attachments", () => {
     });
     pick(new File(["file"], "held.txt"));
     fireEvent.click(screen.getByLabelText("Send message"));
-    expect(screen.getByText("Uploading…")).toBeDefined();
+    expect(screen.getByText("Uploading")).toBeDefined();
     fireEvent.submit(required(document.querySelector("form")));
     expect(upload).toHaveBeenCalledOnce();
     events.connection("offline");
