@@ -47,19 +47,19 @@ it("shares themes and requires an explicit authenticator action", async () => {
 
 it("returns enrollment proof for the host command, clearing the pasted options", async () => {
   const authentication = setup();
-  fireEvent.click(screen.getByText("Enroll from Hermes", { exact: true }));
-  fireEvent.change(screen.getByLabelText("Options from Hermes"), {
+  fireEvent.click(screen.getByText("Enroll on the host", { exact: true }));
+  fireEvent.change(screen.getByLabelText("Options from the host"), {
     target: { value: '{"publicKey":{}}' },
   });
   fireEvent.click(screen.getByRole("button", { name: "Create device credential" }));
   await waitFor(() =>
-    expect(screen.getByLabelText("Response to paste into Hermes")).toHaveProperty(
+    expect(screen.getByLabelText("Response to paste into the host")).toHaveProperty(
       "value",
       '{"id":"public"}',
     ),
   );
   expect(authentication.createCredential).toHaveBeenCalledWith('{"publicKey":{}}');
-  expect(screen.getByLabelText("Options from Hermes")).toHaveProperty("value", "");
+  expect(screen.getByLabelText("Options from the host")).toHaveProperty("value", "");
 });
 
 it("surfaces authenticator errors and cancellation for sign-in and enrollment", async () => {
@@ -68,17 +68,25 @@ it("surfaces authenticator errors and cancellation for sign-in and enrollment", 
     authentication.signIn.mockRejectedValueOnce(error);
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
     expect(
-      await screen.findByText(error instanceof Error ? error.message : "Sign-in failed."),
+      await screen.findByText(
+        error instanceof Error
+          ? error.message
+          : "Sign-in failed. The authenticator returned no response. Try your device or security key again.",
+      ),
     ).toBeDefined();
   }
-  fireEvent.click(screen.getByText("Enroll from Hermes", { exact: true }));
-  fireEvent.change(screen.getByLabelText("Options from Hermes"), { target: { value: "options" } });
+  fireEvent.click(screen.getByText("Enroll on the host", { exact: true }));
+  fireEvent.change(screen.getByLabelText("Options from the host"), {
+    target: { value: "options" },
+  });
   for (const error of [new Error("Device is synced"), "cancelled"]) {
     authentication.createCredential.mockRejectedValueOnce(error);
     fireEvent.click(screen.getByRole("button", { name: "Create device credential" }));
     expect(
       await screen.findByText(
-        error instanceof Error ? error.message : "Credential creation failed.",
+        error instanceof Error
+          ? error.message
+          : "Credential creation failed. The authenticator returned no credential. Check the options and try again.",
       ),
     ).toBeDefined();
   }

@@ -4,6 +4,7 @@
   min-height: 384px;
   container: app / size;
   overflow: hidden;
+  background: var(--page);
 }
 .sidebar {
   width: 272px;
@@ -11,33 +12,17 @@
   display: flex;
   flex-direction: column;
   background: var(--sidebar);
-  border-right: 1px solid var(--border);
+  border-right: 1px solid var(--hairline);
   padding: var(--space-6) var(--space-4) var(--space-5);
   min-height: 0;
   overflow-y: auto;
 }
 .brand {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  font-size: var(--font-xl);
-  font-weight: 700;
-  font-variation-settings: "CASL" 0.7;
-  flex-wrap: wrap;
-  margin: 0 var(--space-3) var(--space-8);
+  display: block;
+  margin-bottom: var(--space-8);
 }
-.brandIcon {
-  width: 36px;
-  height: 36px;
-  color: var(--primary);
-  display: grid;
-  place-items: center;
-  background: color-mix(in srgb, var(--primary) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--primary) 20%, transparent);
-  border-radius: 0.75rem;
-}
-.brandDot {
-  color: var(--primary);
+.brand > span {
+  width: 100%;
 }
 .sidebarLabel {
   font-size: var(--font-xs);
@@ -57,7 +42,7 @@
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   padding: var(--space-3);
   min-height: 44px;
   font-size: var(--font-sm);
@@ -71,16 +56,16 @@
   overflow-wrap: anywhere;
 }
 .navActive {
-  background: color-mix(in srgb, var(--primary) 9%, transparent);
-  color: var(--primary);
-  border: 1px solid color-mix(in srgb, var(--primary) 13%, transparent);
+  background: var(--surface);
+  color: var(--foreground);
+  border: 1px solid var(--hairline);
 }
 .navDot {
   flex: none;
   margin-left: auto;
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
   background: var(--primary);
 }
 .sidebarFooter {
@@ -89,14 +74,14 @@
   gap: var(--space-3);
   margin-top: auto;
   padding-top: var(--space-4);
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--hairline);
 }
 .connectionStatus {
   min-width: 0;
   overflow-wrap: anywhere;
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: var(--space-1);
   font-size: var(--font-xs);
   color: var(--muted-foreground);
 }
@@ -105,9 +90,9 @@
 }
 .statusDot {
   background: var(--green);
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
   display: inline-block;
   flex: none;
 }
@@ -119,10 +104,11 @@
   flex-direction: column;
   min-width: 0;
   flex: 1;
+  background: var(--background);
 }
 .topbar {
   min-height: 64px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--hairline);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -143,9 +129,9 @@
 .previewBadge {
   color: var(--foreground);
   background: color-mix(in srgb, var(--blue) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--blue) 35%, var(--border));
-  border-radius: 5px;
-  padding: 3px 7px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
   font-size: var(--font-xs);
 }
 .connectionBanner,
@@ -154,7 +140,7 @@
   align-items: center;
   gap: var(--space-3);
   padding: var(--space-3) var(--space-8);
-  background: color-mix(in srgb, var(--warning) 12%, transparent);
+  background: var(--status-warning-bg);
   color: var(--foreground);
   font-size: var(--font-sm);
 }
@@ -170,7 +156,8 @@
   margin-left: auto;
 }
 .errorBanner {
-  color: var(--destructive);
+  color: var(--status-error-text);
+  background: var(--status-error-bg);
 }
 .skipLink {
   position: fixed;
@@ -182,7 +169,7 @@
   font-size: var(--font-sm);
   background: var(--primary);
   color: var(--primary-foreground);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
 }
 .skipLink:focus {
   top: var(--space-5);
@@ -252,4 +239,12 @@
   .noticeBanner {
     padding-inline: var(--space-5);
   }
+}
+
+.sidebar,
+.topbar,
+.previewBadge,
+.connectionStatus {
+  font-variation-settings: var(--font-machine);
+  line-height: var(--leading-ui);
 }

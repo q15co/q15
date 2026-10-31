@@ -65,7 +65,11 @@ function MediaContent({ part, filename }: MediaProps) {
         </div>
       </div>
       {loaded && <InlineMedia kind={kind} media={loaded} />}
-      {error && <output className={styles.error}>Attachment unavailable.</output>}
+      {error && (
+        <output className={styles.error}>
+          Attachment unavailable. Reload the page to try again.
+        </output>
+      )}
       {loaded && (
         <a className={styles.download} href={loaded.url} download={loaded.filename}>
           <Download size={14} aria-hidden="true" />

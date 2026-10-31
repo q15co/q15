@@ -1,11 +1,11 @@
 import type { MotionProps } from "motion/react";
 
-import { Sparkles, ArrowUpRight } from "lucide-react";
+import { ArrowUpRight } from "lucide-react";
 import * as motion from "motion/react-m";
 
 import type { ChatStore } from "../application/chat-store";
 
-import { recursiveAxes } from "./ui/font-motion";
+import { Brand } from "./brand";
 import { useMotionPreference } from "./ui/motion-preference";
 
 import styles from "./welcome.module.css";
@@ -24,32 +24,10 @@ export function Welcome({ store, connected }: { store: ChatStore; connected: boo
     }) satisfies MotionProps;
   return (
     <div className={styles.welcome}>
-      <motion.div className={styles.welcomeMark} {...reveal(0)} aria-hidden="true">
-        <span className={styles.orbit}>
-          <span className={styles.satellite} />
-        </span>
-        <Sparkles />
-      </motion.div>
-      <motion.h1
-        {...reveal(0.08)}
-        animate={{
-          opacity: 1,
-          y: 0,
-          fontVariationSettings: reduced
-            ? recursiveAxes(0.5, 500)
-            : [recursiveAxes(0.5, 500), recursiveAxes(1, 540, -2.5), recursiveAxes(0.5, 500)],
-        }}
-        transition={{
-          ...reveal(0.08).transition,
-          fontVariationSettings: {
-            duration: reduced ? 0 : 8,
-            repeat: reduced ? 0 : Infinity,
-            ease: "easeInOut",
-          },
-        }}
-      >
-        Start a conversation
-      </motion.h1>
+      <div className={styles.welcomeMark}>
+        <Brand lockup />
+      </div>
+      <motion.h1 {...reveal(0.08)}>Start a conversation</motion.h1>
       <div className={styles.suggestions}>
         {["Help me think through an idea", "Explore something new", "Let's get something done"].map(
           (text, i) => (

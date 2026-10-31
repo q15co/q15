@@ -1,10 +1,6 @@
 .screen {
   min-height: 100dvh;
-  background: radial-gradient(
-    ellipse at 50% 30%,
-    color-mix(in srgb, var(--primary) 6%, transparent),
-    transparent 65%
-  );
+  background: var(--page);
   padding: var(--space-6);
 }
 .header {
@@ -15,30 +11,14 @@
   justify-content: space-between;
 }
 .brand {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  font-size: var(--font-xl);
-  font-weight: 650;
-}
-.brand svg,
-.brand span {
-  color: var(--primary);
+  display: block;
 }
 .card {
   width: min(100%, 30rem);
   margin: clamp(2rem, 12vh, 8rem) auto var(--space-8);
 }
-.icon {
-  display: inline-flex;
-  padding: var(--space-4);
-  color: var(--primary);
-  background: color-mix(in srgb, var(--primary) 9%, transparent);
-  border: 1px solid color-mix(in srgb, var(--primary) 20%, transparent);
-  border-radius: 1rem;
-}
 .card h1 {
-  font-size: var(--font-2xl);
+  font-size: var(--font-xl);
   line-height: var(--leading-heading);
   margin: var(--space-6) 0 var(--space-3);
 }
@@ -57,12 +37,12 @@
 .status {
   display: block;
   margin: var(--space-4) 0;
-  color: var(--primary);
+  color: var(--foreground);
 }
 .enrollment {
   margin-top: var(--space-8);
   padding-top: var(--space-6);
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--hairline);
 }
 .enrollment summary {
   display: flex;
@@ -81,9 +61,16 @@
   min-height: 6rem;
   margin: var(--space-2) 0 var(--space-3);
   padding: var(--space-3);
-  border: 1px solid var(--border);
-  border-radius: 0.5rem;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-md);
   color: var(--foreground);
-  background: var(--sidebar);
+  background: var(--surface);
   resize: vertical;
+}
+
+.status,
+.enrollment summary,
+.enrollment label {
+  font-variation-settings: var(--font-machine);
+  line-height: var(--leading-ui);
 }

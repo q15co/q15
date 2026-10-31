@@ -1,0 +1,44 @@
+[
+  {
+    "source": "favicon.svg",
+    "target": "public/icon.svg",
+    "sourceHash": "019c2d44390ffe050e8ae879509823b5da8888fb01910ca1d99a0dca75394209",
+    "outputHash": "019c2d44390ffe050e8ae879509823b5da8888fb01910ca1d99a0dca75394209"
+  },
+  {
+    "source": "q15-mark-mocha.svg",
+    "target": "src/components/brand/q15-mark-mocha.svg",
+    "sourceHash": "7093d3651da25bb0ffa8b31b1523f44e18d16912e0d30a53e3a7b43b3f41c361",
+    "outputHash": "7093d3651da25bb0ffa8b31b1523f44e18d16912e0d30a53e3a7b43b3f41c361"
+  },
+  {
+    "source": "q15-mark-latte.svg",
+    "target": "src/components/brand/q15-mark-latte.svg",
+    "sourceHash": "f66edeb272838d3759a6223785a996cd49df87bf233c55be2780723a873e5fc3",
+    "outputHash": "f66edeb272838d3759a6223785a996cd49df87bf233c55be2780723a873e5fc3"
+  },
+  {
+    "source": "q15-lockup-mocha.svg",
+    "target": "src/components/brand/q15-lockup-mocha.svg",
+    "sourceHash": "a3195c3b1f5dc6396e89a82c8fafed2ccef667ea54ceb1225fcd30b724febfce",
+    "outputHash": "a3195c3b1f5dc6396e89a82c8fafed2ccef667ea54ceb1225fcd30b724febfce"
+  },
+  {
+    "source": "q15-lockup-latte.svg",
+    "target": "src/components/brand/q15-lockup-latte.svg",
+    "sourceHash": "68bc5f00be0de5f2069d4fae0f4cdea6e72f05eb7fc789841f888a2186f81ff0",
+    "outputHash": "68bc5f00be0de5f2069d4fae0f4cdea6e72f05eb7fc789841f888a2186f81ff0"
+  },
+  {
+    "source": "q15-mark-mocha.svg",
+    "target": "public/icon-192.png",
+    "sourceHash": "7093d3651da25bb0ffa8b31b1523f44e18d16912e0d30a53e3a7b43b3f41c361",
+    "outputHash": "bd7ae867379ad832481ef67b8548c91ce90df59563e659fc2e688536f4ce7924"
+  },
+  {
+    "source": "q15-mark-mocha.svg",
+    "target": "public/icon-512.png",
+    "sourceHash": "7093d3651da25bb0ffa8b31b1523f44e18d16912e0d30a53e3a7b43b3f41c361",
+    "outputHash": "18f36ab9367def2b0a35b3f8eed2f38aaeb6a1c605280ae509a3095025fb7046"
+  }
+]

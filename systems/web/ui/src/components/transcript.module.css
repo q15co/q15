@@ -29,7 +29,8 @@
 }
 .latestButton {
   pointer-events: auto;
-  box-shadow: 0 3px 15px var(--crust);
+  background: var(--sidebar);
+  border: 1px solid var(--hairline);
 }
 @container app (max-width: 48rem) {
   .transcriptInner {

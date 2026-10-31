@@ -1,15 +1,5 @@
 import { clsx } from "clsx";
-import {
-  Sparkles,
-  MessageSquare,
-  Moon,
-  Sun,
-  Menu,
-  X,
-  Download,
-  WifiOff,
-  CircleAlert,
-} from "lucide-react";
+import { MessageSquare, Moon, Sun, Menu, X, Download, WifiOff, CircleAlert } from "lucide-react";
 import { AnimatePresence } from "motion/react";
 import * as motion from "motion/react-m";
 import { useEffect, useLayoutEffect, useState, useSyncExternalStore } from "react";
@@ -17,6 +7,7 @@ import { flushSync } from "react-dom";
 
 import type { ChatStore } from "./application/chat-store";
 
+import { Brand } from "./components/brand";
 import { Composer } from "./components/composer";
 import { MediaContext } from "./components/media-context";
 import { Transcript } from "./components/transcript";
@@ -110,12 +101,7 @@ export function App({
         aria-label="Chat navigation"
       >
         <a className={styles.brand} href="/">
-          <span className={styles.brandIcon}>
-            <Sparkles size={19} />
-          </span>
-          <span>
-            q15<span className={styles.brandDot}>.</span>
-          </span>
+          <Brand lockup />
         </a>
         <Button
           className={styles.mobileClose}
@@ -147,7 +133,7 @@ export function App({
                 ? "Sign-in required"
                 : connected
                   ? "Connected"
-                  : "Reconnecting…"}
+                  : "Reconnecting"}
           </span>
           <Button
             variant="ghost"
@@ -224,7 +210,7 @@ export function App({
             ) : state.connection === "offline" ? (
               "Disconnected. Refresh to reconnect."
             ) : (
-              "Reconnecting to q15…"
+              "Reconnecting to q15"
             )}
           </output>
         )}

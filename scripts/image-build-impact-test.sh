@@ -46,6 +46,8 @@ assert_impact '{"agent":false,"exec":false,"proxy":false,"web":false,"ui":false}
 assert_impact '{"agent":false,"exec":false,"proxy":false,"web":true,"ui":true}' \
 	'systems/web/ui/src/app.tsx'
 assert_impact '{"agent":false,"exec":false,"proxy":false,"web":true,"ui":true}' \
+	'brand/svg/q15-mark-mocha.svg'
+assert_impact '{"agent":false,"exec":false,"proxy":false,"web":true,"ui":true}' \
 	'docker/web.Dockerfile' \
 	'scripts/tool-versions.sh'
 assert_impact '{"agent":false,"exec":false,"proxy":false,"web":false,"ui":true}' \

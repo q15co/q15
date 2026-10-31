@@ -5,7 +5,7 @@
   scroll-margin: var(--space-10);
 }
 .message:target {
-  border-radius: var(--space-3);
+  border-radius: var(--radius-lg);
   outline: 1px solid var(--primary);
   outline-offset: var(--space-3);
 }
@@ -26,14 +26,14 @@
 .userMessage .messageBody {
   --subtext: var(--foreground);
   color: var(--foreground);
-  background: color-mix(in srgb, var(--primary) 18%, var(--background));
-  border: 1px solid color-mix(in srgb, var(--primary) 45%, var(--border));
+  background: var(--surface);
+  border: 1px solid var(--hairline);
   padding: var(--space-3) var(--space-4);
   width: fit-content;
   max-width: 85%;
   min-width: 0;
   text-align: left;
-  border-radius: var(--space-3) var(--space-1) var(--space-3) var(--space-3);
+  border-radius: var(--radius-lg);
 }
 .messageActions {
   display: flex;
@@ -59,8 +59,8 @@
 .modelTag {
   font-size: var(--font-xs);
   color: var(--muted-foreground);
-  border: 1px solid var(--border);
-  border-radius: var(--space-2);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-md);
   padding: 1px var(--space-2);
   max-width: 16rem;
   overflow: hidden;
@@ -87,14 +87,15 @@
 }
 .messageActions .failed,
 .failed {
-  color: var(--destructive);
+  color: var(--status-error-text);
+  background: var(--status-error-bg);
 }
 .pendingText {
   white-space: pre-wrap;
 }
 .messageActions button[data-copied] {
   color: var(--foreground);
-  background: color-mix(in srgb, var(--green) 12%, transparent);
+  background: var(--status-success-bg);
 }
 .messageActions button[data-copied] svg {
   color: var(--green);
@@ -112,4 +113,11 @@
   .userMessage .messageBody {
     max-width: calc(100% - var(--space-6));
   }
+}
+
+.messageActions,
+.pendingLabel,
+.messageMeta {
+  font-variation-settings: var(--font-machine);
+  line-height: var(--leading-ui);
 }

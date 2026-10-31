@@ -1,4 +1,5 @@
 .root {
+  font-variation-settings: var(--font-machine);
   margin: 0;
   padding: var(--space-3) var(--space-5);
   max-height: 18rem;
@@ -24,7 +25,7 @@
 .nested {
   margin: var(--space-2) 0;
   padding-left: var(--space-4);
-  border-left: 2px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-left: 1px solid var(--hairline);
 }
 .field {
   display: contents;
@@ -32,7 +33,7 @@
 .key {
   font-family: "Recursive Variable", monospace;
   font-size: var(--font-xs);
-  color: var(--blue);
+  color: var(--foreground);
   min-width: 0;
   overflow-wrap: anywhere;
 }
@@ -44,8 +45,9 @@
 .shell {
   margin: 0;
   padding: var(--space-2) var(--space-3);
-  border-radius: 0.5rem;
-  background: var(--crust);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  border: 1px solid var(--hairline);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font-family: "Recursive Variable", monospace;
@@ -54,8 +56,9 @@
 .block {
   margin: 0;
   padding: var(--space-2) var(--space-3);
-  border-radius: 0.5rem;
-  background: var(--crust);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  border: 1px solid var(--hairline);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font-family: "Recursive Variable", monospace;
@@ -80,9 +83,9 @@
   align-items: center;
   max-width: 100%;
   padding: var(--space-1) var(--space-2);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--surface) 70%, transparent);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-full);
+  background: var(--surface);
   color: var(--subtext);
   font-family: "Recursive Variable", monospace;
   font-size: var(--font-xs);
@@ -99,16 +102,16 @@
   max-width: 100%;
 }
 .chip[data-kind="string"] {
-  color: var(--green);
+  color: var(--syntax-string);
 }
 .chip[data-kind="number"] {
-  color: var(--warning);
+  color: var(--syntax-number);
 }
 .chip[data-kind="boolean"] {
-  color: var(--sapphire);
+  color: var(--syntax-flag);
 }
 .chip[data-kind="null"] {
-  color: var(--overlay);
+  color: var(--muted-foreground);
   font-style: italic;
 }
 .items {
@@ -120,15 +123,15 @@
 }
 .item {
   padding: var(--space-1) 0 var(--space-1) var(--space-3);
-  border-left: 2px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-left: 1px solid var(--hairline);
 }
 .more {
   align-self: center;
-  color: var(--overlay);
+  color: var(--muted-foreground);
   font-size: var(--font-xs);
 }
 .empty {
-  color: var(--overlay);
+  color: var(--muted-foreground);
   font-size: var(--font-xs);
   font-style: italic;
 }
@@ -137,23 +140,23 @@
   font-weight: 600;
 }
 .flag {
-  color: var(--sapphire);
+  color: var(--syntax-flag);
 }
 .string {
-  color: var(--green);
+  color: var(--syntax-string);
 }
 .variable {
-  color: var(--maroon);
+  color: var(--syntax-variable);
 }
 .operator {
-  color: var(--overlay);
+  color: var(--muted-foreground);
 }
 .comment {
-  color: var(--overlay);
+  color: var(--muted-foreground);
   font-style: italic;
 }
 .number {
-  color: var(--warning);
+  color: var(--syntax-number);
 }
 .plain {
   color: var(--foreground);

@@ -1,9 +1,10 @@
-import { Fingerprint, KeyRound, Sparkles, Moon, Sun, ArrowRight } from "lucide-react";
+import { KeyRound, Moon, Sun, ArrowRight } from "lucide-react";
 import { useLayoutEffect, useState } from "react";
 
 import type { OwnerAuthentication } from "../application/auth";
 
 import { applyTheme, initialTheme } from "../theme";
+import { Brand } from "./brand";
 import { Button } from "./ui/button";
 
 import styles from "./login.module.css";
@@ -17,24 +18,32 @@ export function Login({ authentication }: { authentication: OwnerAuthentication 
   useLayoutEffect(() => applyTheme(theme), [theme]);
   const signIn = async () => {
     setBusy(true);
-    setStatus("Waiting for your authenticator…");
+    setStatus("Waiting for authenticator");
     try {
       await authentication.signIn();
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Sign-in failed.");
+      setStatus(
+        error instanceof Error
+          ? error.message
+          : "Sign-in failed. The authenticator returned no response. Try your device or security key again.",
+      );
     } finally {
       setBusy(false);
     }
   };
   const enroll = async () => {
     setBusy(true);
-    setStatus("Waiting for your device or security key…");
+    setStatus("Waiting for device or security key");
     try {
       setResponse(await authentication.createCredential(options));
       setOptions("");
-      setStatus("Paste the response into the waiting command on Hermes, then sign in.");
+      setStatus("Paste the response into the waiting command on the host, then sign in.");
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Credential creation failed.");
+      setStatus(
+        error instanceof Error
+          ? error.message
+          : "Credential creation failed. The authenticator returned no credential. Check the options and try again.",
+      );
     } finally {
       setBusy(false);
     }
@@ -42,10 +51,9 @@ export function Login({ authentication }: { authentication: OwnerAuthentication 
   return (
     <main className={styles.screen}>
       <header className={styles.header}>
-        <span className={styles.brand}>
-          <Sparkles aria-hidden="true" size={22} />
-          q15<span>.</span>
-        </span>
+        <a className={styles.brand} href="/" aria-label="q15 home">
+          <Brand />
+        </a>
         <Button
           variant="ghost"
           size="icon"
@@ -56,10 +64,8 @@ export function Login({ authentication }: { authentication: OwnerAuthentication 
         </Button>
       </header>
       <section className={styles.card} aria-labelledby="signin-title">
-        <span className={styles.icon}>
-          <Fingerprint aria-hidden="true" size={32} />
-        </span>
-        <h1 id="signin-title">Your space, securely.</h1>
+        <Brand lockup />
+        <h1 id="signin-title">Sign in to q15</h1>
         <p>Sign in with your enrolled device or security key.</p>
         <Button
           className={styles.signin}
@@ -78,17 +84,17 @@ export function Login({ authentication }: { authentication: OwnerAuthentication 
         <details className={styles.enrollment}>
           <summary>
             <KeyRound aria-hidden="true" size={16} />
-            Enroll from Hermes
+            Enroll on the host
           </summary>
           <p>
-            Run <code>q15-web auth enroll DEVICE_NAME</code> on Hermes, then paste its options here.
-            Enrollment completes only on the host.
+            Run <code>q15-web auth enroll DEVICE_NAME</code> on the host, then paste its options
+            here. Enrollment completes only on the host.
           </p>
           <p className={styles.hint}>
             Use a device-bound authenticator or security key with a PIN. Synced credentials are
             refused.
           </p>
-          <label htmlFor="options">Options from Hermes</label>
+          <label htmlFor="options">Options from the host</label>
           <textarea
             id="options"
             value={options}
@@ -105,7 +111,7 @@ export function Login({ authentication }: { authentication: OwnerAuthentication 
           >
             Create device credential
           </Button>
-          <label htmlFor="response">Response to paste into Hermes</label>
+          <label htmlFor="response">Response to paste into the host</label>
           <textarea id="response" value={response} readOnly spellCheck={false} autoComplete="off" />
         </details>
       </section>

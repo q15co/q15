@@ -178,7 +178,7 @@ export function Composer({
             >
               <Paperclip />
             </Button>
-            {uploading && <output>Uploading…</output>}
+            {uploading && <output>Uploading</output>}
             {busy && (
               <motion.span
                 className={styles.stopControl}

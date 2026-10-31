@@ -70,7 +70,7 @@ describe("turn activity", () => {
     const agent = required(container.querySelector("[data-agent-turn]"));
     const activity = required(agent.querySelector("[data-agent-activity]"));
     expect([...agent.children]).toEqual([activity]);
-    expect(screen.getByText("Thinking…")).toBeDefined();
+    expect(screen.getByText("Thinking")).toBeDefined();
     const reasoning = {
       ...message(1, "assistant", [{ part_type: "reasoning", text: "Considering the request." }]),
       status: "streaming",
@@ -169,7 +169,7 @@ describe("turn activity", () => {
     const { container, rerender } = render(<TurnView messages={[required(history[1])]} working />);
     const activity = required(container.querySelector<HTMLDetailsElement>("[data-agent-activity]"));
     expect(activity.open).toBe(false);
-    expect(screen.getByText("Using tools…")).toBeDefined();
+    expect(screen.getByText("Using tools")).toBeDefined();
     expect(screen.getByText("Running command")).toBeDefined();
     activity.open = true;
     rerender(<TurnView messages={history} working={false} />);

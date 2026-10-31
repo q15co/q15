@@ -16,7 +16,7 @@
   font-weight: 600;
   line-height: var(--leading-heading);
   margin: var(--space-6) 0 var(--space-3);
-  letter-spacing: -0.015em;
+  letter-spacing: -0.02em;
 }
 .markdown h1 {
   font-size: var(--font-xl);
@@ -63,14 +63,14 @@
   font-size: 0.875em;
   background: var(--surface);
   padding: 0.125em 0.35em;
-  border-radius: var(--space-1);
+  border-radius: var(--radius-sm);
   color: var(--foreground);
 }
 .markdown pre {
-  background: var(--sidebar);
-  padding: var(--space-4);
-  border: 1px solid var(--border);
-  border-radius: 0.625rem;
+  background: var(--surface);
+  padding: var(--space-3);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-md);
   overflow: auto;
   margin: var(--space-5) 0;
   line-height: var(--leading-ui);
@@ -93,12 +93,12 @@
 .markdown td {
   text-align: left;
   padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--border);
+  border: 1px solid var(--hairline);
 }
 .markdown th {
   background: var(--surface);
 }
 .markdown img {
   max-width: 100%;
-  border-radius: var(--space-2);
+  border-radius: var(--radius-md);
 }

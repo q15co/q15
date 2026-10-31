@@ -15,6 +15,7 @@ RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
     test "$(node -p 'JSON.parse(require("fs").readFileSync("package.json")).packageManager')" = "pnpm@${PNPM_VERSION}"; \
     pnpm install --frozen-lockfile
 COPY systems/web/ui ./
+COPY brand/svg /src/brand/svg
 RUN set -eu; \
     pnpm build; \
     test -s /src/systems/web/internal/assets/dist/index.html

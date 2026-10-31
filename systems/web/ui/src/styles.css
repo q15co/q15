@@ -6,7 +6,6 @@
   --font-md: 1rem;
   --font-lg: 1.25rem;
   --font-xl: 1.5rem;
-  --font-2xl: 2rem;
   --font-3xl: 2.5rem;
   --leading-body: 1.65;
   --leading-ui: 1.5;
@@ -25,19 +24,39 @@
   --motion-normal: 240ms;
   --motion-slow: 420ms;
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --radius-none: 0;
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-full: 999px;
+  --font-human: "MONO" 0;
+  --font-machine: "MONO" 1;
   --background: #1e1e2e;
   --crust: #11111b;
   --foreground: #cdd6f4;
   --sidebar: #181825;
   --surface: #313244;
   --muted: #45475a;
-  --muted-foreground: #a6adc8;
+  --muted-foreground: #bac2de;
   --subtext: #bac2de;
   --overlay: #9399b2;
   --primary: #cba6f7;
   --primary-foreground: #1e1e2e;
   --accent: #313244;
-  --border: #313244;
+  --hairline: #3132448c;
+  --selection: #585b7040;
+  --disabled: #7f849c;
+  --page: var(--crust);
+  --status-success-bg: #364143;
+  --status-warning-bg: #454145;
+  --status-error-bg: #443244;
+  --status-success-text: var(--green);
+  --status-warning-text: var(--warning);
+  --status-error-text: var(--destructive);
+  --syntax-string: var(--green);
+  --syntax-number: var(--warning);
+  --syntax-flag: var(--sapphire);
+  --syntax-variable: var(--maroon);
   --ring: #cba6f7;
   --green: #a6e3a1;
   --destructive: #f38ba8;
@@ -62,7 +81,20 @@
   --primary: #8839ef;
   --primary-foreground: #eff1f5;
   --accent: #dce0e8;
-  --border: #ccd0da;
+  --hairline: #ccd0da8c;
+  --selection: #9ca0b040;
+  --disabled: #8c8fa1;
+  --page: var(--background);
+  --status-success-bg: #d0e2d1;
+  --status-warning-bg: #ecdfce;
+  --status-error-bg: #eac8d3;
+  --status-success-text: var(--foreground);
+  --status-warning-text: var(--foreground);
+  --status-error-text: var(--foreground);
+  --syntax-string: var(--foreground);
+  --syntax-number: var(--foreground);
+  --syntax-flag: var(--foreground);
+  --syntax-variable: var(--foreground);
   --ring: #8839ef;
   --green: #40a02b;
   --destructive: #d20f39;
@@ -81,11 +113,9 @@
   body {
     margin: 0;
     font-family: "Recursive Variable", sans-serif;
-    font-variation-settings:
-      "CASL" 0.2,
-      "MONO" 0;
+    font-variation-settings: var(--font-human);
     font-size: var(--font-md);
-    line-height: var(--leading-ui);
+    line-height: var(--leading-body);
     color: var(--foreground);
     caret-color: var(--rosewater);
     background: var(--background);
@@ -95,6 +125,7 @@
   textarea,
   input {
     font: inherit;
+    font-variation-settings: inherit;
   }
   button,
   a,
@@ -117,14 +148,31 @@
     outline-offset: 4px;
   }
   ::selection {
-    background: color-mix(in srgb, var(--overlay) 25%, transparent);
+    background: var(--selection);
+  }
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    font-variation-settings: var(--font-machine);
+    font-weight: 600;
+    line-height: var(--leading-heading);
+    letter-spacing: -0.02em;
+  }
+  button,
+  summary,
+  label,
+  time,
+  output {
+    font-variation-settings: var(--font-machine);
+    line-height: var(--leading-ui);
   }
   code,
   pre {
     font-family: "Recursive Variable", monospace;
-    font-variation-settings:
-      "MONO" 1,
-      "CASL" 0;
+    font-variation-settings: var(--font-machine);
     font-size: var(--font-sm);
   }
   h1,

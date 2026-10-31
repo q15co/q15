@@ -6,8 +6,8 @@
   padding: var(--space-3);
   margin-block: var(--space-2);
   min-width: 0;
-  border: 1px solid var(--muted);
-  border-radius: var(--space-3);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
   background: var(--sidebar);
   line-height: var(--leading-ui);
 }
@@ -22,7 +22,7 @@
   place-items: center;
   width: var(--space-10);
   height: var(--space-10);
-  border-radius: var(--space-2);
+  border-radius: var(--radius-md);
   background: var(--background);
 }
 .icon svg {
@@ -35,7 +35,7 @@
   max-width: 100%;
   max-height: 24rem;
   object-fit: contain;
-  border-radius: var(--space-2);
+  border-radius: var(--radius-md);
   background: var(--background);
 }
 .audio {
@@ -66,23 +66,29 @@
   gap: var(--space-2);
   min-height: 36px;
   padding: var(--space-2) var(--space-3);
-  border: 1px solid color-mix(in srgb, var(--blue) 30%, transparent);
-  border-radius: var(--space-2);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--blue) 10%, transparent);
-  color: var(--blue);
+  color: var(--foreground);
   font-size: var(--font-sm);
   font-weight: 500;
   transition: background-color var(--motion-fast);
 }
 .download:hover {
-  background: color-mix(in srgb, var(--blue) 20%, transparent);
+  border-color: var(--disabled);
 }
 .error {
-  color: var(--destructive);
+  color: var(--status-error-text);
+  background: var(--status-error-bg);
   font-size: var(--font-sm);
 }
 @media (pointer: coarse) {
   .download {
     min-height: 44px;
   }
+}
+
+.header,
+.download {
+  font-variation-settings: var(--font-machine);
 }

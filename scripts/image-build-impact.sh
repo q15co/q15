@@ -58,6 +58,7 @@ while IFS= read -r file; do
 
 	if matches_any "${file}" \
 		"systems/web/**" \
+		"brand/svg/**" \
 		"libs/chat-contract/**" \
 		".dockerignore" \
 		"go.work" \
@@ -69,6 +70,8 @@ while IFS= read -r file; do
 
 	if matches_any "${file}" \
 		"systems/web/ui/**" \
+		"brand/svg/**" \
+		"scripts/sync-ui-brand.py" \
 		"libs/chat-contract/browser/**" \
 		"scripts/tool-versions.sh" \
 		"scripts/project-setup.sh" \

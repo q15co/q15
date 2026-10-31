@@ -82,7 +82,7 @@ describe("attachment rendering", () => {
         <PartView part={part} />
       </MediaContext>,
     );
-    await screen.findByText("Attachment unavailable.");
+    await screen.findByText("Attachment unavailable. Reload the page to try again.");
     expect(screen.queryByRole("link", { name: "Download" })).toBeNull();
     let resolve: ((value: MediaObject) => void) | undefined;
     load.mockImplementation(
