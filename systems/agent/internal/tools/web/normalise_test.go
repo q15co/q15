@@ -50,6 +50,16 @@ func TestCanonicalURL(t *testing.T) {
 			want: "http://example.com:8080/a",
 		},
 		{
+			name: "preserves escaped path separators",
+			in:   "https://Example.COM/a%2Fb%2F?utm_source=news",
+			want: "https://example.com/a%2Fb%2F",
+		},
+		{
+			name: "preserves IPv6 brackets",
+			in:   "https://[2001:db8::1]:443/a",
+			want: "https://[2001:db8::1]/a",
+		},
+		{
 			name: "leaves non http urls alone",
 			in:   "mailto:someone@example.com",
 			want: "mailto:someone@example.com",
@@ -95,7 +105,7 @@ func TestNormaliseResultsDeduplicatesBeforeTruncating(t *testing.T) {
 		},
 	}
 
-	got := normaliseResults(results, "", 10)
+	got := normaliseResults(results, "", 10, maxExcerptRunes)
 	if len(got) != 2 {
 		t.Fatalf("normaliseResults() kept %d results, want 2: %+v", len(got), got)
 	}
@@ -108,7 +118,7 @@ func TestNormaliseResultsDeduplicatesBeforeTruncating(t *testing.T) {
 
 	// Truncation happens after dedupe, so a count of 2 is filled by two
 	// distinct sources rather than one source and its syndicated copy.
-	if trunc := normaliseResults(results, "", 2); len(trunc) != 2 {
+	if trunc := normaliseResults(results, "", 2, maxExcerptRunes); len(trunc) != 2 {
 		t.Fatalf("normaliseResults(count 2) kept %d results, want 2", len(trunc))
 	}
 }
@@ -121,6 +131,7 @@ func TestNormaliseResultsBoundsSnippetsFromAnyProvider(t *testing.T) {
 		[]Result{{Title: "t", URL: "https://example.com", Snippet: huge}},
 		"",
 		1,
+		maxExcerptRunes,
 	)
 	if len(got) != 1 {
 		t.Fatalf("kept %d results, want 1", len(got))
@@ -146,6 +157,7 @@ func TestNormaliseResultsWindowsAnOversizedSnippetByQuery(t *testing.T) {
 		[]Result{{Title: "Svelte runes", URL: "https://svelte.dev/docs/migration", Snippet: huge}},
 		"svelte runes migration guide",
 		1,
+		maxExcerptRunes,
 	)
 	if len(got) != 1 {
 		t.Fatalf("kept %d results, want 1", len(got))
@@ -159,6 +171,21 @@ func TestNormaliseResultsWindowsAnOversizedSnippetByQuery(t *testing.T) {
 	}
 	if strings.Contains(snippet, "On this page") {
 		t.Fatalf("snippet starts from the nav block: %q", snippet)
+	}
+}
+
+func TestExcerptHonorsSmallLimits(t *testing.T) {
+	t.Parallel()
+
+	for limit := 1; limit <= 3; limit++ {
+		got := excerpt(
+			"Leading prose with a matched passage and more prose.",
+			[]string{"matched"},
+			limit,
+		)
+		if n := len([]rune(got)); n > limit {
+			t.Errorf("excerpt(limit %d) = %q (%d runes)", limit, got, n)
+		}
 	}
 }
 

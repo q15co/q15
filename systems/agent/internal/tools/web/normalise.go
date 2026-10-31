@@ -103,6 +103,9 @@ func excerpt(text string, terms []string, limit int) string {
 	if len(runes) <= limit {
 		return text
 	}
+	if limit < 3 {
+		return truncateSnippet(text, limit)
+	}
 
 	// Reserve room for the ellipses inside the budget so the return value
 	// never exceeds limit runes.
@@ -337,9 +340,9 @@ func canonicalURL(raw string) string {
 		return raw
 	}
 
-	host := strings.ToLower(parsed.Hostname())
-	if port := parsed.Port(); port != "" && port != defaultPort(scheme) {
-		host = host + ":" + port
+	host := strings.ToLower(parsed.Host)
+	if port := parsed.Port(); port == defaultPort(scheme) {
+		host = strings.TrimSuffix(host, ":"+port)
 	}
 
 	query := parsed.Query()
@@ -349,18 +352,18 @@ func canonicalURL(raw string) string {
 		}
 	}
 
-	path := parsed.Path
-	if len(path) > 1 {
-		path = strings.TrimRight(path, "/")
-	}
-	if path == "/" {
-		path = ""
+	// Trim literal slashes without changing escaped separators in document IDs.
+	path := strings.TrimRight(parsed.EscapedPath(), "/")
+	decodedPath, err := url.PathUnescape(path)
+	if err != nil {
+		return raw
 	}
 
 	canonical := url.URL{
 		Scheme:   scheme,
 		Host:     host,
-		Path:     path,
+		Path:     decodedPath,
+		RawPath:  path,
 		RawQuery: query.Encode(),
 	}
 	return canonical.String()

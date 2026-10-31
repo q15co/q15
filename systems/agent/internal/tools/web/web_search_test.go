@@ -282,6 +282,31 @@ func firstLine(out string) string {
 	return out
 }
 
+func TestRenderResultsCountsOnlyCompleteResultsWithinBudget(t *testing.T) {
+	t.Parallel()
+
+	results := []Result{
+		{Title: "First", URL: "https://example.com/first", Snippet: "matched passage"},
+		{Title: strings.Repeat("大", maxRenderBytes), URL: "https://example.com/oversized"},
+	}
+	for _, results := range [][]Result{results, results[1:]} {
+		out := renderResults("ollama", reasonRotation, len(results), results, defaultSnippetChars)
+		if len(out) > maxRenderBytes {
+			t.Fatalf("output is %d bytes, maximum %d", len(out), maxRenderBytes)
+		}
+		want := fmt.Sprintf("ollama (rotation) · %d results", len(results)-1)
+		if header := firstLine(out); header != want {
+			t.Errorf("header = %q, want %q", header, want)
+		}
+		if !strings.Contains(out, fmt.Sprintf("requested %d", len(results))) {
+			t.Error("output does not report the requested result count")
+		}
+		if strings.Contains(out, "大") || !strings.Contains(out, "output truncated") {
+			t.Error("output should drop the oversized result and report truncation")
+		}
+	}
+}
+
 func TestSearchAttributesRotation(t *testing.T) {
 	t.Parallel()
 

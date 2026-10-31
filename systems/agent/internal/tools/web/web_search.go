@@ -394,7 +394,7 @@ func (s *Search) Run(ctx context.Context, arguments string) (string, error) {
 		results, err := p.provider.Search(ctx, SearchRequest{Query: query, Count: count})
 		if err == nil {
 			p.recordSuccess()
-			results = normaliseResults(results, query, count)
+			results = normaliseResults(results, query, count, snippetChars)
 			reason := attempt.reason
 			if priorCause != "" {
 				reason = fallbackReason(priorName, priorCause)
@@ -474,21 +474,20 @@ func (s *Search) order(start int) []selection {
 // than ten slots partly consumed by syndicated copies of one article. It
 // matches on the canonical URL, or on a near-identical title, because the same
 // article syndicated on two domains has two URLs and one title.
-func normaliseResults(results []Result, query string, count int) []Result {
+func normaliseResults(results []Result, query string, count, snippetChars int) []Result {
 	if count <= 0 {
 		count = defaultWebSearchCount
 	}
 	terms := queryTerms(query)
+	snippetChars = clamp(snippetChars, 1, maxExcerptRunes)
 	kept := make([]Result, 0, min(count, len(results)))
 	seenURL := make(map[string]struct{}, len(results))
 	for _, result := range results {
 		result.Title = cleanText(result.Title)
 		result.URL = canonicalURL(result.URL)
-		// Re-bound with the query terms, not a nil term set: an adapter that
-		// returns a document anyway is re-windowed onto its matched passage
-		// rather than onto its leading text, which is nav/TOC in every case
-		// this contract exists to fix.
-		result.Snippet = excerpt(result.Snippet, terms, maxExcerptRunes)
+		// Select again at the caller's budget: taking the first 300 runes of
+		// a 1200-rune excerpt can discard the matched passage entirely.
+		result.Snippet = excerpt(result.Snippet, terms, snippetChars)
 
 		if result.URL != "" {
 			if _, duplicate := seenURL[result.URL]; duplicate {
@@ -525,37 +524,34 @@ func renderResults(
 	results []Result,
 	snippetChars int,
 ) string {
-	var b strings.Builder
-
 	header := provider
 	if reason != "" {
 		header = fmt.Sprintf("%s (%s)", provider, reason)
 	}
-	fmt.Fprintf(&b, "%s · %d results\n", header, len(results))
-	if len(results) < requested {
-		fmt.Fprintf(&b, "requested %d\n", requested)
-	}
-
-	// The notice is reserved inside the ceiling, so the rendered response never
-	// exceeds maxRenderBytes however many results the provider sent.
+	// Reserve both the shortfall line and notice before selecting complete
+	// result blocks; the header must count the results that actually fit.
+	headerBudget := len(
+		fmt.Sprintf("%s · %d results\nrequested %d\n", header, len(results), requested),
+	)
 	notice := fmt.Sprintf("output truncated at %d bytes\n", maxRenderBytes)
+	var body strings.Builder
 	written := 0
 	for i, result := range results {
 		block := renderResult(i+1, result, snippetChars)
-		if b.Len()+len(block)+len(notice) > maxRenderBytes {
-			if written == 0 {
-				// Nothing but the header fitted: keep a bounded slice of this
-				// block rather than dropping the only result silently.
-				b.WriteString(truncateBytes(block, maxRenderBytes-b.Len()-len(notice)-2))
-				b.WriteString("\n")
-			}
-			b.WriteString(notice)
+		if headerBudget+body.Len()+len(block)+len(notice) > maxRenderBytes {
+			body.WriteString(notice)
 			break
 		}
-		b.WriteString(block)
+		body.WriteString(block)
 		written++
 	}
 
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s · %d results\n", header, written)
+	if written < requested {
+		fmt.Fprintf(&b, "requested %d\n", requested)
+	}
+	b.WriteString(body.String())
 	return strings.TrimRight(b.String(), "\n")
 }
 
@@ -586,21 +582,6 @@ func renderResult(n int, result Result, snippetChars int) string {
 		fmt.Fprintf(&b, "   published %s\n", result.Published.UTC().Format("2006-01-02"))
 	}
 	return b.String()
-}
-
-// truncateBytes cuts s to at most n bytes on a rune boundary.
-func truncateBytes(s string, n int) string {
-	if n <= 0 {
-		return ""
-	}
-	if len(s) <= n {
-		return s
-	}
-	s = s[:n]
-	for len(s) > 0 && !utf8.ValidString(s) {
-		s = s[:len(s)-1]
-	}
-	return s
 }
 
 func trimForError(s string, maxLen int) string {

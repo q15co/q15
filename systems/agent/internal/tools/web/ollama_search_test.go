@@ -156,3 +156,32 @@ func TestOllamaWebSearchBoundsHugeContent(t *testing.T) {
 		t.Fatalf("Snippet contains the leading nav/TOC block: %q", snippet)
 	}
 }
+
+func TestOllamaWebSearchRenderedExcerptKeepsMatchedPassage(t *testing.T) {
+	payload, err := json.Marshal(map[string]any{
+		"results": []map[string]string{{
+			"title":   "Svelte documentation",
+			"url":     "https://svelte.dev/docs/svelte/migration-guide",
+			"content": hugeOllamaContent(),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	tool, err := NewSearch([]Provider{ollamaTestProvider(t, payload)})
+	if err != nil {
+		t.Fatalf("NewSearch: %v", err)
+	}
+	for _, args := range []string{
+		`{"query":"svelte runes migration guide","count":1}`,
+		`{"query":"svelte runes migration guide","count":1,"snippet_chars":150}`,
+	} {
+		out, err := tool.Run(context.Background(), args)
+		if err != nil {
+			t.Fatalf("Run(%s): %v", args, err)
+		}
+		if !strings.Contains(out, "explicit runes") {
+			t.Errorf("Run(%s) lost the matched passage:\n%s", args, out)
+		}
+	}
+}
