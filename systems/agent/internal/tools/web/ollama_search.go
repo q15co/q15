@@ -114,14 +114,10 @@ func (o *OllamaWebSearch) Search(ctx context.Context, req SearchRequest) ([]Resu
 	results := make([]Result, 0, len(parsed.Results))
 	for _, item := range parsed.Results {
 		title := cleanText(item.Title)
-		// content is a page body, not a summary: drop the H1 the provider
-		// repeats under the title, then window it against the query so the
-		// matched passage is returned instead of the leading nav block.
-		body := stripTitleEcho(title, cleanText(item.Content))
 		results = append(results, Result{
 			Title:   title,
 			URL:     strings.TrimSpace(item.URL),
-			Snippet: excerpt(body, terms, maxExcerptRunes),
+			Snippet: documentExcerpt(title, item.Content, terms),
 		})
 	}
 	return results, nil

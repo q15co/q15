@@ -286,6 +286,7 @@ func (s *Search) Definition() agent.ToolDefinition {
 			"The header is provenance, not a quality score: rotation, idle, and fallback after <backend>: throttled say why that backend answered.",
 			"A header ending in \"0 results\" means the backend found nothing for the query, which is a normal outcome; a failed search returns an error instead.",
 			"After choosing a result, use web_fetch on the selected URL when you need the page contents.",
+			"Navigation-only pages may have a title and URL without an excerpt; follow the source when you need its contents.",
 		},
 		Parameters: map[string]any{
 			"type": "object",
