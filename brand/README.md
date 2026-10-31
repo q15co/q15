@@ -1,5 +1,10 @@
 # q15 brand
 
+| Document                 | Holds                                                       |
+| ------------------------ | ----------------------------------------------------------- |
+| [`DESIGN.md`](DESIGN.md) | The design system: palette, type, layout, shapes, voice     |
+| This file                | The asset inventory: which file to use, minimum size, build |
+
 One artwork, generated variants. Nothing in `svg/` or `png/` is hand-edited: every file comes from
 `source/q15-duck.svg` through `build.py`, so a change to the artwork or the palette regenerates the
 whole set consistently.
@@ -22,15 +27,10 @@ Catppuccin flavour.
 
 ## Colour
 
-The palette is [Catppuccin](https://catppuccin.com) v1.8.0. Do not introduce colours outside it, and
-do not substitute the nearest brand colour.
-
-| Role                | Mocha (dark)     | Latte (light)    |
-| ------------------- | ---------------- | ---------------- |
-| Duck body           | `#f9e2af` yellow | `#df8e1d` yellow |
-| Beak                | `#fab387` peach  | `#fe640b` peach  |
-| Waves               | `#89b4fa` blue   | `#1e66f5` blue   |
-| Wing, eye, wordmark | `#cdd6f4` text   | `#4c4f69` text   |
+The palette is [Catppuccin](https://catppuccin.com) v1.8.0, and the roles are defined in
+[`DESIGN.md`](DESIGN.md#colors). Do not introduce colours outside it, and do not substitute the
+nearest brand colour. `build.py` maps Mocha to Latte by role, so a new colour must be added to
+`MOCHA_TO_LATTE` before it can appear in the artwork.
 
 The eye highlight is `#ffffff` on Mocha and `#eff1f5` on Latte, kept distinct from the eye itself so
 the dot reads at small sizes.
