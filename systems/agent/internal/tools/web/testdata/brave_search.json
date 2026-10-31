@@ -1,0 +1,18 @@
+{
+  "web": {
+    "results": [
+      {
+        "title": "Go 1.26 Released &amp; Available",
+        "url": "https://go.dev/blog/go1.26?utm_source=newsletter&utm_medium=email#top",
+        "description": "Go 1.26 adds <strong>generic</strong> type aliases and a\n faster toolchain.",
+        "page_age": "2026-02-10T15:04:05"
+      },
+      {
+        "title": "Go 1.26 release notes",
+        "url": "https://go.dev/doc/go1.26/",
+        "description": "The release notes for Go 1.26.",
+        "page_age": ""
+      }
+    ]
+  }
+}

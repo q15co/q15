@@ -102,7 +102,10 @@ func TestOllamaWebSearchRequestAndResponse(t *testing.T) {
 	}
 	provider.baseURL = srv.URL
 
-	out, err := provider.Search(context.Background(), "golang testing", 5)
+	results, err := provider.Search(
+		context.Background(),
+		SearchRequest{Query: "golang testing", Count: 5},
+	)
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}
@@ -122,13 +125,21 @@ func TestOllamaWebSearchRequestAndResponse(t *testing.T) {
 		t.Errorf("max_results = %v, want 5", received["max_results"])
 	}
 
-	if !strings.Contains(out, "Results for: golang testing") {
-		t.Errorf("missing header in output:\n%s", out)
+	if len(results) != 2 {
+		t.Fatalf("results = %d, want 2", len(results))
 	}
-	if !strings.Contains(out, "https://example.com/one") || !strings.Contains(out, "snippet one") {
-		t.Errorf("missing first result in output:\n%s", out)
+	if results[0].URL != "https://example.com/one" || results[0].Snippet != "snippet one" {
+		t.Errorf("first result = %+v", results[0])
 	}
-	if !strings.Contains(out, "(untitled)") {
+	// A blank provider title stays blank in the contract; the renderer is what
+	// supplies the placeholder.
+	if results[1].Title != "" {
+		t.Errorf("blank title became %q, want empty", results[1].Title)
+	}
+	if out := renderResults("ollama", "rotation", 5, results, defaultSnippetChars); !strings.Contains(
+		out,
+		"(untitled)",
+	) {
 		t.Errorf("expected placeholder title for blank title:\n%s", out)
 	}
 }
@@ -148,10 +159,21 @@ func TestOllamaWebSearchErrorStatus(t *testing.T) {
 	}
 	provider.baseURL = srv.URL
 
-	if _, err := provider.Search(context.Background(), "query", 3); err == nil {
+	_, err = provider.Search(context.Background(), SearchRequest{Query: "query", Count: 3})
+	if err == nil {
 		t.Fatal("expected error on 429 response")
 	} else if !strings.Contains(err.Error(), "429") {
 		t.Fatalf("error should mention status: %v", err)
+	}
+}
+
+// fakeResult is one result attributed to a provider, used to trace which
+// backend answered without asserting on provider-specific content.
+func fakeResult(name string) Result {
+	return Result{
+		Title:   "result from " + name,
+		URL:     "https://example.com/" + name,
+		Snippet: "result from " + name,
 	}
 }
 
@@ -160,17 +182,17 @@ func TestOllamaWebSearchErrorStatus(t *testing.T) {
 type fakeProvider struct {
 	name string
 	min  time.Duration
-	run  func(ctx context.Context, query string, count int) (string, error)
+	run  func(ctx context.Context, req SearchRequest) ([]Result, error)
 }
 
 func (f fakeProvider) Name() string               { return f.name }
 func (f fakeProvider) MinInterval() time.Duration { return f.min }
 
-func (f fakeProvider) Search(ctx context.Context, query string, count int) (string, error) {
+func (f fakeProvider) Search(ctx context.Context, req SearchRequest) ([]Result, error) {
 	if f.run == nil {
-		return "from " + f.name, nil
+		return []Result{fakeResult(f.name)}, nil
 	}
-	return f.run(ctx, query, count)
+	return f.run(ctx, req)
 }
 
 // recordingTool builds a Search over injected providers.
@@ -196,11 +218,11 @@ func TestSearchRoundRobinsStartProvider(t *testing.T) {
 	makeProvider := func(name string) fakeProvider {
 		return fakeProvider{
 			name: name,
-			run: func(context.Context, string, int) (string, error) {
+			run: func(context.Context, SearchRequest) ([]Result, error) {
 				mu.Lock()
 				starts = append(starts, name)
 				mu.Unlock()
-				return "from " + name, nil
+				return []Result{fakeResult(name)}, nil
 			},
 		}
 	}
@@ -228,14 +250,14 @@ func TestSearchFallsBackOnProviderError(t *testing.T) {
 
 	failing := fakeProvider{
 		name: "failing",
-		run: func(context.Context, string, int) (string, error) {
-			return "", context.DeadlineExceeded
+		run: func(context.Context, SearchRequest) ([]Result, error) {
+			return nil, context.DeadlineExceeded
 		},
 	}
 	healthy := fakeProvider{
 		name: "healthy",
-		run: func(context.Context, string, int) (string, error) {
-			return "results from healthy", nil
+		run: func(context.Context, SearchRequest) ([]Result, error) {
+			return []Result{fakeResult("healthy")}, nil
 		},
 	}
 
@@ -244,16 +266,169 @@ func TestSearchFallsBackOnProviderError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected failover to succeed: %v", err)
 	}
-	if out != "results from healthy" {
-		t.Fatalf("out = %q", out)
+	if !strings.Contains(out, "result from healthy") {
+		t.Fatalf("out = %q, want the healthy provider's result", out)
+	}
+	if header := firstLine(out); header != "healthy (fallback after failing: failed) · 1 results" {
+		t.Fatalf("header = %q, want the failed predecessor named", header)
+	}
+}
+
+// firstLine returns the attribution header of a rendered response.
+func firstLine(out string) string {
+	if i := strings.IndexByte(out, '\n'); i >= 0 {
+		return out[:i]
+	}
+	return out
+}
+
+func TestRenderResultsCountsOnlyCompleteResultsWithinBudget(t *testing.T) {
+	t.Parallel()
+
+	results := []Result{
+		{Title: "First", URL: "https://example.com/first", Snippet: "matched passage"},
+		{Title: strings.Repeat("大", maxRenderBytes), URL: "https://example.com/oversized"},
+	}
+	cases := []struct {
+		results []Result
+		written int
+		omitted int
+	}{
+		{results: results, written: 1, omitted: 1},
+		{results: results[1:], written: 0, omitted: 1},
+		{
+			results: append(
+				append([]Result{}, results...),
+				Result{Title: "Third", URL: "https://example.com/third"},
+			),
+			written: 1,
+			omitted: 2,
+		},
+	}
+	for _, tc := range cases {
+		out := renderResults(
+			"ollama",
+			reasonRotation,
+			len(tc.results),
+			tc.results,
+			defaultSnippetChars,
+		)
+		if len(out) > maxRenderBytes {
+			t.Fatalf("output is %d bytes, maximum %d", len(out), maxRenderBytes)
+		}
+		want := fmt.Sprintf("ollama (rotation) · %d results", tc.written)
+		if header := firstLine(out); header != want {
+			t.Errorf("header = %q, want %q", header, want)
+		}
+		if !strings.Contains(out, fmt.Sprintf("requested %d", len(tc.results))) {
+			t.Error("output does not report the requested result count")
+		}
+		if strings.Contains(out, "大") ||
+			!strings.Contains(
+				out,
+				fmt.Sprintf("results omitted: %d (output limit: 16384 bytes)", tc.omitted),
+			) {
+			t.Error("output should drop the oversized result and count the omitted results")
+		}
+	}
+}
+
+func TestSearchAttributesRotation(t *testing.T) {
+	t.Parallel()
+
+	tool := recordingTool(t, fakeProvider{name: "a"}, fakeProvider{name: "b"})
+	out, err := tool.Run(context.Background(), `{"query":"rotation"}`)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if header := firstLine(out); header != "a (rotation) · 1 results" {
+		t.Fatalf("header = %q, want rotation", header)
+	}
+}
+
+func TestSearchReportsAvailableResultsAfterDeduplication(t *testing.T) {
+	t.Parallel()
+
+	tool := recordingTool(t, fakeProvider{
+		name: "test",
+		run: func(context.Context, SearchRequest) ([]Result, error) {
+			return []Result{
+				{Title: "First source", URL: "https://example.com/first"},
+				{Title: "First source", URL: "https://mirror.example.com/first"},
+				{Title: strings.Repeat("大", maxRenderBytes), URL: "https://example.com/oversized"},
+				{Title: "Last source", URL: "https://example.com/last"},
+			}, nil
+		},
+	})
+	out, err := tool.Run(context.Background(), `{"query":"source","count":4}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"test (rotation) · 1 results",
+		"requested 4; available 3 distinct results",
+		"results omitted: 2 (output limit: 16384 bytes)",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output is missing %q: %s", want, out)
+		}
+	}
+}
+
+func TestSearchAttributesIdlePromotion(t *testing.T) {
+	t.Parallel()
+
+	tool := recordingTool(
+		t,
+		fakeProvider{name: "slow", min: time.Hour},
+		fakeProvider{name: "idle"},
+	)
+	// Book the rotation target's slot so it cannot run for an hour, which is
+	// what makes order() promote the idle provider.
+	if err := tool.providers[0].wait(context.Background()); err != nil {
+		t.Fatalf("priming throttle: %v", err)
+	}
+
+	out, err := tool.Run(context.Background(), `{"query":"idle"}`)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if header := firstLine(out); header != "idle (idle) · 1 results" {
+		t.Fatalf("header = %q, want idle promotion", header)
+	}
+}
+
+func TestSearchAttributesFallbackAfterThrottledProvider(t *testing.T) {
+	t.Parallel()
+
+	tool := recordingTool(
+		t,
+		fakeProvider{name: "cooling", min: time.Hour},
+		fakeProvider{name: "spaced", min: 5 * time.Millisecond},
+	)
+	// The rotation target is in failure cooldown, and the only other provider
+	// is inside its spacing window, so nothing can be promoted to the front.
+	tool.providers[0].mu.Lock()
+	tool.providers[0].cooldownUntil = time.Now().Add(time.Hour)
+	tool.providers[0].mu.Unlock()
+	if err := tool.providers[1].wait(context.Background()); err != nil {
+		t.Fatalf("priming throttle: %v", err)
+	}
+
+	out, err := tool.Run(context.Background(), `{"query":"fallback"}`)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if header := firstLine(out); header != "spaced (fallback after cooling: throttled) · 1 results" {
+		t.Fatalf("header = %q, want the throttled predecessor named", header)
 	}
 }
 
 func TestSearchAllProvidersFail(t *testing.T) {
 	t.Parallel()
 
-	fail := func(context.Context, string, int) (string, error) {
-		return "", fmt.Errorf("down")
+	fail := func(context.Context, SearchRequest) ([]Result, error) {
+		return nil, fmt.Errorf("down")
 	}
 	tool := recordingTool(
 		t,
@@ -280,11 +455,11 @@ func TestSearchThrottlesEachProvider(t *testing.T) {
 	throttled := fakeProvider{
 		name: "throttled",
 		min:  spacing,
-		run: func(context.Context, string, int) (string, error) {
+		run: func(context.Context, SearchRequest) ([]Result, error) {
 			mu.Lock()
 			stamps = append(stamps, time.Now())
 			mu.Unlock()
-			return "ok", nil
+			return []Result{fakeResult("throttled")}, nil
 		},
 	}
 
@@ -326,20 +501,20 @@ func TestSearchPrefersIdleProviderOverThrottledRotation(t *testing.T) {
 	throttled := fakeProvider{
 		name: "throttled",
 		min:  time.Hour,
-		run: func(context.Context, string, int) (string, error) {
+		run: func(context.Context, SearchRequest) ([]Result, error) {
 			mu.Lock()
 			ran = append(ran, "throttled")
 			mu.Unlock()
-			return "from throttled", nil
+			return []Result{fakeResult("throttled")}, nil
 		},
 	}
 	idle := fakeProvider{
 		name: "idle",
-		run: func(context.Context, string, int) (string, error) {
+		run: func(context.Context, SearchRequest) ([]Result, error) {
 			mu.Lock()
 			ran = append(ran, "idle")
 			mu.Unlock()
-			return "from idle", nil
+			return []Result{fakeResult("idle")}, nil
 		},
 	}
 
@@ -354,7 +529,7 @@ func TestSearchPrefersIdleProviderOverThrottledRotation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if out != "from idle" {
+	if !strings.Contains(out, "result from idle") {
 		t.Fatalf("out = %q, want the idle provider's result", out)
 	}
 
@@ -371,9 +546,9 @@ func TestSearchCoolsDownAFailingProvider(t *testing.T) {
 	calls := 0
 	brittle := fakeProvider{
 		name: "brittle",
-		run: func(context.Context, string, int) (string, error) {
+		run: func(context.Context, SearchRequest) ([]Result, error) {
 			calls++
-			return "", fmt.Errorf("backend down")
+			return nil, fmt.Errorf("backend down")
 		},
 	}
 	tool := recordingTool(t, brittle)
@@ -476,9 +651,9 @@ func TestSearchCanceledBeforeRequest(t *testing.T) {
 	calls := 0
 	tool := recordingTool(t, fakeProvider{
 		name: "healthy",
-		run: func(context.Context, string, int) (string, error) {
+		run: func(context.Context, SearchRequest) ([]Result, error) {
 			calls++
-			return "ok", nil
+			return []Result{fakeResult("healthy")}, nil
 		},
 	})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -498,13 +673,13 @@ func TestSearchCallerCancellationDoesNotCoolDownProvider(t *testing.T) {
 		calls := 0
 		tool := recordingTool(t, fakeProvider{
 			name: "healthy",
-			run: func(ctx context.Context, _ string, _ int) (string, error) {
+			run: func(ctx context.Context, _ SearchRequest) ([]Result, error) {
 				calls++
 				if ctx.Done() != nil {
 					<-ctx.Done()
-					return "", ctx.Err()
+					return nil, ctx.Err()
 				}
-				return "ok", nil
+				return []Result{fakeResult("healthy")}, nil
 			},
 		})
 		for i := 0; i < providerFailureThreshold; i++ {
@@ -517,7 +692,7 @@ func TestSearchCallerCancellationDoesNotCoolDownProvider(t *testing.T) {
 		}
 
 		out, err := tool.Run(context.Background(), `{"query":"healthy"}`)
-		if err != nil || out != "ok" {
+		if err != nil || !strings.Contains(out, "result from healthy") {
 			t.Fatalf("healthy provider unavailable after canceled calls: %q, %v", out, err)
 		}
 		if calls != providerFailureThreshold+1 {

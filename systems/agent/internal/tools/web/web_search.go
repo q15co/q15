@@ -1,3 +1,4 @@
+// Package web provides web search and web fetch tools for the agent.
 package web
 
 import (
@@ -8,27 +9,83 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
 )
 
-// Failure backoff: a provider that keeps failing is skipped for a cooldown so
-// a dead backend cannot tax every other call with a full client timeout.
 const (
+	defaultWebSearchCount    = 5
+	maxWebSearchCount        = 10
+	maxBraveSearchQueryChars = 400
+	maxBraveSearchQueryWords = 50
+	maxErrorResponseBody     = 200
+
+	// providerTimeout is the one request budget every provider uses. Unequal
+	// timeouts used to make fallback latency depend on which backend answered
+	// first.
+	providerTimeout = 20 * time.Second
+	// providerResponseLimit bounds one provider response body. The ceiling
+	// lives at the read as well as at the render so a hostile or careless
+	// payload cannot be decoded into memory first.
+	providerResponseLimit = 2 << 20
+
+	// defaultSnippetChars is the snippet budget when the caller does not ask
+	// for a different one.
+	defaultSnippetChars = 300
+	// maxSnippetChars is the largest snippet_chars a caller may request. It is
+	// the excerpt bound, not a separate number: a rendered snippet longer than
+	// a Result.Snippet would break the invariant this package is built around.
+	maxSnippetChars = maxExcerptRunes
+	// maxRenderBytes is the ceiling on one rendered response, measured on the
+	// joined output. Results are dropped rather than letting the whole set
+	// through.
+	maxRenderBytes = 16 * 1024
+
+	// Failure backoff: a provider that keeps failing is skipped for a cooldown
+	// so a dead backend cannot tax every other call with a full client timeout.
 	providerFailureThreshold = 3
 	providerCooldown         = 60 * time.Second
 )
 
+// Result is one search hit, in the one shape every provider returns.
+//
+// Snippet carries a normalised excerpt, never a page body: it is cleaned with
+// cleanText, deduplicated against the title, and at most maxExcerptRunes runes
+// long. Published is the zero time when the provider has no date for the
+// result.
+type Result struct {
+	Title     string
+	URL       string
+	Snippet   string    // invariant: normalised excerpt, <= maxExcerptRunes
+	Published time.Time // zero when the provider has no date
+}
+
+// SearchRequest is the argument set passed to a provider. Later filters
+// (freshness, offset, country, language) are additive here rather than a second
+// signature change across every adapter.
+type SearchRequest struct {
+	Query string
+	Count int
+}
+
 // Provider is one web search backend (Brave, Ollama, ...). Implementations
 // are constructed from SearchConfig via NewProviders and composed into the
 // web_search tool by NewSearch.
+//
+// Adapters return data only. No implementation renders, formats or joins text:
+// the renderer in Search.Run is the single place the output shape is decided,
+// so a new backend cannot invent a second shape. Search must return results
+// whose Snippet is a normalised excerpt of at most maxExcerptRunes runes and
+// whose URL is absolute; an adapter that returns whole documents fails the
+// contract its callers rely on.
 type Provider interface {
-	// Name identifies the backend in rotation reports and error messages.
+	// Name identifies the backend in the attribution line and error messages.
 	Name() string
 	// MinInterval is the minimum spacing between requests to this backend.
 	MinInterval() time.Duration
-	// Search runs one query and returns the formatted result list.
-	Search(ctx context.Context, query string, count int) (string, error)
+	// Search runs one query and returns its results in the shared shape.
+	Search(ctx context.Context, req SearchRequest) ([]Result, error)
 }
 
 // SearchConfig is the resolved web_search configuration: one field per
@@ -145,6 +202,31 @@ func (p *throttledProvider) recordFailure() {
 	}
 }
 
+// Attribution reasons. Every selection path in Run maps to one of these, so
+// the header names the path actually taken rather than a guess: a stale timer
+// makes rotation order invisible from the outside, and mislabelling exactly the
+// calls that are hardest to reproduce is worse than saying nothing.
+const (
+	reasonRotation  = "rotation"
+	reasonIdle      = "idle"
+	reasonThrottled = "throttled"
+	reasonFailed    = "failed"
+)
+
+// selection is one planned provider attempt: the provider index, its name, and
+// the reason it was chosen.
+type selection struct {
+	index  int
+	name   string
+	reason string
+}
+
+// fallbackReason names the provider that did not answer and why, so the
+// attribution line reads "brave (fallback after ollama: throttled)".
+func fallbackReason(name, cause string) string {
+	return fmt.Sprintf("fallback after %s: %s", name, cause)
+}
+
 // Search is the web_search tool: it round-robins requests across the
 // configured providers, throttles each provider independently, and falls back
 // to the next provider when one errors so a rate-limited or misconfigured
@@ -192,12 +274,20 @@ func (s *Search) Providers() []string {
 // Definition returns the tool schema exposed to the model.
 func (s *Search) Definition() agent.ToolDefinition {
 	return agent.ToolDefinition{
-		Name:        "web_search",
-		Description: "Search the web for current information and return titles, URLs, and snippets. Requests rotate across the configured providers.",
+		Name: "web_search",
+		Description: fmt.Sprintf(
+			"Search the web for current information. Returns up to count distinct sources, each as a numbered title, a canonical URL and an excerpt of at most %d characters. The first line names the backend that answered and why, for example \"brave (rotation) · 3 results\".",
+			maxSnippetChars,
+		),
 		PromptGuidance: []string{
 			"Use for discovery when the question depends on current web information.",
-			"Keep queries concise: keyword phrases work best; full paragraphs are rejected or truncated by providers.",
+			"Keep queries concise: keyword phrases work best; queries over 400 characters or 50 words are rejected.",
+			"Each result is a title line, an indented URL line and an indented excerpt. The excerpt is at most snippet_chars characters, cut at a word boundary and marked with an ellipsis; it is a window on the matched part of the page, not the page.",
+			"The header is provenance, not a quality score: rotation, idle, and fallback after <backend>: throttled say why that backend answered.",
+			"A header ending in \"0 results\" with \"available 0\" means no distinct hits. With a nonzero available count, the output limit omitted every result. Provider failures return an error.",
 			"After choosing a result, use web_fetch on the selected URL when you need the page contents.",
+			"An absent excerpt means the provider supplied no usable prose summary; the underlying page may still contain prose.",
+			"The requested count is an upper bound. The available count is distinct candidates before the output limit; omitted counts whole candidates dropped for that limit.",
 		},
 		Parameters: map[string]any{
 			"type": "object",
@@ -209,9 +299,19 @@ func (s *Search) Definition() agent.ToolDefinition {
 				},
 				"count": map[string]any{
 					"type":        "integer",
-					"description": "Number of results to return (1-10)",
+					"description": "Number of distinct results to return (1-10)",
 					"minimum":     1,
 					"maximum":     maxWebSearchCount,
+				},
+				"snippet_chars": map[string]any{
+					"type": "integer",
+					"description": fmt.Sprintf(
+						"Characters of excerpt per result (default %d, maximum %d)",
+						defaultSnippetChars,
+						maxSnippetChars,
+					),
+					"minimum": 1,
+					"maximum": maxSnippetChars,
 				},
 			},
 			"required": []string{"query"},
@@ -226,8 +326,9 @@ func (s *Search) Run(ctx context.Context, arguments string) (string, error) {
 	}
 
 	var args struct {
-		Query string `json:"query"`
-		Count *int   `json:"count"`
+		Query        string `json:"query"`
+		Count        *int   `json:"count"`
+		SnippetChars *int   `json:"snippet_chars"`
 	}
 	if err := json.Unmarshal([]byte(arguments), &args); err != nil {
 		return "", fmt.Errorf("invalid arguments JSON: %w", err)
@@ -249,6 +350,24 @@ func (s *Search) Run(ctx context.Context, arguments string) (string, error) {
 		count = clamp(*args.Count, 1, maxWebSearchCount)
 	}
 
+	snippetChars := defaultSnippetChars
+	if args.SnippetChars != nil {
+		snippetChars = *args.SnippetChars
+		// A caller asking for more than the excerpt bound is told the bound
+		// rather than silently clamped: silently ignoring a request is the
+		// failure mode this output contract exists to remove.
+		if snippetChars > maxSnippetChars {
+			return "", fmt.Errorf(
+				"snippet_chars is %d, maximum is %d",
+				snippetChars,
+				maxSnippetChars,
+			)
+		}
+		if snippetChars < 1 {
+			return "", fmt.Errorf("snippet_chars must be at least 1")
+		}
+	}
+
 	s.mu.Lock()
 	start := s.next
 	s.next = (s.next + 1) % len(s.providers)
@@ -258,24 +377,37 @@ func (s *Search) Run(ctx context.Context, arguments string) (string, error) {
 	// while another is idle. Starting on the idle one keeps a rate-limited
 	// backend from consuming the caller's deadline; rotation order is kept for
 	// every other case, including the fallback walk below.
-	order := s.order(start)
+	plan := s.order(start)
 
 	failures := make([]error, 0, len(s.providers))
-	for _, idx := range order {
+	priorName, priorCause := "", ""
+	for _, attempt := range plan {
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
-		p := &s.providers[idx]
+		p := &s.providers[attempt.index]
 		if !p.available(time.Now()) {
+			priorName, priorCause = attempt.name, reasonThrottled
 			continue
 		}
 		if err := p.wait(ctx); err != nil {
 			return "", err
 		}
-		out, err := p.provider.Search(ctx, query, count)
+		results, err := p.provider.Search(ctx, SearchRequest{Query: query, Count: count})
 		if err == nil {
 			p.recordSuccess()
-			return out, nil
+			results = normaliseResults(results, query, count, snippetChars)
+			reason := attempt.reason
+			if priorCause != "" {
+				reason = fallbackReason(priorName, priorCause)
+			}
+			return renderResults(
+				p.provider.Name(),
+				reason,
+				count,
+				results,
+				snippetChars,
+			), nil
 		}
 		failures = append(failures, fmt.Errorf("%s: %w", p.provider.Name(), err))
 		if cerr := ctx.Err(); cerr != nil {
@@ -283,6 +415,7 @@ func (s *Search) Run(ctx context.Context, arguments string) (string, error) {
 			break
 		}
 		p.recordFailure()
+		priorName, priorCause = attempt.name, reasonFailed
 	}
 
 	if len(failures) == 0 {
@@ -291,19 +424,211 @@ func (s *Search) Run(ctx context.Context, arguments string) (string, error) {
 	return "", fmt.Errorf("all web search providers failed: %w", errors.Join(failures...))
 }
 
-// order returns provider indexes starting at start, moving the first provider
-// that can run immediately to the front.
-func (s *Search) order(start int) []int {
-	order := make([]int, 0, len(s.providers))
+// order returns the attempt plan starting at start, moving the first provider
+// that can run immediately to the front, and labels every entry with the reason
+// it was selected.
+//
+// The head is "rotation" when the rotation target can run and "idle" when a
+// provider was promoted over it. Every later entry is a "fallback after ..."
+// naming its predecessor, because reaching it means the predecessor did not
+// answer.
+func (s *Search) order(start int) []selection {
+	plan := make([]selection, 0, len(s.providers))
 	for i := 0; i < len(s.providers); i++ {
-		order = append(order, (start+i)%len(s.providers))
+		idx := (start + i) % len(s.providers)
+		plan = append(plan, selection{index: idx, name: s.providers[idx].provider.Name()})
 	}
+
 	now := time.Now()
-	for i, idx := range order {
-		if s.providers[idx].available(now) && s.providers[idx].waitRemaining() <= 0 {
-			order[0], order[i] = order[i], order[0]
+	promoted := false
+	for i, attempt := range plan {
+		if s.providers[attempt.index].available(now) &&
+			s.providers[attempt.index].waitRemaining() <= 0 {
+			plan[0], plan[i] = plan[i], plan[0]
+			promoted = i != 0
 			break
 		}
 	}
-	return order
+
+	if plan[0].index == start && !promoted {
+		plan[0].reason = reasonRotation
+	} else {
+		plan[0].reason = reasonIdle
+	}
+
+	for i := 1; i < len(plan); i++ {
+		prior := &s.providers[plan[i-1].index]
+		cause := reasonFailed
+		if !prior.available(now) || prior.waitRemaining() > 0 {
+			cause = reasonThrottled
+		}
+		plan[i].reason = fallbackReason(plan[i-1].name, cause)
+	}
+	return plan
+}
+
+// normaliseResults is the one place the shared post-processing lives: URLs
+// canonicalised (adapters return absolute URLs), snippets re-bounded to the
+// excerpt invariant, duplicates dropped, and only then the list truncated to
+// count.
+//
+// Dedupe runs before truncation so count: 10 means ten distinct sources rather
+// than ten slots partly consumed by syndicated copies of one article. It
+// matches on the canonical URL, or on a near-identical title, because the same
+// article syndicated on two domains has two URLs and one title.
+func normaliseResults(results []Result, query string, count, snippetChars int) []Result {
+	if count <= 0 {
+		count = defaultWebSearchCount
+	}
+	terms := queryTerms(query)
+	snippetChars = clamp(snippetChars, 1, maxExcerptRunes)
+	kept := make([]Result, 0, min(count, len(results)))
+	seenURL := make(map[string]struct{}, len(results))
+	for _, result := range results {
+		result.Title = cleanText(result.Title)
+		result.URL = canonicalURL(result.URL)
+		// Select again at the caller's budget: taking the first 300 runes of
+		// a 1200-rune excerpt can discard the matched passage entirely.
+		result.Snippet = excerpt(result.Snippet, terms, snippetChars)
+
+		if result.URL != "" {
+			if _, duplicate := seenURL[result.URL]; duplicate {
+				continue
+			}
+		}
+		duplicate := false
+		for _, existing := range kept {
+			if sameTitle(existing.Title, result.Title) {
+				duplicate = true
+				break
+			}
+		}
+		if duplicate {
+			continue
+		}
+		if result.URL != "" {
+			seenURL[result.URL] = struct{}{}
+		}
+		kept = append(kept, result)
+		if len(kept) >= count {
+			break
+		}
+	}
+	return kept
+}
+
+// renderResults builds the one output shape every provider is rendered with:
+// an attribution header naming the backend and the reason it answered, then one
+// numbered block per result with the URL and snippet indented under it.
+func renderResults(
+	provider, reason string,
+	requested int,
+	results []Result,
+	snippetChars int,
+) string {
+	header := provider
+	if reason != "" {
+		header = fmt.Sprintf("%s (%s)", provider, reason)
+	}
+	// Reserve both the shortfall line and notice before selecting complete
+	// result blocks; the header must count the results that actually fit.
+	requestLine := fmt.Sprintf(
+		"requested %d; available %d distinct results\n",
+		requested,
+		len(results),
+	)
+	headerBudget := len(fmt.Sprintf("%s · %d results\n", header, len(results))) + len(requestLine)
+	notice := "results omitted: %d (output limit: %d bytes)\n"
+	noticeBudget := len(fmt.Sprintf(notice, len(results), maxRenderBytes))
+	var body strings.Builder
+	written := 0
+	for i, result := range results {
+		block := renderResult(i+1, result, snippetChars)
+		if headerBudget+body.Len()+len(block)+noticeBudget > maxRenderBytes {
+			fmt.Fprintf(&body, notice, len(results)-written, maxRenderBytes)
+			break
+		}
+		body.WriteString(block)
+		written++
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s · %d results\n", header, written)
+	if written < requested {
+		b.WriteString(requestLine)
+	}
+	b.WriteString(body.String())
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// renderResult renders one result: numbered title line, indented URL line,
+// indented snippet line.
+func renderResult(n int, result Result, snippetChars int) string {
+	var b strings.Builder
+
+	title := strings.TrimSpace(result.Title)
+	if title == "" {
+		title = "(untitled)"
+	}
+	fmt.Fprintf(&b, "%d. %s\n", n, title)
+
+	urlLine := strings.TrimSpace(result.URL)
+	if urlLine == "" {
+		urlLine = "(no url)"
+	}
+	if isDocumentURL(urlLine) {
+		urlLine += " [document]"
+	}
+	fmt.Fprintf(&b, "   %s\n", urlLine)
+
+	if snippet := truncateSnippet(result.Snippet, snippetChars); snippet != "" {
+		fmt.Fprintf(&b, "   %s\n", snippet)
+	}
+	if !result.Published.IsZero() {
+		fmt.Fprintf(&b, "   published %s\n", result.Published.UTC().Format("2006-01-02"))
+	}
+	return b.String()
+}
+
+func trimForError(s string, maxLen int) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "(empty response body)"
+	}
+	if maxLen <= 0 || len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
+}
+
+func normalizeSearchQuery(query string) string {
+	return strings.Join(strings.Fields(strings.TrimSpace(query)), " ")
+}
+
+func validateSearchQuery(query string) error {
+	if charCount := utf8.RuneCountInString(query); charCount > maxBraveSearchQueryChars {
+		return fmt.Errorf(
+			"query is too long for Brave Search: %d characters, maximum is %d; retry with a shorter search query",
+			charCount,
+			maxBraveSearchQueryChars,
+		)
+	}
+	if wordCount := len(strings.Fields(query)); wordCount > maxBraveSearchQueryWords {
+		return fmt.Errorf(
+			"query is too long for Brave Search: %d words, maximum is %d; retry with a concise keyword search",
+			wordCount,
+			maxBraveSearchQueryWords,
+		)
+	}
+	return nil
+}
+
+func clamp(v, minV, maxV int) int {
+	if v < minV {
+		return minV
+	}
+	if v > maxV {
+		return maxV
+	}
+	return v
 }
