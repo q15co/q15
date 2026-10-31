@@ -203,6 +203,15 @@ func TestBraveWebSearchOmitsNavigationSummaries(t *testing.T) {
 			description: "• 申告書は国税庁ホームページからダウンロードできます。",
 			want:        "申告書は国税庁ホームページからダウンロードできます。",
 		},
+		{
+			name:        "download link title containing a question mark",
+			description: "申告忘れていませんか？（令和7年12月）（PDF/729KB） · 計算書の使い方（PDF/387KB）",
+		},
+		{
+			name:        "prose with a download size after breadcrumbs",
+			description: "ホーム · この手引きでは申告書の記載方法を説明しています。（PDF/729KB）",
+			want:        "この手引きでは申告書の記載方法を説明しています。（PDF/729KB）",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

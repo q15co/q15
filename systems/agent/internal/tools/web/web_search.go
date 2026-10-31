@@ -284,9 +284,10 @@ func (s *Search) Definition() agent.ToolDefinition {
 			"Keep queries concise: keyword phrases work best; queries over 400 characters or 50 words are rejected.",
 			"Each result is a title line, an indented URL line and an indented excerpt. The excerpt is at most snippet_chars characters, cut at a word boundary and marked with an ellipsis; it is a window on the matched part of the page, not the page.",
 			"The header is provenance, not a quality score: rotation, idle, and fallback after <backend>: throttled say why that backend answered.",
-			"A header ending in \"0 results\" means the backend found nothing for the query, which is a normal outcome; a failed search returns an error instead.",
+			"A header ending in \"0 results\" with \"available 0\" means no distinct hits. With a nonzero available count, the output limit omitted every result. Provider failures return an error.",
 			"After choosing a result, use web_fetch on the selected URL when you need the page contents.",
-			"Navigation-only pages may have a title and URL without an excerpt; follow the source when you need its contents.",
+			"An absent excerpt means the provider supplied no usable prose summary; the underlying page may still contain prose.",
+			"The requested count is an upper bound. The available count is distinct candidates before the output limit; omitted counts whole candidates dropped for that limit.",
 		},
 		Parameters: map[string]any{
 			"type": "object",
@@ -531,9 +532,12 @@ func renderResults(
 	}
 	// Reserve both the shortfall line and notice before selecting complete
 	// result blocks; the header must count the results that actually fit.
-	headerBudget := len(
-		fmt.Sprintf("%s · %d results\nrequested %d\n", header, len(results), requested),
+	requestLine := fmt.Sprintf(
+		"requested %d; available %d distinct results\n",
+		requested,
+		len(results),
 	)
+	headerBudget := len(fmt.Sprintf("%s · %d results\n", header, len(results))) + len(requestLine)
 	notice := "results omitted: %d (output limit: %d bytes)\n"
 	noticeBudget := len(fmt.Sprintf(notice, len(results), maxRenderBytes))
 	var body strings.Builder
@@ -551,7 +555,7 @@ func renderResults(
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s · %d results\n", header, written)
 	if written < requested {
-		fmt.Fprintf(&b, "requested %d\n", requested)
+		b.WriteString(requestLine)
 	}
 	b.WriteString(body.String())
 	return strings.TrimRight(b.String(), "\n")

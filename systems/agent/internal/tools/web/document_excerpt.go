@@ -9,6 +9,7 @@ import (
 var (
 	documentListMarker = regexp.MustCompile(`^(?:[-+*•●]|\p{N}+[.)])\s+`)
 	summarySeparator   = regexp.MustCompile(`\s+[·›»|]\s+`)
+	summaryDownload    = regexp.MustCompile(`(?i)[(（]PDF\s*[/／:：]\s*[\d.,]+\s*[KMGT]?B[)）]\s*$`)
 )
 
 // Provider summaries can contain only breadcrumbs or index links. Keep any
@@ -19,6 +20,16 @@ func summaryExcerpt(title, text string, terms []string) string {
 	if parts := summarySeparator.Split(text, -1); len(parts) > 1 {
 		var prose []string
 		for _, part := range parts {
+			if summaryDownload.MatchString(part) {
+				// Publication titles can contain a question mark followed by
+				// download metadata; that alone does not make them prose.
+				caption := summaryDownload.ReplaceAllString(part, "")
+				caption = strings.ReplaceAll(caption, "?", "")
+				caption = strings.ReplaceAll(caption, "？", "")
+				if !hasProseSentence(caption) {
+					continue
+				}
+			}
 			if hasProseSentence(part) {
 				prose = append(prose, part)
 			}

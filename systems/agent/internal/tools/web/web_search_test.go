@@ -346,6 +346,35 @@ func TestSearchAttributesRotation(t *testing.T) {
 	}
 }
 
+func TestSearchReportsAvailableResultsAfterDeduplication(t *testing.T) {
+	t.Parallel()
+
+	tool := recordingTool(t, fakeProvider{
+		name: "test",
+		run: func(context.Context, SearchRequest) ([]Result, error) {
+			return []Result{
+				{Title: "First source", URL: "https://example.com/first"},
+				{Title: "First source", URL: "https://mirror.example.com/first"},
+				{Title: strings.Repeat("大", maxRenderBytes), URL: "https://example.com/oversized"},
+				{Title: "Last source", URL: "https://example.com/last"},
+			}, nil
+		},
+	})
+	out, err := tool.Run(context.Background(), `{"query":"source","count":4}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"test (rotation) · 1 results",
+		"requested 4; available 3 distinct results",
+		"results omitted: 2 (output limit: 16384 bytes)",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output is missing %q: %s", want, out)
+		}
+	}
+}
+
 func TestSearchAttributesIdlePromotion(t *testing.T) {
 	t.Parallel()
 
