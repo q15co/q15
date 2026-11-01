@@ -47,14 +47,29 @@ func (i *Indexer) Search(
 	query string,
 	options SearchOptions,
 ) (SearchResult, error) {
+	return i.search(ctx, query, options, searchLimit(options.Limit))
+}
+
+func searchLimit(limit int) int {
+	if limit <= 0 {
+		return 6
+	}
+	return min(limit, 32)
+}
+
+// search retains the fused pool when maxHits is zero so context assembly can
+// judge candidates before choosing the final retrieval slots.
+func (i *Indexer) search(
+	ctx context.Context,
+	query string,
+	options SearchOptions,
+	maxHits int,
+) (SearchResult, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return SearchResult{}, errors.New("history search query is required")
 	}
-	if options.Limit <= 0 {
-		options.Limit = 6
-	}
-	options.Limit = min(options.Limit, 32)
+	options.Limit = searchLimit(options.Limit)
 	if options.Mode == "" {
 		options.Mode = "hybrid"
 	}
@@ -118,6 +133,9 @@ func (i *Indexer) Search(
 		}
 	}
 	hits := fuseHits(dense, lexical, options)
+	if maxHits > 0 {
+		hits = hits[:min(maxHits, len(hits))]
+	}
 	var chunks []int64
 	for n := range hits {
 		hit := &hits[n]
@@ -246,16 +264,13 @@ func fuseHits(dense, lexical []historydb.SearchDenseRow, options SearchOptions) 
 		return 0
 	})
 	seen := make(map[int64]bool)
-	hits := make([]SearchHit, 0, options.Limit)
+	hits := make([]SearchHit, 0, len(ordered))
 	for _, hit := range ordered {
 		if seen[hit.TurnID] {
 			continue
 		}
 		seen[hit.TurnID] = true
 		hits = append(hits, hit)
-		if len(hits) >= options.Limit {
-			break
-		}
 	}
 	return hits
 }

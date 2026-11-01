@@ -57,6 +57,23 @@ whether it is generated. Recent turns are excluded from retrieval, and overlappi
 results are deduplicated. Short acknowledgements use nearby conversation context for retrieval.
 `history_search` finds older evidence and `history_read` pages original turn JSON.
 
+Automatic retrieval judges the fused, turn-deduplicated summary pool before filling retrieval slots.
+A narrow history port calls the currently selected decision model directly, sharing its router with
+`decision_check`; it never starts an agent turn or re-enters context assembly. One batched yes/no
+question per digest assesses whether it adds useful information beyond the current request and
+preceding turn. The preceding turn uses its digest when available, otherwise bounded user text and
+the assistant's final text tail. The current request takes precedence over that background. At most
+64 candidates fit within an initial 16,000-token estimated judge budget, including an allowance for
+each question. Provider-reported usage and latency are logged for tuning.
+
+Candidates below 0.3 usefulness probability are rejected. Remaining candidates are ranked by
+probability, preserving retrieval order for ties, and fill up to the retrieval limit. Relative rank
+alone does not reject an uncertain candidate; no history is injected when all judged candidates are
+rejected. Counts, kept turn IDs and kept/dropped scores are logged without source text. A judge
+error, invalid response or provider timeout logs a warning and uses the original retrieval ranking.
+The gate initially inherits the decision client's 120-second timeout and caller cancellation. This
+policy is always active, without an enable flag or separate model selection.
+
 At the start of each user turn, the runtime selects history within the token and fraction caps for
 initial context, counting instructions, tool definitions and user input. It shortens copied
 historical tool-output and reasoning excerpts, represents older turns with stored summaries, and

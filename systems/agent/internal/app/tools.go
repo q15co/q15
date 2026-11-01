@@ -7,6 +7,7 @@ import (
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/config"
+	"github.com/q15co/q15/systems/agent/internal/decision"
 	"github.com/q15co/q15/systems/agent/internal/embed"
 	"github.com/q15co/q15/systems/agent/internal/execution"
 	"github.com/q15co/q15/systems/agent/internal/fileops"
@@ -33,6 +34,7 @@ func buildRuntimeTools(
 	dumpWriter io.Writer,
 	scheduleManager *schedule.Manager,
 	modelAdapter *routedModelAdapter,
+	decisionClient decision.Client,
 	contextFitter agent.RequestContextFitter,
 ) []agent.Tool {
 	subAgentManager := subagent.NewManager(
@@ -50,7 +52,7 @@ func buildRuntimeTools(
 		baseToolList,
 		tools.NewListProviders(registry, selection),
 		tools.NewListModels(registry, selection),
-		tools.NewDecisionCheck(newRoutedDecisionAdapter(registry, modelAdapter.decisionClientFor)),
+		tools.NewDecisionCheck(decisionClient),
 		tools.NewSwitchModel(registry, selection, selectionStore),
 		subagent.NewSpawn(subAgentManager),
 		subagent.NewRead(subAgentManager),
