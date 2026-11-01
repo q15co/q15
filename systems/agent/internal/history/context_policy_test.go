@@ -144,7 +144,11 @@ func TestAutomaticContextUsesRelevantSummariesWithoutGapWall(t *testing.T) {
 	if _, err := indexer.Embed(t.Context(), 128); err != nil {
 		t.Fatal(err)
 	}
-	service, err := NewContextService(indexer, ContextSettings{RecentTurns: 1, MinSimilarity: 0.7})
+	service, err := NewContextService(
+		indexer,
+		ContextSettings{RecentTurns: 1, MinSimilarity: 0.7},
+		judgeFunc(acceptCandidates),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

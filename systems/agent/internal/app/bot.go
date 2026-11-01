@@ -124,6 +124,7 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 	if err != nil {
 		return err
 	}
+	decisionClient := newRoutedDecisionAdapter(registry, modelAdapter.decisionClientFor)
 	var modelClient agent.ModelClient = modelAdapter
 	if dumpWriter != nil {
 		modelClient = dump.NewModelClientDump(modelAdapter, dumpWriter)
@@ -271,6 +272,7 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 		dumpWriter,
 		scheduleManager,
 		modelAdapter,
+		decisionClient,
 		subagentContextFitter,
 	)...)
 	if err != nil {
@@ -278,7 +280,11 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 	}
 
 	contextSettings.Tools = toolRegistry.Definitions()
-	contextService, err := history.NewContextService(historyIndexer, contextSettings)
+	contextService, err := history.NewContextService(
+		historyIndexer,
+		contextSettings,
+		historyJudge{client: decisionClient},
+	)
 	if err != nil {
 		return err
 	}

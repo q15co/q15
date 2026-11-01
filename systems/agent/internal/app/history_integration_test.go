@@ -19,6 +19,20 @@ import (
 
 type historyFixtureEmbedder struct{}
 
+type historyFixtureJudge struct{}
+
+func (historyFixtureJudge) Judge(
+	_ context.Context,
+	_ string,
+	candidates []string,
+) (history.Judgment, error) {
+	scores := make([]float64, len(candidates))
+	for n := range scores {
+		scores[n] = 1
+	}
+	return history.Judgment{Scores: scores}, nil
+}
+
 func (historyFixtureEmbedder) EmbedQuery(context.Context, string) ([]float32, error) {
 	return []float32{1, 0, 0}, nil
 }
@@ -67,7 +81,11 @@ func TestInteractiveAndScheduledContextUsePostgres(t *testing.T) {
 	if _, err := indexer.Embed(t.Context(), 16); err != nil {
 		t.Fatal(err)
 	}
-	service, err := history.NewContextService(indexer, history.ContextSettings{})
+	service, err := history.NewContextService(
+		indexer,
+		history.ContextSettings{},
+		historyFixtureJudge{},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,6 +217,7 @@ func TestPostgresKeepsLargeToolSourceWhileModelReplayFits(t *testing.T) {
 	service, err := history.NewContextService(
 		indexer,
 		history.ContextSettings{InitialContextMaxTokens: 2048},
+		historyFixtureJudge{},
 	)
 	if err != nil {
 		t.Fatal(err)

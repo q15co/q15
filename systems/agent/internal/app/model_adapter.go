@@ -355,14 +355,10 @@ func newModelAdapterWithSelectionAndFactory(
 // makeDumpAwareFactory returns a modelClientFactory that threads an optional
 // dump transport through to each provider's NewClient. When rt is nil the
 // factory uses default HTTP transports.
+// Routers enforce model capabilities at dispatch: a shared provider connection
+// can be initialized through the decision port before its first chat call.
 func makeDumpAwareFactory(rt http.RoundTripper) modelClientFactory {
 	return func(m modelcatalog.Model, mediaStore q15media.Store) (agent.ModelClient, error) {
-		if !m.Capabilities.Chat {
-			return nil, fmt.Errorf(
-				"role primary model %q: missing capability chat",
-				m.ProviderModel,
-			)
-		}
 		switch providertypes.NormalizeOrEmpty(m.ProviderType) {
 		case providertypes.Ollama:
 			return ollama.NewClient(

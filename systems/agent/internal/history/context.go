@@ -28,18 +28,26 @@ type ContextSettings struct {
 type ContextService struct {
 	indexer  *Indexer
 	settings ContextSettings
+	judge    Judge
 }
 
 // NewContextService configures a bounded prompt source over Postgres history.
-func NewContextService(indexer *Indexer, settings ContextSettings) (*ContextService, error) {
+func NewContextService(
+	indexer *Indexer,
+	settings ContextSettings,
+	judge Judge,
+) (*ContextService, error) {
 	if indexer == nil {
 		return nil, errors.New("history context requires an indexer")
+	}
+	if judge == nil {
+		return nil, errors.New("history context requires a retrieval judge")
 	}
 	settings, err := normalizeContextSettings(settings)
 	if err != nil {
 		return nil, err
 	}
-	return &ContextService{indexer: indexer, settings: settings}, nil
+	return &ContextService{indexer: indexer, settings: settings, judge: judge}, nil
 }
 
 // NewIsolatedContextFitter applies the same limits without loading parent history.
@@ -171,7 +179,7 @@ func (s *ContextService) PrepareContext(
 	}
 	query := retrievalQuery(input, turns, byTurn)
 	if query != "" {
-		result, err := s.indexer.Search(
+		result, err := s.indexer.search(
 			ctx,
 			query,
 			SearchOptions{
@@ -180,12 +188,18 @@ func (s *ContextService) PrepareContext(
 				MinSimilarity:  s.settings.MinSimilarity,
 				SummariesOnly:  true,
 			},
+			0,
 		)
 		if err != nil {
 			return agent.PreparedContext{}, err
 		}
 		snapshot.lexicalFallback = result.LexicalFallback
-		for _, hit := range slices.Backward(result.Hits) {
+		state, source := retrievalJudgeState(input, turns, byTurn)
+		hits, err := s.judgeHits(ctx, state, source, result.Hits)
+		if err != nil {
+			return agent.PreparedContext{}, err
+		}
+		for _, hit := range slices.Backward(hits) {
 			snapshot.groups = append(
 				snapshot.groups,
 				contextGroup{
@@ -226,19 +240,8 @@ func retrievalQuery(
 	recent []conversation.Turn,
 	digests map[int64]string,
 ) string {
-	var text strings.Builder
-	for _, message := range input {
-		if body := strings.TrimSpace(conversation.TextValue(message)); body != "" {
-			text.WriteString(body)
-			text.WriteByte('\n')
-		}
-	}
-	query := strings.TrimSpace(text.String())
-	if query == "" {
-		return ""
-	}
-	query = boundedText(query, 4096)
-	if len(recent) == 0 || !needsPreviousContext(query) {
+	query := retrievalInput(input)
+	if query == "" || len(recent) == 0 || !needsPreviousContext(query) {
 		return query
 	}
 	previous := recent[0]
@@ -247,6 +250,17 @@ func retrievalQuery(
 		anchor = renderSource(previous, 1024)
 	}
 	return query + fmt.Sprintf("\nPrevious turn %d: ", previous.Seq) + boundedText(anchor, 2048)
+}
+
+func retrievalInput(input []conversation.Message) string {
+	var text strings.Builder
+	for _, message := range input {
+		if body := strings.TrimSpace(conversation.TextValue(message)); body != "" {
+			text.WriteString(body)
+			text.WriteByte('\n')
+		}
+	}
+	return boundedText(strings.TrimSpace(text.String()), 4096)
 }
 
 func needsPreviousContext(query string) bool {

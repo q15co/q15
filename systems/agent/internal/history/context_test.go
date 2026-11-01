@@ -224,7 +224,11 @@ func TestSmallContextWindowKeepsLastAssistant(t *testing.T) {
 			)
 		}
 	}
-	service, err := NewContextService(indexer, ContextSettings{RecentTurns: 1})
+	service, err := NewContextService(
+		indexer,
+		ContextSettings{RecentTurns: 1},
+		judgeFunc(acceptCandidates),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
