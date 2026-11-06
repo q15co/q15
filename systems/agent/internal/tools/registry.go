@@ -6,6 +6,7 @@
 package tools
 
 import (
+	"context"
 	"io"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
@@ -201,8 +202,10 @@ func NewScheduleDelete(manager *scheduled.Manager) *scheduletools.Delete {
 	return scheduletools.NewDelete(manager)
 }
 
-// NewSubAgentManager constructs a delegated sub-agent session manager.
+// NewSubAgentManager constructs a delegated sub-agent session manager. ctx is
+// the application root context the manager derives session lifetimes from.
 func NewSubAgentManager(
+	ctx context.Context,
 	registry *modelcatalog.Registry,
 	factory subagent.ModelFactory,
 	baseTools agent.ToolRegistry,
@@ -212,6 +215,7 @@ func NewSubAgentManager(
 	contextFitter agent.RequestContextFitter,
 ) *subagent.Manager {
 	return subagent.NewManager(
+		ctx,
 		registry,
 		factory,
 		baseTools,

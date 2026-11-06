@@ -28,6 +28,23 @@ const (
 	maxListLimit       = 500
 )
 
+// Finished-session retention bounds. Retention is count-based rather than
+// age-based: counts are what bound memory under bursty fan-outs, where wall
+// age would not. Running sessions are never evicted; see
+// evictFinishedSessions for the eviction rule.
+const (
+	// maxFinishedSessionLogs is how many finished sessions keep their full
+	// event log and transcript. Older finished sessions drop only those
+	// unbounded parts and keep their record (id, model, task, status, error,
+	// final answer), so subagent_list and subagent_read still show that the
+	// session existed and how it ended.
+	maxFinishedSessionLogs = 16
+	// maxFinishedSessionRecords is how many finished session records are kept
+	// at all; older records are deleted from the session map entirely, which
+	// is what bounds the map itself.
+	maxFinishedSessionRecords = 128
+)
+
 // ModelFactory constructs model clients for delegated agents.
 type ModelFactory func(modelcatalog.Model, q15media.Store) (agent.ModelClient, error)
 
@@ -129,8 +146,12 @@ func (c *mediaAdaptiveClient) Complete(
 
 // Manager tracks delegated sub-agent sessions.
 type Manager struct {
-	mu            sync.Mutex
-	sessions      map[string]*Session
+	mu       sync.Mutex
+	sessions map[string]*Session
+	// baseCtx is the application root context: every session derives its
+	// lifetime from it (see Start), so a session outlives the chat turn that
+	// spawned it but is still canceled when the process shuts down.
+	baseCtx       context.Context
 	registry      *modelcatalog.Registry
 	factory       ModelFactory
 	tools         agent.ToolRegistry
@@ -157,6 +178,15 @@ type Session struct {
 	result   *agent.EngineResult
 	err      error
 	done     chan struct{}
+	// finishedAt is the terminal transition time; it orders finished sessions
+	// for retention eviction and is zero while the session runs.
+	finishedAt time.Time
+	// finalAnswer, logEvicted and droppedEvents keep an evicted session
+	// readable after retention drops its event log: the terminal state, the
+	// failure reason (err) and the final answer survive the log.
+	finalAnswer   string
+	logEvicted    bool
+	droppedEvents int
 }
 
 // Event is a buffered sub-agent progress event.
@@ -168,9 +198,13 @@ type Event struct {
 }
 
 // NewManager constructs a sub-agent manager backed by the live model registry.
+// ctx must be the application root context (process lifetime): every session
+// derives its lifetime from it, so sessions outlive the chat turn that spawned
+// them but are still canceled when the process shuts down.
 // A nil skillResolver is valid and preserves the pre-skill behavior (no skill
 // injection possible, but existing spawns work unchanged).
 func NewManager(
+	ctx context.Context,
 	registry *modelcatalog.Registry,
 	factory ModelFactory,
 	tools agent.ToolRegistry,
@@ -180,6 +214,7 @@ func NewManager(
 	contextFitter agent.RequestContextFitter,
 ) *Manager {
 	return &Manager{
+		baseCtx:       ctx,
 		sessions:      map[string]*Session{},
 		registry:      registry,
 		factory:       factory,
@@ -191,8 +226,11 @@ func NewManager(
 	}
 }
 
-// Start creates and runs a delegated sub-agent session.
-func (m *Manager) Start(ctx context.Context, req StartRequest) (*Session, error) {
+// Start creates and runs a delegated sub-agent session. The session context
+// derives from the manager's base context (the application root), not from
+// the chat turn that dispatched the spawn: the session survives its parent
+// turn ending and is canceled only by subagent_kill or process shutdown.
+func (m *Manager) Start(req StartRequest) (*Session, error) {
 	if m == nil {
 		return nil, fmt.Errorf("subagent manager is not configured")
 	}
@@ -253,7 +291,13 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) (*Session, error)
 		messages = append(messages, conversation.SystemMessage(injected))
 	}
 	messages = append(messages, conversation.UserMessage(msg))
-	childCtx, cancel := context.WithCancel(ctx)
+	// The session context derives from the manager base context, not from the
+	// tool-dispatch context: the parent chat turn's context ends with the
+	// turn, and deriving from it killed every live session mid-work (#393).
+	// context.WithoutCancel on the dispatch context is deliberately not used
+	// either: sessions must still be canceled by process shutdown, so the
+	// cancel chain stays rooted at the application context.
+	childCtx, cancel := context.WithCancel(m.baseCtx)
 	m.mu.Lock()
 	m.next++
 	id := fmt.Sprintf("subagent-%d", m.next)
@@ -279,7 +323,14 @@ func (m *Manager) run(
 	engine *agent.Engine,
 	turnBudget *agent.TurnBudget,
 ) {
-	defer close(s.done)
+	// Every terminal transition funnels through this defer, which makes it the
+	// single point where finished-session retention is bounded. Eviction runs
+	// before done is closed so a waiter unblocked by done observes the
+	// post-eviction state.
+	defer func() {
+		m.evictFinishedSessions()
+		close(s.done)
+	}()
 	observer := agent.RunObserverFunc(func(_ context.Context, ev agent.RunEvent) {
 		text := ev.FinalText
 		if text == "" {
@@ -305,15 +356,33 @@ func (m *Manager) run(
 		)
 		s.mu.Lock()
 		if s.Status == "killed" {
+			// subagent_kill marks the session before canceling it, so a killed
+			// session never reaches the cancellation check below: an
+			// intentional kill is terminal state killed, not a failure. The
+			// distinction is session state, not error text.
 			s.mu.Unlock()
 			return
 		}
 		s.result = &result
 		s.messages = append(s.messages, result.Messages...)
+		s.finalAnswer = result.FinalText
 		if err != nil {
 			s.Status = "failed"
 			s.err = err
+			s.finishedAt = time.Now()
 			s.addEventLocked("failed", result.FinalText, err)
+			s.mu.Unlock()
+			return
+		}
+		if ctx.Err() != nil {
+			// The context ended while the engine was mid-flight and it still
+			// returned a nil error, so result may be partial. Marking that
+			// completed would truncate silently, so the session fails with the
+			// cancellation reason before its events are readable.
+			s.Status = "failed"
+			s.err = fmt.Errorf("session context ended before the run finished: %w", ctx.Err())
+			s.finishedAt = time.Now()
+			s.addEventLocked("failed", result.FinalText, s.err)
 			s.mu.Unlock()
 			return
 		}
@@ -325,6 +394,7 @@ func (m *Manager) run(
 				), nil)
 			}
 			s.Status = "completed"
+			s.finishedAt = time.Now()
 			s.addEventLocked("completed", result.FinalText, nil)
 			s.mu.Unlock()
 			return
@@ -333,6 +403,69 @@ func (m *Manager) run(
 		s.messages = append(s.messages, s.pending...)
 		s.pending = nil
 		s.mu.Unlock()
+	}
+}
+
+// dropLog releases the session's event log and message transcript — the
+// unbounded per-session memory — while keeping the record itself: id, model,
+// task, terminal status, failure reason and final answer. Called by
+// evictFinishedSessions for finished sessions only; a running session's log
+// is never dropped while the engine still appends to it.
+func (s *Session) dropLog() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.logEvicted {
+		return
+	}
+	s.droppedEvents += len(s.events)
+	s.events = nil
+	s.messages = nil
+	s.pending = nil
+	if s.result != nil {
+		s.result.Messages = nil
+	}
+	s.logEvicted = true
+}
+
+// evictFinishedSessions bounds retention of finished sessions. The newest
+// maxFinishedSessionLogs finished sessions keep their event log; older
+// finished sessions lose the log but keep their record; beyond
+// maxFinishedSessionRecords the oldest records are deleted from the map
+// entirely. Sessions of any age are candidates only once finished: running
+// sessions are never evicted.
+func (m *Manager) evictFinishedSessions() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	// finished pairs a session with its terminal timestamp, snapshotted under
+	// the session lock. Lock order is m.mu then s.mu; nothing acquires them
+	// in the opposite order.
+	type finished struct {
+		session    *Session
+		finishedAt time.Time
+	}
+	var done []finished
+	for _, s := range m.sessions {
+		s.mu.Lock()
+		if s.Status != "running" {
+			done = append(done, finished{session: s, finishedAt: s.finishedAt})
+		}
+		s.mu.Unlock()
+	}
+	if len(done) <= maxFinishedSessionLogs && len(done) <= maxFinishedSessionRecords {
+		return
+	}
+	// Oldest terminal transitions are evicted first: ordering by finishedAt
+	// (not CreatedAt) protects the log of a long-running session that has
+	// just completed over stale logs of sessions finished earlier.
+	sort.Slice(done, func(i, j int) bool { return done[i].finishedAt.Before(done[j].finishedAt) })
+	for i, f := range done {
+		if i >= len(done)-maxFinishedSessionLogs {
+			break
+		}
+		f.session.dropLog()
+		if i < len(done)-maxFinishedSessionRecords {
+			delete(m.sessions, f.session.ID)
+		}
 	}
 }
 
@@ -393,6 +526,12 @@ func (s *Session) Read(after, maxChars int) string {
 	if s.err != nil {
 		fmt.Fprintf(&b, "Error: %v\n", s.err)
 	}
+	if s.logEvicted {
+		fmt.Fprintf(&b, "Event-Log: evicted by retention (%d events dropped)\n", s.droppedEvents)
+		if s.finalAnswer != "" {
+			fmt.Fprintf(&b, "Final-Answer: %s\n", truncate(s.finalAnswer, defaultMaxOutput))
+		}
+	}
 	for _, e := range s.events {
 		if e.Index < int(after) {
 			continue
@@ -433,6 +572,7 @@ func (s *Session) Kill() {
 	s.mu.Lock()
 	if s.Status == "running" {
 		s.Status = "killed"
+		s.finishedAt = time.Now()
 		if s.cancel != nil {
 			s.cancel()
 		}
@@ -457,6 +597,8 @@ func (t *Spawn) Definition() agent.ToolDefinition {
 			"Use a vision-capable model when delegating analysis of media refs such as media://sha256/... attachments.",
 			"Default tools allowlist is empty; explicitly grant only needed tools.",
 			"max_turns counts model responses, includes a final answer-only turn without tools, and is shared with queued follow-up messages.",
+			"A session keeps running after the chat turn that spawned it ends; it stops only by completing, through subagent_kill, or at process shutdown.",
+			"Poll a spawned session's progress later with subagent_read or subagent_list.",
 			"Give the sub-agent full /workspace/... paths for files in packages whose names collide with runtime roots (memory, skills); /memory and /skills are persistent runtime roots, not Go package paths.",
 			"When delegating a skill by name or path, pass it via `skills`; its instructions are injected automatically and its declared tools are granted without listing them in `tools`.",
 		},
@@ -492,8 +634,11 @@ func (t *Spawn) Definition() agent.ToolDefinition {
 	}
 }
 
-// Run starts a delegated sub-agent session.
-func (t *Spawn) Run(ctx context.Context, args string) (string, error) {
+// Run starts a delegated sub-agent session. The dispatch context is the
+// parent chat turn's and ends with it, so it is deliberately not handed to
+// the session: the manager derives the session lifetime from its own base
+// context (process shutdown) instead.
+func (t *Spawn) Run(_ context.Context, args string) (string, error) {
 	var a struct {
 		Model, Task, Context string
 		Tools                []string `json:"tools"`
@@ -508,7 +653,7 @@ func (t *Spawn) Run(ctx context.Context, args string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	s, err := t.manager.Start(ctx, StartRequest{
+	s, err := t.manager.Start(StartRequest{
 		ModelRef:     a.Model,
 		Task:         a.Task,
 		ExtraContext: a.Context,

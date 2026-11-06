@@ -262,6 +262,7 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 		return err
 	}
 	toolRegistry, err := agent.NewToolRegistry(buildRuntimeTools(
+		ctx,
 		baseToolList,
 		registry,
 		selection,

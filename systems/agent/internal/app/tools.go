@@ -22,8 +22,11 @@ import (
 
 // buildRuntimeTools appends model selection, delegated sub-agent, and
 // owner-scoped scheduling tools to the base tool list. The base registry is
-// reused as the restricted sub-agent and scheduled-job tool surface.
+// reused as the restricted sub-agent and scheduled-job tool surface. ctx is
+// the application root context: the sub-agent manager derives session
+// lifetimes from it, so sessions survive the chat turn that spawned them.
 func buildRuntimeTools(
+	ctx context.Context,
 	baseToolList []agent.Tool,
 	registry *modelcatalog.Registry,
 	selection *modelcatalog.Selection,
@@ -38,6 +41,7 @@ func buildRuntimeTools(
 	contextFitter agent.RequestContextFitter,
 ) []agent.Tool {
 	subAgentManager := subagent.NewManager(
+		ctx,
 		registry,
 		func(model modelcatalog.Model, _ q15media.Store) (agent.ModelClient, error) {
 			return modelAdapter.clientFor(model)

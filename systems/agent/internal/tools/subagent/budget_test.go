@@ -56,7 +56,7 @@ func TestSubagentBudgetsEvidenceAndReservesFinalAnswer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	session, err := manager.Start(t.Context(), StartRequest{
+	session, err := manager.Start(StartRequest{
 		ModelRef: "child", Task: "Inspect the evidence.", AllowedTools: []string{"read_file"}, MaxTurns: 3,
 	})
 	if err != nil {
@@ -152,7 +152,7 @@ func TestSubagentFinalTurnNeverExecutesToolsOrRetriesEmptyReply(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			session, err := manager.Start(t.Context(), StartRequest{
+			session, err := manager.Start(StartRequest{
 				ModelRef: "child", Task: "Give a final answer.", AllowedTools: []string{"read_file"}, MaxTurns: 1,
 			})
 			if err != nil {
@@ -220,7 +220,7 @@ func TestSubagentQueuedFollowupSharesOriginalTurnBudget(t *testing.T) {
 		return assistantResult("Answer."), nil
 	}}
 	manager := newTestManager(t, model)
-	session, err := manager.Start(t.Context(), StartRequest{
+	session, err := manager.Start(StartRequest{
 		ModelRef: "child", Task: "Initial task.", AllowedTools: []string{"read_file"}, MaxTurns: 2,
 	})
 	if err != nil {
