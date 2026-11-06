@@ -631,9 +631,13 @@ func subagentTestTextContains(message conversation.Message, text string) bool {
 
 func waitDone(t *testing.T, session *Session) {
 	t.Helper()
+	timeout := 30 * time.Second
+	if deadline, ok := t.Deadline(); ok && time.Until(deadline) < timeout {
+		timeout = time.Until(deadline)
+	}
 	select {
 	case <-session.done:
-	case <-time.After(2 * time.Second):
+	case <-time.After(timeout):
 		t.Fatalf("session %s did not finish", session.ID)
 	}
 }
@@ -1258,6 +1262,36 @@ func TestFinishedSessionEvictionBoundsRetention(t *testing.T) {
 	}
 	if _, ok := manager.Get(running.ID); !ok {
 		t.Fatal("running session was deleted from the manager")
+	}
+}
+
+func TestFinishedSessionEvictionBreaksTimestampTies(t *testing.T) {
+	manager := &Manager{sessions: make(map[string]*Session)}
+	finishedAt := time.Now()
+	for i := 0; i <= maxFinishedSessionLogs; i++ {
+		id := fmt.Sprintf("subagent-tied-%02d", i)
+		manager.sessions[id] = &Session{
+			ID:         id,
+			Status:     "completed",
+			finishedAt: finishedAt,
+			events:     []Event{{Index: 0, Type: "completed"}},
+		}
+	}
+
+	// Map iteration order varies between passes. Repetition makes this test
+	// discriminate the old timestamp-only comparator instead of relying on a
+	// fortunate map order; the ID tie-break makes every pass deterministic.
+	for attempt := 0; attempt < 32; attempt++ {
+		manager.evictFinishedSessions()
+		for i := 0; i <= maxFinishedSessionLogs; i++ {
+			session := manager.sessions[fmt.Sprintf("subagent-tied-%02d", i)]
+			if want := i == 0; session.logEvicted != want {
+				t.Fatalf("attempt %d: session %s logEvicted = %v, want %v",
+					attempt, session.ID, session.logEvicted, want)
+			}
+			session.logEvicted = false
+			session.events = []Event{{Index: 0, Type: "completed"}}
+		}
 	}
 }
 

@@ -461,7 +461,12 @@ func (m *Manager) evictFinishedSessions() {
 	// Oldest terminal transitions are evicted first: ordering by finishedAt
 	// (not CreatedAt) protects the log of a long-running session that has
 	// just completed over stale logs of sessions finished earlier.
-	sort.Slice(done, func(i, j int) bool { return done[i].finishedAt.Before(done[j].finishedAt) })
+	sort.Slice(done, func(i, j int) bool {
+		if done[i].finishedAt.Equal(done[j].finishedAt) {
+			return done[i].session.ID < done[j].session.ID
+		}
+		return done[i].finishedAt.Before(done[j].finishedAt)
+	})
 	for i, f := range done {
 		if i >= len(done)-maxFinishedSessionLogs {
 			break
@@ -607,7 +612,7 @@ func (t *Spawn) Definition() agent.ToolDefinition {
 			"Use a vision-capable model when delegating analysis of media refs such as media://sha256/... attachments.",
 			"Default tools allowlist is empty; explicitly grant only needed tools.",
 			"max_turns counts model responses, includes a final answer-only turn without tools, and is shared with queued follow-up messages.",
-			"A session keeps running after the chat turn that spawned it ends; it stops only by completing, through subagent_kill, or at process shutdown.",
+			"A session keeps running after the chat turn that spawned it ends; it stops by completing or failing, through subagent_kill, or at process shutdown.",
 			"Poll a spawned session's progress later with subagent_read or subagent_list.",
 			"Give the sub-agent full /workspace/... paths for files in packages whose names collide with runtime roots (memory, skills); /memory and /skills are persistent runtime roots, not Go package paths.",
 			"When delegating a skill by name or path, pass it via `skills`; its instructions are injected automatically and its declared tools are granted without listing them in `tools`.",
