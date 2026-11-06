@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1073,35 +1074,45 @@ func TestSessionSurvivesParentTurnCancel(t *testing.T) {
 	}
 }
 
+// residualCancelContext opens the window between the engine's final context
+// check and the manager's terminal bookkeeping: the first check after the
+// model returns stays live, and subsequent checks report cancellation.
+type residualCancelContext struct {
+	context.Context
+	modelReturned atomic.Bool
+	checks        atomic.Int32
+}
+
+func (c *residualCancelContext) Err() error {
+	if !c.modelReturned.Load() || c.checks.Add(1) == 1 {
+		return nil
+	}
+	return context.Canceled
+}
+
 // TestShutdownCancelReportsFailedWithReason is #393 lifecycle requirement 1:
-// when the session context ends mid-flight (here the manager base context,
-// i.e. process shutdown), the session must be reported failed with the
-// cancellation reason — a partial result must never read as a completed
-// answer whose event log simply stops.
+// a partial result returned with a nil error in the residual cancellation
+// window must be failed with its cancellation reason, not completed.
 func TestShutdownCancelReportsFailedWithReason(t *testing.T) {
-	base, shutdown := context.WithCancel(context.Background())
+	ctx := &residualCancelContext{Context: context.Background()}
 	model := &recordingModel{complete: func(
-		ctx context.Context,
+		_ context.Context,
 		_ string,
 		_ []conversation.Message,
 		_ []agent.ToolDefinition,
 		_ int,
 	) (agent.ModelClientResult, error) {
-		<-ctx.Done()
-		// A provider may hand back a partial result instead of an error when
-		// the request context ends mid-flight.
+		ctx.modelReturned.Store(true)
 		return assistantResult("partial answer cut off mid-flight"), nil
 	}}
 	manager := newTestManager(t, model)
-	// Same-package override of the manager base context: canceling base
-	// simulates process shutdown for this session.
-	manager.baseCtx = base
-
-	session, err := manager.Start(StartRequest{ModelRef: "child", Task: "work"})
-	if err != nil {
-		t.Fatalf("Start() error = %v", err)
+	engine := agent.NewEngine(model, nil, []string{"child"})
+	session := &Session{
+		ID: "subagent-1", Status: "running", done: make(chan struct{}),
+		messages: []conversation.Message{conversation.UserMessage("work")},
 	}
-	shutdown()
+	manager.sessions[session.ID] = session
+	go manager.run(ctx, session, engine, agent.NewTurnBudget(1))
 	waitDone(t, session)
 
 	read := session.Read(0, defaultMaxOutput)
@@ -1295,5 +1306,165 @@ func TestRunCompletionDrivesLogEviction(t *testing.T) {
 	}
 	if _, ok := manager.Get(oldest.ID); !ok {
 		t.Fatal("log-evicted session record vanished from the manager")
+	}
+}
+
+func TestShutdownCancelErrorIncludesReason(t *testing.T) {
+	base, shutdown := context.WithCancel(context.Background())
+	manager := newTestManager(t, &recordingModel{})
+	manager.baseCtx = base
+	manager.contextFitter = func(
+		context.Context,
+		agent.ModelContext,
+		[]conversation.Message,
+		[]agent.ToolDefinition,
+		int,
+		...conversation.Message,
+	) ([]conversation.Message, error) {
+		shutdown()
+		return nil, fmt.Errorf("context fitting failed")
+	}
+
+	session, err := manager.Start(StartRequest{ModelRef: "child", Task: "work"})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	waitDone(t, session)
+
+	if session.Status != "failed" {
+		t.Fatalf("session.Status = %q, want failed", session.Status)
+	}
+	if session.err == nil || !strings.Contains(session.err.Error(), "context canceled") ||
+		!strings.Contains(session.err.Error(), "context fitting failed") {
+		t.Fatalf("session.err = %v, want both cancellation and run errors", session.err)
+	}
+}
+
+func TestKilledSessionEvictionWaitsForRunToFinish(t *testing.T) {
+	started := make(chan struct{})
+	canceled := make(chan struct{})
+	release := make(chan struct{})
+	model := &recordingModel{complete: func(
+		ctx context.Context,
+		_ string,
+		_ []conversation.Message,
+		_ []agent.ToolDefinition,
+		call int,
+	) (agent.ModelClientResult, error) {
+		if call != 1 {
+			return assistantResult("done"), nil
+		}
+		close(started)
+		<-ctx.Done()
+		close(canceled)
+		<-release
+		return agent.ModelClientResult{}, ctx.Err()
+	}}
+	manager := newTestManager(t, model)
+	killed, err := manager.Start(StartRequest{ModelRef: "child", Task: "work"})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("model call did not start")
+	}
+	killed.Kill()
+	select {
+	case <-canceled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("model call did not observe cancellation")
+	}
+
+	finishSessions := func() {
+		t.Helper()
+		for i := 0; i < maxFinishedSessionLogs; i++ {
+			session, err := manager.Start(StartRequest{ModelRef: "child", Task: "work"})
+			if err != nil {
+				t.Fatalf("Start() error = %v", err)
+			}
+			waitDone(t, session)
+		}
+	}
+	finishSessions()
+	killed.mu.Lock()
+	evictedBeforeReturn := killed.logEvicted
+	killed.mu.Unlock()
+	close(release)
+	waitDone(t, killed)
+	if evictedBeforeReturn {
+		t.Fatal("killed session log was evicted while its engine was still running")
+	}
+
+	// Once the killed run has returned, it participates in retention exactly
+	// like every other terminal session.
+	finishSessions()
+	killed.mu.Lock()
+	evictedAfterReturn := killed.logEvicted
+	killed.mu.Unlock()
+	if !evictedAfterReturn {
+		t.Fatal("killed session log survived past the finished-log retention cap")
+	}
+}
+
+func TestEvictedReadKeepsEventCursorAndReleasesResult(t *testing.T) {
+	session := &Session{
+		ID:          "subagent-1",
+		Status:      "completed",
+		finalAnswer: "answer",
+		events: []Event{
+			{Index: 0, Type: "model_response", Text: "answer"},
+			{Index: 1, Type: "completed", Text: "answer"},
+		},
+		result: &agent.EngineResult{
+			Messages: []conversation.Message{{Role: conversation.AssistantRole}},
+			Attachments: []conversation.Part{{
+				Type: conversation.MediaPartType, DataURL: "large retained payload",
+			}},
+		},
+	}
+	session.dropLog()
+
+	read := session.Read(0, defaultMaxOutput)
+	if !strings.Contains(read, "Next-Event-Index: 2") {
+		t.Fatalf("evicted session read = %q, want its terminal event cursor", read)
+	}
+	if session.result != nil {
+		t.Fatal("log eviction retained the engine result and its attachments")
+	}
+}
+
+func TestListConcurrentWithSessionCompletion(t *testing.T) {
+	manager := newTestManager(t, &recordingModel{})
+	list := NewList(manager)
+	stop := make(chan struct{})
+	readerDone := make(chan error, 1)
+	go func() {
+		for {
+			select {
+			case <-stop:
+				readerDone <- nil
+				return
+			default:
+			}
+			if _, err := list.Run(context.Background(), `{"state":"all"}`); err != nil {
+				readerDone <- err
+				return
+			}
+		}
+	}()
+
+	for i := 0; i < 32; i++ {
+		session, err := manager.Start(StartRequest{ModelRef: "child", Task: "work"})
+		if err != nil {
+			close(stop)
+			t.Fatalf("Start() error = %v", err)
+		}
+		waitDone(t, session)
+	}
+	close(stop)
+	if err := <-readerDone; err != nil {
+		t.Fatalf("List.Run() error = %v", err)
 	}
 }

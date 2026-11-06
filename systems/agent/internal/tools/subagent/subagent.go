@@ -178,8 +178,10 @@ type Session struct {
 	result   *agent.EngineResult
 	err      error
 	done     chan struct{}
-	// finishedAt is the terminal transition time; it orders finished sessions
-	// for retention eviction and is zero while the session runs.
+	// finishedAt is recorded during run's terminal bookkeeping and orders
+	// finished sessions for retention eviction. It stays zero while run is
+	// active, including after Kill marks the session but before the engine
+	// returns, so retention cannot drop a log that is still being written.
 	finishedAt time.Time
 	// finalAnswer, logEvicted and droppedEvents keep an evicted session
 	// readable after retention drops its event log: the terminal state, the
@@ -328,6 +330,11 @@ func (m *Manager) run(
 	// before done is closed so a waiter unblocked by done observes the
 	// post-eviction state.
 	defer func() {
+		s.mu.Lock()
+		if s.Status != "running" {
+			s.finishedAt = time.Now()
+		}
+		s.mu.Unlock()
 		m.evictFinishedSessions()
 		close(s.done)
 	}()
@@ -366,23 +373,23 @@ func (m *Manager) run(
 		s.result = &result
 		s.messages = append(s.messages, result.Messages...)
 		s.finalAnswer = result.FinalText
-		if err != nil {
+		if ctx.Err() != nil {
+			// Check the context before a generic run error: cancellation may
+			// cause that error, and the terminal record must retain the
+			// cancellation reason rather than only a secondary failure.
 			s.Status = "failed"
-			s.err = err
-			s.finishedAt = time.Now()
-			s.addEventLocked("failed", result.FinalText, err)
+			s.err = fmt.Errorf("session context ended before the run finished: %w", ctx.Err())
+			if err != nil {
+				s.err = fmt.Errorf("%w; run error: %v", s.err, err)
+			}
+			s.addEventLocked("failed", result.FinalText, s.err)
 			s.mu.Unlock()
 			return
 		}
-		if ctx.Err() != nil {
-			// The context ended while the engine was mid-flight and it still
-			// returned a nil error, so result may be partial. Marking that
-			// completed would truncate silently, so the session fails with the
-			// cancellation reason before its events are readable.
+		if err != nil {
 			s.Status = "failed"
-			s.err = fmt.Errorf("session context ended before the run finished: %w", ctx.Err())
-			s.finishedAt = time.Now()
-			s.addEventLocked("failed", result.FinalText, s.err)
+			s.err = err
+			s.addEventLocked("failed", result.FinalText, err)
 			s.mu.Unlock()
 			return
 		}
@@ -394,7 +401,6 @@ func (m *Manager) run(
 				), nil)
 			}
 			s.Status = "completed"
-			s.finishedAt = time.Now()
 			s.addEventLocked("completed", result.FinalText, nil)
 			s.mu.Unlock()
 			return
@@ -421,9 +427,7 @@ func (s *Session) dropLog() {
 	s.events = nil
 	s.messages = nil
 	s.pending = nil
-	if s.result != nil {
-		s.result.Messages = nil
-	}
+	s.result = nil
 	s.logEvicted = true
 }
 
@@ -446,7 +450,7 @@ func (m *Manager) evictFinishedSessions() {
 	var done []finished
 	for _, s := range m.sessions {
 		s.mu.Lock()
-		if s.Status != "running" {
+		if s.Status != "running" && !s.finishedAt.IsZero() {
 			done = append(done, finished{session: s, finishedAt: s.finishedAt})
 		}
 		s.mu.Unlock()
@@ -504,7 +508,7 @@ func (m *Manager) List(state string, limit int) []*Session {
 	}
 	out := make([]*Session, 0, len(m.sessions))
 	for _, s := range m.sessions {
-		if state == "" || state == "all" || s.Status == state {
+		if state == "" || state == "all" || s.status() == state {
 			out = append(out, s)
 		}
 	}
@@ -550,9 +554,16 @@ func (s *Session) Read(after, maxChars int) string {
 		}
 		b.WriteString(line)
 	}
-	fmt.Fprintf(&b, "Next-Event-Index: %d", len(s.events))
+	fmt.Fprintf(&b, "Next-Event-Index: %d", s.droppedEvents+len(s.events))
 	return b.String()
 }
+
+func (s *Session) status() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.Status
+}
+
 func (s *Session) Write(message string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -572,7 +583,6 @@ func (s *Session) Kill() {
 	s.mu.Lock()
 	if s.Status == "running" {
 		s.Status = "killed"
-		s.finishedAt = time.Now()
 		if s.cancel != nil {
 			s.cancel()
 		}
@@ -774,7 +784,7 @@ func (t *Write) Run(_ context.Context, args string) (string, error) {
 	if err := s.Write(a.Message); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("Session-ID: %s\nStatus: %s\nMessage-Appended: true", s.ID, s.Status), nil
+	return fmt.Sprintf("Session-ID: %s\nStatus: %s\nMessage-Appended: true", s.ID, s.status()), nil
 }
 
 // List enumerates delegated sub-agent sessions.
@@ -830,7 +840,7 @@ func (t *List) Run(_ context.Context, args string) (string, error) {
 			"Session-ID: %s\nModel: %s\nStatus: %s\nTask: %s\nCreated-At: %s\n\n",
 			s.ID,
 			s.Model,
-			s.Status,
+			s.status(),
 			truncate(s.Task, 200),
 			s.CreatedAt.Format(time.RFC3339),
 		)
@@ -877,7 +887,7 @@ func (t *Kill) Run(_ context.Context, args string) (string, error) {
 		return "", fmt.Errorf("unknown subagent session %q", a.SessionID)
 	}
 	s.Kill()
-	return fmt.Sprintf("Session-ID: %s\nStatus: %s", s.ID, s.Status), nil
+	return fmt.Sprintf("Session-ID: %s\nStatus: %s", s.ID, s.status()), nil
 }
 
 // resolveSkillRefs resolves skill name/path refs from the spawn tool into
