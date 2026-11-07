@@ -255,8 +255,14 @@ func TestNotificationIsBounded(t *testing.T) {
 	if len(msgs) != 1 {
 		t.Fatalf("notifications = %d, want exactly 1", len(msgs))
 	}
-	if got := utf8.RuneCountInString(msgs[0].Text); got > maxNotificationRunes {
-		t.Fatalf("notification length = %d runes, want <= %d", got, maxNotificationRunes)
+	// Equality, not an upper bound: a byte-based cut would produce a message of
+	// roughly half this length, and only the exact budget catches that.
+	if got := utf8.RuneCountInString(msgs[0].Text); got != maxNotificationRunes {
+		t.Fatalf(
+			"notification length = %d runes, want exactly %d: the bound did not use its budget",
+			got,
+			maxNotificationRunes,
+		)
 	}
 	if !strings.Contains(msgs[0].Text, "truncated") {
 		t.Fatalf("notification %q does not say the answer was truncated", msgs[0].Text)
