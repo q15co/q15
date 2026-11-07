@@ -580,6 +580,7 @@ func newTestManagerWithModels(
 		nil,
 		nil,
 		newTestContextFitter(t),
+		nil,
 	)
 }
 
@@ -730,6 +731,7 @@ func newTestManagerWithResolver(
 		resolver,
 		nil,
 		newTestContextFitter(t),
+		nil,
 	)
 }
 

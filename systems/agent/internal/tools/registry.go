@@ -213,6 +213,7 @@ func NewSubAgentManager(
 	skillResolver subagent.SkillResolver,
 	dumpWriter io.Writer,
 	contextFitter agent.RequestContextFitter,
+	notifier subagent.Notifier,
 ) *subagent.Manager {
 	return subagent.NewManager(
 		ctx,
@@ -223,5 +224,6 @@ func NewSubAgentManager(
 		skillResolver,
 		dumpWriter,
 		contextFitter,
+		notifier,
 	)
 }
