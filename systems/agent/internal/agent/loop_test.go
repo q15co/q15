@@ -10,6 +10,7 @@ import (
 
 	"github.com/q15co/q15/systems/agent/internal/conversation"
 	"github.com/q15co/q15/systems/agent/internal/modelselection"
+	"github.com/q15co/q15/systems/agent/internal/turnctx"
 )
 
 type fakeModelClient struct {
@@ -178,6 +179,34 @@ func firstPart(msg conversation.Message) conversation.Part {
 
 func userTextMessage(text string) conversation.Message {
 	return conversation.UserMessage(text)
+}
+
+func TestLoopReplyPassesReservedTurnIdentityToTools(t *testing.T) {
+	var gotSeq int64
+	var gotOrigin turnctx.Origin
+	registry, err := NewToolRegistry(&testTool{
+		def: ToolDefinition{Name: "capture_parent"},
+		run: func(ctx context.Context, _ string) (string, error) {
+			gotSeq = turnctx.TurnSeqFrom(ctx)
+			gotOrigin, _ = turnctx.OriginFrom(ctx)
+			return "captured", nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := &fakeModelClient{results: []ModelClientResult{
+		toolCallResult("capture", "capture_parent", `{}`), assistantResult("done"),
+	}}
+	store := &fakeConversationStore{reservedSeq: 42}
+	loop := NewLoop(model, registry, []string{"model"}, "system", store, 0)
+	origin := turnctx.Origin{Channel: "web", ChatID: "chat", UserID: "owner", MessageID: "message"}
+	if _, err := loop.Reply(turnctx.WithOrigin(t.Context(), origin), userTextMessage("work"), nil); err != nil {
+		t.Fatal(err)
+	}
+	if gotSeq != 42 || gotOrigin != origin {
+		t.Fatalf("tool context: sequence=%d origin=%+v", gotSeq, gotOrigin)
+	}
 }
 
 func TestDefaultSystemPromptUsesStructuredPromptSections(t *testing.T) {

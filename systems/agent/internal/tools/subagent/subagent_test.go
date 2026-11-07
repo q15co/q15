@@ -2,11 +2,13 @@ package subagent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -84,7 +86,7 @@ func TestManagerStartDefaultsToNoTools(t *testing.T) {
 	model := &recordingModel{}
 	manager := newTestManager(t, model)
 
-	session, err := manager.Start(context.Background(), StartRequest{
+	session, err := manager.Start(StartRequest{
 		ModelRef: "child",
 		Task:     "summarize this",
 	})
@@ -232,7 +234,7 @@ func TestManagerStartSendsTaggedProviderModelToClient(t *testing.T) {
 	})
 
 	// deriveRef("gemma3:4b") == "gemma3-4b", preserving the version tag.
-	session, err := manager.Start(context.Background(), StartRequest{
+	session, err := manager.Start(StartRequest{
 		ModelRef: "gemma3-4b", // agent-facing ref
 		Task:     "summarize this",
 	})
@@ -283,7 +285,7 @@ func TestSessionWriteQueuesFollowUpForRunningSubAgent(t *testing.T) {
 	}
 	manager := newTestManager(t, model)
 
-	session, err := manager.Start(context.Background(), StartRequest{
+	session, err := manager.Start(StartRequest{
 		ModelRef: "child",
 		Task:     "initial task",
 	})
@@ -342,7 +344,7 @@ func TestWriteToolRunAppendsMessageToRunningSession(t *testing.T) {
 	}
 	manager := newTestManager(t, model)
 
-	session, err := manager.Start(context.Background(), StartRequest{
+	session, err := manager.Start(StartRequest{
 		ModelRef: "child",
 		Task:     "initial task",
 	})
@@ -415,7 +417,7 @@ func TestWriteToolRunRejectsEmptyMessage(t *testing.T) {
 	}
 	manager := newTestManager(t, model)
 
-	session, err := manager.Start(context.Background(), StartRequest{
+	session, err := manager.Start(StartRequest{
 		ModelRef: "child",
 		Task:     "initial task",
 	})
@@ -546,7 +548,9 @@ func newTestManager(t *testing.T, model agent.ModelClient) *Manager {
 // newTestManagerWithModels builds a sub-agent manager backed by a registry
 // seeded with the given provider models. It allows tests to register tagged
 // models (e.g. ProviderModel: "gemma3:4b") whose agent-facing ref is derived
-// by modelcatalog.deriveRef at refresh time.
+// by modelcatalog.deriveRef at refresh time. The manager's base context is
+// context.Background(); tests that drive session lifetime set manager.baseCtx
+// after construction, the same way budget_test.go swaps manager.tools.
 func newTestManagerWithModels(
 	t *testing.T,
 	model agent.ModelClient,
@@ -566,6 +570,7 @@ func newTestManagerWithModels(
 	)
 	reg.Refresh(context.Background())
 	return NewManager(
+		context.Background(),
 		reg,
 		func(modelcatalog.Model, q15media.Store) (agent.ModelClient, error) {
 			return model, nil
@@ -627,9 +632,13 @@ func subagentTestTextContains(message conversation.Message, text string) bool {
 
 func waitDone(t *testing.T, session *Session) {
 	t.Helper()
+	timeout := 30 * time.Second
+	if deadline, ok := t.Deadline(); ok && time.Until(deadline) < timeout {
+		timeout = time.Until(deadline)
+	}
 	select {
 	case <-session.done:
-	case <-time.After(2 * time.Second):
+	case <-time.After(timeout):
 		t.Fatalf("session %s did not finish", session.ID)
 	}
 }
@@ -711,6 +720,7 @@ func newTestManagerWithResolver(
 	)
 	reg.Refresh(context.Background())
 	return NewManager(
+		context.Background(),
 		reg,
 		func(modelcatalog.Model, q15media.Store) (agent.ModelClient, error) {
 			return model, nil
@@ -1005,5 +1015,637 @@ func TestSubagentDispatchRechecksChatCapability(t *testing.T) {
 	}
 	if len(inner.snapshotCalls()) != 1 {
 		t.Fatal("provider called after capability was removed")
+	}
+}
+
+// TestSessionSurvivesParentTurnCancel is the regression for #393: a session
+// spawned from the parent chat turn's context must keep running after that
+// turn's context is canceled, because the session context derives from the
+// manager's base context (process lifetime), not from the dispatch context.
+func TestSessionSurvivesParentTurnCancel(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	model := &recordingModel{complete: func(
+		ctx context.Context,
+		_ string,
+		_ []conversation.Message,
+		_ []agent.ToolDefinition,
+		_ int,
+	) (agent.ModelClientResult, error) {
+		close(started)
+		<-release
+		if err := ctx.Err(); err != nil {
+			// Regressed: the session context is still a child of the dispatch
+			// context and died when the parent turn ended.
+			return agent.ModelClientResult{}, fmt.Errorf(
+				"session died with the parent turn: %w", err,
+			)
+		}
+		return assistantResult("survived the parent turn"), nil
+	}}
+	manager := newTestManager(t, model)
+	parentTurn, cancelTurn := context.WithCancel(context.Background())
+
+	out, err := NewSpawn(
+		manager,
+	).Run(parentTurn, `{"model":"child","task":"work","wait_seconds":0}`)
+	if err != nil {
+		t.Fatalf("Spawn.Run() error = %v", err)
+	}
+	if !strings.Contains(out, "Status: running") {
+		t.Fatalf("Spawn.Run() output = %q, want a running session", out)
+	}
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("model call did not start")
+	}
+
+	// The parent chat turn ends. Context cancellation is synchronous, so a
+	// session context still derived from the dispatch context would already
+	// be done when the model returns above.
+	cancelTurn()
+	close(release)
+
+	session, ok := manager.Get(sessionID(1))
+	if !ok {
+		t.Fatal("Spawn.Run() did not register the session with the manager")
+	}
+	waitDone(t, session)
+	read := session.Read(0, defaultMaxOutput)
+	if session.Status != "completed" ||
+		!strings.Contains(read, "completed: survived the parent turn") {
+		t.Fatalf("session did not survive the parent turn ending: %s", read)
+	}
+}
+
+func TestSpawnWaitStopsWhenParentTurnCanceled(t *testing.T) {
+	started := make(chan context.Context, 1)
+	release := make(chan struct{})
+	model := &recordingModel{complete: func(
+		ctx context.Context,
+		_ string,
+		_ []conversation.Message,
+		_ []agent.ToolDefinition,
+		_ int,
+	) (agent.ModelClientResult, error) {
+		started <- ctx
+		select {
+		case <-release:
+			return assistantResult("finished after parent cancellation"), nil
+		case <-ctx.Done():
+			return agent.ModelClientResult{}, ctx.Err()
+		}
+	}}
+	manager := newTestManager(t, model)
+	base, shutdown := context.WithCancel(t.Context())
+	t.Cleanup(shutdown)
+	manager.baseCtx = base
+	parentTurn, cancelTurn := context.WithCancel(t.Context())
+	t.Cleanup(cancelTurn)
+	returned := make(chan error, 1)
+	go func() {
+		_, err := NewSpawn(manager).Run(parentTurn,
+			`{"model":"child","task":"work","wait_seconds":300}`)
+		returned <- err
+	}()
+
+	var sessionCtx context.Context
+	select {
+	case sessionCtx = <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("model call did not start")
+	}
+	cancelTurn()
+	select {
+	case err := <-returned:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Spawn.Run() error = %v, want context canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Spawn.Run() kept waiting after the parent turn was canceled")
+	}
+	if err := sessionCtx.Err(); err != nil {
+		t.Fatalf("session context ended with its parent turn: %v", err)
+	}
+	close(release)
+	session, ok := manager.Get(sessionID(1))
+	if !ok {
+		t.Fatal("spawned session disappeared")
+	}
+	waitDone(t, session)
+	if session.status() != "completed" {
+		t.Fatalf("session did not complete: %s", session.Read(0, defaultMaxOutput))
+	}
+}
+
+func TestSpawnRejectsCanceledOrInvalidRequestsBeforeStarting(t *testing.T) {
+	for _, name := range []string{"canceled", "negative wait"} {
+		t.Run(name, func(t *testing.T) {
+			manager := newTestManager(t, &recordingModel{})
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			args := `{"model":"child","task":"work","wait_seconds":0}`
+			if name == "canceled" {
+				cancel()
+			} else {
+				args = `{"model":"child","task":"work","wait_seconds":-1}`
+			}
+			if _, err := NewSpawn(manager).Run(ctx, args); err == nil {
+				t.Fatal("Spawn.Run() succeeded")
+			}
+			if sessions := manager.List("all", 0); len(sessions) != 0 {
+				t.Fatalf("rejected spawn started %d sessions", len(sessions))
+			}
+		})
+	}
+}
+
+func TestFinishedSessionReleasesContext(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(fmt.Sprintf("failure=%t", fail), func(t *testing.T) {
+			contexts := make(chan context.Context, 1)
+			model := &recordingModel{complete: func(
+				ctx context.Context,
+				_ string,
+				_ []conversation.Message,
+				_ []agent.ToolDefinition,
+				_ int,
+			) (agent.ModelClientResult, error) {
+				contexts <- ctx
+				if fail {
+					return agent.ModelClientResult{}, errors.New("model failed")
+				}
+				return assistantResult("done"), nil
+			}}
+			manager := newTestManager(t, model)
+			session, err := manager.Start(StartRequest{ModelRef: "child", Task: "work"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			waitDone(t, session)
+			ctx := <-contexts
+			if !errors.Is(ctx.Err(), context.Canceled) {
+				t.Fatalf("finished session context error = %v, want context canceled", ctx.Err())
+			}
+			want := "completed"
+			if fail {
+				want = "failed"
+			}
+			if got := session.status(); got != want {
+				t.Fatalf("session status = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+// residualCancelContext opens the window between the engine's final context
+// check and the manager's terminal bookkeeping: the first check after the
+// model returns stays live, and subsequent checks report cancellation.
+type residualCancelContext struct {
+	context.Context
+	modelReturned atomic.Bool
+	checks        atomic.Int32
+}
+
+func (c *residualCancelContext) Err() error {
+	if !c.modelReturned.Load() || c.checks.Add(1) == 1 {
+		return nil
+	}
+	return context.Canceled
+}
+
+// TestShutdownCancelReportsFailedWithReason is #393 lifecycle requirement 1:
+// a partial result returned with a nil error in the residual cancellation
+// window must be failed with its cancellation reason, not completed.
+func TestShutdownCancelReportsFailedWithReason(t *testing.T) {
+	ctx := &residualCancelContext{Context: context.Background()}
+	model := &recordingModel{complete: func(
+		_ context.Context,
+		_ string,
+		_ []conversation.Message,
+		_ []agent.ToolDefinition,
+		_ int,
+	) (agent.ModelClientResult, error) {
+		ctx.modelReturned.Store(true)
+		return assistantResult("partial answer cut off mid-flight"), nil
+	}}
+	manager := newTestManager(t, model)
+	engine := agent.NewEngine(model, nil, []string{"child"})
+	session := &Session{
+		ID: "subagent-1", Status: "running", done: make(chan struct{}),
+		messages: []conversation.Message{conversation.UserMessage("work")},
+	}
+	manager.sessions[session.ID] = session
+	go manager.run(ctx, session, engine, agent.NewTurnBudget(1))
+	waitDone(t, session)
+
+	read := session.Read(0, defaultMaxOutput)
+	if session.Status != "failed" {
+		t.Fatalf("session.Status = %q, want failed:\n%s", session.Status, read)
+	}
+	if session.err == nil || !strings.Contains(session.err.Error(), "context canceled") {
+		t.Fatalf("session.err = %v, want the cancellation reason", session.err)
+	}
+	if !strings.Contains(read, "failed:") || strings.Contains(read, "] completed") {
+		t.Fatalf("read = %q, want a terminal failed event and no completed event", read)
+	}
+}
+
+// TestKillStaysKilledAfterCancelVisibility guards the distinction required by
+// #393: an intentional subagent_kill cancels the same session context, yet
+// the session must stay killed — the cancellation-visibility check must not
+// rewrite an intentional kill into a failure.
+func TestKillStaysKilledAfterCancelVisibility(t *testing.T) {
+	started := make(chan struct{})
+	model := &recordingModel{complete: func(
+		ctx context.Context,
+		_ string,
+		_ []conversation.Message,
+		_ []agent.ToolDefinition,
+		_ int,
+	) (agent.ModelClientResult, error) {
+		close(started)
+		<-ctx.Done()
+		return agent.ModelClientResult{}, ctx.Err()
+	}}
+	manager := newTestManager(t, model)
+	session, err := manager.Start(StartRequest{ModelRef: "child", Task: "work"})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("model call did not start")
+	}
+
+	out, err := NewKill(manager).Run(context.Background(), `{"session_id":"`+session.ID+`"}`)
+	if err != nil {
+		t.Fatalf("Kill.Run() error = %v", err)
+	}
+	if !strings.Contains(out, "Status: killed") {
+		t.Fatalf("Kill.Run() output = %q, want Status: killed", out)
+	}
+	waitDone(t, session)
+	if session.Status != "killed" {
+		t.Fatalf("session.Status = %q, want killed: %s",
+			session.Status, session.Read(0, defaultMaxOutput))
+	}
+	if session.err != nil {
+		t.Fatalf("session.err = %v, want nil: an intentional kill is not a failure", session.err)
+	}
+	read := session.Read(0, defaultMaxOutput)
+	if !strings.Contains(read, "killed") || strings.Contains(read, "] failed") {
+		t.Fatalf("read = %q, want killed without a failed event", read)
+	}
+}
+
+// TestFinishedSessionEvictionBoundsRetention is #393 lifecycle requirement 2:
+// retention of finished sessions is bounded count-wise. The oldest finished
+// sessions lose their event log first while their record keeps the terminal
+// state and final answer; beyond the record cap the oldest records are
+// deleted entirely; and running sessions are never evicted.
+func TestFinishedSessionEvictionBoundsRetention(t *testing.T) {
+	manager := newTestManager(t, &recordingModel{})
+	base := time.Now()
+	insert := func(i int) *Session {
+		s := &Session{
+			ID:          fmt.Sprintf("subagent-old-%d", i),
+			Model:       "child",
+			Task:        "historical task",
+			Status:      "completed",
+			CreatedAt:   base.Add(time.Duration(i) * time.Second),
+			finishedAt:  base.Add(time.Duration(i) * time.Second),
+			finalAnswer: fmt.Sprintf("final answer %d", i),
+			events: []Event{
+				{Index: 0, Type: "model_response", Text: "working"},
+				{Index: 1, Type: "completed", Text: fmt.Sprintf("final answer %d", i)},
+			},
+		}
+		manager.sessions[s.ID] = s
+		return s
+	}
+	// Two more finished sessions than the record cap, so eviction both drops
+	// logs and deletes the oldest records entirely.
+	total := maxFinishedSessionRecords + 2
+	for i := 0; i < total; i++ {
+		insert(i)
+	}
+	running := &Session{
+		ID:        "subagent-running",
+		Model:     "child",
+		Task:      "still working",
+		Status:    "running",
+		CreatedAt: base.Add(time.Duration(total) * time.Second),
+		events:    []Event{{Index: 0, Type: "model_response", Text: "working"}},
+	}
+	manager.sessions[running.ID] = running
+
+	if err := manager.evictFinishedSessions(); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := len(manager.sessions); got != maxFinishedSessionRecords+1 {
+		t.Fatalf("retained sessions = %d, want %d finished records plus the running one",
+			got, maxFinishedSessionRecords)
+	}
+	for _, i := range []int{0, 1} {
+		if _, ok := manager.Get(fmt.Sprintf("subagent-old-%d", i)); ok {
+			t.Fatalf("finished session %d survived beyond the record cap", i)
+		}
+	}
+	oldestRetained, ok := manager.Get("subagent-old-2")
+	if !ok {
+		t.Fatal("oldest finished session under the record cap was deleted")
+	}
+	if !oldestRetained.logEvicted || len(oldestRetained.events) != 0 {
+		t.Fatalf("oldest retained session kept its event log: %#v", oldestRetained.events)
+	}
+	if oldestRetained.Status != "completed" || oldestRetained.finalAnswer != "final answer 2" {
+		t.Fatalf("evicted session lost its terminal record: status=%q answer=%q",
+			oldestRetained.Status, oldestRetained.finalAnswer)
+	}
+	read := oldestRetained.Read(0, defaultMaxOutput)
+	for _, want := range []string{
+		"Status: completed",
+		"Event-Log: evicted by retention",
+		"Final-Answer: final answer 2",
+	} {
+		if !strings.Contains(read, want) {
+			t.Fatalf("evicted session read = %q, want %q", read, want)
+		}
+	}
+	newest, ok := manager.Get(fmt.Sprintf("subagent-old-%d", total-1))
+	if !ok || newest.logEvicted || len(newest.events) != 2 {
+		t.Fatalf("newest finished session lost its event log: %#v", newest)
+	}
+	if running.logEvicted || len(running.events) != 1 {
+		t.Fatal("running session was evicted")
+	}
+	if _, ok := manager.Get(running.ID); !ok {
+		t.Fatal("running session was deleted from the manager")
+	}
+}
+
+func TestFinishedSessionEvictionBreaksTimestampTies(t *testing.T) {
+	manager := &Manager{sessions: make(map[string]*Session)}
+	finishedAt := time.Now()
+	for i := 0; i <= maxFinishedSessionLogs; i++ {
+		id := fmt.Sprintf("subagent-tied-%02d", i)
+		manager.sessions[id] = &Session{
+			ID:         id,
+			Status:     "completed",
+			finishedAt: finishedAt,
+			events:     []Event{{Index: 0, Type: "completed"}},
+		}
+	}
+
+	// Map iteration order varies between passes. Repetition makes this test
+	// discriminate the old timestamp-only comparator instead of relying on a
+	// fortunate map order; the ID tie-break makes every pass deterministic.
+	for attempt := 0; attempt < 32; attempt++ {
+		if err := manager.evictFinishedSessions(); err != nil {
+			t.Fatal(err)
+		}
+		for i := 0; i <= maxFinishedSessionLogs; i++ {
+			session := manager.sessions[fmt.Sprintf("subagent-tied-%02d", i)]
+			if want := i == 0; session.logEvicted != want {
+				t.Fatalf("attempt %d: session %s logEvicted = %v, want %v",
+					attempt, session.ID, session.logEvicted, want)
+			}
+			session.logEvicted = false
+			session.events = []Event{{Index: 0, Type: "completed"}}
+		}
+	}
+}
+
+// TestRunCompletionDrivesLogEviction proves retention runs at the terminal
+// transition itself: once more than maxFinishedSessionLogs sessions are
+// finished, the oldest finished session's event log is dropped while its
+// record — terminal state and final answer — stays readable.
+func TestRunCompletionDrivesLogEviction(t *testing.T) {
+	manager := newTestManager(t, &recordingModel{})
+	sessions := make([]*Session, 0, maxFinishedSessionLogs+1)
+	for i := 0; i <= maxFinishedSessionLogs; i++ {
+		session, err := manager.Start(StartRequest{
+			ModelRef: "child",
+			Task:     fmt.Sprintf("task %d", i),
+		})
+		if err != nil {
+			t.Fatalf("Start() error = %v", err)
+		}
+		waitDone(t, session)
+		if session.Status != "completed" {
+			t.Fatalf("session %d = %q, want completed", i, session.Status)
+		}
+		sessions = append(sessions, session)
+	}
+
+	oldest := sessions[0]
+	if !oldest.logEvicted {
+		t.Fatal("oldest finished session kept its event log past the retention cap")
+	}
+	read := oldest.Read(0, defaultMaxOutput)
+	for _, want := range []string{
+		"Status: completed",
+		"Event-Log: evicted by retention",
+		"Final-Answer: done",
+	} {
+		if !strings.Contains(read, want) {
+			t.Fatalf("evicted session read = %q, want %q", read, want)
+		}
+	}
+	newest := sessions[len(sessions)-1]
+	if newest.logEvicted {
+		t.Fatal("most recently finished session lost its event log")
+	}
+	if read := newest.Read(0, defaultMaxOutput); !strings.Contains(read, "completed: done") {
+		t.Fatalf("newest session read = %q, want the full completed event", read)
+	}
+	if _, ok := manager.Get(oldest.ID); !ok {
+		t.Fatal("log-evicted session record vanished from the manager")
+	}
+}
+
+func TestShutdownCancelErrorIncludesReason(t *testing.T) {
+	base, shutdown := context.WithCancel(context.Background())
+	manager := newTestManager(t, &recordingModel{})
+	manager.baseCtx = base
+	manager.contextFitter = func(
+		context.Context,
+		agent.ModelContext,
+		[]conversation.Message,
+		[]agent.ToolDefinition,
+		int,
+		...conversation.Message,
+	) ([]conversation.Message, error) {
+		shutdown()
+		return nil, fmt.Errorf("context fitting failed")
+	}
+
+	session, err := manager.Start(StartRequest{ModelRef: "child", Task: "work"})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	waitDone(t, session)
+
+	if session.Status != "failed" {
+		t.Fatalf("session.Status = %q, want failed", session.Status)
+	}
+	if session.err == nil || !strings.Contains(session.err.Error(), "context canceled") ||
+		!strings.Contains(session.err.Error(), "context fitting failed") {
+		t.Fatalf("session.err = %v, want both cancellation and run errors", session.err)
+	}
+}
+
+func TestKilledSessionEvictionWaitsForRunToFinish(t *testing.T) {
+	started := make(chan struct{})
+	canceled := make(chan struct{})
+	release := make(chan struct{})
+	model := &recordingModel{complete: func(
+		ctx context.Context,
+		_ string,
+		_ []conversation.Message,
+		_ []agent.ToolDefinition,
+		call int,
+	) (agent.ModelClientResult, error) {
+		if call != 1 {
+			return assistantResult("done"), nil
+		}
+		close(started)
+		<-ctx.Done()
+		close(canceled)
+		<-release
+		return agent.ModelClientResult{}, ctx.Err()
+	}}
+	manager := newTestManager(t, model)
+	killed, err := manager.Start(StartRequest{ModelRef: "child", Task: "work"})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("model call did not start")
+	}
+	killed.Kill()
+	select {
+	case <-canceled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("model call did not observe cancellation")
+	}
+
+	finishSessions := func() {
+		t.Helper()
+		for i := 0; i < maxFinishedSessionLogs; i++ {
+			session, err := manager.Start(StartRequest{ModelRef: "child", Task: "work"})
+			if err != nil {
+				t.Fatalf("Start() error = %v", err)
+			}
+			waitDone(t, session)
+		}
+	}
+	finishSessions()
+	killed.mu.Lock()
+	evictedBeforeReturn := killed.logEvicted
+	killed.mu.Unlock()
+	close(release)
+	waitDone(t, killed)
+	if evictedBeforeReturn {
+		t.Fatal("killed session log was evicted while its engine was still running")
+	}
+
+	// Once the killed run has returned, it participates in retention exactly
+	// like every other terminal session.
+	finishSessions()
+	killed.mu.Lock()
+	evictedAfterReturn := killed.logEvicted
+	killed.mu.Unlock()
+	if !evictedAfterReturn {
+		t.Fatal("killed session log survived past the finished-log retention cap")
+	}
+}
+
+func TestEvictedReadKeepsEventCursorAndReleasesResult(t *testing.T) {
+	session := &Session{
+		ID:          "subagent-1",
+		Status:      "completed",
+		finalAnswer: "answer",
+		events: []Event{
+			{Index: 0, Type: "model_response", Text: "answer"},
+			{Index: 1, Type: "completed", Text: "answer"},
+		},
+		result: &agent.EngineResult{
+			Messages: []conversation.Message{{Role: conversation.AssistantRole}},
+			Attachments: []conversation.Part{{
+				Type: conversation.MediaPartType, DataURL: "large retained payload",
+			}},
+		},
+	}
+	session.dropLog()
+
+	read := session.Read(0, defaultMaxOutput)
+	if !strings.Contains(read, "Next-Event-Index: 2") {
+		t.Fatalf("evicted session read = %q, want its terminal event cursor", read)
+	}
+	if session.result != nil {
+		t.Fatal("log eviction retained the engine result and its attachments")
+	}
+}
+
+func TestEvictedReadBoundsFinalAnswerOutput(t *testing.T) {
+	session := &Session{
+		ID:            "subagent-1",
+		Status:        "completed",
+		finalAnswer:   strings.Repeat("long final answer ", 2000),
+		logEvicted:    true,
+		droppedEvents: 2,
+	}
+	const limit = 512
+	read := session.Read(0, limit)
+	if len(read) > limit {
+		t.Fatalf("read returned %d bytes, want at most %d", len(read), limit)
+	}
+	for _, want := range []string{
+		"Status: completed", "Final-Answer: long final answer", "Output-Truncated: true", "Next-Event-Index: 2",
+	} {
+		if !strings.Contains(read, want) {
+			t.Fatalf("read = %q, want %q", read, want)
+		}
+	}
+}
+
+func TestListConcurrentWithSessionCompletion(t *testing.T) {
+	manager := newTestManager(t, &recordingModel{})
+	list := NewList(manager)
+	stop := make(chan struct{})
+	readerDone := make(chan error, 1)
+	go func() {
+		for {
+			select {
+			case <-stop:
+				readerDone <- nil
+				return
+			default:
+			}
+			if _, err := list.Run(context.Background(), `{"state":"all"}`); err != nil {
+				readerDone <- err
+				return
+			}
+		}
+	}()
+
+	for i := 0; i < 32; i++ {
+		session, err := manager.Start(StartRequest{ModelRef: "child", Task: "work"})
+		if err != nil {
+			close(stop)
+			t.Fatalf("Start() error = %v", err)
+		}
+		waitDone(t, session)
+	}
+	close(stop)
+	if err := <-readerDone; err != nil {
+		t.Fatalf("List.Run() error = %v", err)
 	}
 }

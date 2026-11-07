@@ -1,0 +1,116 @@
+Name data sources
+=================
+
+names_data.go contains a compact selection of given and family names from:
+
+- faker-js/faker v10.1.0, commit f81abc77a34d8a2016f06b73ed859fef44446c2d
+  https://github.com/faker-js/faker/tree/f81abc77a34d8a2016f06b73ed859fef44446c2d/src/locales
+  src/locales/<locale>/person/first_name.ts and last_name.ts for:
+  af_ZA, de, en, en_IN, en_NG, es, fi, fr, it, nl, pt_BR, ro, tr.
+- joke2k/faker v37.12.0, commit 949a8d6ff538b86a6a40b2082beaeade480e891a
+  https://github.com/joke2k/faker/tree/949a8d6ff538b86a6a40b2082beaeade480e891a/faker/providers/person
+  en_PK/__init__.py first_names and last_names; ja_JP/__init__.py
+  first_name_female_pairs, first_name_male_pairs, and last_name_pairs
+  (the upstream romanized forms); vi_VN/__init__.py first_names_female,
+  first_names_unisex, first_names_male, and last_names.
+
+Names are lowercased and Latin accents are removed. Latin letters not handled
+by Unicode decomposition use these substitutions: i for dotless i, ss for
+eszett, ae for ae ligature, o for o with stroke, l for l with stroke, d for
+d with stroke and eth, and th for thorn. Only single names of 2-10 ASCII
+letters are retained. Each locale contributes at most 64 given and 64 family
+names. Selection ranks normalized values by SHA-256, then sorts each selected
+list alphabetically. Given names are disjoint across pools: allocate locales
+in ascending available given-name count (locale breaks ties), excluding names
+already allocated to a previous pool. Family names stay within their locale.
+
+The catalog contains 16 locales and 56,428 distinct name pairs.
+The runtime uses only these static lists, with no Faker dependency or download.
+
+faker-js/faker license
+=====================
+
+Faker - Copyright (c) 2022-2025
+
+This software consists of voluntary contributions made by many individuals.
+For exact contribution history, see the revision history
+available at https://github.com/faker-js/faker
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+===
+
+From: https://github.com/faker-js/faker/commit/a9f98046c7d5eeaabe12fc587024c06d683800b8
+To: https://github.com/faker-js/faker/commit/29234378807c4141588861f69421bf20b5ac635e
+
+Based on faker.js, copyright Marak Squires and contributor, what follows below is the original license.
+
+===
+
+faker.js - Copyright (c) 2011-2020
+Marak Squires
+http://github.com/marak/faker.js/
+
+faker.js was inspired by and has used data definitions from:
+
+ * https://github.com/stympy/faker/ - Copyright (c) 2007-2010 Benjamin Curtis
+ * http://search.cpan.org/~jasonk/Data-Faker-0.07/ - Copyright 2004-2005 by Jason Kohles
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+joke2k/faker license
+===================
+
+Copyright (c) 2012 Daniele Faraglia
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.

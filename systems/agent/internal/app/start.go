@@ -38,6 +38,11 @@ func Run(ctx context.Context, args []string) error {
 
 // Start loads config, builds the live model roster registry, and starts the bot.
 func Start(ctx context.Context) error {
+	// A hard kill skips shutdown cleanup. Invalidate readiness before config
+	// loading or provider discovery can fail or block.
+	if err := clearRuntimeReady(runtimeReadyPath); err != nil {
+		return fmt.Errorf("clear stale runtime readiness: %w", err)
+	}
 	if err := q15auth.SetStorePath(AuthPath); err != nil {
 		return fmt.Errorf("configure auth store: %w", err)
 	}

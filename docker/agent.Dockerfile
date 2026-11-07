@@ -25,6 +25,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /out/q15-agent /usr/local/bin/q15-agent
+COPY --from=build /src/systems/agent/internal/tools/subagent/names_LICENSE /usr/share/licenses/q15-agent/names_LICENSE
 
 ENV HOME=/root
 WORKDIR /root
