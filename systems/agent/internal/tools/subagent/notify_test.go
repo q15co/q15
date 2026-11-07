@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/bus"
@@ -224,7 +225,9 @@ func TestNotificationDeliveryFailureKeepsTerminalStatus(t *testing.T) {
 }
 
 func TestNotificationIsBounded(t *testing.T) {
-	huge := strings.Repeat("x", maxNotificationChars*2)
+	// Multibyte on purpose: a byte bound would cut this far below the stated
+	// rune budget, and the assertion would not notice.
+	huge := strings.Repeat("ä", maxNotificationRunes*2)
 	model := &recordingModel{complete: func(
 		context.Context,
 		string,
@@ -252,10 +255,61 @@ func TestNotificationIsBounded(t *testing.T) {
 	if len(msgs) != 1 {
 		t.Fatalf("notifications = %d, want exactly 1", len(msgs))
 	}
-	if len(msgs[0].Text) > maxNotificationChars {
-		t.Fatalf("notification length = %d, want <= %d", len(msgs[0].Text), maxNotificationChars)
+	if got := utf8.RuneCountInString(msgs[0].Text); got > maxNotificationRunes {
+		t.Fatalf("notification length = %d runes, want <= %d", got, maxNotificationRunes)
 	}
 	if !strings.Contains(msgs[0].Text, "truncated") {
 		t.Fatalf("notification %q does not say the answer was truncated", msgs[0].Text)
+	}
+	if !utf8.ValidString(msgs[0].Text) {
+		t.Fatal("notification is not valid UTF-8: truncation split a rune")
+	}
+}
+
+// TestInterruptedSessionDoesNotNotify pins the spec's exclusion: Close marks
+// every live session interrupted, so announcing that state would deliver one
+// message per live session on every restart.
+func TestInterruptedSessionDoesNotNotify(t *testing.T) {
+	started := make(chan struct{})
+	model := &recordingModel{complete: func(
+		ctx context.Context,
+		_ string,
+		_ []conversation.Message,
+		_ []agent.ToolDefinition,
+		_ int,
+	) (agent.ModelClientResult, error) {
+		close(started)
+		<-ctx.Done()
+		return agent.ModelClientResult{}, ctx.Err()
+	}}
+	manager := newTestManager(t, model)
+	notifier := &fakeNotifier{}
+	manager.notifier = notifier
+
+	session, err := manager.Start(StartRequest{
+		ModelRef: "child",
+		Task:     "work",
+		Origin:   testOrigin(),
+	})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("model call did not start")
+	}
+
+	if err := manager.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if session.Status != "interrupted" {
+		t.Fatalf(
+			"session.Status = %q, want interrupted: the test did not reach the path",
+			session.Status,
+		)
+	}
+	if msgs := notifier.published(); len(msgs) != 0 {
+		t.Fatalf("notifications = %#v, want none for an interrupted session", msgs)
 	}
 }

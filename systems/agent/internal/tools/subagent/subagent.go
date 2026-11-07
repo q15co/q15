@@ -31,9 +31,11 @@ const (
 	maxOutput          = 200000
 	defaultListLimit   = 100
 	maxListLimit       = 500
-	// maxNotificationChars bounds a terminal-state message below the 4096-rune
-	// transport limit, leaving room for the header lines the formatter adds.
-	maxNotificationChars = 3800
+	// maxNotificationRunes bounds a terminal message so it arrives as one
+	// message: the transport chunks at 3800 runes (telegramTextChunkRunes),
+	// and this package must not import a channel to read that value. Runes,
+	// not bytes, because that is the unit the transport chunks on.
+	maxNotificationRunes = 3800
 	// notificationTimeout bounds a single delivery attempt so a stalled
 	// transport cannot hold a finished session open.
 	notificationTimeout = 10 * time.Second
@@ -223,12 +225,8 @@ type Session struct {
 	droppedEvents int
 	parentTurn    int64
 	// origin is the chat that spawned the session. It is captured at Start
-	// because the session outlives the dispatch context that carries it, so a
-	// completion has no context left to read a notification target from.
-	origin turnctx.Origin
-	// notified records that the terminal message was published, so a session
-	// cannot publish twice if run's terminal defer were ever reached again.
-	notified       bool
+	// because the session outlives the dispatch context that carries it.
+	origin         turnctx.Origin
 	runID          string
 	recordPath     string
 	restored       bool
@@ -530,19 +528,31 @@ type terminalNotification struct {
 // observes the session finished also knows the message was attempted. Delivery
 // is best-effort by design: a transport failure is logged and never folded
 // into the session's terminal state, because the persisted record is the
-// source of truth and the message is a courtesy. Sessions with no origin, and
-// sessions restored as interrupted after a restart, never reach this path.
+// source of truth and the message is a courtesy.
+//
+// Only completed, failed and killed are announced. An interrupted session is a
+// shutdown artifact: Close marks every live session interrupted and cancels
+// it, so announcing them would deliver one message per live session on every
+// restart. A terminal state reached while the process is already shutting down
+// can still lose its message, because the publish context derives from the
+// session's own, which shutdown has canceled; delivery during shutdown is
+// unreliable by nature and not worth blocking the shutdown to chase.
 func (m *Manager) notifyTerminal(s *Session) {
 	if m.notifier == nil {
 		return
 	}
 	s.mu.Lock()
-	if s.notified || s.origin.Channel == "" || s.origin.ChatID == "" {
+	switch s.Status {
+	case "completed", "failed", "killed":
+	default:
 		s.mu.Unlock()
 		return
 	}
-	s.notified = true
 	origin := s.origin
+	if origin.Channel == "" || origin.ChatID == "" {
+		s.mu.Unlock()
+		return
+	}
 	snapshot := terminalNotification{
 		id:         s.ID,
 		model:      s.Model,
@@ -612,8 +622,6 @@ func statusWord(status string) string {
 		return "stopped (killed)"
 	case "failed":
 		return "failed"
-	case "interrupted":
-		return "interrupted"
 	default:
 		return status
 	}
@@ -623,28 +631,35 @@ func statusWord(status string) string {
 // the single-line header the formatter builds around it.
 func oneLineExcerpt(text string, limit int) string {
 	joined := strings.Join(strings.Fields(text), " ")
-	if len(joined) <= limit {
-		return joined
+	cut, truncated := truncateRunes(joined, limit)
+	if !truncated {
+		return cut
 	}
-	cut := limit
-	for cut > 0 && !utf8.RuneStart(joined[cut]) {
-		cut--
-	}
-	return strings.TrimRight(joined[:cut], " ") + "…"
+	return strings.TrimRight(cut, " ") + "…"
 }
 
 // boundNotification truncates on a rune boundary and says so, rather than
 // silently dropping the tail of a long answer.
 func boundNotification(text string) string {
-	if len(text) <= maxNotificationChars {
+	const marker = "\n\n… (truncated; read the full log with subagent_read)"
+	cut, truncated := truncateRunes(text, maxNotificationRunes-utf8.RuneCountInString(marker))
+	if !truncated {
 		return text
 	}
-	const marker = "\n\n… (truncated; read the full log with subagent_read)"
-	cut := maxNotificationChars - len(marker)
-	for cut > 0 && !utf8.RuneStart(text[cut]) {
-		cut--
+	return cut + marker
+}
+
+// truncateRunes cuts text to limit runes and reports whether it cut. Runes are
+// the unit the transport chunks on, so a bound in runes is the honest one: a
+// byte bound would silently shrink the budget for every non-ASCII answer.
+func truncateRunes(text string, limit int) (string, bool) {
+	if limit < 0 {
+		return "", true
 	}
-	return text[:cut] + marker
+	if utf8.RuneCountInString(text) <= limit {
+		return text, false
+	}
+	return string([]rune(text)[:limit]), true
 }
 
 // dropLog releases the session's event log and message transcript — the
