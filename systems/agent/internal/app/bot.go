@@ -33,6 +33,7 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/schedulestore"
 	"github.com/q15co/q15/systems/agent/internal/selectionstore"
 	q15skills "github.com/q15co/q15/systems/agent/internal/skills"
+	"github.com/q15co/q15/systems/agent/internal/tools/subagent"
 )
 
 // runtimeEnvironmentInfo is the resolved view of the q15-exec runtime that the
@@ -59,9 +60,6 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 		build.Modified,
 		build.Source,
 	)
-	if err := clearRuntimeReady(runtimeReadyPath); err != nil {
-		return fmt.Errorf("clear stale runtime readiness: %w", err)
-	}
 	defer func() {
 		if err := clearRuntimeReady(runtimeReadyPath); err != nil {
 			log.Printf("q15: runtime event=readiness_cleanup_failed error=%q", err)
@@ -261,20 +259,34 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 	if err != nil {
 		return err
 	}
-	toolRegistry, err := agent.NewToolRegistry(buildRuntimeTools(
+	subAgentManager := subagent.NewManager(
 		ctx,
+		registry,
+		func(model modelcatalog.Model, _ q15media.Store) (agent.ModelClient, error) {
+			return modelAdapter.clientFor(model)
+		},
+		baseToolRegistry,
+		mediaStore,
+		subagentSkillResolver{manager: skillManager},
+		dumpWriter,
+		subagentContextFitter,
+	)
+	if err := subAgentManager.Restore(filepath.Join(rt.StateLocalDir, "subagent")); err != nil {
+		return fmt.Errorf("restore subagent sessions for agent %q: %w", rt.Name, err)
+	}
+	defer func() {
+		if err := subAgentManager.Close(); err != nil {
+			log.Printf("q15: subagent event=shutdown_failed error=%q", err)
+		}
+	}()
+	toolRegistry, err := agent.NewToolRegistry(buildRuntimeTools(
 		baseToolList,
 		registry,
 		selection,
 		selectionStore,
-		baseToolRegistry,
-		mediaStore,
-		skillManager,
-		dumpWriter,
+		subAgentManager,
 		scheduleManager,
-		modelAdapter,
 		decisionClient,
-		subagentContextFitter,
 	)...)
 	if err != nil {
 		return fmt.Errorf("build tool registry for agent %q: %w", rt.Name, err)

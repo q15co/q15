@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"fmt"
-	"io"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/config"
@@ -22,36 +21,16 @@ import (
 
 // buildRuntimeTools appends model selection, delegated sub-agent, and
 // owner-scoped scheduling tools to the base tool list. The base registry is
-// reused as the restricted sub-agent and scheduled-job tool surface. ctx is
-// the application root context: the sub-agent manager derives session
-// lifetimes from it, so sessions survive the chat turn that spawned them.
+// reused as the restricted scheduled-job tool surface.
 func buildRuntimeTools(
-	ctx context.Context,
 	baseToolList []agent.Tool,
 	registry *modelcatalog.Registry,
 	selection *modelcatalog.Selection,
 	selectionStore *selectionstore.Store,
-	baseToolRegistry agent.ToolRegistry,
-	mediaStore q15media.Store,
-	skillManager *q15skills.Manager,
-	dumpWriter io.Writer,
+	subAgentManager *subagent.Manager,
 	scheduleManager *schedule.Manager,
-	modelAdapter *routedModelAdapter,
 	decisionClient decision.Client,
-	contextFitter agent.RequestContextFitter,
 ) []agent.Tool {
-	subAgentManager := subagent.NewManager(
-		ctx,
-		registry,
-		func(model modelcatalog.Model, _ q15media.Store) (agent.ModelClient, error) {
-			return modelAdapter.clientFor(model)
-		},
-		baseToolRegistry,
-		mediaStore,
-		subagentSkillResolver{manager: skillManager},
-		dumpWriter,
-		contextFitter,
-	)
 	return append(
 		baseToolList,
 		tools.NewListProviders(registry, selection),

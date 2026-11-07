@@ -59,12 +59,8 @@ func TestBuildToolListIncludesOnlyCurrentRuntimeTools(t *testing.T) {
 }
 
 func TestBuildRuntimeToolsIncludesDecisionCheck(t *testing.T) {
-	base, err := agent.NewToolRegistry(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
 	toolList := buildRuntimeTools(
-		context.Background(), nil, nil, nil, nil, base, nil, nil, nil, nil, nil, nil, nil,
+		nil, nil, nil, nil, nil, nil, nil,
 	)
 	for _, tool := range toolList {
 		if tool.Definition().Name == "decision_check" {

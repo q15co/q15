@@ -48,6 +48,16 @@ Notes:
   the latest transcript schema on startup.
 - `/var/lib/q15/agent` is agent-owned durable runtime state. Scheduled-job definitions and run
   provenance live under `/var/lib/q15/agent/schedule/` and must persist across updates.
+- Sub-agent lifecycle records live under `/var/lib/q15/agent/subagent/`, with one atomic JSON record
+  per session. Startup reconciles unfinished records to `interrupted` with reason `lost to restart`;
+  sessions are not resumed. Records retain the parent turn, final answer, error, event cursor, and a
+  bounded diagnostic tail saved at tool completion and model-attempt checkpoints. Retention keeps up
+  to 128 finished records plus active sessions. Only one agent process may own the directory at a
+  time; preserve this volume across container updates. New session IDs use short given and family
+  names with a durable numeric suffix, for example `amina-hassan-42`. The `.sequence` file reserves
+  numbers before work starts and survives record eviction; preserve it with the records. Name pairs
+  cycle through a multilingual catalog without reuse until the catalog is exhausted. Existing
+  UUID-based session IDs remain readable.
 - Scheduled-job tool access is stored per job: the main agent selects the job's `allowed_tools` at
   creation or update time. It is not configured as a deployment-wide allow-list.
 - Compose health checks gate the executor on the proxy and the agent on the executor and Qdrant.

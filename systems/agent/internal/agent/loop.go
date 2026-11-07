@@ -12,6 +12,7 @@ import (
 
 	"github.com/q15co/q15/systems/agent/internal/conversation"
 	"github.com/q15co/q15/systems/agent/internal/modelselection"
+	"github.com/q15co/q15/systems/agent/internal/turnctx"
 )
 
 const (
@@ -157,6 +158,7 @@ func (l *Loop) Reply(
 			return ReplyResult{}, fmt.Errorf("reserve transcript turn sequence: %w", err)
 		}
 		observer = stampRunSeq(observer, turnSeq)
+		ctx = turnctx.WithTurnSeq(ctx, turnSeq)
 	}
 	lastUserTimestamp := time.Time{}
 	hasLastUserTimestamp := false

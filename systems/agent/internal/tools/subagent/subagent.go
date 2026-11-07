@@ -4,8 +4,10 @@ package subagent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log"
 	"regexp"
 	"sort"
 	"strings"
@@ -17,6 +19,7 @@ import (
 	"github.com/q15co/q15/systems/agent/internal/dump"
 	q15media "github.com/q15co/q15/systems/agent/internal/media"
 	"github.com/q15co/q15/systems/agent/internal/modelcatalog"
+	"github.com/q15co/q15/systems/agent/internal/turnctx"
 )
 
 const (
@@ -79,6 +82,7 @@ type StartRequest struct {
 	AllowedTools []string
 	Skills       []Skill
 	MaxTurns     int
+	ParentTurn   int64
 }
 
 // mediaAdaptiveClient wraps a ModelClient so that media parts are adapted to
@@ -159,7 +163,11 @@ type Manager struct {
 	skillResolver SkillResolver
 	dumpWriter    io.Writer
 	contextFitter agent.RequestContextFitter
-	next          int64
+	next          uint64
+	runID         string
+	records       *recordStore
+	closed        bool
+	workers       sync.WaitGroup
 }
 
 // Session stores one delegated sub-agent lifecycle.
@@ -186,9 +194,14 @@ type Session struct {
 	// finalAnswer, logEvicted and droppedEvents keep an evicted session
 	// readable after retention drops its event log: the terminal state, the
 	// failure reason (err) and the final answer survive the log.
-	finalAnswer   string
-	logEvicted    bool
-	droppedEvents int
+	finalAnswer    string
+	logEvicted     bool
+	droppedEvents  int
+	parentTurn     int64
+	runID          string
+	recordPath     string
+	restored       bool
+	persistenceErr error
 }
 
 // Event is a buffered sub-agent progress event.
@@ -301,21 +314,44 @@ func (m *Manager) Start(req StartRequest) (*Session, error) {
 	// cancel chain stays rooted at the application context.
 	childCtx, cancel := context.WithCancel(m.baseCtx)
 	m.mu.Lock()
-	m.next++
-	id := fmt.Sprintf("subagent-%d", m.next)
+	if m.closed {
+		m.mu.Unlock()
+		cancel()
+		return nil, errors.New("subagent manager is closed")
+	}
+	id, err := m.allocateIDLocked()
+	if err != nil {
+		m.mu.Unlock()
+		cancel()
+		return nil, err
+	}
 	s := &Session{
-		ID:        id,
-		Model:     modelCfg.Ref,
-		Task:      req.Task,
-		Status:    "running",
-		CreatedAt: time.Now(),
-		messages:  messages,
-		cancel:    cancel,
-		done:      make(chan struct{}),
+		ID:         id,
+		Model:      modelCfg.Ref,
+		Task:       req.Task,
+		Status:     "running",
+		CreatedAt:  time.Now(),
+		messages:   messages,
+		cancel:     cancel,
+		done:       make(chan struct{}),
+		parentTurn: req.ParentTurn,
+		runID:      m.runID,
+	}
+	if m.records != nil {
+		s.recordPath = m.records.path(id)
+		if err := m.records.save(s.recordLocked()); err != nil {
+			m.mu.Unlock()
+			cancel()
+			return nil, fmt.Errorf("record subagent before starting: %w", err)
+		}
 	}
 	m.sessions[id] = s
+	m.workers.Add(1)
 	m.mu.Unlock()
-	go m.run(childCtx, s, engine, agent.NewTurnBudget(req.MaxTurns))
+	go func() {
+		defer m.workers.Done()
+		m.run(childCtx, s, engine, agent.NewTurnBudget(req.MaxTurns))
+	}()
 	return s, nil
 }
 
@@ -330,12 +366,28 @@ func (m *Manager) run(
 	// before done is closed so a waiter unblocked by done observes the
 	// post-eviction state.
 	defer func() {
+		if s.cancel != nil {
+			s.cancel()
+		}
 		s.mu.Lock()
 		if s.Status != "running" {
-			s.finishedAt = time.Now()
+			s.finishedAt = time.Now().UTC()
+		}
+		m.saveSessionLocked(s)
+		if s.persistenceErr != nil {
+			s.err = errors.Join(s.err, s.persistenceErr)
+			if s.Status == "completed" {
+				s.Status = "failed"
+			}
+			s.addEventLocked("persistence_failed", "", s.persistenceErr)
+			// A failed directory sync may still have installed the first
+			// snapshot. Try to replace it with the visible failure state.
+			m.saveSessionLocked(s)
 		}
 		s.mu.Unlock()
-		m.evictFinishedSessions()
+		if err := m.evictFinishedSessions(); err != nil {
+			log.Printf("q15: subagent event=retention_failed error=%q", err)
+		}
 		close(s.done)
 	}()
 	observer := agent.RunObserverFunc(func(_ context.Context, ev agent.RunEvent) {
@@ -346,7 +398,13 @@ func (m *Manager) run(
 		if text == "" && ev.ToolCall.Name != "" {
 			text = ev.ToolCall.Name
 		}
-		s.addEvent(string(ev.Type), text, ev.Err)
+		s.mu.Lock()
+		s.addEventLocked(string(ev.Type), text, ev.Err)
+		if s.Status == "running" && (ev.Type == agent.RunEventToolFinished ||
+			ev.Type == agent.RunEventModelTurnStarted) {
+			m.saveSessionLocked(s)
+		}
+		s.mu.Unlock()
 	})
 
 	for {
@@ -362,7 +420,7 @@ func (m *Manager) run(
 			},
 		)
 		s.mu.Lock()
-		if s.Status == "killed" {
+		if s.Status == "killed" || s.Status == "interrupted" {
 			// subagent_kill marks the session before canceling it, so a killed
 			// session never reaches the cancellation check below: an
 			// intentional kill is terminal state killed, not a failure. The
@@ -373,6 +431,7 @@ func (m *Manager) run(
 		s.result = &result
 		s.messages = append(s.messages, result.Messages...)
 		s.finalAnswer = result.FinalText
+		err = errors.Join(err, s.persistenceErr)
 		if ctx.Err() != nil {
 			// Check the context before a generic run error: cancellation may
 			// cause that error, and the terminal record must retain the
@@ -437,9 +496,13 @@ func (s *Session) dropLog() {
 // maxFinishedSessionRecords the oldest records are deleted from the map
 // entirely. Sessions of any age are candidates only once finished: running
 // sessions are never evicted.
-func (m *Manager) evictFinishedSessions() {
+func (m *Manager) evictFinishedSessions() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.evictFinishedSessionsLocked()
+}
+
+func (m *Manager) evictFinishedSessionsLocked() error {
 	// finished pairs a session with its terminal timestamp, snapshotted under
 	// the session lock. Lock order is m.mu then s.mu; nothing acquires them
 	// in the opposite order.
@@ -456,7 +519,7 @@ func (m *Manager) evictFinishedSessions() {
 		s.mu.Unlock()
 	}
 	if len(done) <= maxFinishedSessionLogs && len(done) <= maxFinishedSessionRecords {
-		return
+		return nil
 	}
 	// Oldest terminal transitions are evicted first: ordering by finishedAt
 	// (not CreatedAt) protects the log of a long-running session that has
@@ -473,18 +536,23 @@ func (m *Manager) evictFinishedSessions() {
 		}
 		f.session.dropLog()
 		if i < len(done)-maxFinishedSessionRecords {
+			if m.records != nil {
+				if err := m.records.remove(f.session.ID); err != nil {
+					return err
+				}
+			}
 			delete(m.sessions, f.session.ID)
 		}
 	}
+	return nil
 }
 
-func (s *Session) addEvent(typ, text string, err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.addEventLocked(typ, text, err)
-}
 func (s *Session) addEventLocked(typ, text string, err error) {
-	e := Event{Index: len(s.events), Type: typ, Text: truncate(text, defaultMaxOutput)}
+	e := Event{
+		Index: s.droppedEvents + len(s.events),
+		Type:  typ,
+		Text:  truncate(text, defaultMaxOutput),
+	}
 	if err != nil {
 		e.Error = err.Error()
 	}
@@ -530,15 +598,44 @@ func (s *Session) Read(after, maxChars int) string {
 	if maxChars <= 0 || maxChars > maxOutput {
 		maxChars = defaultMaxOutput
 	}
+	footer := fmt.Sprintf("Next-Event-Index: %d", s.droppedEvents+len(s.events))
 	var b strings.Builder
 	fmt.Fprintf(&b, "Session-ID: %s\nStatus: %s\n", s.ID, s.Status)
 	if s.err != nil {
 		fmt.Fprintf(&b, "Error: %v\n", s.err)
 	}
+	if s.parentTurn != 0 {
+		fmt.Fprintf(&b, "Parent-Turn: %d\n", s.parentTurn)
+	}
+	if !s.finishedAt.IsZero() {
+		fmt.Fprintf(&b, "Finished-At: %s\n", s.finishedAt.Format(time.RFC3339))
+	}
+	if s.recordPath != "" {
+		fmt.Fprintf(&b, "Record-Path: %s\n", s.recordPath)
+	}
 	if s.logEvicted {
 		fmt.Fprintf(&b, "Event-Log: evicted by retention (%d events dropped)\n", s.droppedEvents)
+	} else if s.restored {
+		fmt.Fprintf(&b, "Event-Log: restored snapshot (%d of %d events retained)\n",
+			len(s.events), s.droppedEvents+len(s.events))
+	}
+	if s.logEvicted || s.restored {
 		if s.finalAnswer != "" {
-			fmt.Fprintf(&b, "Final-Answer: %s\n", truncate(s.finalAnswer, defaultMaxOutput))
+			line := fmt.Sprintf("Final-Answer: %s\n", truncate(s.finalAnswer, defaultMaxOutput))
+			remaining := maxChars - b.Len() - len(footer)
+			if len(line) > remaining {
+				const marker = "...\nOutput-Truncated: true\n"
+				if remaining > len(marker) {
+					b.WriteString(line[:remaining-len(marker)])
+					b.WriteString(marker)
+				} else {
+					if len("Output-Truncated: true\n") <= remaining {
+						b.WriteString("Output-Truncated: true\n")
+					}
+				}
+			} else {
+				b.WriteString(line)
+			}
 		}
 	}
 	for _, e := range s.events {
@@ -553,13 +650,15 @@ func (s *Session) Read(after, maxChars int) string {
 			line += ": " + e.Error
 		}
 		line += "\n"
-		if b.Len()+len(line) > maxChars {
-			b.WriteString("Output-Truncated: true\n")
+		if b.Len()+len(line)+len(footer) > maxChars {
+			if b.Len()+len("Output-Truncated: true\n")+len(footer) <= maxChars {
+				b.WriteString("Output-Truncated: true\n")
+			}
 			break
 		}
 		b.WriteString(line)
 	}
-	fmt.Fprintf(&b, "Next-Event-Index: %d", s.droppedEvents+len(s.events))
+	b.WriteString(footer)
 	return b.String()
 }
 
@@ -614,6 +713,7 @@ func (t *Spawn) Definition() agent.ToolDefinition {
 			"max_turns counts model responses, includes a final answer-only turn without tools, and is shared with queued follow-up messages.",
 			"A session keeps running after the chat turn that spawned it ends; it stops by completing or failing, through subagent_kill, or at process shutdown.",
 			"Poll a spawned session's progress later with subagent_read or subagent_list.",
+			"After a restart, unfinished sessions are listed as interrupted with their persisted diagnostic tail; they are not resumed.",
 			"Give the sub-agent full /workspace/... paths for files in packages whose names collide with runtime roots (memory, skills); /memory and /skills are persistent runtime roots, not Go package paths.",
 			"When delegating a skill by name or path, pass it via `skills`; its instructions are injected automatically and its declared tools are granted without listing them in `tools`.",
 		},
@@ -649,11 +749,12 @@ func (t *Spawn) Definition() agent.ToolDefinition {
 	}
 }
 
-// Run starts a delegated sub-agent session. The dispatch context is the
-// parent chat turn's and ends with it, so it is deliberately not handed to
-// the session: the manager derives the session lifetime from its own base
-// context (process shutdown) instead.
-func (t *Spawn) Run(_ context.Context, args string) (string, error) {
+// Run starts a delegated session and waits within the parent turn's lifetime.
+// Canceling the wait leaves the session running under the manager's context.
+func (t *Spawn) Run(ctx context.Context, args string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	var a struct {
 		Model, Task, Context string
 		Tools                []string `json:"tools"`
@@ -663,6 +764,16 @@ func (t *Spawn) Run(_ context.Context, args string) (string, error) {
 	}
 	if err := json.Unmarshal([]byte(args), &a); err != nil {
 		return "", fmt.Errorf("invalid arguments JSON: %w", err)
+	}
+	wait := defaultWaitSeconds
+	if a.Wait != nil {
+		wait = *a.Wait
+	}
+	if wait < 0 {
+		return "", fmt.Errorf("wait_seconds must be >= 0")
+	}
+	if wait > maxWaitSeconds {
+		wait = maxWaitSeconds
 	}
 	skills, err := t.manager.resolveSkillRefs(a.Skills)
 	if err != nil {
@@ -675,22 +786,15 @@ func (t *Spawn) Run(_ context.Context, args string) (string, error) {
 		AllowedTools: a.Tools,
 		Skills:       skills,
 		MaxTurns:     a.MaxTurns,
+		ParentTurn:   turnctx.TurnSeqFrom(ctx),
 	})
 	if err != nil {
 		return "", err
 	}
-	wait := defaultWaitSeconds
-	if a.Wait != nil {
-		wait = *a.Wait
-	}
-	if wait < 0 {
-		return "", fmt.Errorf("wait_seconds must be >= 0")
-	}
-	if wait > maxWaitSeconds {
-		wait = maxWaitSeconds
-	}
 	if wait > 0 {
 		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
 		case <-s.done:
 			return s.Read(0, defaultMaxOutput), nil
 		case <-time.After(time.Duration(wait) * time.Second):
@@ -807,8 +911,15 @@ func (t *List) Definition() agent.ToolDefinition {
 			"type": "object",
 			"properties": map[string]any{
 				"state": map[string]any{
-					"type":    "string",
-					"enum":    []string{"all", "running", "completed", "failed", "killed"},
+					"type": "string",
+					"enum": []string{
+						"all",
+						"running",
+						"completed",
+						"failed",
+						"killed",
+						"interrupted",
+					},
 					"default": "all",
 				},
 				"limit": map[string]any{
@@ -840,15 +951,31 @@ func (t *List) Run(_ context.Context, args string) (string, error) {
 	}
 	var b strings.Builder
 	for _, s := range t.manager.List(a.State, a.Limit) {
+		s.mu.Lock()
 		fmt.Fprintf(
 			&b,
-			"Session-ID: %s\nModel: %s\nStatus: %s\nTask: %s\nCreated-At: %s\n\n",
+			"Session-ID: %s\nModel: %s\nStatus: %s\nTask: %s\nCreated-At: %s\n",
 			s.ID,
 			s.Model,
-			s.status(),
+			s.Status,
 			truncate(s.Task, 200),
 			s.CreatedAt.Format(time.RFC3339),
 		)
+		if s.parentTurn != 0 {
+			fmt.Fprintf(&b, "Parent-Turn: %d\n", s.parentTurn)
+		}
+		if !s.finishedAt.IsZero() {
+			fmt.Fprintf(&b, "Finished-At: %s\n", s.finishedAt.Format(time.RFC3339))
+		}
+		fmt.Fprintf(&b, "Last-Event-Index: %d\n", s.droppedEvents+len(s.events)-1)
+		if s.err != nil {
+			fmt.Fprintf(&b, "Error: %v\n", s.err)
+		}
+		if s.recordPath != "" {
+			fmt.Fprintf(&b, "Record-Path: %s\n", s.recordPath)
+		}
+		b.WriteByte('\n')
+		s.mu.Unlock()
 	}
 	if b.Len() == 0 {
 		return "No sub-agent sessions found.", nil
