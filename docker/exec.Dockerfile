@@ -80,15 +80,16 @@ RUN nix --extra-experimental-features 'nix-command flakes' build --no-link \
     test -d /etc/nix-ld/lib/openssl && \
     test -d /etc/nix-ld/lib/curl
 
-COPY docker/exec-floor.txt /tmp/q15-exec-floor.txt
-
 # Install one stable profile, then link each of its bin entries into the FHS
 # default path used by command -p and dependency-owned shell shims. The /nix
 # snapshot is taken only after the floor exists so a mounted volume can be
 # repaired from the same image contents.
-RUN set -eu; \
+RUN --mount=type=bind,source=docker/exec-floor.txt,target=/tmp/q15-exec-floor.txt \
+    set -eu; \
     set --; \
     while IFS= read -r ATTR || [ -n "${ATTR}" ]; do \
+        ATTR="${ATTR#"${ATTR%%[![:space:]]*}"}"; \
+        ATTR="${ATTR%"${ATTR##*[![:space:]]}"}"; \
         case "${ATTR}" in \
             ''|'#'*) continue ;; \
         esac; \
@@ -96,7 +97,7 @@ RUN set -eu; \
     done < /tmp/q15-exec-floor.txt; \
     nix --extra-experimental-features 'nix-command flakes' profile install \
         --profile /nix/var/nix/profiles/q15-floor "$@" && \
-    mkdir -p /etc/q15 /usr/bin && \
+    mkdir -p /etc/q15 && \
     : > /etc/q15/exec-floor.manifest && \
     for BINARY in /nix/var/nix/profiles/q15-floor/bin/*; do \
         if [ ! -e "${BINARY}" ] && [ ! -L "${BINARY}" ]; then \
@@ -107,8 +108,12 @@ RUN set -eu; \
         printf '%s\n' "${NAME}" >> /etc/q15/exec-floor.manifest; \
     done && \
     test -s /etc/q15/exec-floor.manifest && \
-    FLOOR_VERSION="$(sha256sum /tmp/q15-exec-floor.txt)" && \
-    FLOOR_VERSION="${FLOOR_VERSION%% *}" && \
+    FLOOR_HASH="$(sha256sum /tmp/q15-exec-floor.txt)" && \
+    FLOOR_HASH="${FLOOR_HASH%% *}" && \
+    FLOOR_STORE_PATH="$(/nix/var/nix/profiles/q15-floor/bin/readlink -f /nix/var/nix/profiles/q15-floor)" && \
+    FLOOR_VERSION="${FLOOR_HASH} ${FLOOR_STORE_PATH}" && \
+    set -- ${FLOOR_VERSION} && \
+    [ "$#" -eq 2 ] && [ -n "$1" ] && [ -n "$2" ] && \
     printf '%s\n' "${FLOOR_VERSION}" > /etc/q15/exec-floor.version && \
     while IFS= read -r NAME; do \
         test -L "/usr/bin/${NAME}" && \
