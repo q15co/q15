@@ -19,6 +19,9 @@ func TestNixRuntimeHealthyRecognizesRequiredMarkers(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, "store"), 0o755); err != nil {
 		t.Fatalf("MkdirAll(store) error = %v", err)
 	}
+	if err := os.MkdirAll(filepath.Join(root, "var/nix/profiles/q15-floor"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(q15-floor) error = %v", err)
+	}
 
 	healthy, err := nixRuntimeHealthy(root)
 	if err != nil {
@@ -44,6 +47,25 @@ func TestNixRuntimeHealthyRejectsMissingMarkers(t *testing.T) {
 	}
 	if healthy {
 		t.Fatalf("expected nix runtime at %q to be unhealthy", root)
+	}
+}
+
+func TestNixRuntimeHealthyRejectsMissingFloorProfile(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeTestExecutable(t, filepath.Join(root, "var/nix/profiles/default/bin/nix"))
+	writeTestExecutable(t, filepath.Join(root, "var/nix/profiles/default/bin/bash"))
+	if err := os.MkdirAll(filepath.Join(root, "store"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(store) error = %v", err)
+	}
+
+	healthy, err := nixRuntimeHealthy(root)
+	if err != nil {
+		t.Fatalf("nixRuntimeHealthy() error = %v", err)
+	}
+	if healthy {
+		t.Fatal("expected a runtime without the q15-floor profile to be unhealthy")
 	}
 }
 
@@ -267,6 +289,7 @@ func TestBootstrapNixRuntimeReconcilesExecFloorVersion(t *testing.T) {
 		marker         string
 		writeMarker    bool
 		inPlaceUpgrade bool
+		breakFloor     bool
 		wantReseed     bool
 	}{
 		{
@@ -284,6 +307,13 @@ func TestBootstrapNixRuntimeReconcilesExecFloorVersion(t *testing.T) {
 			writeMarker:    true,
 			inPlaceUpgrade: true,
 			wantReseed:     true,
+		},
+		{
+			name:        "matching marker repairs a broken floor",
+			marker:      "floor-v1\n",
+			writeMarker: true,
+			breakFloor:  true,
+			wantReseed:  true,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -319,6 +349,11 @@ func TestBootstrapNixRuntimeReconcilesExecFloorVersion(t *testing.T) {
 				}
 				if err := os.Symlink("q15-floor-99-link", profilePath); err != nil {
 					t.Fatalf("Symlink(upgraded q15-floor) error = %v", err)
+				}
+			}
+			if tc.breakFloor {
+				if err := os.Remove(filepath.Join(runtimeRoot, "store", "floor", "bin", "sed")); err != nil {
+					t.Fatalf("Remove(runtime sed) error = %v", err)
 				}
 			}
 
@@ -387,6 +422,66 @@ func TestBootstrapNixRuntimeNamesMissingExecFloorBinary(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), `exec floor binary "patch"`) {
 		t.Fatalf("bootstrapNixRuntimeWithConfig() error = %v, want missing patch binary", err)
+	}
+	marker, readErr := os.ReadFile(filepath.Join(runtimeRoot, ".q15-exec-floor.version"))
+	if readErr != nil {
+		t.Fatalf("ReadFile(runtime floor marker) error = %v", readErr)
+	}
+	if got := string(marker); got != "floor-v0\n" {
+		t.Fatalf("runtime floor marker advanced after failed verification: %q", got)
+	}
+}
+
+func TestBootstrapNixRuntimeNamesRequiredBinaryWhenImageMetadataIsMissing(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name           string
+		removeManifest bool
+		removeVersion  bool
+	}{
+		{name: "manifest", removeManifest: true},
+		{name: "version", removeVersion: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			sourceRoot := t.TempDir()
+			runtimeRoot := t.TempDir()
+			imageRoot := t.TempDir()
+			usrBinDir := filepath.Join(imageRoot, "usr", "bin")
+			manifestPath := filepath.Join(imageRoot, "etc", "q15", "exec-floor.manifest")
+			imageVersionPath := filepath.Join(imageRoot, "etc", "q15", "exec-floor.version")
+			writeBootstrapFloorFixture(t, sourceRoot, runtimeRoot, usrBinDir, "sed")
+			writeTestFile(t, manifestPath, "sed\n")
+			writeTestFile(t, imageVersionPath, "floor-v1\n")
+			if tc.removeManifest {
+				if err := os.Remove(manifestPath); err != nil {
+					t.Fatalf("Remove(manifest) error = %v", err)
+				}
+			}
+			if tc.removeVersion {
+				if err := os.Remove(imageVersionPath); err != nil {
+					t.Fatalf("Remove(version) error = %v", err)
+				}
+			}
+
+			err := bootstrapNixRuntimeWithConfig(nixRuntimeConfig{
+				runtimeDir:         runtimeRoot,
+				bootstrapSourceDir: sourceRoot,
+				imageVersionPath:   imageVersionPath,
+				runtimeVersionPath: filepath.Join(runtimeRoot, ".q15-exec-floor.version"),
+				manifestPath:       manifestPath,
+				binaryDir:          usrBinDir,
+				imageRuntimePaths:  []string{manifestPath},
+			})
+			if err == nil || !strings.Contains(err.Error(), `exec floor binary "sed"`) {
+				t.Fatalf(
+					"bootstrapNixRuntimeWithConfig() error = %v, want required sed binary",
+					err,
+				)
+			}
+		})
 	}
 }
 
@@ -486,6 +581,98 @@ func TestCopyTreeCopiesFilesAndSymlinks(t *testing.T) {
 	}
 	if linkTarget != "default" {
 		t.Fatalf("link target = %q, want %q", linkTarget, "default")
+	}
+}
+
+func TestCopyRegularFileAtomicallyReplacesTarget(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	sourcePath := filepath.Join(root, "source")
+	targetPath := filepath.Join(root, "target")
+	peerPath := filepath.Join(root, "peer")
+	writeTestFile(t, sourcePath, "new contents")
+	writeTestFile(t, targetPath, "old contents")
+	if err := os.Link(targetPath, peerPath); err != nil {
+		t.Fatalf("Link(peer) error = %v", err)
+	}
+	before, err := os.Lstat(targetPath)
+	if err != nil {
+		t.Fatalf("Lstat(target before copy) error = %v", err)
+	}
+
+	if err := copyRegularFile(sourcePath, targetPath, 0o751); err != nil {
+		t.Fatalf("copyRegularFile() error = %v", err)
+	}
+	content, err := os.ReadFile(targetPath)
+	if err != nil {
+		t.Fatalf("ReadFile(target) error = %v", err)
+	}
+	if got := string(content); got != "new contents" {
+		t.Fatalf("target contents = %q, want new contents", got)
+	}
+	peer, err := os.ReadFile(peerPath)
+	if err != nil {
+		t.Fatalf("ReadFile(peer) error = %v", err)
+	}
+	if got := string(peer); got != "old contents" {
+		t.Fatalf("existing inode was modified in place: peer contents = %q", got)
+	}
+	after, err := os.Lstat(targetPath)
+	if err != nil {
+		t.Fatalf("Lstat(target after copy) error = %v", err)
+	}
+	if os.SameFile(before, after) {
+		t.Fatal("target inode was retained; copy did not rename a replacement")
+	}
+	if got := after.Mode().Perm(); got != 0o751 {
+		t.Fatalf("target mode = %o, want 751", got)
+	}
+}
+
+func TestCopySymlinkKeepsIdenticalLinkAndAtomicallyReplacesChangedLink(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	sourcePath := filepath.Join(root, "source")
+	targetPath := filepath.Join(root, "target")
+	if err := os.Symlink("generation-1", sourcePath); err != nil {
+		t.Fatalf("Symlink(source) error = %v", err)
+	}
+	if err := os.Symlink("generation-1", targetPath); err != nil {
+		t.Fatalf("Symlink(target) error = %v", err)
+	}
+	before, err := os.Lstat(targetPath)
+	if err != nil {
+		t.Fatalf("Lstat(target before copy) error = %v", err)
+	}
+
+	if err := copySymlink(sourcePath, targetPath); err != nil {
+		t.Fatalf("copySymlink(identical) error = %v", err)
+	}
+	after, err := os.Lstat(targetPath)
+	if err != nil {
+		t.Fatalf("Lstat(target after identical copy) error = %v", err)
+	}
+	if !os.SameFile(before, after) {
+		t.Fatal("identical symlink was replaced instead of left intact")
+	}
+
+	if err := os.Remove(sourcePath); err != nil {
+		t.Fatalf("Remove(source) error = %v", err)
+	}
+	if err := os.Symlink("generation-2", sourcePath); err != nil {
+		t.Fatalf("Symlink(changed source) error = %v", err)
+	}
+	if err := copySymlink(sourcePath, targetPath); err != nil {
+		t.Fatalf("copySymlink(changed) error = %v", err)
+	}
+	targetValue, err := os.Readlink(targetPath)
+	if err != nil {
+		t.Fatalf("Readlink(target) error = %v", err)
+	}
+	if targetValue != "generation-2" {
+		t.Fatalf("target link = %q, want generation-2", targetValue)
 	}
 }
 
