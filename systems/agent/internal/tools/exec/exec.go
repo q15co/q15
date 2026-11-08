@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -86,18 +87,39 @@ func (e *Exec) Definition() agent.ToolDefinition {
 }
 
 func execFloorPromptGuidance(floorCommands []string) []string {
+	commands := make([]string, 0, len(floorCommands))
+	for _, command := range floorCommands {
+		if command = strings.TrimSpace(command); command != "" {
+			commands = append(commands, command)
+		}
+	}
+	slices.Sort(commands)
+	commands = slices.Compact(commands)
+
 	guidance := make([]string, 0, 3)
-	if len(floorCommands) > 0 {
+	present := make(map[string]struct{}, len(commands))
+	for _, command := range commands {
+		present[command] = struct{}{}
+	}
+	if len(commands) > 0 {
 		guidance = append(
 			guidance,
-			"Base commands present with no `packages`: "+strings.Join(floorCommands, ", ")+".",
+			"Base commands present with no `packages`: "+strings.Join(commands, ", ")+".",
 		)
 	}
-	return append(
-		guidance,
-		"`python3`, `make`, and compilers such as `gcc` and `go` are deliberately absent from the base floor.",
-		"Anything not listed as present must be named in `packages`.",
-	)
+	var absences []string
+	for _, command := range []string{"python3", "make", "gcc", "go"} {
+		if _, ok := present[command]; !ok {
+			absences = append(absences, "`"+command+"`")
+		}
+	}
+	if len(absences) > 0 {
+		guidance = append(
+			guidance,
+			"Commands deliberately absent from the base floor: "+strings.Join(absences, ", ")+".",
+		)
+	}
+	return append(guidance, "Anything not listed as present must be named in `packages`.")
 }
 
 // Run executes one shell command from raw JSON tool arguments.

@@ -27,7 +27,7 @@ func TestExecFloorCommandsReachToolGuidance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildToolList() error = %v", err)
 	}
-	want := "Base commands present with no `packages`: sed, awk, grep, patch, ps, hostname, rg, jq."
+	want := "Base commands present with no `packages`: awk, grep, hostname, jq, patch, ps, rg, sed."
 	for _, tool := range toolList {
 		if tool.Definition().Name != "exec" {
 			continue
