@@ -172,6 +172,87 @@ async function backend(
   return requests;
 }
 
+test("background agent answers are chat messages and survive reload", async ({ page }) => {
+  const history: Page = { turns: [], head_seq: "0", has_more: false };
+  let publish: ((value: Frame) => void) | undefined;
+  await backend(page, history, (send) => {
+    publish = send;
+    const parent = turn(31);
+    history.turns = [parent];
+    history.head_seq = "31";
+    send(
+      frame("msg.final", {
+        msg: { turn: "31", ordinal: -1 },
+        status: "completed",
+        full_text: "Sub-agent started.",
+      }),
+    );
+  });
+  await page.goto("/");
+  await page.getByLabel("Message q15").fill("Start a delegated calculation.");
+  await page.getByRole("button", { name: "Send message", exact: true }).click();
+  await expect.poll(() => publish !== undefined).toBe(true);
+  const send = required(publish);
+  send(frame("turn.start", { turn: "32", msg: { turn: "32", ordinal: -1 }, background: true }));
+  const answer = "I independently checked the delegated answer: 221.";
+  history.turns.unshift({
+    seq: "32",
+    created_at: "2026-11-08T08:00:00Z",
+    messages: [
+      {
+        ordinal: 0,
+        role: "assistant",
+        parts: [
+          {
+            ordinal: 0,
+            part_type: "tool_call",
+            tool_call: {
+              id: "completion-child",
+              name: "subagent_completion",
+              arguments: '{"session_id":"child"}',
+            },
+          },
+        ],
+      },
+      {
+        ordinal: 1,
+        role: "tool",
+        parts: [
+          {
+            ordinal: 0,
+            part_type: "tool_result",
+            tool_call_id: "completion-child",
+            content: "Answer: 221",
+          },
+        ],
+      },
+      {
+        ordinal: 3,
+        role: "assistant",
+        parts: [{ ordinal: 0, part_type: "text", disposition: "final", text: answer }],
+      },
+    ],
+  });
+  history.head_seq = "32";
+  send(
+    frame("msg.final", {
+      msg: { turn: "32", ordinal: -1 },
+      status: "completed",
+      full_text: answer,
+    }),
+  );
+  await expect(
+    page.getByLabel("Conversation", { exact: true }).getByText(answer, { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "Dismiss notice" })).toHaveCount(0);
+  await page.reload();
+  await expect(
+    page.getByLabel("Conversation", { exact: true }).getByText(answer, { exact: true }),
+  ).toHaveCount(1);
+  await expect(page.getByText("Received sub-agent result", { exact: true })).toBeVisible();
+  await expect(page.getByText(/Used \d+ tools?/u)).toHaveCount(0);
+});
+
 test("send, queue, stop, themes, and narrow screens work in a browser", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));

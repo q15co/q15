@@ -140,12 +140,51 @@ func (l *Loop) Reply(
 	userMessage conversation.Message,
 	observer RunObserver,
 ) (ReplyResult, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
 	userMessage, err := normalizeUserMessage(userMessage)
 	if err != nil {
 		return ReplyResult{}, err
+	}
+	return l.run(ctx, []conversation.Message{userMessage}, observer)
+}
+
+// Continue runs an interactive turn triggered by a runtime event. The input
+// stays distinct from user messages in both the prompt and the transcript.
+func (l *Loop) Continue(
+	ctx context.Context,
+	parentTurn int64,
+	messages []conversation.Message,
+	observer RunObserver,
+) (ReplyResult, error) {
+	messages = conversation.NormalizeMessages(conversation.CloneMessages(messages))
+	if len(messages) == 0 {
+		return ReplyResult{}, errors.New("continuation input is required")
+	}
+	for _, message := range messages {
+		if message.Role == conversation.UserRole {
+			return ReplyResult{}, errors.New("continuation cannot impersonate a user message")
+		}
+	}
+	return l.run(turnctx.WithParentTurn(ctx, parentTurn), messages, observer)
+}
+
+func (l *Loop) run(
+	ctx context.Context,
+	input []conversation.Message,
+	observer RunObserver,
+) (ReplyResult, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	var err error
+	recordedInput := input
+	if input[0].Role != conversation.UserRole {
+		// Runtime steering applies to this run; its tool results remain durable.
+		recordedInput = nil
+		for _, message := range input {
+			if message.Role != conversation.SystemRole {
+				recordedInput = append(recordedInput, message)
+			}
+		}
 	}
 	var turnSeq int64
 	if l.store != nil {
@@ -160,32 +199,32 @@ func (l *Loop) Reply(
 		observer = stampRunSeq(observer, turnSeq)
 		ctx = turnctx.WithTurnSeq(ctx, turnSeq)
 	}
-	lastUserTimestamp := time.Time{}
-	hasLastUserTimestamp := false
-	if l.store != nil {
-		lastUserTimestamp, hasLastUserTimestamp, err = l.store.LoadLastUserTimestamp(ctx)
-		if err != nil {
-			emitRunEvent(ctx, observer, RunEvent{
-				Type: RunEventRunFailed,
-				Err:  err,
-			})
-			return ReplyResult{}, fmt.Errorf("load last user timestamp: %w", err)
+	if input[0].Role == conversation.UserRole {
+		lastUserTimestamp := time.Time{}
+		hasLastUserTimestamp := false
+		if l.store != nil {
+			lastUserTimestamp, hasLastUserTimestamp, err = l.store.LoadLastUserTimestamp(ctx)
+			if err != nil {
+				emitRunEvent(ctx, observer, RunEvent{
+					Type: RunEventRunFailed,
+					Err:  err,
+				})
+				return ReplyResult{}, fmt.Errorf("load last user timestamp: %w", err)
+			}
 		}
+		input[0] = withUserTemporalMetadata(
+			input[0], time.Now().In(time.Local), lastUserTimestamp, hasLastUserTimestamp,
+		)
 	}
-	userMessage = withUserTemporalMetadata(
-		userMessage,
-		time.Now().In(time.Local),
-		lastUserTimestamp,
-		hasLastUserTimestamp,
-	)
 
 	emitRunEvent(ctx, observer, RunEvent{
-		Type: RunEventRunStarted,
+		Type:       RunEventRunStarted,
+		Background: input[0].Role != conversation.UserRole,
 	})
 
 	// Keep the canonical system prefix ordered from most stable to least stable
 	// so providers can reuse cached prefixes across working-memory changes.
-	prepared, err := l.contextBuilder.Prepare(ctx, userMessage)
+	prepared, err := l.contextBuilder.Prepare(ctx, input...)
 	if err != nil {
 		emitRunEvent(ctx, observer, RunEvent{
 			Type: RunEventRunFailed,
@@ -204,7 +243,7 @@ func (l *Loop) Reply(
 		var stopErr *StopError
 		if errors.As(err, &stopErr) {
 			turnMessages := append(
-				copyMessages([]conversation.Message{userMessage}),
+				copyMessages(recordedInput),
 				copyMessages(result.Messages)...,
 			)
 			if persistErr := l.persistTurn(ctx, turnSeq, turnMessages); persistErr != nil {
@@ -229,7 +268,7 @@ func (l *Loop) Reply(
 	}
 
 	turnMessages := append(
-		copyMessages([]conversation.Message{userMessage}),
+		copyMessages(recordedInput),
 		copyMessages(result.Messages)...,
 	)
 	if err := l.persistTurn(ctx, turnSeq, turnMessages); err != nil {

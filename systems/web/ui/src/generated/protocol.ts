@@ -98,6 +98,7 @@ export interface ProgressPayload {
 export interface TurnStartPayload {
   turn: string;
   msg: MessageID;
+  background?: boolean;
 }
 
 export interface FinalPayload {

@@ -1100,7 +1100,9 @@ func (x *SessionOpened) GetSessionId() string {
 }
 
 type RunStarted struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Background runs do not consume a queued user message.
+	Background    bool `protobuf:"varint,1,opt,name=background,proto3" json:"background,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1133,6 +1135,13 @@ func (x *RunStarted) ProtoReflect() protoreflect.Message {
 // Deprecated: Use RunStarted.ProtoReflect.Descriptor instead.
 func (*RunStarted) Descriptor() ([]byte, []int) {
 	return file_q15_chat_v1_chat_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *RunStarted) GetBackground() bool {
+	if x != nil {
+		return x.Background
+	}
+	return false
 }
 
 // ModelTurnStarted begins a new model attempt for the run. Subscribers should
@@ -2464,9 +2473,12 @@ const file_q15_chat_v1_chat_proto_rawDesc = "" +
 	"\x05event\".\n" +
 	"\rSessionOpened\x12\x1d\n" +
 	"\n" +
-	"session_id\x18\x01 \x01(\tR\tsessionId\"\f\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\",\n" +
 	"\n" +
-	"RunStarted\"L\n" +
+	"RunStarted\x12\x1e\n" +
+	"\n" +
+	"background\x18\x01 \x01(\bR\n" +
+	"background\"L\n" +
 	"\x10ModelTurnStarted\x12\x1b\n" +
 	"\tloop_turn\x18\x01 \x01(\x05R\bloopTurn\x12\x1b\n" +
 	"\tmodel_ref\x18\x02 \x01(\tR\bmodelRef\"&\n" +

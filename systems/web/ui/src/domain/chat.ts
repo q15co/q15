@@ -63,13 +63,15 @@ export function reduceFrame(state: Readonly<ChatState>, value: ServerFrame): Cha
       update({ cursor: value.payload.cursor });
       break;
     case "turn.start": {
-      // Local sends follow the agent's FIFO queue. Keep their live lifecycle
-      // separate from persistence: an aborted run may have no history record.
-      const firstPending = next.pending.find(
-        (p) =>
-          p.turn === undefined &&
-          (p.state === "sending" || p.state === "accepted" || p.state === "queued"),
-      );
+      // A runtime continuation has no user send to consume from the queue.
+      const firstPending =
+        value.payload.background === true
+          ? undefined
+          : next.pending.find(
+              (p) =>
+                p.turn === undefined &&
+                (p.state === "sending" || p.state === "accepted" || p.state === "queued"),
+            );
       update({
         active: value.payload.turn,
         notice: null,

@@ -14,6 +14,16 @@ export interface ToolActivityItem {
 }
 export type ActivityItem = ToolActivityItem | { key: string; kind: "message"; source: Source };
 
+// Completion notifications use a tool exchange to keep delegated output untrusted.
+// The reserved ID also identifies notifications saved before the dedicated name.
+export function isSubagentCompletion(part: Part): boolean {
+  return (
+    part.part_type === "tool_call" &&
+    part.tool_call?.id.startsWith("completion-") === true &&
+    ["subagent_completion", "subagent_read"].includes(part.tool_call.name)
+  );
+}
+
 // History separates calls and results into messages; live drafts contain both.
 // Present either shape without changing canonical message or part identities.
 export function presentTurn(messages: readonly ChatMessage[]) {

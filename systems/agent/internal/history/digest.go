@@ -205,11 +205,24 @@ func digestSource(target conversation.Turn, previous []conversation.Turn) string
 
 func renderSource(turn conversation.Turn, partLimit int) string {
 	var source strings.Builder
+	completions := make(map[string]bool)
 	for _, message := range turn.Messages {
 		if clock := message.UserTemporal; clock != nil {
 			fmt.Fprintf(&source, "clock: %s\n", clock.TimeLocal.Format("2006-01-02T15:04:05Z07:00"))
 		}
 		for _, part := range message.Parts {
+			if conversation.IsSubagentCompletion(part) {
+				completions[part.ID] = true
+				continue
+			}
+			if part.Type == conversation.ToolResultPartType && completions[part.ToolCallID] {
+				fmt.Fprintf(
+					&source,
+					"runtime subagent_completion (automatically received, not assistant tool use or polling): %s\n",
+					boundedText(part.Content, partLimit),
+				)
+				continue
+			}
 			var body string
 			switch part.Type {
 			case conversation.TextPartType:

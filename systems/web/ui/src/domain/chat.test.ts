@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import type { ChatMessage, ChatState } from "./chat";
+import type { ChatMessage, ChatState, Pending } from "./chat";
 
 import media from "../fixtures/protocol/media.json";
 import history from "../fixtures/server/history.json";
@@ -37,6 +37,41 @@ function packet(type: string, payload: unknown) {
 }
 
 describe("pure chat domain", () => {
+  it("keeps queued user input separate from a background continuation", () => {
+    const pending: Pending = {
+      id: "next",
+      text: "another question",
+      afterTurn: "7",
+      state: "queued",
+    };
+    const started = reduceFrame(
+      { ...initial(), pending: [pending] },
+      packet("turn.start", {
+        turn: "8",
+        msg: { turn: "8", ordinal: -1 },
+        background: true,
+      }),
+    );
+    expect(started.active).toBe("8");
+    expect(started.pending).toEqual([pending]);
+    const finished = reduceFrame(
+      started,
+      packet("msg.final", {
+        msg: { turn: "8", ordinal: -1 },
+        status: "completed",
+        full_text: "I checked the child result.",
+      }),
+    );
+    expect(finished.pending).toEqual([pending]);
+    expect(finished.messages[0]?.parts[0]?.text).toBe("I checked the child result.");
+    expect(finished.notice).toBeNull();
+    const userTurn = reduceFrame(
+      finished,
+      packet("turn.start", { turn: "9", msg: { turn: "9", ordinal: -1 } }),
+    );
+    expect(userTurn.pending[0]?.turn).toBe("9");
+    expect(userTurn.pending[0]?.state).toBe("running");
+  });
   it.each([100, 1000])(
     "never reads the historical collection during live updates with %s rows",
     (size) => {

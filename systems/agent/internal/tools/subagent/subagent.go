@@ -13,10 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
-	"github.com/q15co/q15/systems/agent/internal/bus"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
 	"github.com/q15co/q15/systems/agent/internal/dump"
 	q15media "github.com/q15co/q15/systems/agent/internal/media"
@@ -31,16 +29,6 @@ const (
 	maxOutput          = 200000
 	defaultListLimit   = 100
 	maxListLimit       = 500
-	// maxNotificationRunes bounds a terminal message so it arrives as one
-	// message: the transport chunks at 3800 runes (telegramTextChunkRunes),
-	// and this package must not import a channel to read that value. Runes,
-	// not bytes, because that is the unit the transport chunks on.
-	maxNotificationRunes = 3800
-	// notificationTimeout bounds a single delivery attempt so a stalled
-	// transport cannot hold a finished session open.
-	notificationTimeout = 10 * time.Second
-	taskExcerptChars    = 160
-	errorExcerptChars   = 400
 )
 
 // Finished-session retention bounds. Retention is count-based rather than
@@ -62,13 +50,6 @@ const (
 
 // ModelFactory constructs model clients for delegated agents.
 type ModelFactory func(modelcatalog.Model, q15media.Store) (agent.ModelClient, error)
-
-// Notifier publishes a terminal-state message to the chat that spawned a
-// session. It is satisfied by the runtime message bus, and lives here as a
-// narrow interface so this package depends on no transport.
-type Notifier interface {
-	PublishOutboundAndWaitForDelivery(context.Context, bus.OutboundMessage) error
-}
 
 // Skill is a delegated skill whose body and declared tools are injected into a
 // sub-agent at spawn time. The subagent package owns this neutral value type
@@ -106,8 +87,9 @@ type StartRequest struct {
 	// because the session deliberately outlives the turn that carries it, so
 	// a completion has no dispatch context to read a target from. A zero
 	// Origin means the session was not spawned from a chat, and no terminal
-	// notification is published.
-	Origin turnctx.Origin
+	// completion is queued.
+	Origin        turnctx.Origin
+	spawnReturned <-chan struct{}
 }
 
 // mediaAdaptiveClient wraps a ModelClient so that media parts are adapted to
@@ -188,7 +170,7 @@ type Manager struct {
 	skillResolver SkillResolver
 	dumpWriter    io.Writer
 	contextFitter agent.RequestContextFitter
-	notifier      Notifier
+	publisher     CompletionPublisher
 	next          uint64
 	runID         string
 	records       *recordStore
@@ -212,6 +194,11 @@ type Session struct {
 	result   *agent.EngineResult
 	err      error
 	done     chan struct{}
+	// The result releases synchronous spawn waits before completion delivery.
+	// Waiting for spawnReturned lets that caller consume an inline result first.
+	resultReady        chan struct{}
+	spawnReturned      <-chan struct{}
+	completionConsumed bool
 	// finishedAt is recorded during run's terminal bookkeeping and orders
 	// finished sessions for retention eviction. It stays zero while run is
 	// active, including after Kill marks the session but before the engine
@@ -256,7 +243,7 @@ func NewManager(
 	skillResolver SkillResolver,
 	dumpWriter io.Writer,
 	contextFitter agent.RequestContextFitter,
-	notifier Notifier,
+	publisher CompletionPublisher,
 ) *Manager {
 	return &Manager{
 		baseCtx:       ctx,
@@ -268,7 +255,7 @@ func NewManager(
 		skillResolver: skillResolver,
 		dumpWriter:    dumpWriter,
 		contextFitter: contextFitter,
-		notifier:      notifier,
+		publisher:     publisher,
 	}
 }
 
@@ -357,17 +344,19 @@ func (m *Manager) Start(req StartRequest) (*Session, error) {
 		return nil, err
 	}
 	s := &Session{
-		ID:         id,
-		Model:      modelCfg.Ref,
-		Task:       req.Task,
-		Status:     "running",
-		CreatedAt:  time.Now(),
-		messages:   messages,
-		cancel:     cancel,
-		done:       make(chan struct{}),
-		parentTurn: req.ParentTurn,
-		origin:     req.Origin,
-		runID:      m.runID,
+		ID:            id,
+		Model:         modelCfg.Ref,
+		Task:          req.Task,
+		Status:        "running",
+		CreatedAt:     time.Now(),
+		messages:      messages,
+		cancel:        cancel,
+		done:          make(chan struct{}),
+		resultReady:   make(chan struct{}),
+		spawnReturned: req.spawnReturned,
+		parentTurn:    req.ParentTurn,
+		origin:        req.Origin,
+		runID:         m.runID,
 	}
 	if m.records != nil {
 		s.recordPath = m.records.path(id)
@@ -420,10 +409,11 @@ func (m *Manager) run(
 		if err := m.evictFinishedSessions(); err != nil {
 			log.Printf("q15: subagent event=retention_failed error=%q", err)
 		}
-		// Publish before done closes, so a caller that observes the session
-		// finished also knows the terminal message was attempted. Delivery is
-		// bounded by notificationTimeout and never affects the recorded state.
-		m.notifyTerminal(s)
+		close(s.resultReady)
+		if s.spawnReturned != nil {
+			<-s.spawnReturned
+		}
+		m.publishCompletion(s)
 		close(s.done)
 	}()
 	observer := agent.RunObserverFunc(func(_ context.Context, ev agent.RunEvent) {
@@ -505,161 +495,6 @@ func (m *Manager) run(
 		s.pending = nil
 		s.mu.Unlock()
 	}
-}
-
-// terminalNotification is an immutable snapshot of how a session ended,
-// taken under the session lock so the message cannot race the terminal
-// bookkeeping or the retention pass that may drop the event log.
-type terminalNotification struct {
-	id         string
-	model      string
-	task       string
-	status     string
-	err        error
-	answer     string
-	createdAt  time.Time
-	finishedAt time.Time
-}
-
-// notifyTerminal publishes one message describing how a session ended to the
-// chat that spawned it.
-//
-// It runs in run's terminal defer before done is closed, so a caller that
-// observes the session finished also knows the message was attempted. Delivery
-// is best-effort by design: a transport failure is logged and never folded
-// into the session's terminal state, because the persisted record is the
-// source of truth and the message is a courtesy.
-//
-// Only completed, failed and killed are announced. An interrupted session is a
-// shutdown artifact: Close marks every live session interrupted and cancels
-// it, so announcing them would deliver one message per live session on every
-// restart. A terminal state reached while the process is already shutting down
-// can still lose its message, because the publish context derives from the
-// session's own, which shutdown has canceled; delivery during shutdown is
-// unreliable by nature and not worth blocking the shutdown to chase.
-func (m *Manager) notifyTerminal(s *Session) {
-	if m.notifier == nil {
-		return
-	}
-	s.mu.Lock()
-	switch s.Status {
-	case "completed", "failed", "killed":
-	default:
-		s.mu.Unlock()
-		return
-	}
-	origin := s.origin
-	if origin.Channel == "" || origin.ChatID == "" {
-		s.mu.Unlock()
-		return
-	}
-	snapshot := terminalNotification{
-		id:         s.ID,
-		model:      s.Model,
-		task:       s.Task,
-		status:     s.Status,
-		err:        s.err,
-		answer:     s.finalAnswer,
-		createdAt:  s.CreatedAt,
-		finishedAt: s.finishedAt,
-	}
-	s.mu.Unlock()
-
-	ctx, cancel := context.WithTimeout(m.baseCtx, notificationTimeout)
-	defer cancel()
-	if err := m.notifier.PublishOutboundAndWaitForDelivery(ctx, bus.OutboundMessage{
-		Channel: origin.Channel,
-		ChatID:  origin.ChatID,
-		Text:    formatTerminalNotification(snapshot),
-	}); err != nil {
-		log.Printf(
-			"q15: subagent event=notification_failed session_id=%q channel=%q chat_id=%q error=%q",
-			snapshot.id,
-			origin.Channel,
-			origin.ChatID,
-			err,
-		)
-	}
-}
-
-// formatTerminalNotification renders the transport-ready message. It keeps the
-// raw status word in the text so the message stays greppable, and bounds the
-// result so a long final answer cannot exceed a transport message limit.
-func formatTerminalNotification(n terminalNotification) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "🤖 Sub-agent %s %s\n", n.id, statusWord(n.status))
-	detail := "model: " + n.model
-	if !n.createdAt.IsZero() && !n.finishedAt.IsZero() {
-		if duration := n.finishedAt.Sub(n.createdAt); duration > 0 {
-			detail += " · " + duration.Round(time.Second).String()
-		}
-	}
-	b.WriteString(detail + "\n")
-	if task := oneLineExcerpt(n.task, taskExcerptChars); task != "" {
-		fmt.Fprintf(&b, "task: %s\n", task)
-	}
-	if n.err != nil {
-		fmt.Fprintf(&b, "error: %s\n", oneLineExcerpt(n.err.Error(), errorExcerptChars))
-	}
-	if answer := strings.TrimSpace(n.answer); answer != "" {
-		label := "answer:"
-		if n.status == "failed" && n.err != nil {
-			// A failed run can still have produced text; labelling it an
-			// answer would overstate how much that text can be trusted.
-			label = "partial answer:"
-		}
-		fmt.Fprintf(&b, "\n%s\n%s", label, answer)
-	}
-	return boundNotification(b.String())
-}
-
-// statusWord adds a human gloss while keeping the raw status verbatim.
-func statusWord(status string) string {
-	switch status {
-	case "completed":
-		return "finished (completed)"
-	case "killed":
-		return "stopped (killed)"
-	case "failed":
-		return "failed"
-	default:
-		return status
-	}
-}
-
-// oneLineExcerpt flattens whitespace so a multi-line task or error cannot break
-// the single-line header the formatter builds around it.
-func oneLineExcerpt(text string, limit int) string {
-	joined := strings.Join(strings.Fields(text), " ")
-	cut, truncated := truncateRunes(joined, limit)
-	if !truncated {
-		return cut
-	}
-	return strings.TrimRight(cut, " ") + "…"
-}
-
-// boundNotification truncates on a rune boundary and says so, rather than
-// silently dropping the tail of a long answer.
-func boundNotification(text string) string {
-	const marker = "\n\n… (truncated; read the full log with subagent_read)"
-	cut, truncated := truncateRunes(text, maxNotificationRunes-utf8.RuneCountInString(marker))
-	if !truncated {
-		return text
-	}
-	return cut + marker
-}
-
-// truncateRunes cuts text to limit runes and reports whether it cut. Runes are
-// the unit the transport chunks on, so a bound in runes is the honest one: a
-// byte bound would silently shrink the budget for every non-ASCII answer.
-func truncateRunes(text string, limit int) (string, bool) {
-	if limit < 0 {
-		return "", true
-	}
-	if utf8.RuneCountInString(text) <= limit {
-		return text, false
-	}
-	return string([]rune(text)[:limit]), true
 }
 
 // dropLog releases the session's event log and message transcript — the
@@ -904,7 +739,7 @@ func (t *Spawn) Definition() agent.ToolDefinition {
 			"max_turns counts model responses, includes a final answer-only turn without tools, and is shared with queued follow-up messages.",
 			"A session keeps running after the chat turn that spawned it ends; it stops by completing or failing, through subagent_kill, or at process shutdown.",
 			"Poll a spawned session's progress later with subagent_read or subagent_list.",
-			"The chat that spawned a session receives one message when it reaches a terminal state, carrying the final answer; poll for progress, not to learn that it finished.",
+			"When an asynchronous session completes, fails, or is killed, its result returns to you in a new interactive turn. Review it and continue the original task; the result is not sent directly to the user. Poll only when you need interim progress.",
 			"After a restart, unfinished sessions are listed as interrupted with their persisted diagnostic tail; they are not resumed.",
 			"Give the sub-agent full /workspace/... paths for files in packages whose names collide with runtime roots (memory, skills); /memory and /skills are persistent runtime roots, not Go package paths.",
 			"When delegating a skill by name or path, pass it via `skills`; its instructions are injected automatically and its declared tools are granted without listing them in `tools`.",
@@ -974,15 +809,18 @@ func (t *Spawn) Run(ctx context.Context, args string) (string, error) {
 	// The chat is captured here, while the dispatch context is still alive.
 	// The session outlives this context, so a completion cannot recover it.
 	origin, _ := turnctx.OriginFrom(ctx)
+	spawnReturned := make(chan struct{})
+	defer close(spawnReturned)
 	s, err := t.manager.Start(StartRequest{
-		ModelRef:     a.Model,
-		Task:         a.Task,
-		ExtraContext: a.Context,
-		AllowedTools: a.Tools,
-		Skills:       skills,
-		MaxTurns:     a.MaxTurns,
-		ParentTurn:   turnctx.TurnSeqFrom(ctx),
-		Origin:       origin,
+		ModelRef:      a.Model,
+		Task:          a.Task,
+		ExtraContext:  a.Context,
+		AllowedTools:  a.Tools,
+		Skills:        skills,
+		MaxTurns:      a.MaxTurns,
+		ParentTurn:    turnctx.TurnSeqFrom(ctx),
+		Origin:        origin,
+		spawnReturned: spawnReturned,
 	})
 	if err != nil {
 		return "", err
@@ -991,7 +829,10 @@ func (t *Spawn) Run(ctx context.Context, args string) (string, error) {
 		select {
 		case <-ctx.Done():
 			return "", ctx.Err()
-		case <-s.done:
+		case <-s.resultReady:
+			s.mu.Lock()
+			s.completionConsumed = true
+			s.mu.Unlock()
 			return s.Read(0, defaultMaxOutput), nil
 		case <-time.After(time.Duration(wait) * time.Second):
 		}

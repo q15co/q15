@@ -237,7 +237,7 @@ func runEventToSessionEvent(event agent.RunEvent) *chatpb.SessionEvent {
 	switch event.Type {
 	case agent.RunEventRunStarted: // run_events.go:15
 		out = &chatpb.SessionEvent{Event: &chatpb.SessionEvent_RunStarted{
-			RunStarted: &chatpb.RunStarted{},
+			RunStarted: &chatpb.RunStarted{Background: event.Background},
 		}}
 	case agent.RunEventModelTurnStarted: // run_events.go:16
 		out = &chatpb.SessionEvent{Event: &chatpb.SessionEvent_ModelTurnStarted{

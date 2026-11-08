@@ -20,6 +20,17 @@ import {
 } from "./protocol";
 
 describe("frozen browser contract", () => {
+  it("validates background-turn metadata", () => {
+    const payload = { turn: "8", msg: { turn: "8", ordinal: -1 } };
+    for (const background of [true, false]) {
+      expect(
+        parseFrame(JSON.stringify(frame("turn.start", { ...payload, background }))).payload,
+      ).toEqual({ ...payload, background });
+    }
+    expect(() =>
+      parseFrame(JSON.stringify(frame("turn.start", { ...payload, background: "yes" }))),
+    ).toThrow(/unsupported/iu);
+  });
   it("validates client fixtures and preserves typed outgoing requests", () => {
     const client = frames.filter(
       (value) =>

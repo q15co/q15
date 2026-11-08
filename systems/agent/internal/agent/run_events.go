@@ -31,6 +31,8 @@ type RunEvent struct {
 	ToolCall   ToolCall
 	ToolOutput string
 	FinalText  string
+	// Background distinguishes a runtime continuation from a queued user send.
+	Background bool
 	// Seq is the durable transcript turn sequence this run owns, reserved when the
 	// run starts and written to the transcript when it finishes. It is zero when no
 	// transcript store is attached. It is not Turn, which is the engine's per-run

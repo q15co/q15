@@ -193,7 +193,10 @@ message SessionOpened {
   string session_id = 1;
 }
 
-message RunStarted {}
+message RunStarted {
+  // Background runs do not consume a queued user message.
+  bool background = 1;
+}
 
 // ModelTurnStarted begins a new model attempt for the run. Subscribers should
 // replace any answer and reasoning draft accumulated so far.

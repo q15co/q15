@@ -1235,7 +1235,7 @@ func TestShutdownCancelReportsFailedWithReason(t *testing.T) {
 	manager := newTestManager(t, model)
 	engine := agent.NewEngine(model, nil, []string{"child"})
 	session := &Session{
-		ID: "subagent-1", Status: "running", done: make(chan struct{}),
+		ID: "subagent-1", Status: "running", done: make(chan struct{}), resultReady: make(chan struct{}),
 		messages: []conversation.Message{conversation.UserMessage("work")},
 	}
 	manager.sessions[session.ID] = session
