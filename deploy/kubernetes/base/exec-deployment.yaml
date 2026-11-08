@@ -6,6 +6,8 @@ metadata:
     app.kubernetes.io/name: q15-exec
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: q15-exec
@@ -36,20 +38,6 @@ spec:
               mkdir -p "$target"
               cp -a /nix/. "$target"/
               printf '%s\n' "$image_floor_version" > "$target/.q15-exec-floor.version"
-              if [[ ! -x "$target/var/nix/profiles/default/bin/nix" ]] || [[ ! -x "$target/var/nix/profiles/default/bin/bash" ]] || [[ ! -d "$target/store" ]]; then
-                echo "q15-exec: bootstrapped /nix volume is still missing required runtime markers" >&2
-                exit 1
-              fi
-              if [[ ! -L "$target/var/nix/profiles/q15-floor" ]] && [[ ! -e "$target/var/nix/profiles/q15-floor" ]]; then
-                echo "q15-exec: bootstrapped /nix volume is missing the q15-floor profile" >&2
-                exit 1
-              fi
-              while IFS= read -r binary; do
-                if [[ ! -x "$target/var/nix/profiles/q15-floor/bin/$binary" ]]; then
-                  echo "q15-exec: bootstrapped /nix volume is missing exec floor binary \"$binary\"" >&2
-                  exit 1
-                fi
-              done < /etc/q15/exec-floor.manifest
           volumeMounts:
             - name: nix
               mountPath: /var/lib/q15/bootstrap-nix

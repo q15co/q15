@@ -247,12 +247,17 @@ model: `q15-exec` supports multiple concurrent sessions within one pod, but sess
 currently held in memory inside that pod. Keeping one exec pod per stack avoids cross-pod session
 routing complexity and keeps storage ownership local to the stack.
 
-The checked-in exec deployment also seeds a fresh `/nix` PVC from the image in an init container
-when the mounted volume is missing the bootstrap runtime markers. In addition, the `q15-exec`
-process keeps an image-local bootstrap copy outside `/nix` and repairs an empty persisted `/nix` at
-startup before serving exec requests. Together those safeguards keep Kubernetes PVC-backed `/nix`
-storage persistent without losing the image's built-in shell, profile, cert bundle, or `nix` binary
-on first mount.
+The checked-in exec deployment uses `Recreate` rollouts so two exec pods never mount the same
+stack's `/nix` PVC during an update. Its init container seeds the PVC when the bootstrap runtime or
+floor profile is missing, or when the image's floor marker differs from the volume marker. The
+marker is written only after the seed copy succeeds. The `q15-exec` process then owns floor
+verification and repair from its image-local bootstrap copy before serving exec requests.
+
+A changed image floor marker therefore reseeds even a healthy existing volume. This deliberately
+replaces an in-place `nix profile upgrade --profile /nix/var/nix/profiles/q15-floor` on redeploy:
+the deployed image defines the floor. If the image and its bootstrap copy cannot provide every
+required floor binary, startup fails loudly and names the missing binary; the runtime marker is not
+advanced past a failed verification.
 
 Validate the base with:
 
