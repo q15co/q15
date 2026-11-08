@@ -55,6 +55,7 @@ func TestRequiredImageRuntimePathsCoverLoaderAndLibrariesPerArchitecture(t *test
 		"/etc/fonts/fonts.conf",
 		"/etc/nix-ld/ld",
 		"/etc/nix-ld/lib",
+		"/etc/q15/exec-floor.manifest",
 	}
 
 	for _, tc := range []struct {
@@ -245,6 +246,9 @@ func TestNixBootstrapSourceAvailableAcceptsProfileSymlinks(t *testing.T) {
 	if err := os.Symlink("/nix/store/source-root-profile", filepath.Join(root, "var/nix/profiles/default-1-link")); err != nil {
 		t.Fatalf("Symlink(default-1-link) error = %v", err)
 	}
+	if err := os.Symlink("/nix/store/source-floor-profile", filepath.Join(root, "var/nix/profiles/q15-floor")); err != nil {
+		t.Fatalf("Symlink(q15-floor) error = %v", err)
+	}
 
 	available, err := nixBootstrapSourceAvailable(root)
 	if err != nil {
@@ -252,6 +256,194 @@ func TestNixBootstrapSourceAvailableAcceptsProfileSymlinks(t *testing.T) {
 	}
 	if !available {
 		t.Fatalf("expected bootstrap source at %q to be available", root)
+	}
+}
+
+func TestBootstrapNixRuntimeReconcilesExecFloorVersion(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name           string
+		marker         string
+		writeMarker    bool
+		inPlaceUpgrade bool
+		wantReseed     bool
+	}{
+		{
+			name:        "matching marker does not reseed",
+			marker:      "floor-v1\n",
+			writeMarker: true,
+		},
+		{
+			name:       "missing marker reseeds",
+			wantReseed: true,
+		},
+		{
+			name:           "mismatched marker reseeds and replaces an in-place upgrade",
+			marker:         "floor-v0\n",
+			writeMarker:    true,
+			inPlaceUpgrade: true,
+			wantReseed:     true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			sourceRoot := t.TempDir()
+			runtimeRoot := t.TempDir()
+			imageRoot := t.TempDir()
+			usrBinDir := filepath.Join(imageRoot, "usr", "bin")
+			manifestPath := filepath.Join(imageRoot, "etc", "q15", "exec-floor.manifest")
+			imageVersionPath := filepath.Join(imageRoot, "etc", "q15", "exec-floor.version")
+			runtimeVersionPath := filepath.Join(runtimeRoot, ".q15-exec-floor.version")
+			writeBootstrapFloorFixture(t, sourceRoot, runtimeRoot, usrBinDir, "sed")
+			writeTestFile(t, manifestPath, "sed\n")
+			writeTestFile(t, imageVersionPath, "floor-v1\n")
+			writeTestFile(t, filepath.Join(sourceRoot, "store", "reseed-sentinel"), "source\n")
+
+			// Start with a healthy volume, then remove the sentinel so a later
+			// copy is observable without intercepting copyTree itself.
+			if err := copyTree(sourceRoot, runtimeRoot); err != nil {
+				t.Fatalf("copyTree(initial fixture) error = %v", err)
+			}
+			if err := os.Remove(filepath.Join(runtimeRoot, "store", "reseed-sentinel")); err != nil {
+				t.Fatalf("Remove(reseed-sentinel) error = %v", err)
+			}
+			if tc.writeMarker {
+				writeTestFile(t, runtimeVersionPath, tc.marker)
+			}
+			if tc.inPlaceUpgrade {
+				profilePath := filepath.Join(runtimeRoot, "var", "nix", "profiles", "q15-floor")
+				if err := os.Remove(profilePath); err != nil {
+					t.Fatalf("Remove(upgraded q15-floor) error = %v", err)
+				}
+				if err := os.Symlink("q15-floor-99-link", profilePath); err != nil {
+					t.Fatalf("Symlink(upgraded q15-floor) error = %v", err)
+				}
+			}
+
+			err := bootstrapNixRuntimeWithConfig(nixRuntimeConfig{
+				runtimeDir:         runtimeRoot,
+				bootstrapSourceDir: sourceRoot,
+				imageVersionPath:   imageVersionPath,
+				runtimeVersionPath: runtimeVersionPath,
+				manifestPath:       manifestPath,
+				binaryDir:          usrBinDir,
+				imageRuntimePaths:  []string{manifestPath},
+			})
+			if err != nil {
+				t.Fatalf("bootstrapNixRuntimeWithConfig() error = %v", err)
+			}
+
+			_, err = os.Stat(filepath.Join(runtimeRoot, "store", "reseed-sentinel"))
+			reseeded := err == nil
+			if reseeded != tc.wantReseed {
+				t.Fatalf("reseeded = %t, want %t (stat error = %v)", reseeded, tc.wantReseed, err)
+			}
+			marker, err := os.ReadFile(runtimeVersionPath)
+			if err != nil {
+				t.Fatalf("ReadFile(runtime floor marker) error = %v", err)
+			}
+			if got := string(marker); got != "floor-v1\n" {
+				t.Fatalf("runtime floor marker = %q, want %q", got, "floor-v1\\n")
+			}
+			if tc.inPlaceUpgrade {
+				profilePath := filepath.Join(runtimeRoot, "var", "nix", "profiles", "q15-floor")
+				target, err := os.Readlink(profilePath)
+				if err != nil {
+					t.Fatalf("Readlink(q15-floor) error = %v", err)
+				}
+				want := filepath.Join(runtimeRoot, "var", "nix", "profiles", "q15-floor-1-link")
+				if target != want {
+					t.Fatalf("q15-floor target = %q, want image target %q", target, want)
+				}
+			}
+		})
+	}
+}
+
+func TestBootstrapNixRuntimeNamesMissingExecFloorBinary(t *testing.T) {
+	t.Parallel()
+
+	sourceRoot := t.TempDir()
+	runtimeRoot := t.TempDir()
+	imageRoot := t.TempDir()
+	usrBinDir := filepath.Join(imageRoot, "usr", "bin")
+	manifestPath := filepath.Join(imageRoot, "etc", "q15", "exec-floor.manifest")
+	imageVersionPath := filepath.Join(imageRoot, "etc", "q15", "exec-floor.version")
+	writeBootstrapFloorFixture(t, sourceRoot, runtimeRoot, usrBinDir, "sed")
+	writeTestFile(t, manifestPath, "sed\npatch\n")
+	writeTestFile(t, imageVersionPath, "floor-v1\n")
+	writeTestFile(t, filepath.Join(runtimeRoot, ".q15-exec-floor.version"), "floor-v0\n")
+
+	err := bootstrapNixRuntimeWithConfig(nixRuntimeConfig{
+		runtimeDir:         runtimeRoot,
+		bootstrapSourceDir: sourceRoot,
+		imageVersionPath:   imageVersionPath,
+		runtimeVersionPath: filepath.Join(runtimeRoot, ".q15-exec-floor.version"),
+		manifestPath:       manifestPath,
+		binaryDir:          usrBinDir,
+		imageRuntimePaths:  []string{manifestPath},
+	})
+	if err == nil || !strings.Contains(err.Error(), `exec floor binary "patch"`) {
+		t.Fatalf("bootstrapNixRuntimeWithConfig() error = %v, want missing patch binary", err)
+	}
+}
+
+func writeBootstrapFloorFixture(
+	t *testing.T,
+	sourceRoot string,
+	runtimeRoot string,
+	usrBinDir string,
+	binaries ...string,
+) {
+	t.Helper()
+
+	writeTestExecutable(t, filepath.Join(sourceRoot, "store", "default", "bin", "nix"))
+	writeTestExecutable(t, filepath.Join(sourceRoot, "store", "default", "bin", "bash"))
+	for _, binary := range binaries {
+		writeTestExecutable(t, filepath.Join(sourceRoot, "store", "floor", "bin", binary))
+	}
+	profileDir := filepath.Join(sourceRoot, "var", "nix", "profiles")
+	if err := os.MkdirAll(profileDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", profileDir, err)
+	}
+	defaultGenerationTarget := filepath.Join(runtimeRoot, "store", "default")
+	if err := os.Symlink(defaultGenerationTarget, filepath.Join(profileDir, "default-1-link")); err != nil {
+		t.Fatalf("Symlink(default-1-link) error = %v", err)
+	}
+	defaultProfileTarget := filepath.Join(runtimeRoot, "var", "nix", "profiles", "default-1-link")
+	if err := os.Symlink(defaultProfileTarget, filepath.Join(profileDir, "default")); err != nil {
+		t.Fatalf("Symlink(default) error = %v", err)
+	}
+	generationTarget := filepath.Join(runtimeRoot, "store", "floor")
+	if err := os.Symlink(generationTarget, filepath.Join(profileDir, "q15-floor-1-link")); err != nil {
+		t.Fatalf("Symlink(q15-floor-1-link) error = %v", err)
+	}
+	profileTarget := filepath.Join(runtimeRoot, "var", "nix", "profiles", "q15-floor-1-link")
+	if err := os.Symlink(profileTarget, filepath.Join(profileDir, "q15-floor")); err != nil {
+		t.Fatalf("Symlink(q15-floor) error = %v", err)
+	}
+	for _, binary := range binaries {
+		link := filepath.Join(usrBinDir, binary)
+		if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q) error = %v", filepath.Dir(link), err)
+		}
+		target := filepath.Join(runtimeRoot, "var", "nix", "profiles", "q15-floor", "bin", binary)
+		if err := os.Symlink(target, link); err != nil {
+			t.Fatalf("Symlink(%q) error = %v", link, err)
+		}
+	}
+}
+
+func writeTestFile(t *testing.T, path string, content string) {
+	t.Helper()
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", path, err)
 	}
 }
 
