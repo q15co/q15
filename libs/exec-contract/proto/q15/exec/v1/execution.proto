@@ -33,6 +33,7 @@ message GetRuntimeInfoResponse {
   bool proxy_enabled = 7;
   string proxy_policy_revision = 8;
   string media_dir = 9;
+  repeated string exec_floor_commands = 10;
 }
 
 enum SessionState {

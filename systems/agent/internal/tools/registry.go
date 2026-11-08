@@ -60,8 +60,8 @@ func NewApplyPatch(exec FileToolExecutor) *files.ApplyPatch {
 }
 
 // NewExec delegates to exec.NewExec.
-func NewExec(client execution.Service) *exec.Exec {
-	return exec.NewExec(client)
+func NewExec(client execution.Service, floorCommands []string) *exec.Exec {
+	return exec.NewExec(client, floorCommands...)
 }
 
 // NewExecList delegates to exec.NewList.

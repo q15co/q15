@@ -185,6 +185,33 @@ func TestExecDefinitionPackagesAreOptional(t *testing.T) {
 	}
 }
 
+func TestExecDefinitionRendersExactlyTheReportedFloorCommands(t *testing.T) {
+	t.Parallel()
+
+	floorCommands := []string{"sed", "awk", "grep", "patch", "ps", "hostname", "rg", "jq"}
+	definition := NewExec(nil, floorCommands...).Definition()
+	var presentParagraphs []string
+	for _, line := range definition.PromptGuidance {
+		if strings.HasPrefix(line, "Base commands present") {
+			presentParagraphs = append(presentParagraphs, line)
+		}
+	}
+	want := "Base commands present with no `packages`: sed, awk, grep, patch, ps, hostname, rg, jq."
+	if len(presentParagraphs) != 1 || presentParagraphs[0] != want {
+		t.Fatalf("present-command paragraphs = %q, want exactly %q", presentParagraphs, want)
+	}
+
+	guidance := strings.Join(definition.PromptGuidance, "\n")
+	for _, want := range []string{
+		"`python3`, `make`, and compilers such as `gcc` and `go` are deliberately absent",
+		"Anything not listed as present must be named in `packages`.",
+	} {
+		if !strings.Contains(guidance, want) {
+			t.Errorf("exec guidance missing %q:\n%s", want, guidance)
+		}
+	}
+}
+
 func TestExecRunFormatsStdoutStderrAndExitCode(t *testing.T) {
 	t.Parallel()
 

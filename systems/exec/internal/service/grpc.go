@@ -22,6 +22,7 @@ type RuntimeInfo struct {
 	SkillsDir           string
 	ProxyEnabled        bool
 	ProxyPolicyRevision string
+	ExecFloorCommands   []string
 }
 
 // GRPCServer implements the execution service API.
@@ -66,6 +67,7 @@ func (s *GRPCServer) GetRuntimeInfo(
 		SkillsDir:           s.info.SkillsDir,
 		ProxyEnabled:        s.info.ProxyEnabled,
 		ProxyPolicyRevision: s.info.ProxyPolicyRevision,
+		ExecFloorCommands:   append([]string(nil), s.info.ExecFloorCommands...),
 		Capabilities: []*execpb.RuntimeCapability{
 			{Name: "sessions", Enabled: true},
 			{Name: "list_sessions", Enabled: true},

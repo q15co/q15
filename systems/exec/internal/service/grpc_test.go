@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"slices"
 	"testing"
 
 	"github.com/q15co/q15/libs/exec-contract/execpb"
@@ -32,6 +33,7 @@ func TestGRPCServerRunsSessionsEndToEnd(t *testing.T) {
 		SkillsDir:           "/skills",
 		ProxyEnabled:        true,
 		ProxyPolicyRevision: "rev-123",
+		ExecFloorCommands:   []string{"sed", "awk", "rg", "jq"},
 	})
 	if err != nil {
 		t.Fatalf("NewGRPCServer() error = %v", err)
@@ -74,6 +76,12 @@ func TestGRPCServerRunsSessionsEndToEnd(t *testing.T) {
 	}
 	if got := info.GetMediaDir(); got != "/media" {
 		t.Fatalf("media dir = %q, want /media", got)
+	}
+	if got, want := info.GetExecFloorCommands(), []string{"sed", "awk", "rg", "jq"}; !slices.Equal(
+		got,
+		want,
+	) {
+		t.Fatalf("exec floor commands = %v, want %v", got, want)
 	}
 
 	started, err := client.StartSession(ctx, &execpb.StartSessionRequest{

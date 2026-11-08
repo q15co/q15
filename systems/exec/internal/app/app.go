@@ -66,8 +66,14 @@ func Serve(ctx context.Context, cfg Settings) error {
 	if cfg.Executor == nil {
 		cfg.Executor = service.NixShellExecutor{}
 	}
+	var floorCommands []string
+	var err error
 	if cfg.Executor.Type() == "local-nix-shell" {
 		if err := bootstrapNixRuntime(); err != nil {
+			return err
+		}
+		floorCommands, err = readExecFloorCommands(execFloorManifestPath)
+		if err != nil {
 			return err
 		}
 	}
@@ -94,6 +100,7 @@ func Serve(ctx context.Context, cfg Settings) error {
 		SkillsDir:           runtimeSkillsDir,
 		ProxyEnabled:        proxyProfile.Enabled,
 		ProxyPolicyRevision: proxyProfile.PolicyRevision,
+		ExecFloorCommands:   floorCommands,
 	})
 	if err != nil {
 		return err

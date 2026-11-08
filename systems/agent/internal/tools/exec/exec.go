@@ -16,17 +16,22 @@ import (
 
 // Exec runs one command through the configured execution service.
 type Exec struct {
-	client execution.Service
+	client        execution.Service
+	floorCommands []string
 }
 
 // NewExec constructs an exec tool backed by the provided session service client.
-func NewExec(client execution.Service) *Exec {
-	return &Exec{client: client}
+// floorCommands must be the installed command manifest reported by that service.
+func NewExec(client execution.Service, floorCommands ...string) *Exec {
+	return &Exec{
+		client:        client,
+		floorCommands: append([]string(nil), floorCommands...),
+	}
 }
 
 // Definition returns the tool schema exposed to the model.
 func (e *Exec) Definition() agent.ToolDefinition {
-	return agent.ToolDefinition{
+	definition := agent.ToolDefinition{
 		Name:        "exec",
 		Description: "Run a command through the configured execution service, returning output if it finishes within the wait window or a session handle if it keeps running",
 		PromptGuidance: []string{
@@ -73,6 +78,26 @@ func (e *Exec) Definition() agent.ToolDefinition {
 			"required": []string{"command"},
 		},
 	}
+	definition.PromptGuidance = append(
+		definition.PromptGuidance,
+		execFloorPromptGuidance(e.floorCommands)...,
+	)
+	return definition
+}
+
+func execFloorPromptGuidance(floorCommands []string) []string {
+	guidance := make([]string, 0, 3)
+	if len(floorCommands) > 0 {
+		guidance = append(
+			guidance,
+			"Base commands present with no `packages`: "+strings.Join(floorCommands, ", ")+".",
+		)
+	}
+	return append(
+		guidance,
+		"`python3`, `make`, and compilers such as `gcc` and `go` are deliberately absent from the base floor.",
+		"Anything not listed as present must be named in `packages`.",
+	)
 }
 
 // Run executes one shell command from raw JSON tool arguments.
