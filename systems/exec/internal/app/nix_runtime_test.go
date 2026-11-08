@@ -676,6 +676,62 @@ func TestCopySymlinkKeepsIdenticalLinkAndAtomicallyReplacesChangedLink(t *testin
 	}
 }
 
+func TestCopyRegularFileLeavesMatchingTargetUntouched(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	sourcePath := filepath.Join(root, "source")
+	targetPath := filepath.Join(root, "target")
+	writeTestFile(t, sourcePath, "AAAA")
+	writeTestFile(t, targetPath, "BBBB")
+	if err := os.Chmod(targetPath, 0o644); err != nil {
+		t.Fatalf("Chmod(target) error = %v", err)
+	}
+
+	if err := copyRegularFile(sourcePath, targetPath, 0o644); err != nil {
+		t.Fatalf("copyRegularFile() error = %v", err)
+	}
+	content, err := os.ReadFile(targetPath)
+	if err != nil {
+		t.Fatalf("ReadFile(target) error = %v", err)
+	}
+	if got := string(content); got != "BBBB" {
+		t.Fatalf("target contents = %q, want the matching-size target left untouched", got)
+	}
+}
+
+func TestCopySymlinkReplacesStrayDirectory(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	sourcePath := filepath.Join(root, "source")
+	targetPath := filepath.Join(root, "target")
+	if err := os.Symlink("generation-1", sourcePath); err != nil {
+		t.Fatalf("Symlink(source) error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(targetPath, "stale"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(target) error = %v", err)
+	}
+
+	if err := copySymlink(sourcePath, targetPath); err != nil {
+		t.Fatalf("copySymlink() error = %v", err)
+	}
+	info, err := os.Lstat(targetPath)
+	if err != nil {
+		t.Fatalf("Lstat(target) error = %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("target mode = %s, want a symlink", info.Mode())
+	}
+	targetValue, err := os.Readlink(targetPath)
+	if err != nil {
+		t.Fatalf("Readlink(target) error = %v", err)
+	}
+	if targetValue != "generation-1" {
+		t.Fatalf("target link = %q, want generation-1", targetValue)
+	}
+}
+
 func writeTestExecutable(t *testing.T, path string) {
 	t.Helper()
 

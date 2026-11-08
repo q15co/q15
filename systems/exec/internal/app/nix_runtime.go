@@ -198,7 +198,24 @@ func writeRuntimeExecFloorVersion(imagePath string, runtimePath string) error {
 	if err := os.MkdirAll(filepath.Dir(runtimePath), 0o755); err != nil {
 		return fmt.Errorf("create exec floor marker directory: %w", err)
 	}
-	if err := os.WriteFile(runtimePath, version, 0o644); err != nil {
+	temporary, err := os.CreateTemp(filepath.Dir(runtimePath), "."+filepath.Base(runtimePath)+"-*")
+	if err != nil {
+		return fmt.Errorf("write exec floor runtime version %q: %w", runtimePath, err)
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if _, err := temporary.Write(version); err != nil {
+		_ = temporary.Close()
+		return fmt.Errorf("write exec floor runtime version %q: %w", runtimePath, err)
+	}
+	if err := temporary.Chmod(0o644); err != nil {
+		_ = temporary.Close()
+		return fmt.Errorf("write exec floor runtime version %q: %w", runtimePath, err)
+	}
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("write exec floor runtime version %q: %w", runtimePath, err)
+	}
+	if err := os.Rename(temporaryPath, runtimePath); err != nil {
 		return fmt.Errorf("write exec floor runtime version %q: %w", runtimePath, err)
 	}
 	return nil
@@ -403,6 +420,13 @@ func copySymlink(sourcePath string, targetPath string) error {
 	if currentValue, err := os.Readlink(targetPath); err == nil && currentValue == targetValue {
 		return nil
 	}
+	// Rename replaces a file or symlink but not a directory, so a stray
+	// directory left by an interrupted earlier copy has to be cleared first.
+	if info, err := os.Lstat(targetPath); err == nil && info.IsDir() {
+		if err := os.RemoveAll(targetPath); err != nil {
+			return err
+		}
+	}
 
 	temporary, err := os.CreateTemp(filepath.Dir(targetPath), "."+filepath.Base(targetPath)+"-*")
 	if err != nil {
@@ -433,6 +457,21 @@ func copyRegularFile(sourcePath string, targetPath string, perm fs.FileMode) err
 		return err
 	}
 	defer sourceFile.Close()
+
+	sourceInfo, err := sourceFile.Stat()
+	if err != nil {
+		return err
+	}
+	// Store paths are content addressed, so a regular target of the same size
+	// and mode already holds the same bytes. Skipping it keeps a failing
+	// verification from rewriting the whole store on every startup.
+	if targetInfo, statErr := os.Stat(targetPath); statErr == nil {
+		if targetInfo.Mode().IsRegular() &&
+			targetInfo.Size() == sourceInfo.Size() &&
+			targetInfo.Mode().Perm() == perm.Perm() {
+			return nil
+		}
+	}
 
 	targetFile, err := os.CreateTemp(filepath.Dir(targetPath), "."+filepath.Base(targetPath)+"-*")
 	if err != nil {
