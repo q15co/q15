@@ -42,6 +42,7 @@ while IFS= read -r file; do
 		".dockerignore" \
 		"go.work" \
 		"go.work.sum" \
+		"docker/exec-floor.txt" \
 		"docker/exec.Dockerfile"; then
 		exec_service=true
 	fi

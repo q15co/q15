@@ -185,6 +185,61 @@ func TestExecDefinitionPackagesAreOptional(t *testing.T) {
 	}
 }
 
+func TestExecDefinitionRendersSortedUniqueFloorCommands(t *testing.T) {
+	t.Parallel()
+
+	floorCommands := []string{
+		"sed",
+		"awk",
+		"grep",
+		"sed",
+		"patch",
+		"ps",
+		"hostname",
+		"rg",
+		"jq",
+		"awk",
+	}
+	definition := NewExec(nil, floorCommands...).Definition()
+	var presentParagraphs []string
+	for _, line := range definition.PromptGuidance {
+		if strings.HasPrefix(line, "Base commands present") {
+			presentParagraphs = append(presentParagraphs, line)
+		}
+	}
+	want := "Base commands present with no `packages`: awk, grep, hostname, jq, patch, ps, rg, sed."
+	if len(presentParagraphs) != 1 || presentParagraphs[0] != want {
+		t.Fatalf("present-command paragraphs = %q, want exactly %q", presentParagraphs, want)
+	}
+
+	guidance := strings.Join(definition.PromptGuidance, "\n")
+	for _, want := range []string{
+		"Commands deliberately absent from the base floor: `python3`, `make`, `gcc`, `go`.",
+		"Anything not listed as present must be named in `packages`.",
+	} {
+		if !strings.Contains(guidance, want) {
+			t.Errorf("exec guidance missing %q:\n%s", want, guidance)
+		}
+	}
+}
+
+func TestExecDefinitionFiltersAbsencesAgainstReportedFloor(t *testing.T) {
+	t.Parallel()
+
+	definition := NewExec(nil, "python3", "gcc").Definition()
+	for _, line := range definition.PromptGuidance {
+		if !strings.HasPrefix(line, "Commands deliberately absent") {
+			continue
+		}
+		want := "Commands deliberately absent from the base floor: `make`, `go`."
+		if line != want {
+			t.Fatalf("absence guidance = %q, want %q", line, want)
+		}
+		return
+	}
+	t.Fatal("exec guidance is missing its filtered absence sentence")
+}
+
 func TestExecRunFormatsStdoutStderrAndExitCode(t *testing.T) {
 	t.Parallel()
 

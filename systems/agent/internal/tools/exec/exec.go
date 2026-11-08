@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -16,17 +17,22 @@ import (
 
 // Exec runs one command through the configured execution service.
 type Exec struct {
-	client execution.Service
+	client        execution.Service
+	floorCommands []string
 }
 
 // NewExec constructs an exec tool backed by the provided session service client.
-func NewExec(client execution.Service) *Exec {
-	return &Exec{client: client}
+// floorCommands must be the installed command manifest reported by that service.
+func NewExec(client execution.Service, floorCommands ...string) *Exec {
+	return &Exec{
+		client:        client,
+		floorCommands: append([]string(nil), floorCommands...),
+	}
 }
 
 // Definition returns the tool schema exposed to the model.
 func (e *Exec) Definition() agent.ToolDefinition {
-	return agent.ToolDefinition{
+	definition := agent.ToolDefinition{
 		Name:        "exec",
 		Description: "Run a command through the configured execution service, returning output if it finishes within the wait window or a session handle if it keeps running",
 		PromptGuidance: []string{
@@ -73,6 +79,47 @@ func (e *Exec) Definition() agent.ToolDefinition {
 			"required": []string{"command"},
 		},
 	}
+	definition.PromptGuidance = append(
+		definition.PromptGuidance,
+		execFloorPromptGuidance(e.floorCommands)...,
+	)
+	return definition
+}
+
+func execFloorPromptGuidance(floorCommands []string) []string {
+	commands := make([]string, 0, len(floorCommands))
+	for _, command := range floorCommands {
+		if command = strings.TrimSpace(command); command != "" {
+			commands = append(commands, command)
+		}
+	}
+	slices.Sort(commands)
+	commands = slices.Compact(commands)
+
+	guidance := make([]string, 0, 3)
+	present := make(map[string]struct{}, len(commands))
+	for _, command := range commands {
+		present[command] = struct{}{}
+	}
+	if len(commands) > 0 {
+		guidance = append(
+			guidance,
+			"Base commands present with no `packages`: "+strings.Join(commands, ", ")+".",
+		)
+	}
+	var absences []string
+	for _, command := range []string{"python3", "make", "gcc", "go"} {
+		if _, ok := present[command]; !ok {
+			absences = append(absences, "`"+command+"`")
+		}
+	}
+	if len(absences) > 0 {
+		guidance = append(
+			guidance,
+			"Commands deliberately absent from the base floor: "+strings.Join(absences, ", ")+".",
+		)
+	}
+	return append(guidance, "Anything not listed as present must be named in `packages`.")
 }
 
 // Run executes one shell command from raw JSON tool arguments.

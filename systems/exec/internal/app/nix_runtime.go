@@ -1,23 +1,32 @@
 package app
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 )
 
 const (
-	runtimeNixDir         = "/nix"
-	bootstrapNixSourceDir = "/var/lib/q15/bootstrap-nix"
+	runtimeNixDir               = "/nix"
+	bootstrapNixSourceDir       = "/var/lib/q15/bootstrap-nix"
+	execFloorVersionPath        = "/etc/q15/exec-floor.version"
+	runtimeExecFloorVersionPath = "/nix/.q15-exec-floor.version"
+	execFloorManifestPath       = "/etc/q15/exec-floor.manifest"
+	execFloorBinaryDir          = "/usr/bin"
+	requiredExecFloorBinary     = "sed"
 )
 
 var requiredNixRuntimeMarkers = []string{
 	"store",
 	"var/nix/profiles/default/bin/nix",
 	"var/nix/profiles/default/bin/bash",
+	"var/nix/profiles/q15-floor",
 }
 
 // requiredImageRuntimePathsBase are the architecture independent paths baked
@@ -30,6 +39,7 @@ var requiredImageRuntimePathsBase = []string{
 	"/etc/fonts/fonts.conf",
 	"/etc/nix-ld/ld",
 	"/etc/nix-ld/lib",
+	execFloorManifestPath,
 }
 
 // execImageLoaderPaths maps a Go architecture to the FHS path where the exec
@@ -54,68 +64,219 @@ func requiredImageRuntimePaths(goarch string) ([]string, bool) {
 	return append(paths, loader), true
 }
 
-// execImageRuntimeHealthy reports whether the image paths this binary depends
-// on exist in the container it is running in.
-func execImageRuntimeHealthy() (bool, error) {
-	paths, ok := requiredImageRuntimePaths(runtime.GOARCH)
-	if !ok {
-		return false, fmt.Errorf(
-			"no exec image loader path known for GOARCH %q",
-			runtime.GOARCH,
-		)
-	}
-	return runtimePathsHealthy(paths)
-}
-
 var requiredBootstrapSourceMarkers = []string{
 	"store",
 	"var/nix/profiles/default",
 	"var/nix/profiles/default-1-link",
+	"var/nix/profiles/q15-floor",
+}
+
+// nixRuntimeConfig contains the absolute production paths as fields so the
+// bootstrap behavior can be exercised against an isolated filesystem tree.
+type nixRuntimeConfig struct {
+	runtimeDir         string
+	bootstrapSourceDir string
+	imageVersionPath   string
+	runtimeVersionPath string
+	manifestPath       string
+	binaryDir          string
+	imageRuntimePaths  []string
 }
 
 func bootstrapNixRuntime() error {
-	healthy, err := nixRuntimeHealthy(runtimeNixDir)
+	imageRuntimePaths, ok := requiredImageRuntimePaths(runtime.GOARCH)
+	if !ok {
+		return fmt.Errorf(
+			"no exec image loader path known for GOARCH %q",
+			runtime.GOARCH,
+		)
+	}
+	return bootstrapNixRuntimeWithConfig(nixRuntimeConfig{
+		runtimeDir:         runtimeNixDir,
+		bootstrapSourceDir: bootstrapNixSourceDir,
+		imageVersionPath:   execFloorVersionPath,
+		runtimeVersionPath: runtimeExecFloorVersionPath,
+		manifestPath:       execFloorManifestPath,
+		binaryDir:          execFloorBinaryDir,
+		imageRuntimePaths:  imageRuntimePaths,
+	})
+}
+
+func bootstrapNixRuntimeWithConfig(cfg nixRuntimeConfig) error {
+	healthy, err := nixRuntimeHealthy(cfg.runtimeDir)
 	if err != nil {
 		return err
 	}
-	imagePathsHealthy, err := execImageRuntimeHealthy()
+	imagePathsHealthy, err := runtimePathsHealthy(cfg.imageRuntimePaths)
 	if err != nil {
 		return err
 	}
-	if healthy && imagePathsHealthy {
-		return nil
+	if !imagePathsHealthy {
+		if _, err := os.Stat(cfg.manifestPath); err != nil {
+			return fmt.Errorf(
+				"exec floor binary %q cannot be verified: stat image manifest %q: %w",
+				requiredExecFloorBinary,
+				cfg.manifestPath,
+				err,
+			)
+		}
+	}
+	floorVersionCurrent, err := execFloorVersionCurrent(
+		cfg.imageVersionPath,
+		cfg.runtimeVersionPath,
+	)
+	if err != nil {
+		return err
+	}
+	if healthy && imagePathsHealthy && floorVersionCurrent {
+		if err := verifyExecFloorBinaries(cfg.manifestPath, cfg.binaryDir); err == nil {
+			return nil
+		}
 	}
 
-	sourceHealthy, err := nixBootstrapSourceAvailable(bootstrapNixSourceDir)
+	sourceHealthy, err := nixBootstrapSourceAvailable(cfg.bootstrapSourceDir)
 	if err != nil {
 		return err
 	}
 	if !sourceHealthy {
 		return fmt.Errorf(
 			"nix runtime missing required bootstrap markers in %q",
-			bootstrapNixSourceDir,
+			cfg.bootstrapSourceDir,
 		)
 	}
 
-	if err := copyTree(bootstrapNixSourceDir, runtimeNixDir); err != nil {
-		return fmt.Errorf("bootstrap /nix from %q: %w", bootstrapNixSourceDir, err)
+	if err := copyTree(cfg.bootstrapSourceDir, cfg.runtimeDir); err != nil {
+		return fmt.Errorf("bootstrap /nix from %q: %w", cfg.bootstrapSourceDir, err)
 	}
 
-	healthy, err = nixRuntimeHealthy(runtimeNixDir)
+	healthy, err = nixRuntimeHealthy(cfg.runtimeDir)
 	if err != nil {
 		return err
 	}
 	if !healthy {
 		return fmt.Errorf("bootstrapped /nix is still missing required runtime markers")
 	}
-	imagePathsHealthy, err = execImageRuntimeHealthy()
+	if err := verifyExecFloorBinaries(cfg.manifestPath, cfg.binaryDir); err != nil {
+		return fmt.Errorf("bootstrapped /nix exec floor verification failed: %w", err)
+	}
+	imagePathsHealthy, err = runtimePathsHealthy(cfg.imageRuntimePaths)
 	if err != nil {
 		return err
 	}
 	if !imagePathsHealthy {
 		return fmt.Errorf("bootstrapped /nix is still missing required image runtime paths")
 	}
+	return writeRuntimeExecFloorVersion(cfg.imageVersionPath, cfg.runtimeVersionPath)
+}
+
+func execFloorVersionCurrent(imagePath string, runtimePath string) (bool, error) {
+	imageVersion, err := os.ReadFile(imagePath)
+	if err != nil {
+		return false, fmt.Errorf(
+			"exec floor binary %q cannot be verified: read image version %q: %w",
+			requiredExecFloorBinary,
+			imagePath,
+			err,
+		)
+	}
+	if strings.TrimSpace(string(imageVersion)) == "" {
+		return false, fmt.Errorf("exec floor image version %q is empty", imagePath)
+	}
+	runtimeVersion, err := os.ReadFile(runtimePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("read exec floor runtime version %q: %w", runtimePath, err)
+	}
+	return strings.TrimSpace(string(imageVersion)) == strings.TrimSpace(string(runtimeVersion)), nil
+}
+
+func writeRuntimeExecFloorVersion(imagePath string, runtimePath string) error {
+	version, err := os.ReadFile(imagePath)
+	if err != nil {
+		return fmt.Errorf("read exec floor image version %q: %w", imagePath, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(runtimePath), 0o755); err != nil {
+		return fmt.Errorf("create exec floor marker directory: %w", err)
+	}
+	temporary, err := os.CreateTemp(filepath.Dir(runtimePath), "."+filepath.Base(runtimePath)+"-*")
+	if err != nil {
+		return fmt.Errorf("write exec floor runtime version %q: %w", runtimePath, err)
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if _, err := temporary.Write(version); err != nil {
+		_ = temporary.Close()
+		return fmt.Errorf("write exec floor runtime version %q: %w", runtimePath, err)
+	}
+	if err := temporary.Chmod(0o644); err != nil {
+		_ = temporary.Close()
+		return fmt.Errorf("write exec floor runtime version %q: %w", runtimePath, err)
+	}
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("write exec floor runtime version %q: %w", runtimePath, err)
+	}
+	if err := os.Rename(temporaryPath, runtimePath); err != nil {
+		return fmt.Errorf("write exec floor runtime version %q: %w", runtimePath, err)
+	}
 	return nil
+}
+
+func verifyExecFloorBinaries(manifestPath string, binaryDir string) error {
+	binaries, err := readExecFloorCommands(manifestPath)
+	if err != nil {
+		return err
+	}
+	for _, binary := range binaries {
+		path := filepath.Join(binaryDir, binary)
+		info, err := os.Stat(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return fmt.Errorf(
+					"exec floor binary %q does not resolve under %q",
+					binary,
+					binaryDir,
+				)
+			}
+			return fmt.Errorf("resolve exec floor binary %q at %q: %w", binary, path, err)
+		}
+		if info.IsDir() || info.Mode()&0o111 == 0 {
+			return fmt.Errorf("exec floor binary %q at %q is not executable", binary, path)
+		}
+	}
+	return nil
+}
+
+func readExecFloorCommands(manifestPath string) ([]string, error) {
+	manifest, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"exec floor binary %q cannot be verified: read image manifest %q: %w",
+			requiredExecFloorBinary,
+			manifestPath,
+			err,
+		)
+	}
+	var commands []string
+	for _, line := range strings.Split(string(manifest), "\n") {
+		name := strings.TrimSpace(line)
+		if name == "" {
+			continue
+		}
+		if name == "." || name == ".." || filepath.Base(name) != name {
+			return nil, fmt.Errorf(
+				"exec floor manifest %q contains invalid binary name %q",
+				manifestPath,
+				name,
+			)
+		}
+		commands = append(commands, name)
+	}
+	if len(commands) == 0 {
+		return nil, fmt.Errorf("exec floor manifest %q is empty", manifestPath)
+	}
+	return commands, nil
 }
 
 func nixBootstrapSourceAvailable(root string) (bool, error) {
@@ -160,7 +321,13 @@ func nixRuntimeHealthy(root string) (bool, error) {
 			continue
 		}
 		if info.IsDir() {
-			return false, nil
+			if marker != "var/nix/profiles/q15-floor" {
+				return false, nil
+			}
+			continue
+		}
+		if marker == "var/nix/profiles/q15-floor" {
+			continue
 		}
 		if info.Mode()&0o111 == 0 {
 			return false, nil
@@ -252,10 +419,34 @@ func copySymlink(sourcePath string, targetPath string) error {
 	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
 		return err
 	}
-	if err := os.RemoveAll(targetPath); err != nil && !os.IsNotExist(err) {
+	if currentValue, err := os.Readlink(targetPath); err == nil && currentValue == targetValue {
+		return nil
+	}
+	// Rename replaces a file or symlink but not a directory, so a stray
+	// directory left by an interrupted earlier copy has to be cleared first.
+	if info, err := os.Lstat(targetPath); err == nil && info.IsDir() {
+		if err := os.RemoveAll(targetPath); err != nil {
+			return err
+		}
+	}
+
+	temporary, err := os.CreateTemp(filepath.Dir(targetPath), "."+filepath.Base(targetPath)+"-*")
+	if err != nil {
 		return err
 	}
-	return os.Symlink(targetValue, targetPath)
+	temporaryPath := temporary.Name()
+	if err := temporary.Close(); err != nil {
+		_ = os.Remove(temporaryPath)
+		return err
+	}
+	if err := os.Remove(temporaryPath); err != nil {
+		return err
+	}
+	defer os.Remove(temporaryPath)
+	if err := os.Symlink(targetValue, temporaryPath); err != nil {
+		return err
+	}
+	return os.Rename(temporaryPath, targetPath)
 }
 
 func copyRegularFile(sourcePath string, targetPath string, perm fs.FileMode) error {
@@ -269,16 +460,69 @@ func copyRegularFile(sourcePath string, targetPath string, perm fs.FileMode) err
 	}
 	defer sourceFile.Close()
 
-	targetFile, err := os.OpenFile(targetPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, perm)
+	sourceInfo, err := sourceFile.Stat()
 	if err != nil {
 		return err
 	}
+	targetInfo, err := os.Lstat(targetPath)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err == nil {
+		if targetInfo.Mode().IsRegular() &&
+			targetInfo.Size() == sourceInfo.Size() &&
+			targetInfo.Mode().Perm() == perm.Perm() {
+			matches, err := fileContentsEqual(sourceFile, targetPath)
+			if err != nil {
+				return err
+			}
+			if matches {
+				return nil
+			}
+		}
+	}
+
+	targetFile, err := os.CreateTemp(filepath.Dir(targetPath), "."+filepath.Base(targetPath)+"-*")
+	if err != nil {
+		return err
+	}
+	temporaryPath := targetFile.Name()
+	defer os.Remove(temporaryPath)
 	if _, err := io.Copy(targetFile, sourceFile); err != nil {
+		_ = targetFile.Close()
+		return err
+	}
+	if err := targetFile.Chmod(perm); err != nil {
 		_ = targetFile.Close()
 		return err
 	}
 	if err := targetFile.Close(); err != nil {
 		return err
 	}
-	return os.Chmod(targetPath, perm)
+	if targetInfo != nil && targetInfo.IsDir() {
+		if err := os.RemoveAll(targetPath); err != nil {
+			return err
+		}
+	}
+	return os.Rename(temporaryPath, targetPath)
+}
+
+func fileContentsEqual(source *os.File, targetPath string) (bool, error) {
+	target, err := os.Open(targetPath)
+	if err != nil {
+		return false, err
+	}
+	defer target.Close()
+
+	sourceHash, targetHash := sha256.New(), sha256.New()
+	if _, err := io.Copy(sourceHash, source); err != nil {
+		return false, err
+	}
+	if _, err := io.Copy(targetHash, target); err != nil {
+		return false, err
+	}
+	if _, err := source.Seek(0, io.SeekStart); err != nil {
+		return false, err
+	}
+	return bytes.Equal(sourceHash.Sum(nil), targetHash.Sum(nil)), nil
 }

@@ -53,13 +53,14 @@ func buildRuntimeTools(
 // toolDeps carries the dependencies buildToolList assembles the base tool
 // list from: constructed services plus the resolved web_search configuration.
 type toolDeps struct {
-	execClient       execution.Service
-	fileExec         tools.FileToolExecutor
-	skillManager     *q15skills.Manager
-	fileSettings     fileops.Settings
-	mediaStore       q15media.Store
-	embeddingService *embed.Service
-	webSearch        config.WebSearchToolRuntime
+	execClient        execution.Service
+	execFloorCommands []string
+	fileExec          tools.FileToolExecutor
+	skillManager      *q15skills.Manager
+	fileSettings      fileops.Settings
+	mediaStore        q15media.Store
+	embeddingService  *embed.Service
+	webSearch         config.WebSearchToolRuntime
 }
 
 // buildToolList assembles the base agent tools (file ops, exec, media, skills,
@@ -73,7 +74,7 @@ func buildToolList(deps toolDeps) ([]agent.Tool, error) {
 		tools.NewEditFile(deps.fileExec),
 		tools.NewApplyPatch(deps.fileExec),
 		tools.NewValidateSkill(deps.skillManager),
-		tools.NewExec(deps.execClient),
+		tools.NewExec(deps.execClient, deps.execFloorCommands),
 		tools.NewExecList(deps.execClient),
 		tools.NewExecRead(deps.execClient),
 		tools.NewExecWrite(deps.execClient),

@@ -46,6 +46,7 @@ type runtimeEnvironmentInfo struct {
 	ExecutorType        string
 	ProxyEnabled        bool
 	ProxyPolicyRevision string
+	ExecFloorCommands   []string
 }
 
 // runBot is the composition root: it builds the selection store, model adapter,
@@ -158,13 +159,14 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 		defer embeddingService.Close()
 	}
 	baseToolList, err := buildToolList(toolDeps{
-		execClient:       executionClient,
-		fileExec:         fileExec,
-		skillManager:     skillManager,
-		fileSettings:     fileSettings,
-		mediaStore:       mediaStore,
-		embeddingService: embeddingService,
-		webSearch:        rt.Tools.WebSearch,
+		execClient:        executionClient,
+		execFloorCommands: runtimeInfo.ExecFloorCommands,
+		fileExec:          fileExec,
+		skillManager:      skillManager,
+		fileSettings:      fileSettings,
+		mediaStore:        mediaStore,
+		embeddingService:  embeddingService,
+		webSearch:         rt.Tools.WebSearch,
 	})
 	if err != nil {
 		return fmt.Errorf("configure tools for agent %q: %w", rt.Name, err)
@@ -624,6 +626,7 @@ func resolveRuntimeEnvironment(
 		ExecutorType:        executorType,
 		ProxyEnabled:        info.GetProxyEnabled(),
 		ProxyPolicyRevision: strings.TrimSpace(info.GetProxyPolicyRevision()),
+		ExecFloorCommands:   append([]string(nil), info.GetExecFloorCommands()...),
 	}, nil
 }
 

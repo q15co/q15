@@ -182,6 +182,7 @@ type GetRuntimeInfoResponse struct {
 	ProxyEnabled        bool                   `protobuf:"varint,7,opt,name=proxy_enabled,json=proxyEnabled,proto3" json:"proxy_enabled,omitempty"`
 	ProxyPolicyRevision string                 `protobuf:"bytes,8,opt,name=proxy_policy_revision,json=proxyPolicyRevision,proto3" json:"proxy_policy_revision,omitempty"`
 	MediaDir            string                 `protobuf:"bytes,9,opt,name=media_dir,json=mediaDir,proto3" json:"media_dir,omitempty"`
+	ExecFloorCommands   []string               `protobuf:"bytes,10,rep,name=exec_floor_commands,json=execFloorCommands,proto3" json:"exec_floor_commands,omitempty"`
 	unknownFields       protoimpl.UnknownFields
 	sizeCache           protoimpl.SizeCache
 }
@@ -277,6 +278,13 @@ func (x *GetRuntimeInfoResponse) GetMediaDir() string {
 		return x.MediaDir
 	}
 	return ""
+}
+
+func (x *GetRuntimeInfoResponse) GetExecFloorCommands() []string {
+	if x != nil {
+		return x.ExecFloorCommands
+	}
+	return nil
 }
 
 type Session struct {
@@ -1385,7 +1393,7 @@ const file_q15_exec_v1_execution_proto_rawDesc = "" +
 	"\x15GetRuntimeInfoRequest\"A\n" +
 	"\x11RuntimeCapability\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
-	"\aenabled\x18\x02 \x01(\bR\aenabled\"\x83\x03\n" +
+	"\aenabled\x18\x02 \x01(\bR\aenabled\"\xb3\x03\n" +
 	"\x16GetRuntimeInfoResponse\x12'\n" +
 	"\x0fservice_version\x18\x01 \x01(\tR\x0eserviceVersion\x12#\n" +
 	"\rexecutor_type\x18\x02 \x01(\tR\fexecutorType\x12#\n" +
@@ -1397,7 +1405,9 @@ const file_q15_exec_v1_execution_proto_rawDesc = "" +
 	"\fcapabilities\x18\x06 \x03(\v2\x1e.q15.exec.v1.RuntimeCapabilityR\fcapabilities\x12#\n" +
 	"\rproxy_enabled\x18\a \x01(\bR\fproxyEnabled\x122\n" +
 	"\x15proxy_policy_revision\x18\b \x01(\tR\x13proxyPolicyRevision\x12\x1b\n" +
-	"\tmedia_dir\x18\t \x01(\tR\bmediaDir\"\xe1\x03\n" +
+	"\tmedia_dir\x18\t \x01(\tR\bmediaDir\x12.\n" +
+	"\x13exec_floor_commands\x18\n" +
+	" \x03(\tR\x11execFloorCommands\"\xe1\x03\n" +
 	"\aSession\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x18\n" +

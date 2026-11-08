@@ -71,6 +71,13 @@ func Serve(ctx context.Context, cfg Settings) error {
 			return err
 		}
 	}
+	floorCommands, err := reportedExecFloorCommands(
+		cfg.Executor.Type(),
+		execFloorManifestPath,
+	)
+	if err != nil {
+		return err
+	}
 	proxyProfile, cleanupProxy, err := bootstrapProxyRuntime(ctx, cfg.ProxyAdminAddress)
 	if err != nil {
 		return err
@@ -94,6 +101,7 @@ func Serve(ctx context.Context, cfg Settings) error {
 		SkillsDir:           runtimeSkillsDir,
 		ProxyEnabled:        proxyProfile.Enabled,
 		ProxyPolicyRevision: proxyProfile.PolicyRevision,
+		ExecFloorCommands:   floorCommands,
 	})
 	if err != nil {
 		return err
@@ -124,6 +132,13 @@ func Serve(ctx context.Context, cfg Settings) error {
 	case err := <-errCh:
 		return err
 	}
+}
+
+func reportedExecFloorCommands(executorType string, manifestPath string) ([]string, error) {
+	if executorType != "local-nix-shell" {
+		return nil, nil
+	}
+	return readExecFloorCommands(manifestPath)
 }
 
 func resolveListenTarget(value string) (string, string) {

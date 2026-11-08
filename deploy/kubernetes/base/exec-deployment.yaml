@@ -6,6 +6,8 @@ metadata:
     app.kubernetes.io/name: q15-exec
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: q15-exec
@@ -23,17 +25,19 @@ spec:
             - |
               set -euo pipefail
               target=/var/lib/q15/bootstrap-nix
-              if [[ -x "$target/var/nix/profiles/default/bin/nix" ]] && [[ -x "$target/var/nix/profiles/default/bin/bash" ]] && [[ -d "$target/store" ]]; then
+              image_floor_version="$(< /etc/q15/exec-floor.version)"
+              runtime_floor_version=
+              if [[ -f "$target/.q15-exec-floor.version" ]]; then
+                runtime_floor_version="$(< "$target/.q15-exec-floor.version")"
+              fi
+              if [[ -x "$target/var/nix/profiles/default/bin/nix" ]] && [[ -x "$target/var/nix/profiles/default/bin/bash" ]] && [[ -d "$target/store" ]] && { [[ -L "$target/var/nix/profiles/q15-floor" ]] || [[ -e "$target/var/nix/profiles/q15-floor" ]]; } && [[ "$runtime_floor_version" == "$image_floor_version" ]]; then
                 echo "q15-exec: existing /nix volume already has a usable bootstrap runtime"
                 exit 0
               fi
               echo "q15-exec: bootstrapping /nix volume from image contents"
               mkdir -p "$target"
               cp -a /nix/. "$target"/
-              if [[ ! -x "$target/var/nix/profiles/default/bin/nix" ]] || [[ ! -x "$target/var/nix/profiles/default/bin/bash" ]] || [[ ! -d "$target/store" ]]; then
-                echo "q15-exec: bootstrapped /nix volume is still missing required runtime markers" >&2
-                exit 1
-              fi
+              printf '%s\n' "$image_floor_version" > "$target/.q15-exec-floor.version"
           volumeMounts:
             - name: nix
               mountPath: /var/lib/q15/bootstrap-nix
