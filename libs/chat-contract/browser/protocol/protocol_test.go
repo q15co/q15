@@ -11,6 +11,27 @@ import (
 	"github.com/q15co/q15/libs/chat-contract/chatpb"
 )
 
+func TestBackgroundRunStartsWithoutConsumingUserInput(t *testing.T) {
+	frame, ok := FromEvent(
+		&chatpb.SessionEvent{
+			TurnSeq: 8,
+			Event: &chatpb.SessionEvent_RunStarted{
+				RunStarted: &chatpb.RunStarted{Background: true},
+			},
+		},
+	)
+	if !ok || frame.Type != TurnStart {
+		t.Fatalf("background event = %#v, %v", frame, ok)
+	}
+	var payload TurnStartPayload
+	if err := json.Unmarshal(frame.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if !payload.Background || payload.Turn != 8 {
+		t.Fatalf("background identity lost: %#v", payload)
+	}
+}
+
 func TestFrameGoldens(t *testing.T) {
 	ts := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	msg := MessageID{Turn: 42, Ordinal: -1}

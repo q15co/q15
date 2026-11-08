@@ -135,8 +135,9 @@ type ProgressPayload struct {
 
 // TurnStartPayload binds an event stream to its durable turn.
 type TurnStartPayload struct {
-	Turn int64     `json:"turn,string"`
-	Msg  MessageID `json:"msg"`
+	Turn       int64     `json:"turn,string"`
+	Msg        MessageID `json:"msg"`
+	Background bool      `json:"background,omitempty"`
 }
 
 // FinalPayload is self-contained on completion, cancellation and failure.
@@ -263,7 +264,7 @@ func FromEvent(event *chatpb.SessionEvent) (Frame, bool) {
 	case *chatpb.SessionEvent_SessionOpened:
 		return New(Status, id, seq, ts, StatusPayload{State: "idle"}), true
 	case *chatpb.SessionEvent_RunStarted:
-		return New(TurnStart, id, seq, ts, TurnStartPayload{Turn: turn, Msg: msg}), true
+		return New(TurnStart, id, seq, ts, TurnStartPayload{Turn: turn, Msg: msg, Background: value.RunStarted.GetBackground()}), true
 	case *chatpb.SessionEvent_ModelTurnStarted:
 		progress.Kind, progress.ModelRef, progress.LoopTurn = "model_start", value.ModelTurnStarted.GetModelRef(), value.ModelTurnStarted.GetLoopTurn()
 		return New(Snapshot, id, seq, ts, progress), true

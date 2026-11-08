@@ -4,6 +4,7 @@ import {
   ChevronDown,
   CircleAlert,
   Globe,
+  Inbox,
   LoaderCircle,
   Terminal,
   Wrench,
@@ -15,7 +16,7 @@ import type { Source, ToolActivityItem } from "../domain/activity";
 import type { ChatMessage } from "../domain/chat";
 import type { Part } from "../generated/protocol";
 
-import { presentTurn } from "../domain/activity";
+import { isSubagentCompletion, presentTurn } from "../domain/activity";
 import { isRecord } from "../shared/type-guards";
 import { MessageView } from "./message";
 import { PartView } from "./parts";
@@ -38,34 +39,48 @@ function context(part: Part) {
 
 function toolPresentation(item: ToolActivityItem, working: boolean) {
   const name = item.source.part.tool_call?.name ?? "";
+  const completion = isSubagentCompletion(item.source.part);
   const error =
     item.source.part.is_error === true || item.results.some((s) => s.part.is_error === true);
   const finished = item.source.part.part_type === "tool_result" || item.results.length > 0;
-  const running = working && !finished;
+  const running = working && !finished && !completion;
   const command = ["exec", "bash", "exec_command"].includes(name);
   const web = ["web_search", "web_fetch"].includes(name);
-  const title = command
-    ? running
-      ? "Running command"
-      : "Ran command"
-    : name === "web_search"
+  const title = completion
+    ? "Sub-agent result received"
+    : command
       ? running
-        ? "Searching the web"
-        : "Searched the web"
-      : name === "web_fetch"
+        ? "Running command"
+        : "Ran command"
+      : name === "web_search"
         ? running
-          ? "Reading page"
-          : "Read page"
-        : name === ""
-          ? "Tool result"
-          : name.replaceAll("_", " ");
+          ? "Searching the web"
+          : "Searched the web"
+        : name === "web_fetch"
+          ? running
+            ? "Reading page"
+            : "Read page"
+          : name === ""
+            ? "Tool result"
+            : name.replaceAll("_", " ");
   return {
     name,
+    completion,
     title,
     error,
     running,
     status: error ? "Failed" : finished ? "Completed" : running ? "Running" : "No result",
-    Icon: error ? CircleAlert : running ? LoaderCircle : command ? Terminal : web ? Globe : Wrench,
+    Icon: error
+      ? CircleAlert
+      : completion
+        ? Inbox
+        : running
+          ? LoaderCircle
+          : command
+            ? Terminal
+            : web
+              ? Globe
+              : Wrench,
   };
 }
 
@@ -90,7 +105,7 @@ const ToolActivity = memo(
     anchors: Set<string>;
   }) {
     const reduced = useMotionPreference();
-    const { title, status, error, running, Icon } = toolPresentation(item, working);
+    const { title, status, error, running, completion, Icon } = toolPresentation(item, working);
     const part = item.source.part;
     const description = context(part);
     const results = part.part_type === "tool_result" ? [item.source] : item.results;
@@ -120,7 +135,7 @@ const ToolActivity = memo(
         <div className={styles.toolBody}>
           {part.tool_call && (
             <section>
-              <h3 className="sr-only">Tool arguments</h3>
+              <h3 className="sr-only">{completion ? "Sub-agent details" : "Tool arguments"}</h3>
               <ToolArguments raw={part.tool_call.arguments} />
             </section>
           )}
@@ -131,7 +146,9 @@ const ToolActivity = memo(
                 {result !== item.source && anchors.has(result.key) && (
                   <MessageAnchor source={result} />
                 )}
-                <h3 className="sr-only">{failed ? "Tool error" : "Tool output"}</h3>
+                <h3 className="sr-only">
+                  {completion ? "Sub-agent result" : failed ? "Tool error" : "Tool output"}
+                </h3>
                 {(failed || results.length > 1) && (
                   <p className={styles.flowLabel}>{failed ? "Error" : `Output ${index + 1}`}</p>
                 )}
@@ -177,7 +194,10 @@ export function TurnView({
       toolPresentation(item, working).running,
   );
   const phase = usingTool ? "tool" : "thinking";
-  const toolCount = activity.filter((item) => item.kind === "tool").length;
+  const toolCount = activity.filter(
+    (item) => item.kind === "tool" && !isSubagentCompletion(item.source.part),
+  ).length;
+  const hasCompletion = activity.some((item) => isSubagentCompletion(item.source.part));
   const errors = activity.filter(
     (item) =>
       item.source.part.is_error === true ||
@@ -194,7 +214,9 @@ export function TurnView({
         ? "Work failed"
         : toolCount > 0
           ? `Used ${toolCount} ${toolCount === 1 ? "tool" : "tools"}`
-          : "Thought process";
+          : hasCompletion
+            ? "Received sub-agent result"
+            : "Thought process";
   const anchored = new Set(answers.map((m) => m.key));
   const anchors = new Set<string>();
   for (const item of activity) {

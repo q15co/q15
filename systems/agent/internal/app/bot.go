@@ -270,6 +270,7 @@ func runBot(ctx context.Context, rt config.AgentRuntime, registry *modelcatalog.
 		subagentSkillResolver{manager: skillManager},
 		dumpWriter,
 		subagentContextFitter,
+		messageBus,
 	)
 	if err := subAgentManager.Restore(filepath.Join(rt.StateLocalDir, "subagent")); err != nil {
 		return fmt.Errorf("restore subagent sessions for agent %q: %w", rt.Name, err)

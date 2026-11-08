@@ -10,8 +10,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
+	"github.com/q15co/q15/systems/agent/internal/turnctx"
 )
 
 // ContextSettings separates history assembly limits from model request ceilings.
@@ -176,6 +179,13 @@ func (s *ContextService) PrepareContext(
 			group.excerpt = boundedText(renderSource(turn, 1024), 2048)
 		}
 		snapshot.groups = append(snapshot.groups, group)
+	}
+	if parentID := turnctx.ParentTurnFrom(ctx); parentID > 0 {
+		snapshot.groups, err = s.includeParentTurn(ctx, snapshot.groups, parentID)
+		if err != nil {
+			return agent.PreparedContext{}, err
+		}
+		recentIDs = append(recentIDs, parentID)
 	}
 	query := retrievalQuery(input, turns, byTurn)
 	if query != "" {
@@ -754,4 +764,31 @@ func selectedGroups(groups []contextGroup) []contextGroup {
 		}
 	}
 	return result
+}
+
+func (s *ContextService) includeParentTurn(
+	ctx context.Context,
+	groups []contextGroup,
+	id int64,
+) ([]contextGroup, error) {
+	parent, err := s.indexer.store.ReadTurn(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// A canceled or failed spawning turn may never have committed.
+		return groups, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load continuation parent turn %d: %w", id, err)
+	}
+	group := contextGroup{
+		id:        id,
+		createdAt: parent.CreatedAt,
+		kind:      "recent",
+		messages:  parent.Messages,
+		protected: true,
+	}
+	if index := slices.IndexFunc(groups, func(group contextGroup) bool { return group.id == id }); index >= 0 {
+		groups[index] = group
+		return groups, nil
+	}
+	return append([]contextGroup{group}, groups...), nil
 }

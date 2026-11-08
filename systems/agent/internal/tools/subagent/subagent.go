@@ -83,6 +83,13 @@ type StartRequest struct {
 	Skills       []Skill
 	MaxTurns     int
 	ParentTurn   int64
+	// Origin is the chat that dispatched the spawn. It is captured here
+	// because the session deliberately outlives the turn that carries it, so
+	// a completion has no dispatch context to read a target from. A zero
+	// Origin means the session was not spawned from a chat, and no terminal
+	// completion is queued.
+	Origin        turnctx.Origin
+	spawnReturned <-chan struct{}
 }
 
 // mediaAdaptiveClient wraps a ModelClient so that media parts are adapted to
@@ -163,6 +170,7 @@ type Manager struct {
 	skillResolver SkillResolver
 	dumpWriter    io.Writer
 	contextFitter agent.RequestContextFitter
+	publisher     CompletionPublisher
 	next          uint64
 	runID         string
 	records       *recordStore
@@ -186,6 +194,11 @@ type Session struct {
 	result   *agent.EngineResult
 	err      error
 	done     chan struct{}
+	// The result releases synchronous spawn waits before completion delivery.
+	// Waiting for spawnReturned lets that caller consume an inline result first.
+	resultReady        chan struct{}
+	spawnReturned      <-chan struct{}
+	completionConsumed bool
 	// finishedAt is recorded during run's terminal bookkeeping and orders
 	// finished sessions for retention eviction. It stays zero while run is
 	// active, including after Kill marks the session but before the engine
@@ -194,10 +207,13 @@ type Session struct {
 	// finalAnswer, logEvicted and droppedEvents keep an evicted session
 	// readable after retention drops its event log: the terminal state, the
 	// failure reason (err) and the final answer survive the log.
-	finalAnswer    string
-	logEvicted     bool
-	droppedEvents  int
-	parentTurn     int64
+	finalAnswer   string
+	logEvicted    bool
+	droppedEvents int
+	parentTurn    int64
+	// origin is the chat that spawned the session. It is captured at Start
+	// because the session outlives the dispatch context that carries it.
+	origin         turnctx.Origin
 	runID          string
 	recordPath     string
 	restored       bool
@@ -227,6 +243,7 @@ func NewManager(
 	skillResolver SkillResolver,
 	dumpWriter io.Writer,
 	contextFitter agent.RequestContextFitter,
+	publisher CompletionPublisher,
 ) *Manager {
 	return &Manager{
 		baseCtx:       ctx,
@@ -238,6 +255,7 @@ func NewManager(
 		skillResolver: skillResolver,
 		dumpWriter:    dumpWriter,
 		contextFitter: contextFitter,
+		publisher:     publisher,
 	}
 }
 
@@ -326,16 +344,19 @@ func (m *Manager) Start(req StartRequest) (*Session, error) {
 		return nil, err
 	}
 	s := &Session{
-		ID:         id,
-		Model:      modelCfg.Ref,
-		Task:       req.Task,
-		Status:     "running",
-		CreatedAt:  time.Now(),
-		messages:   messages,
-		cancel:     cancel,
-		done:       make(chan struct{}),
-		parentTurn: req.ParentTurn,
-		runID:      m.runID,
+		ID:            id,
+		Model:         modelCfg.Ref,
+		Task:          req.Task,
+		Status:        "running",
+		CreatedAt:     time.Now(),
+		messages:      messages,
+		cancel:        cancel,
+		done:          make(chan struct{}),
+		resultReady:   make(chan struct{}),
+		spawnReturned: req.spawnReturned,
+		parentTurn:    req.ParentTurn,
+		origin:        req.Origin,
+		runID:         m.runID,
 	}
 	if m.records != nil {
 		s.recordPath = m.records.path(id)
@@ -388,6 +409,11 @@ func (m *Manager) run(
 		if err := m.evictFinishedSessions(); err != nil {
 			log.Printf("q15: subagent event=retention_failed error=%q", err)
 		}
+		close(s.resultReady)
+		if s.spawnReturned != nil {
+			<-s.spawnReturned
+		}
+		m.publishCompletion(s)
 		close(s.done)
 	}()
 	observer := agent.RunObserverFunc(func(_ context.Context, ev agent.RunEvent) {
@@ -713,6 +739,7 @@ func (t *Spawn) Definition() agent.ToolDefinition {
 			"max_turns counts model responses, includes a final answer-only turn without tools, and is shared with queued follow-up messages.",
 			"A session keeps running after the chat turn that spawned it ends; it stops by completing or failing, through subagent_kill, or at process shutdown.",
 			"Poll a spawned session's progress later with subagent_read or subagent_list.",
+			"When an asynchronous session completes, fails, or is killed, its result returns to you in a new interactive turn. Review it and continue the original task; the result is not sent directly to the user. Poll only when you need interim progress.",
 			"After a restart, unfinished sessions are listed as interrupted with their persisted diagnostic tail; they are not resumed.",
 			"Give the sub-agent full /workspace/... paths for files in packages whose names collide with runtime roots (memory, skills); /memory and /skills are persistent runtime roots, not Go package paths.",
 			"When delegating a skill by name or path, pass it via `skills`; its instructions are injected automatically and its declared tools are granted without listing them in `tools`.",
@@ -779,14 +806,21 @@ func (t *Spawn) Run(ctx context.Context, args string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// The chat is captured here, while the dispatch context is still alive.
+	// The session outlives this context, so a completion cannot recover it.
+	origin, _ := turnctx.OriginFrom(ctx)
+	spawnReturned := make(chan struct{})
+	defer close(spawnReturned)
 	s, err := t.manager.Start(StartRequest{
-		ModelRef:     a.Model,
-		Task:         a.Task,
-		ExtraContext: a.Context,
-		AllowedTools: a.Tools,
-		Skills:       skills,
-		MaxTurns:     a.MaxTurns,
-		ParentTurn:   turnctx.TurnSeqFrom(ctx),
+		ModelRef:      a.Model,
+		Task:          a.Task,
+		ExtraContext:  a.Context,
+		AllowedTools:  a.Tools,
+		Skills:        skills,
+		MaxTurns:      a.MaxTurns,
+		ParentTurn:    turnctx.TurnSeqFrom(ctx),
+		Origin:        origin,
+		spawnReturned: spawnReturned,
 	})
 	if err != nil {
 		return "", err
@@ -795,7 +829,10 @@ func (t *Spawn) Run(ctx context.Context, args string) (string, error) {
 		select {
 		case <-ctx.Done():
 			return "", ctx.Err()
-		case <-s.done:
+		case <-s.resultReady:
+			s.mu.Lock()
+			s.completionConsumed = true
+			s.mu.Unlock()
 			return s.Read(0, defaultMaxOutput), nil
 		case <-time.After(time.Duration(wait) * time.Second):
 		}

@@ -15,4 +15,10 @@ type Agent interface {
 		userMessage conversation.Message,
 		observer RunObserver,
 	) (ReplyResult, error)
+	Continue(
+		ctx context.Context,
+		parentTurn int64,
+		messages []conversation.Message,
+		observer RunObserver,
+	) (ReplyResult, error)
 }

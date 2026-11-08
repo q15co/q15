@@ -16,9 +16,26 @@ import (
 )
 
 type fakeObservedAgent struct {
-	mu         sync.Mutex
-	replyCalls int
-	reply      func(context.Context, conversation.Message, agent.RunObserver) (agent.ReplyResult, error)
+	mu            sync.Mutex
+	replyCalls    int
+	reply         func(context.Context, conversation.Message, agent.RunObserver) (agent.ReplyResult, error)
+	continuations [][]conversation.Message
+	continueRun   func(context.Context, int64, []conversation.Message, agent.RunObserver) (agent.ReplyResult, error)
+}
+
+func (f *fakeObservedAgent) Continue(
+	ctx context.Context,
+	parentTurn int64,
+	messages []conversation.Message,
+	observer agent.RunObserver,
+) (agent.ReplyResult, error) {
+	f.mu.Lock()
+	f.continuations = append(f.continuations, conversation.CloneMessages(messages))
+	f.mu.Unlock()
+	if f.continueRun != nil {
+		return f.continueRun(ctx, parentTurn, messages, observer)
+	}
+	return agent.ReplyResult{Text: "reviewed result"}, nil
 }
 
 func (f *fakeObservedAgent) Reply(

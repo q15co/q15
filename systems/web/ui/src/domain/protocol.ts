@@ -120,7 +120,7 @@ function isServerFrame(f: Frame): f is ServerFrame {
     case "ready":
       return decimal(p.cursor) && decimal(p.head_seq) && typeof p.device_id === "string";
     case "turn.start":
-      return decimal(p.turn) && identity(p.msg);
+      return decimal(p.turn) && identity(p.msg) && optionalBool(p.background);
     case "delta":
     case "snapshot":
       return (

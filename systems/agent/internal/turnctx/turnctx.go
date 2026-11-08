@@ -9,11 +9,25 @@ type Origin struct {
 	ChatID    string
 	UserID    string
 	MessageID string
+	SessionID string
 }
 
 type originKey struct{}
 
 type turnSeqKey struct{}
+
+type parentTurnKey struct{}
+
+// WithParentTurn identifies the earlier turn whose delegated work is returning.
+func WithParentTurn(ctx context.Context, seq int64) context.Context {
+	return context.WithValue(ctx, parentTurnKey{}, seq)
+}
+
+// ParentTurnFrom returns zero for ordinary user turns.
+func ParentTurnFrom(ctx context.Context) int64 {
+	seq, _ := ctx.Value(parentTurnKey{}).(int64)
+	return seq
+}
 
 // WithTurnSeq attaches the reserved transcript turn identity to tool dispatch.
 func WithTurnSeq(ctx context.Context, seq int64) context.Context {

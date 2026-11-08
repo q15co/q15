@@ -10,7 +10,75 @@ import (
 
 	"github.com/q15co/q15/systems/agent/internal/agent"
 	"github.com/q15co/q15/systems/agent/internal/conversation"
+	"github.com/q15co/q15/systems/agent/internal/turnctx"
 )
+
+func TestContinuationLoadsParentOutsideRecentHistory(t *testing.T) {
+	store := testStore(t)
+	parent := appendTestTurn(
+		t,
+		store,
+		"When the delegated calculation finishes, verify it before giving the result.",
+	)
+	for range 8 {
+		appendTestTurn(t, store, "An unrelated later conversation.")
+	}
+	indexer, err := NewIndexer(
+		t.Context(),
+		store,
+		EmbeddingSpace{Provider: "fixture", Model: "continuation", Dimensions: 3},
+		&testEmbedder{},
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewContextService(
+		indexer,
+		ContextSettings{RecentTurns: 1},
+		judgeFunc(acceptCandidates),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := []conversation.Message{
+		conversation.SystemMessage("Review a delegated completion."),
+		conversation.AssistantMessage(
+			conversation.ToolCall("completion", "subagent_read", `{"session_id":"child"}`),
+		),
+		conversation.ToolResultMessage("completion", "Answer: 42", false),
+	}
+	for _, parentID := range []int64{parent, parent + 1000} {
+		ctx := turnctx.WithParentTurn(t.Context(), parentID)
+		prepared, err := service.PrepareContext(
+			ctx,
+			[]conversation.Message{conversation.SystemMessage("Instructions.")},
+			input,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		messages, err := prepared.FitRequest(
+			ctx,
+			agent.ModelContext{Ref: "main", MaxContextTokens: 40000},
+			prepared.Messages,
+			nil,
+			len(prepared.Messages),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if parentID == parent {
+			var text strings.Builder
+			for _, message := range messages {
+				text.WriteString(conversation.TextValue(message))
+			}
+			if !strings.Contains(text.String(), "verify it before giving the result") {
+				t.Fatal("completion lost the original request outside the recent-history window")
+			}
+		}
+	}
+}
 
 func TestContextFitsWholeTurnsAndKeepsCurrentClock(t *testing.T) {
 	clock := time.Date(2026, 10, 24, 12, 0, 0, 0, time.FixedZone("", 7200))

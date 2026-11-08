@@ -143,7 +143,7 @@ func (e *AgentEndpoint) OpenSession(
 	msg bus.InboundMessage,
 ) (channelport.AgentSession, error) {
 	text := strings.TrimSpace(msg.Text)
-	if text == "" && len(msg.Attachments) == 0 {
+	if text == "" && len(msg.Attachments) == 0 && len(msg.Continuation) == 0 {
 		return nil, nil
 	}
 

@@ -43,6 +43,61 @@ const history = [
 ];
 
 describe("turn activity", () => {
+  it.each(["subagent_completion", "subagent_read"])(
+    "presents pushed %s results separately from actual tool use",
+    (name) => {
+      const completion = message(0, "assistant", [
+        {
+          part_type: "tool_call",
+          tool_call: { id: "completion-child", name, arguments: '{"session_id":"child"}' },
+        },
+      ]);
+      const received = message(1, "tool", [result("completion-child", "Answer: Lantern")]);
+      const answer = message(4, "assistant", [
+        { part_type: "text", disposition: "final", text: "Lantern" },
+      ]);
+      const { container, rerender } = render(
+        <TurnView messages={[completion, received, answer]} working={false} />,
+      );
+      expect(screen.getByText("Received sub-agent result")).toBeDefined();
+      expect(screen.getByText("Sub-agent result received")).toBeDefined();
+      expect(screen.queryByText(/Used \d+ tools?/u)).toBeNull();
+      expect(
+        screen.getByRole("heading", { name: "Sub-agent details", hidden: true }),
+      ).toBeDefined();
+      expect(screen.getByRole("heading", { name: "Sub-agent result", hidden: true })).toBeDefined();
+      expect(container.querySelectorAll('[id="message-42:0"]')).toHaveLength(1);
+      expect(container.querySelectorAll('[id="message-42:1"]')).toHaveLength(1);
+      const read = message(2, "assistant", [
+        {
+          part_type: "tool_call",
+          tool_call: {
+            id: "actual-read",
+            name: "subagent_read",
+            arguments: '{"session_id":"child"}',
+          },
+        },
+      ]);
+      rerender(<TurnView messages={[completion, received, read]} working />);
+      expect(screen.getByText("Using tools")).toBeDefined();
+      expect(screen.getByText("1 tool")).toBeDefined();
+      rerender(
+        <TurnView
+          messages={[
+            completion,
+            received,
+            read,
+            message(3, "tool", [result("actual-read", "Verified the child log")]),
+            answer,
+          ]}
+          working={false}
+        />,
+      );
+      expect(screen.getByText("Used 1 tool")).toBeDefined();
+      expect(screen.getByText("Sub-agent result received")).toBeDefined();
+    },
+  );
+
   it("pairs separate call/result messages and gives only the answer response actions", () => {
     const { container } = render(<TurnView messages={history} working={false} />);
     const agent = required(container.querySelector("[data-agent-turn]"));

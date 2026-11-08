@@ -44,7 +44,7 @@ func runAgentWorker(
 			}
 
 			userMessage := userMessageFromInbound(in)
-			if len(userMessage.Parts) == 0 {
+			if len(userMessage.Parts) == 0 && len(in.Continuation) == 0 {
 				continue
 			}
 
@@ -54,6 +54,7 @@ func runAgentWorker(
 				ChatID:    in.ChatID,
 				UserID:    in.UserID,
 				MessageID: in.MessageID,
+				SessionID: in.SessionID,
 			})
 			session, err := endpoint.OpenSession(runCtx, in)
 			if err != nil {
@@ -69,7 +70,12 @@ func runAgentWorker(
 				cancellable.SetCancel(cancel)
 			}
 
-			reply, err := a.Reply(runCtx, userMessage, session)
+			var reply agent.ReplyResult
+			if len(in.Continuation) > 0 {
+				reply, err = a.Continue(runCtx, in.ParentTurn, in.Continuation, session)
+			} else {
+				reply, err = a.Reply(runCtx, userMessage, session)
+			}
 			if runCtx.Err() != nil {
 				cleanupCtx, cleanupCancel := context.WithTimeout(
 					context.WithoutCancel(runCtx),

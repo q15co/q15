@@ -18,7 +18,7 @@ const (
 	ChannelBridge = "bridge"
 )
 
-// InboundMessage is a user-originated message entering the runtime.
+// InboundMessage carries user input or an internal continuation into the runtime.
 type InboundMessage struct {
 	Channel string
 	ChatID  string
@@ -30,6 +30,10 @@ type InboundMessage struct {
 	SentAt      time.Time
 	Text        string
 	Attachments []conversation.Part
+	// Continuation is runtime-generated input to the interactive agent, rather
+	// than a new user message. It shares the inbound queue to serialize turns.
+	Continuation []conversation.Message
+	ParentTurn   int64
 }
 
 // OutboundMessage is a transport-bound message leaving the runtime.
