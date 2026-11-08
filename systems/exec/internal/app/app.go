@@ -66,16 +66,17 @@ func Serve(ctx context.Context, cfg Settings) error {
 	if cfg.Executor == nil {
 		cfg.Executor = service.NixShellExecutor{}
 	}
-	var floorCommands []string
-	var err error
 	if cfg.Executor.Type() == "local-nix-shell" {
 		if err := bootstrapNixRuntime(); err != nil {
 			return err
 		}
-		floorCommands, err = readExecFloorCommands(execFloorManifestPath)
-		if err != nil {
-			return err
-		}
+	}
+	floorCommands, err := reportedExecFloorCommands(
+		cfg.Executor.Type(),
+		execFloorManifestPath,
+	)
+	if err != nil {
+		return err
 	}
 	proxyProfile, cleanupProxy, err := bootstrapProxyRuntime(ctx, cfg.ProxyAdminAddress)
 	if err != nil {
@@ -131,6 +132,13 @@ func Serve(ctx context.Context, cfg Settings) error {
 	case err := <-errCh:
 		return err
 	}
+}
+
+func reportedExecFloorCommands(executorType string, manifestPath string) ([]string, error) {
+	if executorType != "local-nix-shell" {
+		return nil, nil
+	}
+	return readExecFloorCommands(manifestPath)
 }
 
 func resolveListenTarget(value string) (string, string) {

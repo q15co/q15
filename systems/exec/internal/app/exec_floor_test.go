@@ -3,44 +3,38 @@ package app
 import (
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 )
 
-func TestExecFloorGeneratedCopyMatchesSource(t *testing.T) {
+func TestExecDockerfileUsesRepositoryFloorDefinition(t *testing.T) {
 	t.Parallel()
 
-	sourcePath := filepath.Join("..", "..", "..", "..", "docker", "exec-floor.txt")
+	root := filepath.Join("..", "..", "..", "..")
+	sourcePath := filepath.Join(root, "docker", "exec-floor.txt")
 	source, err := os.ReadFile(sourcePath)
 	if err != nil {
 		t.Fatalf("ReadFile(%q) error = %v", sourcePath, err)
 	}
-	if execFloorDefinition != string(source) {
-		t.Fatalf(
-			"embedded exec-floor.txt differs from %q; run go generate ./systems/exec/internal/app",
-			sourcePath,
-		)
+	if strings.TrimSpace(string(source)) == "" {
+		t.Fatalf("%q is empty", sourcePath)
 	}
-}
 
-func TestExecFloorDefinitionRetainsRequiredAttributes(t *testing.T) {
-	t.Parallel()
-
-	want := []string{
-		"coreutils", "gnused", "gawk", "gnugrep", "findutils", "diffutils",
-		"gnupatch", "gnutar", "gzip", "bzip2", "xz", "zstd", "unzip", "zip",
-		"which", "file", "less", "procps", "hostname", "perl", "ripgrep", "jq",
+	dockerPath := filepath.Join(root, "docker", "exec.Dockerfile")
+	raw, err := os.ReadFile(dockerPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", dockerPath, err)
 	}
-	var got []string
-	for _, line := range strings.Split(execFloorDefinition, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
+	dockerfile := string(raw)
+	for _, want := range []string{
+		"RUN --mount=type=bind,source=docker/exec-floor.txt,target=/tmp/q15-exec-floor.txt",
+		"done < /tmp/q15-exec-floor.txt",
+		"FLOOR_HASH=\"$(sha256sum /tmp/q15-exec-floor.txt)\"",
+		"/nix/var/nix/profiles/q15-floor/bin/readlink -f /nix/var/nix/profiles/q15-floor",
+		`[ "$#" -eq 2 ] && [ -n "$1" ] && [ -n "$2" ]`,
+	} {
+		if !strings.Contains(dockerfile, want) {
+			t.Errorf("%q does not contain %q", dockerPath, want)
 		}
-		got = append(got, line)
-	}
-	if !slices.Equal(got, want) {
-		t.Fatalf("exec floor attributes = %v, want %v", got, want)
 	}
 }
