@@ -1,6 +1,8 @@
 package app
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"io/fs"
@@ -462,14 +464,21 @@ func copyRegularFile(sourcePath string, targetPath string, perm fs.FileMode) err
 	if err != nil {
 		return err
 	}
-	// Store paths are content addressed, so a regular target of the same size
-	// and mode already holds the same bytes. Skipping it keeps a failing
-	// verification from rewriting the whole store on every startup.
-	if targetInfo, statErr := os.Stat(targetPath); statErr == nil {
+	targetInfo, err := os.Lstat(targetPath)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err == nil {
 		if targetInfo.Mode().IsRegular() &&
 			targetInfo.Size() == sourceInfo.Size() &&
 			targetInfo.Mode().Perm() == perm.Perm() {
-			return nil
+			matches, err := fileContentsEqual(sourceFile, targetPath)
+			if err != nil {
+				return err
+			}
+			if matches {
+				return nil
+			}
 		}
 	}
 
@@ -490,5 +499,30 @@ func copyRegularFile(sourcePath string, targetPath string, perm fs.FileMode) err
 	if err := targetFile.Close(); err != nil {
 		return err
 	}
+	if targetInfo != nil && targetInfo.IsDir() {
+		if err := os.RemoveAll(targetPath); err != nil {
+			return err
+		}
+	}
 	return os.Rename(temporaryPath, targetPath)
+}
+
+func fileContentsEqual(source *os.File, targetPath string) (bool, error) {
+	target, err := os.Open(targetPath)
+	if err != nil {
+		return false, err
+	}
+	defer target.Close()
+
+	sourceHash, targetHash := sha256.New(), sha256.New()
+	if _, err := io.Copy(sourceHash, source); err != nil {
+		return false, err
+	}
+	if _, err := io.Copy(targetHash, target); err != nil {
+		return false, err
+	}
+	if _, err := source.Seek(0, io.SeekStart); err != nil {
+		return false, err
+	}
+	return bytes.Equal(sourceHash.Sum(nil), targetHash.Sum(nil)), nil
 }

@@ -21,6 +21,8 @@ assert_impact '{"agent":true,"exec":false,"proxy":false,"web":false,"ui":false}'
 	'systems/agent/internal/app/bot.go'
 assert_impact '{"agent":false,"exec":true,"proxy":false,"web":false,"ui":false}' \
 	'systems/exec/internal/service/grpc.go'
+assert_impact '{"agent":false,"exec":true,"proxy":false,"web":false,"ui":false}' \
+	'docker/exec-floor.txt'
 assert_impact '{"agent":false,"exec":false,"proxy":true,"web":false,"ui":false}' \
 	'systems/proxy/internal/service/grpc.go'
 assert_impact '{"agent":true,"exec":true,"proxy":false,"web":false,"ui":false}' \

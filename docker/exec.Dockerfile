@@ -84,6 +84,8 @@ RUN nix --extra-experimental-features 'nix-command flakes' build --no-link \
 # default path used by command -p and dependency-owned shell shims. The /nix
 # snapshot is taken only after the floor exists so a mounted volume can be
 # repaired from the same image contents.
+ENV PATH="${PATH}:/usr/bin:/bin"
+
 RUN --mount=type=bind,source=docker/exec-floor.txt,target=/tmp/q15-exec-floor.txt \
     set -eu; \
     set --; \
@@ -120,6 +122,7 @@ RUN --mount=type=bind,source=docker/exec-floor.txt,target=/tmp/q15-exec-floor.tx
         test "$(readlink "/usr/bin/${NAME}")" = "/nix/var/nix/profiles/q15-floor/bin/${NAME}" && \
         test -x "/usr/bin/${NAME}"; \
     done < /etc/q15/exec-floor.manifest && \
+    sh -c 'command -v sed && command -v jq' > /dev/null && \
     cp -al /nix/. /var/lib/q15/bootstrap-nix/
 
 ENV TZDIR=/etc/zoneinfo

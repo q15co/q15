@@ -683,11 +683,15 @@ func TestCopyRegularFileLeavesMatchingTargetUntouched(t *testing.T) {
 	sourcePath := filepath.Join(root, "source")
 	targetPath := filepath.Join(root, "target")
 	writeTestFile(t, sourcePath, "AAAA")
-	writeTestFile(t, targetPath, "BBBB")
+	writeTestFile(t, targetPath, "AAAA")
 	if err := os.Chmod(targetPath, 0o644); err != nil {
 		t.Fatalf("Chmod(target) error = %v", err)
 	}
 
+	before, err := os.Lstat(targetPath)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := copyRegularFile(sourcePath, targetPath, 0o644); err != nil {
 		t.Fatalf("copyRegularFile() error = %v", err)
 	}
@@ -695,8 +699,57 @@ func TestCopyRegularFileLeavesMatchingTargetUntouched(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile(target) error = %v", err)
 	}
-	if got := string(content); got != "BBBB" {
-		t.Fatalf("target contents = %q, want the matching-size target left untouched", got)
+	if got := string(content); got != "AAAA" {
+		t.Fatalf("target contents = %q, want AAAA", got)
+	}
+	after, err := os.Lstat(targetPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(before, after) {
+		t.Fatal("identical file was replaced instead of left intact")
+	}
+}
+
+func TestCopyRegularFileRepairsMismatchedTarget(t *testing.T) {
+	t.Parallel()
+
+	for _, kind := range []string{"same-size file", "symlink", "directory"} {
+		t.Run(kind, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			sourcePath := filepath.Join(root, "source")
+			targetPath := filepath.Join(root, "target")
+			writeTestFile(t, sourcePath, "AAAA")
+			switch kind {
+			case "same-size file":
+				writeTestFile(t, targetPath, "BBBB")
+			case "symlink":
+				if err := os.Symlink(sourcePath, targetPath); err != nil {
+					t.Fatal(err)
+				}
+			case "directory":
+				writeTestFile(t, filepath.Join(targetPath, "stale"), "BBBB")
+			}
+
+			if err := copyRegularFile(sourcePath, targetPath, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			info, err := os.Lstat(targetPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !info.Mode().IsRegular() {
+				t.Fatalf("target mode = %s, want a regular file", info.Mode())
+			}
+			content, err := os.ReadFile(targetPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(content) != "AAAA" {
+				t.Fatalf("target contents = %q, want AAAA", content)
+			}
+		})
 	}
 }
 
