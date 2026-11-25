@@ -800,11 +800,3 @@ func statusError(resp *http.Response, body []byte) error {
 	}
 	return apiError
 }
-
-func cloneURL(in *url.URL) *url.URL {
-	if in == nil {
-		return nil
-	}
-	out := *in
-	return &out
-}
