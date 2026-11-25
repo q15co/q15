@@ -3,9 +3,16 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
+    # Go 1.27 never reached nixos-25.11, so the toolchain comes from unstable
+    # while everything else stays on the release channel.
+    nixpkgs-unstable.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
   };
 
-  outputs = {nixpkgs, ...}: let
+  outputs = {
+    nixpkgs,
+    nixpkgs-unstable,
+    ...
+  }: let
     toolVersions = builtins.readFile ./scripts/tool-versions.sh;
     nodeMajor = builtins.head (builtins.match ".*NODE_VERSION=([0-9]+)\\.[0-9]+\\.[0-9]+.*" toolVersions);
     systems = [
@@ -16,6 +23,7 @@
     ];
 
     forAllSystems = nixpkgs.lib.genAttrs systems;
+    go = system: nixpkgs-unstable.legacyPackages.${system}.go_1_27;
   in {
     devShells = forAllSystems (system: let
       pkgs = import nixpkgs {inherit system;};
@@ -26,7 +34,7 @@
           curl
           git
           gnumake
-          go_1_26
+          (go system)
           pkgs."nodejs_${nodeMajor}"
           python312
         ];
