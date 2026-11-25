@@ -35,7 +35,7 @@ func newConnection(
 		transport = http.DefaultTransport
 	}
 	apiKey = strings.TrimSpace(apiKey)
-	sdkBase := cloneURL(base)
+	sdkBase := base.Clone()
 	if apiKey != "" {
 		// The SDK forces SSH-key auth for ollama.com before calling its transport.
 		// This internal authority lets the transport use the configured bearer key instead.

@@ -89,11 +89,10 @@ Before first startup, every long-running q15 stack must provide:
 
 `/workspace` may begin empty, but it is expected to remain attached to the same stack over time.
 
-## Local Docker Compose Stack (Development Only)
+## Local Podman Compose Stack
 
-The checked-in local-development stack lives at [docker-compose.yml](../docker-compose.yml) and uses
-the templates under [deploy/compose](../deploy/compose). It is not the canonical downstream
-deployment-consumer example.
+The local stack lives at [compose.yaml](../compose.yaml) and uses the templates under
+[deploy/compose](../deploy/compose). Install rootless Podman and `podman-compose` 1.6 or later.
 
 Its interface is organized as:
 
@@ -101,15 +100,15 @@ Its interface is organized as:
   config
 - [deploy/compose/proxy-policy.yaml](../deploy/compose/proxy-policy.yaml) for structured proxy
   policy
-- ignored local Docker secret files under [deploy/compose/secrets](../deploy/compose/secrets),
-  seeded from tracked `*.example` templates in that same directory
+- ignored local secret files under [deploy/compose/secrets](../deploy/compose/secrets), seeded from
+  tracked `*.example` templates in that same directory
 - ignored local OpenAI auth state under [deploy/compose/auth](../deploy/compose/auth), seeded from
   [auth.json.example](../deploy/compose/auth/auth.json.example)
 
 The local-development stack intentionally:
 
 - keeps local source builds enabled with `build:`
-- tags those local builds with the canonical GHCR image names on `:main`
+- tags those local builds as `localhost/q15-*:dev`
 - uses a named `q15_workspace` volume for `/workspace`
 - uses the root `make compose-*` targets for local iteration
 
@@ -120,17 +119,17 @@ make compose-secrets-init
 make compose-up
 ```
 
-`make compose-up` waits for the stack's health checks. `q15-agent` starts once the proxy, executor,
-and Qdrant probes pass and TEI has started; TEI then loads the model (the first start downloads ~1.2
-GB of weights), so the first embedding calls may wait on the embedder's retries. The stack runs a
-local TEI (Hugging Face Text Embeddings Inference) embeddings backend by default; see
-[deploy/compose/README.md](../deploy/compose/README.md) for hardware overrides and the Gemini-to-TEI
-migration runbook.
+`make compose-up` builds new images, recreates the containers with the existing named volumes, and
+waits for the stack's health checks. `q15-agent` starts once the executor, PostgreSQL, and Qdrant
+probes pass and Ollama and TEI have started. The executor waits for the proxy probe. TEI then loads
+its model, downloading about 1.2 GB of weights on first use. The first embedding calls may wait for
+the model to load. See [deploy/compose/README.md](../deploy/compose/README.md) for hardware
+overrides.
 
 The local-development stack uses:
 
 - default container entrypoints with no runtime flags
-- Compose `configs` for non-secret YAML files
+- read-only bind mounts for agent and proxy YAML files
 - a read-write bind mount for the auth directory at `/etc/q15/auth`
 - a named volume shared as `/workspace`
 - a named volume shared as `/memory`
@@ -138,11 +137,11 @@ The local-development stack uses:
 - a named `q15_agent_state` volume mounted only into `q15-agent` at `/var/lib/q15/agent`
 - a named volume `q15_exec_nix_store` mounted at `/nix` for persistent executor package/store reuse
   across sessions
-- Docker secret files under [deploy/compose/secrets](../deploy/compose/secrets)
+- local secret files under [deploy/compose/secrets](../deploy/compose/secrets)
 
-That `/nix` named volume keeps fetched packages warm across sessions. Docker's named-volume copy-up
-behavior also preserves the image's built-in bootstrap Nix runtime on first use, which is why the
-local stack can safely keep `/nix` persistent without manually pre-seeding it.
+The `/nix` named volume keeps fetched packages warm across sessions. Podman populates a new named
+volume with the image's bootstrap Nix runtime on first use. Podman and Docker keep their named
+volumes in separate stores, so the first Podman start creates fresh local volumes.
 
 Before using the local-development stack, replace the placeholder values in:
 

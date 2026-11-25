@@ -2,7 +2,7 @@
 
 [![Main verify](https://img.shields.io/github/actions/workflow/status/q15co/q15/publish-main-images.yml?branch=main&style=flat-square&label=main%20verify)](https://github.com/q15co/q15/actions/workflows/publish-main-images.yml)
 [![Licence: MIT](https://img.shields.io/badge/licence-MIT-blue?style=flat-square)](LICENSE)
-[![Go 1.26](https://img.shields.io/badge/go-1.26-00ADD8?style=flat-square&logo=go&logoColor=white)](go.work)
+[![Go 1.27](https://img.shields.io/badge/go-1.27-00ADD8?style=flat-square&logo=go&logoColor=white)](go.work)
 [![q15 images on GHCR](https://img.shields.io/badge/ghcr.io-q15--agent%20%C2%B7%20q15--exec%20%C2%B7%20q15--proxy%20%C2%B7%20q15--web-2496ED?style=flat-square)](https://github.com/q15co/q15/pkgs/container/q15-agent)
 [![Docs](https://img.shields.io/badge/docs-q15.co-6366F1?style=flat-square)](https://q15.co)
 
@@ -171,7 +171,7 @@ first, and it will be taken to a private channel from there.
 
 ## Development
 
-The repository is a Go workspace (Go 1.26.9, pinned in [go.work](go.work)) with a Vite UI under
+The repository is a Go workspace (Go 1.27.4, pinned in [go.work](go.work)) with a Vite UI under
 `systems/web/ui` (Node 24.21.0 and pnpm 12.8.1, pinned in
 [scripts/tool-versions.sh](scripts/tool-versions.sh)).
 
@@ -183,7 +183,7 @@ make test
 ```
 
 `make verify` is the honest local check, and it is the same command the pull request workflow runs.
-For a local stack built from source rather than from published images, use `make compose-up`; see
+For a local stack built from source with Podman, use `make compose-up`. See
 [docs/deployment.md](docs/deployment.md). Nix users can also `nix develop` for a convenience shell,
 and `make hooks-install` for a pre-commit hook that runs the changed-file lint.
 

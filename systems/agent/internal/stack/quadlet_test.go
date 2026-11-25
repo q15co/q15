@@ -17,7 +17,7 @@ import (
 )
 
 func TestQuadletHealthchecksMatchCompose(t *testing.T) {
-	raw, err := os.ReadFile("../../../../docker-compose.yml")
+	raw, err := os.ReadFile("../../../../compose.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -558,7 +558,7 @@ func resourceNames(t *testing.T, profile Profile) []string {
 func volumesInComposeFiles(t *testing.T) []string {
 	t.Helper()
 	paths := []string{
-		"../../../../docker-compose.yml",
+		"../../../../compose.yaml",
 		"../../../../deploy/compose/docker-compose.image-first.yml",
 	}
 

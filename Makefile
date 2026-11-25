@@ -1,11 +1,12 @@
 SHELL := bash
 
 GO ?= go
-DOCKER_COMPOSE ?= docker compose
+PODMAN_COMPOSE ?= podman-compose
 DOCKER ?= docker
 BIN_DIR ?= bin
-COMPOSE_FILE ?= docker-compose.yml
+COMPOSE_FILE ?= compose.yaml
 COMPOSE_PROJECT_NAME ?= q15-local
+COMPOSE_WAIT_TIMEOUT ?= 180
 AGENT_MOD_DIR ?= systems/agent
 Q15_BUILD_COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || printf unknown)
 Q15_BUILD_MODIFIED ?= $(shell if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then if test -n "$$(git status --porcelain)"; then printf true; else printf false; fi; else printf unknown; fi)
@@ -22,7 +23,7 @@ TOOLS_BIN_DIR := $(CURDIR)/.tools/bin
 
 export PATH := $(TOOLS_BIN_DIR):$(PATH)
 
-COMPOSE_ENV := COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT_NAME)
+LOCAL_COMPOSE = $(PODMAN_COMPOSE) -p $(COMPOSE_PROJECT_NAME) -f $(COMPOSE_FILE)
 
 .DEFAULT_GOAL := build
 
@@ -210,16 +211,17 @@ compose-secrets-init:
 	done
 
 compose-up:
-	$(COMPOSE_ENV) $(DOCKER_COMPOSE) -f $(COMPOSE_FILE) up --build -d --wait
+	Q15_BUILD_COMMIT=$(Q15_BUILD_COMMIT) Q15_BUILD_MODIFIED=$(Q15_BUILD_MODIFIED) \
+		$(LOCAL_COMPOSE) up --build --force-recreate -d --wait --wait-timeout $(COMPOSE_WAIT_TIMEOUT)
 
 compose-down:
-	$(COMPOSE_ENV) $(DOCKER_COMPOSE) -f $(COMPOSE_FILE) down --remove-orphans
+	$(LOCAL_COMPOSE) down --remove-orphans
 
 compose-logs:
-	$(COMPOSE_ENV) $(DOCKER_COMPOSE) -f $(COMPOSE_FILE) logs -f $(SERVICE)
+	$(LOCAL_COMPOSE) logs -f $(SERVICE)
 
 compose-ps:
-	$(COMPOSE_ENV) $(DOCKER_COMPOSE) -f $(COMPOSE_FILE) ps
+	$(LOCAL_COMPOSE) ps
 
 clean:
 	rm -rf $(BIN_DIR)
@@ -248,7 +250,7 @@ help:
 	@echo "  ui-e2e        Run real browser tests against the compiled PWA"
 	@echo "  ui-clean      Remove the bundle and restore dist/.gitkeep"
 	@echo "  ui-fixtures-check  Check vendored browser fixtures and generated contract types"
-	@echo "  compose-check Validate Compose rendering and the bridge volume boundary"
+	@echo "  compose-check Check the Compose and Kubernetes volume boundaries"
 	@echo "  project-setup Install or refresh the pinned repo-local tooling under ./.tools"
 	@echo "  fmt           Format tracked files (or FILES='a b' for an explicit subset)"
 	@echo "  lint          Run full-repo file checks plus repo-wide Go static analysis"
@@ -262,16 +264,16 @@ help:
 	@echo "  hooks-install Install the optional q15-managed pre-commit hook"
 	@echo "  hooks-uninstall  Remove q15-managed or legacy generated git hooks"
 	@echo "  compose-secrets-init  Seed ignored local Compose secret files from tracked examples"
-	@echo "  compose-up    Build and start the local-development Docker Compose stack"
-	@echo "  compose-down  Stop and remove the local-development Docker Compose stack"
-	@echo "  compose-logs  Follow local-development Docker Compose logs (set SERVICE=q15-agent|q15-exec|q15-proxy|q15-tei|q15-qdrant)"
-	@echo "  compose-ps    Show local-development Docker Compose service status"
+	@echo "  compose-up    Build and start the local-development Podman Compose stack"
+	@echo "  compose-down  Stop and remove the local-development Podman Compose stack"
+	@echo "  compose-logs  Follow local-development Podman Compose logs (set SERVICE=q15-agent|q15-exec|q15-proxy|q15-tei|q15-qdrant)"
+	@echo "  compose-ps    Show local-development Podman Compose service status"
 	@echo "  clean         Remove ./bin and Go build/test caches"
 	@echo ""
 	@echo "Notes:"
 	@echo "  - FILES accepts a space-separated file list and is shared by hooks, agents, and CI"
 	@echo "  - repo-local tools live under ./.tools and are the source of truth for linting"
-	@echo "  - compose-* targets use the root ./docker-compose.yml local-development stack"
+	@echo "  - compose-* targets use the root ./compose.yaml local-development stack"
 	@echo "  - the image-first deployment example lives at ./deploy/compose/docker-compose.image-first.yml"
 	@echo "  - compose uses tracked YAML config examples plus ignored local secret files under ./deploy/compose"
 	@echo "  - q15-auth is the interactive bootstrap tool for generating auth.json outside the runtime containers"
