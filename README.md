@@ -183,7 +183,7 @@ make test
 ```
 
 `make verify` is the honest local check, and it is the same command the pull request workflow runs.
-For a local stack built from source rather than from published images, use `make compose-up`; see
+For a local stack built from source with Podman, use `make compose-up`. See
 [docs/deployment.md](docs/deployment.md). Nix users can also `nix develop` for a convenience shell,
 and `make hooks-install` for a pre-commit hook that runs the changed-file lint.
 

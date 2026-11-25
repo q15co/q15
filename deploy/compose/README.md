@@ -14,9 +14,8 @@ This directory contains the checked-in Compose-facing config, policy, and secret
   embedding collections.
 - [release.env.example](release.env.example) selects the moving `stable` release or one immutable
   DateVer for updates and rollbacks.
-- [docker-compose.yml](../../docker-compose.yml) in the repo root is the local-development stack. It
-  keeps `build:` enabled and uses a named `q15_workspace` volume for `/workspace`; it is not the
-  image-first deployment example for downstream consumers.
+- [compose.yaml](../../compose.yaml) in the repo root builds the local-development stack under
+  Podman and uses a named `q15_workspace` volume for `/workspace`.
 - [agent-config.yaml](agent-config.yaml) selects the local TEI embeddings backend (the `q15-tei`
   service present in both Compose stacks); see the migration runbook below.
 - [agent-config.discovery.example.yaml](agent-config.discovery.example.yaml),
@@ -160,8 +159,11 @@ Notes:
   better embeddings backend.
 - The default image is the CPU build, so a host without a GPU needs no extra setup. On a GPU host,
   set `TEI_IMAGE` to a GPU build (`:turing-1.9` for T4 and RTX 2000-class, `:1.9` for Ampere and
-  newer), keep the NVIDIA container toolkit installed, and add the device reservation back in a
-  local override file.
+  newer), configure NVIDIA CDI on the host, and add `devices: [nvidia.com/gpu=all]` to `q15-tei` in
+  a local override. Pass the overlay to the Make targets with
+  `COMPOSE_FILE='compose.yaml -f compose.local.yaml'`.
+- If Qwen warm-up is slow on CPU, set `MAX_BATCH_TOKENS: "4096"` under `q15-tei.environment` in the
+  local override. This also caps each input at 4096 tokens.
 - `TEI_MODEL`, `TEI_SERVED_MODEL_NAME`, and `TEI_MAX_CLIENT_BATCH_SIZE` override the served model;
   the served name must match `model` in agent-config.yaml, and `TEI_MAX_CLIENT_BATCH_SIZE` must stay
   \>= the config's `batch_size`.
@@ -205,13 +207,20 @@ credentials. No shared password is needed. For local development:
 make compose-up
 ```
 
-Open `http://localhost:8080`, then follow the host CLI enrollment instructions in
-[the web README](../../systems/web/README.md#enroll-sign-in-and-revoke). Set `Q15_WEB_ORIGIN` to
-your exact HTTPS origin before enrolling production credentials. The local default is
-`http://localhost:8080`; remote HTTP origins fail startup. Credentials and sessions are bound to the
-configured origin. A session cookie alone grants no access: each HTTP request and socket upgrade
-requires a fresh proof from a separate, non-exportable browser session key. Reloads reuse that key
-without a passkey gesture. See
+Open `http://localhost:8080`. To start local passkey enrollment, run:
+
+```bash
+podman-compose -p q15-local -f compose.yaml exec q15-web \
+  /usr/local/bin/q15-web auth enroll "Local browser"
+```
+
+Follow the prompts and the
+[web enrollment instructions](../../systems/web/README.md#enroll-sign-in-and-revoke). Set
+`Q15_WEB_ORIGIN` to your exact HTTPS origin before enrolling production credentials. The local
+default is `http://localhost:8080`; remote HTTP origins fail startup. Credentials and sessions are
+bound to the configured origin. A session cookie alone grants no access: each HTTP request and
+socket upgrade requires a fresh proof from a separate, non-exportable browser session key. Reloads
+reuse that key without a passkey gesture. See
 [session policy](../../systems/web/README.md#sessions-and-http-policy) for proof binding, freshness,
 replay limits and the IndexedDB exception. Upgrading a version 1 auth store preserves devices but
 invalidates old bearer sessions; users sign in again.
@@ -250,7 +259,7 @@ public health endpoint; HTTP starts only after the startup bridge handshake succ
 
 ```bash
 make compose-check
-podman-compose -f docker-compose.yml config
+podman-compose -f compose.yaml config
 podman-compose -f deploy/compose/docker-compose.image-first.yml config
 ```
 

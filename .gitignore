@@ -23,6 +23,7 @@ systems/web/ui/benchmark-results/
 systems/web/ui/benchmark/results/*.json
 systems/web/ui/benchmark/results/*.json.gz
 systems/web/ui/benchmark/results/*-traces/
+/compose.local.yaml
 deploy/compose/secrets/*
 !deploy/compose/secrets/*.example
 !deploy/compose/secrets/README.md

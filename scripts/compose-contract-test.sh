@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "${SCRIPT_DIR}/lib/common.sh"
 ensure_repo_root
 use_repo_tools
-for file in docker-compose.yml deploy/compose/docker-compose.image-first.yml; do
+for file in compose.yaml deploy/compose/docker-compose.image-first.yml; do
 	yq -o=json '.' "${file}" | jq -e '
 		([.services | to_entries[] | select(any(.value.volumes[]?; .source == "q15_bridge")) | .key] | sort) == ["q15-agent", "q15-web"] and
 		([.services | to_entries[] | select(any(.value.volumes[]?; .source == "q15_web_state")) | .key] | sort) == ["q15-web"] and
@@ -24,6 +24,12 @@ for file in docker-compose.yml deploy/compose/docker-compose.image-first.yml; do
 		(.volumes | has("q15_bridge"))
 	' >/dev/null || die "bridge isolation contract failed: ${file}"
 done
+yq -o=json '.' compose.yaml | jq -e '
+	(.services["q15-agent"].volumes | any(.type == "bind" and .read_only and
+		.source == "./deploy/compose/agent-config.yaml" and .target == "/etc/q15/agent/config.yaml")) and
+	(.services["q15-proxy"].volumes | any(.type == "bind" and .read_only and
+		.source == "./deploy/compose/proxy-policy.yaml" and .target == "/etc/q15/proxy/policy.yaml"))
+' >/dev/null || die "local Podman configuration mounts must be read-only binds"
 [[ $(yq '.spec.template.spec.containers[] | select(.name == "exec") | .volumeMounts[] | select(.name == "memory") | .readOnly' deploy/kubernetes/base/exec-deployment.yaml) == true ]] || die "exec memory mount must be read-only"
 [[ $(yq '.spec.template.spec.containers[] | select(.name == "agent") | .volumeMounts[] | select(.name == "memory") | (.readOnly // false)' deploy/kubernetes/base/agent-deployment.yaml) == false ]] || die "agent memory mount must be writable"
 [[ $(yq '.agent.bridge.listen_target' deploy/compose/agent-config.yaml) == 'unix:///run/q15/bridge.sock' ]] || die "agent bridge config differs"
