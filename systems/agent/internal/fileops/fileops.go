@@ -10,6 +10,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -606,8 +607,7 @@ func rollbackDesiredStates(
 	desired map[string]desiredFileState,
 	snapshots map[string]fileSnapshot,
 ) {
-	for i := len(applied) - 1; i >= 0; i-- {
-		key := applied[i]
+	for _, key := range slices.Backward(applied) {
 		state := desired[key]
 		snapshot := snapshots[key]
 

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -110,9 +111,9 @@ func (e *ModelFallbackError) Unwrap() error {
 }
 
 func lastModelAttemptError(failures []ModelAttemptFailure) error {
-	for i := len(failures) - 1; i >= 0; i-- {
-		if failures[i].Err != nil {
-			return failures[i].Err
+	for _, failure := range slices.Backward(failures) {
+		if failure.Err != nil {
+			return failure.Err
 		}
 	}
 	return nil

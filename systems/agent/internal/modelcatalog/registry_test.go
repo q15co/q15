@@ -25,11 +25,11 @@ func (f *fakeCatalog) Discover(_ context.Context, p Provider) ([]Model, error) {
 // invoked. It is used to verify that Run does not refresh more than expected.
 type callCountingCatalog struct {
 	fakeCatalog
-	calls int64
+	calls atomic.Int64
 }
 
 func (c *callCountingCatalog) Discover(ctx context.Context, p Provider) ([]Model, error) {
-	atomic.AddInt64(&c.calls, 1)
+	c.calls.Add(1)
 	return c.fakeCatalog.Discover(ctx, p)
 }
 
@@ -320,13 +320,13 @@ func TestRegistry_IsEmpty(t *testing.T) {
 // caller refreshes synchronously to validate the roster, then starts Run in the
 // background. Run must not perform its own initial refresh — it only ticks.
 func TestRegistry_RunDoesNotRefreshInitially(t *testing.T) {
-	cat := &callCountingCatalog{fakeCatalog: fakeCatalog{models: map[string][]Model{
+	cat := &callCountingCatalog{models: map[string][]Model{
 		"a": {{ProviderModel: "m"}},
-	}}}
+	}}
 	reg := New([]Provider{{Name: "a", Type: "ollama"}}, cat, time.Hour, time.Second)
 
 	reg.Refresh(context.Background())
-	if got := atomic.LoadInt64(&cat.calls); got != 1 {
+	if got := cat.calls.Load(); got != 1 {
 		t.Fatalf("initial Refresh calls = %d, want 1", got)
 	}
 
@@ -342,7 +342,7 @@ func TestRegistry_RunDoesNotRefreshInitially(t *testing.T) {
 	cancel()
 	<-done
 
-	if got := atomic.LoadInt64(&cat.calls); got != 1 {
+	if got := cat.calls.Load(); got != 1 {
 		t.Fatalf("after Run: calls = %d, want 1 (Run must not refresh on its own)", got)
 	}
 }

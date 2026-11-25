@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -69,8 +70,7 @@ func (s *toolTestStore) QueryRuns(
 	defer s.mu.Unlock()
 
 	history := scheduled.RunHistory{StatusCounts: make(map[scheduled.Status]int)}
-	for index := len(s.records) - 1; index >= 0; index-- {
-		record := s.records[index]
+	for _, record := range slices.Backward(s.records) {
 		if record.Owner != query.Owner ||
 			(query.Filter.JobID != "" && record.JobID != query.Filter.JobID) ||
 			(query.Filter.JobName != "" && record.JobName != query.Filter.JobName) ||

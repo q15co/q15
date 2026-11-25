@@ -325,7 +325,7 @@ func TestLoopStreamingCancellationStopsFallbackAndPersistence(t *testing.T) {
 
 func TestEngineWithoutObserverUsesBatchCompletion(t *testing.T) {
 	client := &streamingTestClient{
-		fakeModelClient: fakeModelClient{results: []ModelClientResult{assistantResult("batch")}},
+		results: []ModelClientResult{assistantResult("batch")},
 		stream: func(context.Context, string, []conversation.Message, []ToolDefinition, func(string)) (ModelClientResult, error) {
 			t.Fatal("unobserved run should use Complete")
 			return ModelClientResult{}, nil

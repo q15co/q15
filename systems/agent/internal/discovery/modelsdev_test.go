@@ -103,11 +103,11 @@ func newCacheDir(t *testing.T) string {
 
 func TestModelsDevClient_FirstFetchThenCacheHit(t *testing.T) {
 	newCacheDir(t)
-	var fetchCount int32
+	var fetchCount atomic.Int32
 	payload := writeModelsDevPayload(t, sampleModelsDevPayload())
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		atomic.AddInt32(&fetchCount, 1)
+		fetchCount.Add(1)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(payload)
 	}))
@@ -121,7 +121,7 @@ func TestModelsDevClient_FirstFetchThenCacheHit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first loadFile: %v", err)
 	}
-	if got := atomic.LoadInt32(&fetchCount); got != 1 {
+	if got := fetchCount.Load(); got != 1 {
 		t.Fatalf("expected 1 fetch after first call, got %d", got)
 	}
 
@@ -130,7 +130,7 @@ func TestModelsDevClient_FirstFetchThenCacheHit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second loadFile: %v", err)
 	}
-	if got := atomic.LoadInt32(&fetchCount); got != 1 {
+	if got := fetchCount.Load(); got != 1 {
 		t.Fatalf("expected 1 fetch after cached second call, got %d", got)
 	}
 
@@ -176,11 +176,11 @@ func TestModelsDevClient_ExpiredTTLRefetches(t *testing.T) {
 	// Short TTL so "expired" is immediate.
 	t.Setenv(envCacheTTL, "1")
 
-	var fetchCount int32
+	var fetchCount atomic.Int32
 	payload := writeModelsDevPayload(t, sampleModelsDevPayload())
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		atomic.AddInt32(&fetchCount, 1)
+		fetchCount.Add(1)
 		_, _ = w.Write(payload)
 	}))
 	defer server.Close()
@@ -203,7 +203,7 @@ func TestModelsDevClient_ExpiredTTLRefetches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadFile: %v", err)
 	}
-	if got := atomic.LoadInt32(&fetchCount); got != 1 {
+	if got := fetchCount.Load(); got != 1 {
 		t.Fatalf("expected 1 fetch for expired cache, got %d", got)
 	}
 	if _, ok := file["ollama-cloud"]; !ok {

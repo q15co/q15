@@ -72,11 +72,7 @@ func TestModelAdapterForwardsReasoningThroughRoutedAndBoundClients(t *testing.T)
 				)},
 			}
 			inner := &reasoningAdapterTestClient{
-				streamingAdapterTestClient: streamingAdapterTestClient{
-					fakeModelClient: fakeModelClient{
-						results: []agent.ModelClientResult{want, want, want},
-					},
-				},
+				results: []agent.ModelClientResult{want, want, want},
 			}
 			adapter, err := newModelAdapterWithFactory(
 				registry,

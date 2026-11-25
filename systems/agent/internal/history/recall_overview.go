@@ -47,7 +47,7 @@ func (t recallTool) readOverview(ctx context.Context, args readArguments) (strin
 	}
 	if len(ids) == 0 {
 		// Completed turns can contain media or tool evidence without text.
-		if _, err := t.readSourcePage(ctx, readArguments{TurnID: args.TurnID, sourceCursor: sourceCursor{Field: "body"}, Limit: 1}); err != nil {
+		if _, err := t.readSourcePage(ctx, readArguments{TurnID: args.TurnID, Field: "body", Limit: 1}); err != nil {
 			return "", err
 		}
 	}
@@ -62,7 +62,7 @@ func (t recallTool) readOverview(ctx context.Context, args readArguments) (strin
 		overview.View = "evidence"
 	} else {
 		for _, id := range ids {
-			page, err := t.readSourcePage(ctx, readArguments{TurnID: args.TurnID, sourceCursor: sourceCursor{PartID: id, Field: "body"}, Limit: args.Limit})
+			page, err := t.readSourcePage(ctx, readArguments{TurnID: args.TurnID, PartID: id, Field: "body", Limit: args.Limit})
 			if err != nil {
 				return "", err
 			}
