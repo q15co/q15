@@ -756,7 +756,11 @@ func (c *bearerChatClient) Chat(
 		return statusError(response, body)
 	}
 
-	scanner := bufio.NewScanner(response.Body)
+	return decodeBearerChatStream(response.Body, fn)
+}
+
+func decodeBearerChatStream(body io.Reader, fn ollamaapi.ChatResponseFunc) error {
+	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), q15media.DefaultMaxImageBytes)
 	for scanner.Scan() {
 		var streamErr struct {
