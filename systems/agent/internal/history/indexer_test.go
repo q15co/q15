@@ -71,7 +71,10 @@ func TestIndexRetrievalAndDeletionProvenance(t *testing.T) {
 		embedder,
 		DigestFunc(func(_ context.Context, source string) (DigestResult, error) {
 			generated++
-			_, target, _ := strings.CutLast(source, "\nTARGET turn ")
+			_, target, found := strings.CutLast(source, "\nTARGET turn ")
+			if !found {
+				t.Errorf("digest source is missing the target marker: %q", source)
+			}
 			body := "The weather discussion was recorded."
 			if strings.Contains(target, "PostgreSQL") {
 				body = "The approved memory cutover uses PostgreSQL transcripts."
@@ -159,7 +162,10 @@ func TestDigestFailureDoesNotAdvancePastAnotherTurn(t *testing.T) {
 		EmbeddingSpace{Provider: "test", Model: "fixture", Dimensions: 3},
 		&testEmbedder{},
 		DigestFunc(func(_ context.Context, source string) (DigestResult, error) {
-			_, target, _ := strings.CutLast(source, "\nTARGET turn ")
+			_, target, found := strings.CutLast(source, "\nTARGET turn ")
+			if !found {
+				t.Errorf("digest source is missing the target marker: %q", source)
+			}
 			if strings.Contains(target, "failing summary") {
 				return DigestResult{}, errors.New("injected generation failure")
 			}
@@ -212,7 +218,10 @@ func TestParallelDigestsBoundRequestsAndKeepIndependentProgress(t *testing.T) {
 			case <-ctx.Done():
 				return DigestResult{}, ctx.Err()
 			}
-			_, target, _ := strings.CutLast(source, "\nTARGET turn ")
+			_, target, found := strings.CutLast(source, "\nTARGET turn ")
+			if !found {
+				t.Errorf("digest source is missing the target marker: %q", source)
+			}
 			if strings.Contains(target, "failing summary") {
 				return DigestResult{}, errors.New("injected generation failure")
 			}

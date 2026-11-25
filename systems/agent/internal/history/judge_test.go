@@ -274,7 +274,10 @@ func TestContextJudgesOnceAndReusesSelectionDuringToolSteps(t *testing.T) {
 		},
 		&testEmbedder{},
 		DigestFunc(func(_ context.Context, source string) (DigestResult, error) {
-			_, target, _ := strings.CutLast(source, "\nTARGET turn ")
+			_, target, found := strings.CutLast(source, "\nTARGET turn ")
+			if !found {
+				t.Errorf("digest source is missing the target marker: %q", source)
+			}
 			body := "Latest conversation."
 			if strings.Contains(target, "90 days") {
 				body = "PostgreSQL requires audit retention of 90 days."
