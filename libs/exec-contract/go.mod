@@ -1,6 +1,6 @@
 module github.com/q15co/q15/libs/exec-contract
 
-go 1.26.10
+go 1.27.4
 
 require (
 	google.golang.org/grpc v1.83.2

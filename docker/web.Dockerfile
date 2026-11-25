@@ -20,7 +20,7 @@ RUN set -eu; \
     pnpm build; \
     test -s /src/systems/web/internal/assets/dist/index.html
 
-FROM golang:1.26-bookworm AS build
+FROM golang:1.27-bookworm AS build
 WORKDIR /src
 COPY go.work go.work.sum ./
 COPY libs ./libs

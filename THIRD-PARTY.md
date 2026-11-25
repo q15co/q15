@@ -224,6 +224,6 @@ they are MIT, like everything around them.
 | `debian:bookworm-slim`                          | the agent, proxy and web images  | Debian's own mix of free licences |
 | `gcr.io/distroless/static-debian12:nonroot`     | the web image                    | Apache-2.0                        |
 | `nixos/nix:latest`                              | the executor image               | LGPL-2.1 (Nix itself)             |
-| `golang:1.26-bookworm`, `node:24-bookworm-slim` | build stages only, not published | BSD-3-Clause, MIT and others      |
+| `golang:1.27-bookworm`, `node:24-bookworm-slim` | build stages only, not published | BSD-3-Clause, MIT and others      |
 
 None of these link into a q15 binary; they are separate programs in an image.
