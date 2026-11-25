@@ -185,3 +185,49 @@ func TestHealthcheck(t *testing.T) {
 		})
 	}
 }
+
+func TestHTTPServersRejectTooManyHeaderValues(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		newServer func(http.Handler) *http.Server
+	}{
+		{name: "public", newServer: newPublicHTTPServer},
+		{name: "admin", newServer: newAdminHTTPServer},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			called := make(chan struct{}, 1)
+			handler := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+				called <- struct{}{}
+			})
+			server := httptest.NewUnstartedServer(handler)
+			server.Config = test.newServer(handler)
+			server.Start()
+			defer server.Close()
+
+			request, err := http.NewRequest(http.MethodGet, server.URL, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for range http.DefaultMaxHeaderValueCount + 1 {
+				request.Header.Add("X-Q15-Test", "x")
+			}
+			response, err := server.Client().Do(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer response.Body.Close()
+			if response.StatusCode != http.StatusRequestHeaderFieldsTooLarge {
+				t.Fatalf(
+					"status = %d, want %d",
+					response.StatusCode,
+					http.StatusRequestHeaderFieldsTooLarge,
+				)
+			}
+			select {
+			case <-called:
+				t.Fatal("request reached the handler")
+			default:
+			}
+		})
+	}
+}

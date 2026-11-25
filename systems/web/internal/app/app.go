@@ -144,22 +144,14 @@ func Serve(ctx context.Context, config Config) error {
 		return err
 	}
 	defer adminListener.Close()
-	adminServer := &http.Server{Handler: adminHandler, ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: time.Minute, MaxHeaderBytes: 8192}
+	adminServer := newAdminHTTPServer(adminHandler)
 	defer adminServer.Close()
 	listener, err := net.Listen("tcp", config.Listen)
 	if err != nil {
 		return err
 	}
 	defer listener.Close()
-	httpServer := &http.Server{
-		Handler:           web,
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      15 * time.Second,
-		IdleTimeout:       time.Minute,
-		MaxHeaderBytes:    32 << 10,
-	}
+	httpServer := newPublicHTTPServer(web)
 	defer httpServer.Close()
 	errCh := make(chan error, 2)
 	go func() { errCh <- adminServer.Serve(adminListener) }()
@@ -181,6 +173,30 @@ func Serve(ctx context.Context, config Config) error {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		return httpServer.Shutdown(shutdownCtx)
+	}
+}
+
+// Both configurations leave MaxHeaderValueCount zero to select
+// http.DefaultMaxHeaderValueCount (500), independently of their byte limits.
+func newAdminHTTPServer(handler http.Handler) *http.Server {
+	return &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       time.Minute,
+		MaxHeaderBytes:    8192,
+	}
+}
+
+func newPublicHTTPServer(handler http.Handler) *http.Server {
+	return &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       time.Minute,
+		MaxHeaderBytes:    32 << 10,
 	}
 }
 
