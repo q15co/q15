@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -64,8 +65,7 @@ func (d *toolLoopDetector) Record(call ToolCall, output string) toolLoopAssessme
 	}
 
 	noProgressCount := 0
-	for i := len(d.history) - 1; i >= 0; i-- {
-		rec := d.history[i]
+	for _, rec := range slices.Backward(d.history) {
 		if rec.signature != signature || rec.outputHash != outputHash {
 			break
 		}

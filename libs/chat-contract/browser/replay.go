@@ -3,6 +3,7 @@ package browser
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -51,11 +52,11 @@ func (s *Endpoint) replay(
 	}
 	frames := make([][]byte, 0)
 	replayBytes := 0
-	for i := len(turns) - 1; i >= 0; i-- {
-		if turns[i].GetSeq() <= cursor {
+	for _, turn := range slices.Backward(turns) {
+		if turn.GetSeq() <= cursor {
 			continue
 		}
-		turn := protocol.FromPage(&chatpb.ListTurnsResponse{Turns: []*chatpb.Turn{turns[i]}}).Turns[0]
+		turn := protocol.FromPage(&chatpb.ListTurnsResponse{Turns: []*chatpb.Turn{turn}}).Turns[0]
 		for _, message := range turn.Messages {
 			var text strings.Builder
 			for _, part := range message.Parts {

@@ -162,8 +162,7 @@ func (s *ContextService) PrepareContext(
 		}
 	}
 	var recentIDs []int64
-	for n := len(turns) - 1; n >= 0; n-- {
-		turn := turns[n]
+	for n, turn := range slices.Backward(turns) {
 		group := contextGroup{
 			id:        turn.Seq,
 			createdAt: turn.CreatedAt,

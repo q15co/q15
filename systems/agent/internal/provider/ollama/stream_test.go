@@ -35,10 +35,10 @@ func TestStreamCollectorForwardsOnlyContentAndPreservesResponse(t *testing.T) {
 			Function: ollamaapi.ToolCallFunction{Name: "read_file", Arguments: args},
 		}}}},
 		{
-			Message:    ollamaapi.Message{Content: "now  "},
-			Done:       true,
-			DoneReason: "stop",
-			Metrics:    ollamaapi.Metrics{PromptEvalCount: 12, EvalCount: 7},
+			Message:         ollamaapi.Message{Content: "now  "},
+			Done:            true,
+			DoneReason:      "stop",
+			PromptEvalCount: 12, EvalCount: 7,
 		},
 	}
 	wantCounts := []int{0, 1, 1, 2, 2, 3}

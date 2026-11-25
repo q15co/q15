@@ -66,18 +66,16 @@ func TestCanonicalDumpPreservesReasoningAndCanonicalCapture(t *testing.T) {
 				writer = &buf
 			}
 			inner := &reasoningModelClient{
-				streamingModelClient: streamingModelClient{fakeModelClient: fakeModelClient{
-					result: agent.ModelClientResult{
-						Messages: []conversation.Message{conversation.AssistantMessage(
-							conversation.Reasoning(
-								"considering",
-								nil,
-							),
-							conversation.Text("hello", ""),
-						)},
-					},
-					err: streamErr,
-				}},
+				result: agent.ModelClientResult{
+					Messages: []conversation.Message{conversation.AssistantMessage(
+						conversation.Reasoning(
+							"considering",
+							nil,
+						),
+						conversation.Text("hello", ""),
+					)},
+				},
+				err: streamErr,
 			}
 			var fragments []string
 			result, err := NewModelClientDump(inner, writer).CompleteStreamWithReasoning(
@@ -113,9 +111,9 @@ func TestCanonicalDumpPreservesReasoningAndCanonicalCapture(t *testing.T) {
 }
 
 func TestCanonicalDumpReasoningFallsBackToContentStream(t *testing.T) {
-	inner := &streamingModelClient{fakeModelClient: fakeModelClient{
+	inner := &streamingModelClient{
 		result: agent.ModelClientResult{FinishReason: "stop"},
-	}}
+	}
 	var buf bytes.Buffer
 	var content string
 	result, err := NewModelClientDump(inner, &buf).CompleteStreamWithReasoning(
@@ -137,7 +135,7 @@ func TestCanonicalDumpPreservesStreamingAndErrors(t *testing.T) {
 			if enabled {
 				writer = &buf
 			}
-			inner := &streamingModelClient{fakeModelClient: fakeModelClient{
+			inner := &streamingModelClient{
 				result: agent.ModelClientResult{
 					Messages: []conversation.Message{
 						conversation.AssistantMessage(conversation.Text("hello", "")),
@@ -145,7 +143,7 @@ func TestCanonicalDumpPreservesStreamingAndErrors(t *testing.T) {
 					Usage: agent.ModelUsage{InputTokens: 3, OutputTokens: 2, TotalTokens: 5},
 				},
 				err: streamErr,
-			}}
+			}
 			client := NewModelClientDump(inner, writer)
 			var deltas []string
 			result, err := client.CompleteStream(

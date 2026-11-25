@@ -124,7 +124,7 @@ func TestAutomaticContextUsesRelevantSummariesWithoutGapWall(t *testing.T) {
 		EmbeddingSpace{Provider: "fixture", Model: "automatic", Dimensions: 3},
 		&testEmbedder{},
 		DigestFunc(func(_ context.Context, source string) (DigestResult, error) {
-			target := source[strings.LastIndex(source, "TARGET turn "):]
+			_, target, _ := strings.CutLast(source, "TARGET turn ")
 			body := "Unrelated old weather summary."
 			if strings.Contains(target, "PostgreSQL") {
 				body = "The approved memory cutover uses PostgreSQL transcripts."

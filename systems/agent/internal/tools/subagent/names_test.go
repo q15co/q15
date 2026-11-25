@@ -30,15 +30,16 @@ func TestSessionNameCatalogDoesNotRepeatPairs(t *testing.T) {
 			!strings.HasSuffix(id, "-"+strconv.FormatUint(sequence, 10)) {
 			t.Fatalf("invalid session id: %q", id)
 		}
-		name := id[:strings.LastIndex(id, "-")]
+		name, _, _ := strings.CutLast(id, "-")
 		if seen[name] {
 			t.Fatalf("name %q repeated before the catalog was exhausted", name)
 		}
 		seen[name] = true
 	}
 	first, wrapped := sessionID(1), sessionID(sessionNameCount()+1)
+	wrappedName, _, _ := strings.CutLast(wrapped, "-")
 	if first == wrapped ||
-		strings.TrimSuffix(first, "-1") != wrapped[:strings.LastIndex(wrapped, "-")] {
+		strings.TrimSuffix(first, "-1") != wrappedName {
 		t.Fatalf("catalog wrap lost its unique suffix: %q, %q", first, wrapped)
 	}
 	if id := sessionID(math.MaxUint64); !pattern.MatchString(id) {

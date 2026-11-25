@@ -71,7 +71,7 @@ func TestIndexRetrievalAndDeletionProvenance(t *testing.T) {
 		embedder,
 		DigestFunc(func(_ context.Context, source string) (DigestResult, error) {
 			generated++
-			target := source[strings.LastIndex(source, "\nTARGET turn "):]
+			_, target, _ := strings.CutLast(source, "\nTARGET turn ")
 			body := "The weather discussion was recorded."
 			if strings.Contains(target, "PostgreSQL") {
 				body = "The approved memory cutover uses PostgreSQL transcripts."
@@ -159,7 +159,7 @@ func TestDigestFailureDoesNotAdvancePastAnotherTurn(t *testing.T) {
 		EmbeddingSpace{Provider: "test", Model: "fixture", Dimensions: 3},
 		&testEmbedder{},
 		DigestFunc(func(_ context.Context, source string) (DigestResult, error) {
-			target := source[strings.LastIndex(source, "\nTARGET turn "):]
+			_, target, _ := strings.CutLast(source, "\nTARGET turn ")
 			if strings.Contains(target, "failing summary") {
 				return DigestResult{}, errors.New("injected generation failure")
 			}
@@ -212,7 +212,7 @@ func TestParallelDigestsBoundRequestsAndKeepIndependentProgress(t *testing.T) {
 			case <-ctx.Done():
 				return DigestResult{}, ctx.Err()
 			}
-			target := source[strings.LastIndex(source, "\nTARGET turn "):]
+			_, target, _ := strings.CutLast(source, "\nTARGET turn ")
 			if strings.Contains(target, "failing summary") {
 				return DigestResult{}, errors.New("injected generation failure")
 			}

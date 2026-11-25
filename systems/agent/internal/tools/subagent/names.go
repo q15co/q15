@@ -76,7 +76,11 @@ func (s *recordStore) loadSequence(records []sessionRecord) (uint64, error) {
 		if strings.HasPrefix(record.ID, "subagent-") {
 			continue
 		}
-		sequence, err := strconv.ParseUint(record.ID[strings.LastIndex(record.ID, "-")+1:], 10, 64)
+		_, suffix, found := strings.CutLast(record.ID, "-")
+		if !found {
+			suffix = record.ID
+		}
+		sequence, err := strconv.ParseUint(suffix, 10, 64)
 		if err != nil || sequence == 0 {
 			return 0, fmt.Errorf("invalid subagent session sequence in %q", record.ID)
 		}

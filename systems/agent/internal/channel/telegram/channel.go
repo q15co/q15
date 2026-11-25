@@ -1599,8 +1599,8 @@ func splitTextChunk(text string, limitRunes int) (string, string) {
 		{delimiter: "\n", skip: 1},
 		{delimiter: " ", skip: 1},
 	} {
-		idx := strings.LastIndex(prefix, candidate.delimiter)
-		if idx > limitBytes/2 {
+		head, _, found := strings.CutLast(prefix, candidate.delimiter)
+		if idx := len(head); found && idx > limitBytes/2 {
 			chunk := strings.TrimSpace(text[:idx])
 			rest := strings.TrimSpace(text[idx+candidate.skip:])
 			if chunk != "" {

@@ -241,11 +241,11 @@ func titleKey(title string) string {
 func titleCoreKey(title string) string {
 	core := ""
 	for _, sep := range []string{" | ", " - ", " — ", " · ", " :: "} {
-		i := strings.LastIndex(title, sep)
-		if i <= 0 {
+		head, _, found := strings.CutLast(title, sep)
+		if !found || head == "" {
 			continue
 		}
-		head := strings.TrimSpace(title[:i])
+		head = strings.TrimSpace(head)
 		if len([]rune(head)) >= 12 && len([]rune(head)) > len([]rune(core)) {
 			core = head
 		}
